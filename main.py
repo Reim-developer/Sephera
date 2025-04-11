@@ -1,5 +1,8 @@
 import argparse
+import os
 from walk.WalkFile import WalkFile
+from utils.error import SepheraError
+
 
 class Sephera:
     def __init__(self):
@@ -7,6 +10,12 @@ class Sephera:
         sub_command = self.sephera_parser.add_subparsers(dest = "command", required = True)
 
         tree_command = sub_command.add_parser("tree", help = "List tree view all files")
+        tree_command.add_argument(
+            "--path",
+            type = str,
+            help = "Path to scan (Default is current directory)",
+            default = "."
+        )
         tree_command.add_argument(
             "--ignore",
             type = str,
@@ -21,35 +30,54 @@ class Sephera:
             help = "Create chart for your directory tree (e.g --chart '<MyChartSaveDir>')",
             default = None
         )
-        tree_command.set_defaults(function = self.walk_files)
+        tree_command.set_defaults(function = self.tree_command)
 
-    def walk_files(self, args) -> None:
-        walker = WalkFile(args.ignore)
-        stats = walker.show_list_tree()
+    def tree_command(self, args) -> None:
+        try:
+            from rich.console import Console
+            from chart.Exporter import Exporter
+            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        except KeyboardInterrupt:
+            print("\nAborted by user.")
+            return
+        
+        console = Console()
+
+        if not os.path.exists(args.path):
+            error = SepheraError(console = console)
+            error.show_error(f"{args.path} not found.")
+
+        walker = WalkFile(args.ignore, args.path)
+
+        with Progress(
+                    SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
+                    TextColumn("[progress.description]{task.description}"),
+                    TimeElapsedColumn(), console = console, transient = True) as progress_bar:
+                    task = progress_bar.add_task("Loading Tree...", total = None)
+                    stats = walker.show_list_tree(on_step = lambda: progress_bar.update(task, advance = 1), console = console)
 
         if args.chart:
-            from chart.Exporter import Exporter
-            from rich.console import Console
-            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-
-            console = Console()
             with Progress(
-                SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
-                BarColumn(bar_width = 30), TextColumn("{task.completed}/{task.total}"),
-                TimeElapsedColumn(), console = console, transient = True) as progress_bar:
-                task = progress_bar.add_task("Exporting Chart...", total = 4)
+                    SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
+                    BarColumn(bar_width = 30), TextColumn("{task.completed}/{task.total}"),
+                    TimeElapsedColumn(), console = console, transient = True) as progress_bar:
+                    task = progress_bar.add_task("Exporting Chart...", total = 4)
 
-                exporter = Exporter(args.chart)
-                exporter.export_file_tree_chart(
-                    files = stats["Files"],
-                    dirs = stats["Directory"],
-                    hidden_files = stats["Hidden_Files"],
-                    hidden_dirs = stats["Hidden_Directory"],
-                    on_step = lambda: progress_bar.update(task, advance = 1) 
-                )
+                    exporter = Exporter(args.chart)
+                    exporter.export_file_tree_chart(
+                        files = stats["Files"],
+                        dirs = stats["Directory"],
+                        hidden_files = stats["Hidden_Files"],
+                        hidden_dirs = stats["Hidden_Directory"],
+                        on_step = lambda: progress_bar.update(task, advance = 1) 
+                    )
             print(f"Successfully created chart with name: {args.chart}.png")
+       
 
 if __name__ == "__main__":
-    cli = Sephera()
-    args = cli.sephera_parser.parse_args()
-    args.function(args)
+    try:
+        cli = Sephera()
+        args = cli.sephera_parser.parse_args()
+        args.function(args)
+    except KeyboardInterrupt:
+        print("Aborted.")
