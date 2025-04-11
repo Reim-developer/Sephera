@@ -1,6 +1,8 @@
 import os
 import re
-from typing import Generator, Optional, Union
+from typing import Generator, Optional, Callable
+from rich.console import Console
+from utils.error import SepheraError
 
 """" 
 Sephera Command Line Interface
@@ -8,8 +10,8 @@ WalkFile class
 
 """
 class WalkFile:
-    def __init__(self, ignore_pattern: Optional[str] = None) -> None:
-        self.base_dir = "."
+    def __init__(self, ignore_pattern: Optional[str] = None, base_path: str = ".") -> None:
+        self.base_path = base_path
         self.ignore_regex: Optional[re.Pattern] = None
         self.ignore_str: Optional[str] = None
         
@@ -30,7 +32,7 @@ class WalkFile:
         return False
 
     def walk_all_files(self) -> Generator[str, None, None]:
-        for root, dirs, files in os.walk(self.base_dir):
+        for root, dirs, files in os.walk(self.base_path):
             dirs[:] = [dir for dir in dirs if not self._is_ignored(os.path.join(root, dir))]
 
             for file in files:
@@ -41,13 +43,15 @@ class WalkFile:
 
                 yield os.path.join(root, file)
 
-    def show_list_tree(self) -> dict[str, int]:
+    def show_list_tree(self, on_step: Callable[[], None] = None, console: Console = None) -> dict[str, int]:
         folder_count: int = 0
         file_count: int = 0
         hidden_file_count: int = 0
         hidden_folder_count: int = 0
+        output: list[str] = []
 
-        for root, dirs, files in os.walk(self.base_dir):
+        for root, dirs, files in os.walk(self.base_path):
+            on_step()
             for dir in list(dirs):
                 full_path = os.path.join(root, dir)
 
@@ -57,6 +61,7 @@ class WalkFile:
                 
                 if dir.startswith("."):
                     hidden_folder_count += 1
+                on_step()
                 
             for file in list(files):
                 full_path = os.path.join(root, file)
@@ -68,10 +73,14 @@ class WalkFile:
                     hidden_file_count += 1
                 else:
                     file_count += 1
+                on_step()
 
             folder_count += len(dirs)
 
-        self._show_list_tree(self.base_dir, prefix = "")
+        self._show_list_tree(self.base_path, prefix = "", console = console, output = output)
+        for line in output:
+            print(f"{line}")
+
         print(f"{folder_count} Folder. {file_count} File.")
 
         return {
@@ -81,11 +90,13 @@ class WalkFile:
             "Hidden_Directory": hidden_folder_count
         }
 
-    def _show_list_tree(self, current_dir: str, prefix: str) -> None:
+    def _show_list_tree(self, current_dir: str, prefix: str, console: Console, output: list[str]) -> None:
         try:
             entries = sorted(os.listdir(current_dir))
         except PermissionError:
-            print("Permission Error, Sephera is not permission to run this command")
+            error = SepheraError(console = console)
+            error.show_error(f"Permission Denied. Skipping: {current_dir}")
+            return
         
         entries = [e for e in entries if not e.startswith(".")]
         for i, entry in enumerate(entries):
@@ -95,8 +106,8 @@ class WalkFile:
                 continue
 
             connector = "└── " if i == len(entries) - 1 else "├── "
-            print(f"{prefix}{connector}{entry}")
+            output.append(f"{prefix}{connector}{entry}")
 
             if os.path.isdir(full_path):
                 extension = "    " if i == len(entries) - 1 else "│   "
-                self._show_list_tree(full_path, prefix + extension)
+                self._show_list_tree(full_path, prefix + extension, console = console, output = output)
