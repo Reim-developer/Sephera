@@ -1,6 +1,7 @@
 import argparse
 import os
 from walk.WalkFile import WalkFile
+from walk.Stats import Stats
 from utils.error import SepheraError
 
 
@@ -10,6 +11,8 @@ class Sephera:
         sub_command = self.sephera_parser.add_subparsers(dest = "command", required = True)
 
         tree_command = sub_command.add_parser("tree", help = "List tree view all files")
+        stats_command = sub_command.add_parser("stats", help = "Show stats of your file/project")
+
         tree_command.add_argument(
             "--path",
             type = str,
@@ -32,6 +35,14 @@ class Sephera:
         )
         tree_command.set_defaults(function = self.tree_command)
 
+        stats_command.add_argument(
+             "--path",
+             type = str,
+             help = "Path to scan.(Default is current directory)",
+             default = "."
+        )
+        stats_command.set_defaults(function = self.stats_command)
+
     def tree_command(self, args) -> None:
         try:
             from rich.console import Console
@@ -45,7 +56,7 @@ class Sephera:
 
         if not os.path.exists(args.path):
             error = SepheraError(console = console)
-            error.show_error(f"{args.path} not found.")
+            error.show_error(f"Path: {args.path} not found.")
 
         walker = WalkFile(args.ignore, args.path)
 
@@ -72,6 +83,22 @@ class Sephera:
                         on_step = lambda: progress_bar.update(task, advance = 1) 
                     )
             print(f"Successfully created chart with name: {args.chart}.png")
+
+    def stats_command(self, args) -> None:
+        try:
+            from rich.console import Console
+            from chart.Exporter import Exporter
+            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+        except KeyboardInterrupt:
+            print("\nAborted by user.")
+            return
+        
+        console = Console()
+        if not os.path.exists(args.path):
+          error = SepheraError(console = console)
+          error.show_error(f"Path: {args.path} not found.")
+        
+        stats = Stats(args.path)
        
 
 if __name__ == "__main__":
