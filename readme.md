@@ -4,11 +4,16 @@
 
 --- 
 
-### Features
+### Features & Usage
 - `tree` command to display directory structure visually.
+- `path <Directory Path>`
+    - Example usage: `--path C:\MyAwesome\Project`
+    - Supports full paths with proper error handling.
+
 - `--ignore` option to exclude files or folders:
     - Supports both simple string matching (e.g. `"node_modules"`)
     - And full regex patterns (e.g. `"\.py$"`)
+    
 - `--chart [<File Name>]`:
     - Example usage: `--chart MySuperCoolChart`
     - Export a bar chart representing directory stats
