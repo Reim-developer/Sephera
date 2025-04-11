@@ -41,18 +41,45 @@ class WalkFile:
 
                 yield os.path.join(root, file)
 
-    def show_list_tree(self) -> None:
+    def show_list_tree(self) -> dict[str, int]:
         folder_count: int = 0
         file_count: int = 0
+        hidden_file_count: int = 0
+        hidden_folder_count: int = 0
+
         for root, dirs, files in os.walk(self.base_dir):
-            dirs[:] = [dir for dir in dirs if not self._is_ignored(os.path.join(root, dir))]
-            files = [file for file in files if not self._is_ignored(os.path.join(root, file))]
+            for dir in list(dirs):
+                full_path = os.path.join(root, dir)
+
+                if self._is_ignored(full_path):
+                    dirs.remove(dir)
+                    continue
+                
+                if dir.startswith("."):
+                    hidden_folder_count += 1
+                
+            for file in list(files):
+                full_path = os.path.join(root, file)
+
+                if self._is_ignored(full_path):
+                    continue
+
+                if file.startswith("."):
+                    hidden_file_count += 1
+                else:
+                    file_count += 1
 
             folder_count += len(dirs)
-            file_count += len(files)
 
         self._show_list_tree(self.base_dir, prefix = "")
         print(f"{folder_count} Folder. {file_count} File.")
+
+        return {
+            "Files": file_count,
+            "Directory": folder_count,
+            "Hidden_Files": hidden_file_count,
+            "Hidden_Directory": hidden_folder_count
+        }
 
     def _show_list_tree(self, current_dir: str, prefix: str) -> None:
         try:
@@ -73,5 +100,3 @@ class WalkFile:
             if os.path.isdir(full_path):
                 extension = "    " if i == len(entries) - 1 else "│   "
                 self._show_list_tree(full_path, prefix + extension)
-                
-       
