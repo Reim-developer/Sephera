@@ -13,12 +13,13 @@
 - `--ignore` option to exclude files or folders:
     - Supports both simple string matching (e.g. `"node_modules"`)
     - And full regex patterns (e.g. `"\.py$"`)
-    
+
 - `--chart [<File Name>]`:
     - Example usage: `--chart MySuperCoolChart`
     - Export a bar chart representing directory stats
     - Default file name is `SepheraChart.png` if no file name provided
-    - **[Preview](./preview/SepheraChart.png)**
+    - Preview:
+    - **![Preview](./preview/SepheraChart.png)**
 
 - Clean and readable tree output
 - Full portable:
