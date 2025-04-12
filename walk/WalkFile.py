@@ -1,7 +1,12 @@
 import os
 import re
 from typing import Generator, Optional, Callable
-from rich.console import Console
+
+try:
+    from rich.console import Console
+except KeyboardInterrupt:
+    print("\n Aborted by user.")
+
 from utils.error import SepheraError
 
 """" 
