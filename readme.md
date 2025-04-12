@@ -6,7 +6,8 @@
 
 ### Features & Usage
 - `tree` command to display directory structure visually.
-- `path <Directory Path>`
+**Arguments:**
+- `--path <Directory Path>`
     - Example usage: `--path C:\MyAwesome\Project`
     - Supports full paths with proper error handling.
 
@@ -19,7 +20,26 @@
     - Export a bar chart representing directory stats
     - Default file name is `SepheraChart.png` if no file name provided
     - Preview:
-    - **![Preview](./preview/SepheraChart.png)**
+    **![Preview](./preview/SepheraChart.png)**
+
+
+
+- `stats` command to show your directory/project stats
+**Arguments:**
+-`--path <Directory Path>`
+    - Example usage: `--path C:\MyAwesome\Project`
+
+- `--ignore`
+    - Example usage `--ignore 'node_modules'`
+    This will also support regex, like:
+    - `--ignore '\.py$'`
+
+- `--chart [<File Name>]`
+    - Example usage: `--chart MySuperCoolChart`
+    You can also customize save directory, like:
+    - `--chart 'C:\Document\MySuperCoolChart'`
+    - Preview
+    **![Preview](./preview/StatsOverview.png)**
 
 - Clean and readable tree output
 - Full portable:
