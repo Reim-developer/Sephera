@@ -5,15 +5,15 @@ import os
 try:
     from rich.console import Console
     from chart.Exporter import Exporter
-    from walk.WalkFile import WalkFile
-    from walk.Stats import Stats
+    from sephera.WalkFile import WalkFile
+    from sephera.Stats import Stats
     from utils.error import SepheraError
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 except KeyboardInterrupt:
     print("\nAborted by user.")
     sys.exit(1)
 
-class Sephera:
+class SepheraCli:
     def __init__(self):
         self.sephera_parser = argparse.ArgumentParser(description = "Sephera Commmand Line Interface")
         sub_command = self.sephera_parser.add_subparsers(dest = "command", required = True)
@@ -110,7 +110,7 @@ class Sephera:
 
 if __name__ == "__main__":
     try:
-        cli = Sephera()
+        cli = SepheraCli()
         args = cli.sephera_parser.parse_args()
         args.function(args)
     except KeyboardInterrupt:
