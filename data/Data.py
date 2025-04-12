@@ -20,15 +20,11 @@ class Languages:
             "c_style": CommentStyle(
                 single_line = "//", 
                 multi_line_start = "/*", multi_line_end = "*/"
-            )
-        }
-        self._comment_styles: Dict[str, CommentStyle] = {
+            ),
             "python_style": CommentStyle(
                 single_line = "#", 
                 multi_line_start = '"""', multi_line_end = '"""'
-            )
-        }
-        self._comment_styles: Dict[str, CommentStyle] = {
+            ),
             "shell_style": CommentStyle(
                 single_line = "#"
             )
