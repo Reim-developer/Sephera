@@ -1,9 +1,14 @@
 import os
 import re
-from chart.Exporter import Exporter
 from typing import Optional
-from rich.console import Console
-from rich.table import Table
+
+try:
+    from rich.console import Console
+    from chart.Exporter import Exporter
+    from rich.table import Table
+    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+except KeyboardInterrupt:
+    print("\n Aborted by user.")
 
 class Stats:
     def __init__(self, base_path: str = ".", ignore_pattern: Optional[str] = None) -> None:
@@ -40,39 +45,48 @@ class Stats:
         hidden_file_count: int = 0
         hidden_folder_count: int = 0
         total_hidden_size: int = 0
+        
+        console = Console()
 
-        for root, dirs, files in os.walk(self.base_path):
-            dirs[:] = [dir for dir in dirs if not self._is_ignored(os.path.join(root, dir))]
+        with Progress(
+            SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
+            TimeElapsedColumn(), console = console,
+            transient = True
+            ) as progressBar:
+            progressBar.add_task("Processing...", total = None)
 
-            for dir in dirs:
-                full_dir_path = os.path.join(root, dir)
+            for root, dirs, files in os.walk(self.base_path):
+                dirs[:] = [dir for dir in dirs if not self._is_ignored(os.path.join(root, dir))]
 
-                if self._is_hidden_path(full_dir_path, self.base_path):
-                    hidden_folder_count += 1
-                folder_count += 1
-            
-            for file in files:
-                file_count += 1
-                full_path = os.path.join(root, file)
+                for dir in dirs:
+                    full_dir_path = os.path.join(root, dir)
 
-                try:
-                    size = os.path.getsize(full_path)
-                    total_size += size
+                    if self._is_hidden_path(full_dir_path, self.base_path):
+                        hidden_folder_count += 1
+                    folder_count += 1
+                
+                for file in files:
+                    file_count += 1
+                    full_path = os.path.join(root, file)
 
-                    if self._is_hidden_path(full_path, self.base_path):
-                        hidden_file_count += 1
-                        total_hidden_size += size
+                    try:
+                        size = os.path.getsize(full_path)
+                        total_size += size
 
-                except Exception:
-                    pass
+                        if self._is_hidden_path(full_path, self.base_path):
+                            hidden_file_count += 1
+                            total_hidden_size += size
+
+                    except Exception:
+                        pass
         
         data: dict = {
             "Folder": folder_count,
-            "File:": file_count,
+            "File": file_count,
             "Hidden Folder": hidden_folder_count,
-            "Hidden File:": hidden_file_count
+            "Hidden File": hidden_file_count
         }
-        self.stdout_stats(data = data)
+        self._stdout_stats(data = data)
         exporter = Exporter(output_path = output_chart)
 
         print(f"[+] Total Size: {total_size / (1024 ** 2):.2f} MB")
@@ -83,7 +97,7 @@ class Stats:
             print(f"[+] Saved chart as name: {output_chart}")
         
     
-    def stdout_stats(self, data: dict) -> None:
+    def _stdout_stats(self, data: dict) -> None:
         console = Console()
         total = sum(data.values())
         table = Table(title = "Sephera Stats Overview", show_header = True, header_style = "bold magenta")
