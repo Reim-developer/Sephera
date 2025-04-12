@@ -39,13 +39,36 @@ class Exporter:
         plt.close()
         on_step()
 
+    
+    @staticmethod
+    def _autopct(pct: float) -> str:
+        return f"{pct:.1f}%" if pct >= 1.0 else ""
+
     def export_stats_chart(self, data: dict, total_size: float, total_hidden_size: float) -> None:
-        chart_label = list(data.keys())
-        chart_values = list(data.values())
         chart_colors: list[str] =  ['#ff9999','#66b3ff','#99ff99','#ffcc99']
 
+        threshold_pct: float = 1.0
+        total = sum(data.values())
+        filter_labels: list = []
+        filter_values: list = []
+        other_total: float = 0.0
+
+        for label, value in data.items():
+            pct = (value / total) * 100
+            if pct >= threshold_pct:
+                filter_labels.append(label)
+                filter_values.append(value)
+            else:
+                other_total += value
+        
+        if other_total > 0:
+            other_pct = (other_total / total) * 100
+
+            filter_labels.append(f"Other: {other_pct:.1f}%")
+            filter_values.append(other_total)
+
         fig, ax = plt.subplots(figsize = (8, 8))
-        ax.pie(chart_values, labels = chart_label, autopct = "%1.1f%%", startangle = 90, colors = chart_colors, pctdistance = 0.85)
+        ax.pie(filter_values, labels = filter_labels, autopct = self._autopct, startangle = 90, colors = chart_colors, pctdistance = 0.85, labeldistance = 1.1)
 
         centre_circle = plt.Circle((0, 0), 0.70, fc = "white")
         fig.gca().add_artist(centre_circle)
