@@ -1,9 +1,17 @@
 import argparse
+import sys
 import os
-from walk.WalkFile import WalkFile
-from walk.Stats import Stats
-from utils.error import SepheraError
 
+try:
+    from rich.console import Console
+    from chart.Exporter import Exporter
+    from walk.WalkFile import WalkFile
+    from walk.Stats import Stats
+    from utils.error import SepheraError
+    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
+except KeyboardInterrupt:
+    print("\nAborted by user.")
+    sys.exit(1)
 
 class Sephera:
     def __init__(self):
@@ -58,14 +66,6 @@ class Sephera:
         stats_command.set_defaults(function = self.stats_command)
 
     def tree_command(self, args) -> None:
-        try:
-            from rich.console import Console
-            from chart.Exporter import Exporter
-            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-        except KeyboardInterrupt:
-            print("\nAborted by user.")
-            return
-        
         console = Console()
 
         if not os.path.exists(args.path):
@@ -99,14 +99,6 @@ class Sephera:
             print(f"Successfully created chart with name: {args.chart}.png")
 
     def stats_command(self, args) -> None:
-        try:
-            from rich.console import Console
-            from chart.Exporter import Exporter
-            from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
-        except KeyboardInterrupt:
-            print("\nAborted by user.")
-            return
-        
         console = Console()
         if not os.path.exists(args.path):
           error = SepheraError(console = console)
