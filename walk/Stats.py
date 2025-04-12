@@ -53,10 +53,11 @@ class Stats:
             TimeElapsedColumn(), console = console,
             transient = True
             ) as progressBar:
-            progressBar.add_task("Processing...", total = None)
+            task_id = progressBar.add_task("Processing...", total = None)
 
             for root, dirs, files in os.walk(self.base_path):
                 dirs[:] = [dir for dir in dirs if not self._is_ignored(os.path.join(root, dir))]
+                progressBar.advance(task_id = task_id)
 
                 for dir in dirs:
                     full_dir_path = os.path.join(root, dir)
@@ -77,8 +78,8 @@ class Stats:
                             hidden_file_count += 1
                             total_hidden_size += size
 
-                    except Exception:
-                        pass
+                    except Exception as e:
+                        print(f"Fatal error: {e}")
         
         data: dict = {
             "Folder": folder_count,
