@@ -41,6 +41,20 @@ class Sephera:
              help = "Path to scan.(Default is current directory)",
              default = "."
         )
+        stats_command.add_argument(
+             "--ignore",
+             type = str, 
+             help = "Regex pattern to ignore files or folders (e.g --ignore '__pycache__|\\.git')",
+             default = None
+        )
+        stats_command.add_argument(
+             "--chart",
+             type = str,
+             nargs = "?",
+             const = "SepheraChart",
+             help = "Create chart for your stat overview (e.g --chart '<MyChartSaveDir>')",
+             default = None
+        )
         stats_command.set_defaults(function = self.stats_command)
 
     def tree_command(self, args) -> None:
@@ -62,7 +76,7 @@ class Sephera:
 
         with Progress(
                     SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
-                    TextColumn("[progress.description]{task.description}"),
+                    TextColumn("[progress.description]"),
                     TimeElapsedColumn(), console = console, transient = True) as progress_bar:
                     task = progress_bar.add_task("Loading Tree...", total = None)
                     stats = walker.show_list_tree(on_step = lambda: progress_bar.update(task, advance = 1), console = console)
@@ -98,7 +112,8 @@ class Sephera:
           error = SepheraError(console = console)
           error.show_error(f"Path: {args.path} not found.")
         
-        stats = Stats(args.path)
+        stats = Stats(base_path = args.path, ignore_pattern = args.ignore)
+        stats.stats_all_files(output_chart = args.chart)
        
 
 if __name__ == "__main__":
@@ -107,4 +122,4 @@ if __name__ == "__main__":
         args = cli.sephera_parser.parse_args()
         args.function(args)
     except KeyboardInterrupt:
-        print("Aborted.")
+        print("\n Aborted by user.")
