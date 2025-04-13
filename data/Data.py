@@ -38,11 +38,9 @@ class Languages:
             )
         ]
 
-    @property
     def get_languages(self) -> List[LanguageConfig]:
         return self._languages
     
-    @property
     def get_comment_styles(self) -> Dict[str, CommentStyle]:
         return self._comment_styles
     
