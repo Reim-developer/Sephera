@@ -1,0 +1,79 @@
+# Sephera Project: Programming Language Config.
+# This project is licensed under the GNU General Public License v3.0.
+
+comment_styles:
+  c_style:
+    single_line: "//"
+    multi_line_start: "/*"
+    multi_line_end: "*/"
+
+  python_style:
+    single_line: "#"
+    multi_line_start: '"""'
+    multi_line_end: '"""'
+  
+  shell_style:
+    single_line: "#"
+  
+languages:
+  - name: Python
+    extension:
+      - .py
+    comment_styles: python_style
+
+  - name: Java
+    extension:
+      - .java
+    comment_styles: c_style
+  
+  - name: JavaScript
+    extension:
+      - .js
+      - .jsx
+      - .mjs
+    comment_styles: c_style
+
+  - name: Shell Script
+    extension:
+      - .sh
+    comment_styles: shell_style
+
+  - name: C++
+    extension:
+      - .cc
+      - .cpp
+      - .cxx
+      - .c++
+    comment_styles: c_style
+
+  - name: Golang
+    extension:
+      - .go
+    comment_styles: c_style
+
+  - name: Perl
+    extension:
+      - .pl
+    comment_styles: shell_style
+
+  - name: Ruby
+    extension:
+    - .rb
+    comment_styles: shell_style
+
+  - name: C Header File
+    extension:
+    - .h
+    comment_styles: c_style
+  
+  - name: C++ Header File
+    extension:
+    - .hpp
+    - .hh
+    - .h++
+    comment_styles: c_style
+
+  - name: C#
+    extension:
+    - .cs
+    comment_styles: c_style
