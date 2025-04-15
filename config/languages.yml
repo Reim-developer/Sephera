@@ -77,3 +77,14 @@ languages:
     extension:
     - .cs
     comment_styles: c_style
+
+  - name: TypeScript
+    extension:
+    - .ts
+    - .tsx
+    comment_styles: c_style
+  
+  - name: Rust
+    extension:
+    - .rs
+    comment_styles: c_style
