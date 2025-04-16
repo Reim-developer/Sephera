@@ -1,6 +1,7 @@
 # Sephera Project: Programming Language Config.
 # This project is licensed under the GNU General Public License v3.0.
 
+# Comment Styles for programming languages.
 comment_styles:
   c_style:
     single_line: "//"
@@ -14,7 +15,28 @@ comment_styles:
   
   shell_style:
     single_line: "#"
+
+  perl_style:
+    single_line: "#"
+    multi_line_start: "="
+    multi_line_end: "=cut"
+
+  ruby_style:
+    single_line: "#"
+    multi_line_start: "=begin"
+    multi_line_end: "=end"
   
+  no_comment:
+    single_line: null
+    multi_line_start: null
+    multi_line_end: null
+
+  html_style:
+    single_line: null
+    multi_line_start: "<!--"
+    multi_line_end: "-->"
+
+# Languages extension, name, and comment style configuration.
 languages:
   - name: Python
     extension:
@@ -54,12 +76,12 @@ languages:
   - name: Perl
     extension:
       - .pl
-    comment_styles: shell_style
+    comment_styles: perl_style
 
   - name: Ruby
     extension:
     - .rb
-    comment_styles: shell_style
+    comment_styles: ruby_style
 
   - name: C Header File
     extension:
@@ -88,3 +110,48 @@ languages:
     extension:
     - .rs
     comment_styles: c_style
+
+  - name: PHP
+    extension: 
+    - .php
+    comment_styles: c_style
+
+  - name: YAML
+    extension:
+    - .yml
+    - .yaml
+    comment_styles: shell_style
+
+  - name: JSON
+    extension:
+    - .json 
+    comment_styles: no_comment
+
+  - name: Cython
+    extension:
+    - .pyx
+    - .pxd
+    - .pxi
+    comment_styles: python_style
+
+  - name: CSS
+    extension:
+    - .css
+    comment_styles: c_style
+  
+  - name: HTML
+    extension:
+    - .html
+    - .htm 
+    comment_styles: html_style
+
+  - name: XML
+    extension:
+    - .xml
+    comment_styles: html_style
+
+  - name: Dart
+    extension:
+    - .dart
+    comment_styles: c_style
+    
