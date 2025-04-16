@@ -2,6 +2,10 @@
 # This is a test Perl script, for 
 # test CodeLoc is working
 
+=this
+is a multi line comment
+=cut
+
 if ($#ARGV != 4) {
  print "usage: compem bg.rgb inbase outbase startNum stopNum\n";
  exit;
