@@ -98,9 +98,15 @@ class CodeLoc:
 
             if loc_line > 0 or comment_line > 0 or empty_line > 0:
                 print(f"Language: {language}")
-                print(f"  Code: {loc_line} lines")
-                print(f"  Comments: {comment_line} lines")
-                print(f"  Empty: {empty_line} lines")
+                print(f"Code: {loc_line} lines")
+
+                language_config  = self.language_data.get_language_by_name(name = language)
+                if language_config and language_config.comment_style == "no_comment":
+                    print(f"Comments: This language doesn't support comment")
+                else:
+                    print(f"Comments: {comment_line} lines")
+
+                print(f"Empty: {empty_line} lines")
                 print("-" * 50)
                 
                 total_loc_count += loc_line
