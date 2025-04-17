@@ -1,8 +1,15 @@
 import base64
 
-with open("config/languages.yml", "r") as config_file:
-    yaml_source  = config_file.read()
+class Base64Load:
+    @staticmethod
+    def load_base64_config(file_path: str) -> str:
+        with open(file = file_path, mode = "r") as config_file:
+            yaml_source  = config_file.read()
+            base64_encode = base64.b64encode(yaml_source.encode()).decode()
 
-base64_encode = base64.b64encode(yaml_source.encode()).decode()
+            return base64_encode
+
 print("Programming Language Configuration Base64:")
-print(base64_encode)
+base64_value: str = Base64Load.load_base64_config("config/languages.yml")
+print()
+print(base64_value)
