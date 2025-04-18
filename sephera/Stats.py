@@ -7,35 +7,24 @@ try:
     from chart.Exporter import Exporter
     from rich.table import Table
     from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
+    from utils.utils import Utils
 except KeyboardInterrupt:
     print("\n Aborted by user.")
 
 class Stats:
     def __init__(self, base_path: str = ".", ignore_pattern: Optional[str] = None) -> None:
         self.base_path = base_path
+        
+        self.console = Console()
         self.ignore_regex: Optional[re.Pattern] = None
         self.ignore_str: Optional[str] = None
+        self.utils = Utils()
 
         if ignore_pattern:
             try:
                 self.ignore_regex = re.compile(ignore_pattern)
             except re.error:
                 self.ignore_str = ignore_pattern
-
-    def _is_ignored(self, path: str) -> None:
-        if self.ignore_regex:
-            return bool(self.ignore_regex.search(path))
-        
-        if self.ignore_str:
-            return self.ignore_str in path
-        
-        return False
-
-    def _is_hidden_path(self, path: str, base_path: str) -> None:
-        rel_path = os.path.relpath(path, base_path)
-        parts = rel_path.split(os.sep)
-
-        return any(part.startswith(".") for part in parts)
 
     def stats_all_files(self, output_chart: str = None) -> None:
         file_count: int = 0
@@ -45,24 +34,20 @@ class Stats:
         hidden_file_count: int = 0
         hidden_folder_count: int = 0
         total_hidden_size: int = 0
-        
-        console = Console()
 
-        with Progress(
-            SpinnerColumn(), TextColumn("[progress.description]{task.description}"),
-            TimeElapsedColumn(), console = console,
-            transient = True
-            ) as progressBar:
-            task_id = progressBar.add_task("Processing...", total = None)
-
+        with self.console.status("[bold green] Processing...", spinner = "point") as progressBar:
             for root, dirs, files in os.walk(self.base_path):
-                dirs[:] = [dir for dir in dirs if not self._is_ignored(os.path.join(root, dir))]
-                progressBar.advance(task_id = task_id)
+
+                dirs[:] = [dir for dir in dirs if not 
+                           self.utils.is_ignored(
+                               path = os.path.join(root, dir), 
+                               ignore_regex = self.ignore_regex, 
+                               ignore_str = self.ignore_str)]
 
                 for dir in dirs:
                     full_dir_path = os.path.join(root, dir)
 
-                    if self._is_hidden_path(full_dir_path, self.base_path):
+                    if self.utils.is_hidden_path(path = full_dir_path, base_path = self.base_path):
                         hidden_folder_count += 1
                     folder_count += 1
                 
@@ -74,12 +59,14 @@ class Stats:
                         size = os.path.getsize(full_path)
                         total_size += size
 
-                        if self._is_hidden_path(full_path, self.base_path):
+                        if self.utils.is_hidden_path(full_path, self.base_path):
                             hidden_file_count += 1
                             total_hidden_size += size
 
-                    except Exception as e:
-                        print(f"Fatal error: {e}")
+                    except Exception as error:
+                        self.console.print(f"[red] Fatal error, use --verbose to display this. Skipping...")
+
+            self.console.clear()
         
         data: dict = {
             "Folder": folder_count,
