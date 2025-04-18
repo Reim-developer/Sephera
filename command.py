@@ -30,10 +30,7 @@ class Command:
         except Exception as setup_error:
              self.console.print(f"[red] Fatal error when setup command: {setup_error}")
              sys.exit(1)
-
-    """
-    - Setup stats command for Sephera Command Line Interface.
-    """
+             
     def _set_stats_command(self) -> None:
         stats_parser = self.sub_command.add_parser("stats", help = "Stats all files, folders in your directory")
         stats_parser.add_argument(
@@ -58,9 +55,6 @@ class Command:
         )
         stats_parser.set_defaults(function = self.handler.stats_command_handler)
 
-    """
-    - Setup tree command for Sephera Command Line Interface.
-    """
     def _set_tree_command(self, tree_command: argparse.ArgumentParser) -> None:
         tree_command = self.sub_command.add_parser("tree", help = "List tree view all files")
         tree_command.add_argument(
@@ -83,36 +77,5 @@ class Command:
             help = "Create chart for your directory tree (e.g --chart '<MyChartSaveDir>')",
             default = None
         )
-        tree_command.set_defaults(function = self._tree_command_handler)
+        tree_command.set_defaults(function = self.handler.tree_command_handler)
 
-    def _tree_command_handler(self, args) -> None:
-        console = Console()
-
-        if not os.path.exists(args.path):
-            error = SepheraError(console = console)
-            error.show_error(f"Path: {args.path} not found.")
-
-        walker = WalkFile(args.ignore, args.path)
-        with Progress(
-                    SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
-                    TextColumn("[progress.description]"),
-                    TimeElapsedColumn(), console = console, transient = True) as progress_bar:
-                    task = progress_bar.add_task("Loading Tree...", total = None)
-                    stats = walker.show_list_tree(on_step = lambda: progress_bar.update(task, advance = 1), console = console)
-
-        if args.chart:
-            with Progress(
-                    SpinnerColumn(), TextColumn("[progress.description]{task.description}"), 
-                    BarColumn(bar_width = 30), TextColumn("{task.completed}/{task.total}"),
-                    TimeElapsedColumn(), console = console, transient = True) as progress_bar:
-                    task = progress_bar.add_task("Exporting Chart...", total = 4)
-
-                    exporter = Exporter(args.chart)
-                    exporter.export_file_tree_chart(
-                        files = stats["Files"],
-                        dirs = stats["Directory"],
-                        hidden_files = stats["Hidden_Files"],
-                        hidden_dirs = stats["Hidden_Directory"],
-                        on_step = lambda: progress_bar.update(task, advance = 1) 
-                    )
-            print(f"Successfully created chart with name: {args.chart}.png")
