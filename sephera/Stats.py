@@ -74,6 +74,7 @@ class Stats:
             "Hidden Folder": hidden_folder_count,
             "Hidden File": hidden_file_count
         }
+        
         self._stdout_stats(data = data)
         exporter = Exporter(output_path = output_chart)
 
