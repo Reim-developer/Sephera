@@ -7,7 +7,7 @@ try:
     from chart.Exporter import Exporter
     from sephera.WalkFile import WalkFile
     from sephera.Stats import Stats
-    from utils.error import SepheraError
+    from utils.stdout import SepheraStdout
     from handler import Handler
     from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 except KeyboardInterrupt:
@@ -30,7 +30,7 @@ class Command:
         except Exception as setup_error:
              self.console.print(f"[red] Fatal error when setup command: {setup_error}")
              sys.exit(1)
-             
+
     def _set_stats_command(self) -> None:
         stats_parser = self.sub_command.add_parser("stats", help = "Stats all files, folders in your directory")
         stats_parser.add_argument(
