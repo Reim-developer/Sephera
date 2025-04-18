@@ -3,7 +3,7 @@ import os
 
 try:
     from rich.console import Console
-    from utils.error import SepheraError
+    from utils.stdout import SepheraStdout
     from sephera.Stats import Stats
     from sephera.WalkFile import WalkFile
     from chart.Exporter import Exporter
@@ -14,7 +14,7 @@ except KeyboardInterrupt:
 class Handler:
     def __init__(self) -> None:
         self.console = Console()
-        self.sephera_error = SepheraError()
+        self.sephera_error = SepheraStdout()
 
     def stats_command_handler(self, args) -> None:
         if not os.path.exists(args.path):
@@ -26,7 +26,7 @@ class Handler:
     def tree_command_handler(self, args) -> None:
 
         if not os.path.exists(args.path):
-            error = SepheraError(console = self.console)
+            error = SepheraStdout(console = self.console)
             error.show_error(f"Path: {args.path} not found.")
 
         walker = WalkFile(args.ignore, args.path)
