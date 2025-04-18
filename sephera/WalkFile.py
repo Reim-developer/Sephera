@@ -5,8 +5,9 @@ from typing import Generator, Optional
 
 try:
     from rich.console import Console
-    from utils.error import SepheraError
+    from utils.stdout import SepheraStdout
     from utils.utils import Utils
+    from utils.stdout import SepheraStdout
 except KeyboardInterrupt:
     print("\n Aborted by user.")
     sys.exit(1)
@@ -17,6 +18,8 @@ class WalkFile:
         self.utils = Utils()
 
         self.console = Console()
+        self.stdout = SepheraStdout()
+
         self.ignore_regex: Optional[re.Pattern] = None
         self.ignore_str: Optional[str] = None
         
@@ -84,8 +87,10 @@ class WalkFile:
         for line in output:
             print(f"{line}")
 
-        print(f"{folder_count} Folder. {file_count} File.")
-        print(f"{hidden_folder_count} Hidden Folder. {hidden_file_count} Hidden File.")
+        self.stdout.show_msg("\n".join([
+            f"[+] {folder_count} Folder. {file_count} File.\n",
+            f"[+] {hidden_folder_count} Hidden Folder. {hidden_file_count} Hidden File."
+        ]))
 
         return {
             "Files": file_count,
@@ -99,7 +104,7 @@ class WalkFile:
             entries = sorted(os.listdir(current_dir))
 
         except PermissionError:
-            error = SepheraError(self.console)
+            error = SepheraStdout()
             error.show_error(f"Permission Denied. Skipping: {current_dir}")
             return
         
