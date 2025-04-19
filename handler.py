@@ -22,6 +22,7 @@ class Handler:
     def stats_command_handler(self, args) -> None:
         if not os.path.exists(args.path):
             self.sephera_stdout.show_error(f"Fatal error: {args.path} not found.")
+            sys.exit(1)
 
         stats = Stats(base_path = args.path, ignore_pattern = args.ignore)
         stats.stats_all_files(output_chart = args.chart)
@@ -30,6 +31,7 @@ class Handler:
         if not os.path.exists(args.path):
             error = SepheraStdout(console = self.console)
             error.show_error(f"Path: {args.path} not found.")
+            sys.exit(1)
 
         walker = WalkFile(args.ignore, args.path)
        
@@ -49,6 +51,7 @@ class Handler:
     def loc_command_handler(self, args) -> None:
         if not self.utils.is_path_exists(args.path):
             self.sephera_stdout.show_error(f"{args.path} not found.")
+            sys.exit(1)
 
         codeLoc = CodeLoc(args.path, args.ignore)
         codeLoc.stdout_result()
