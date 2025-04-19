@@ -7,6 +7,7 @@ from typing import Dict, Optional, Tuple, List
 try:
     from data.Data import LanguageData, LanguageConfig, CommentStyle
     from utils.utils import Utils
+    from utils.stdout import SepheraStdout
 except KeyboardInterrupt:
     print("\n Aborted by user.")
 
@@ -21,6 +22,8 @@ class CodeLoc:
         self.ignore_str: List[str] = []
         self.ignore_glob: List[str] = []
 
+        self.stdout = SepheraStdout()
+
         if ignore_pattern:
             for pattern in ignore_pattern:
                 try:
@@ -29,8 +32,8 @@ class CodeLoc:
                 except re.error:
                     if any(char in pattern for char in "*?[]"):
                         self.ignore_glob.append(pattern)
-                    
-                    self.ignore_str.append(pattern)
+                    else:
+                        self.ignore_str.append(pattern)
 
     def _get_language_for_file(self, path: str) -> Optional[LanguageConfig]:
         for language in self.languages:
@@ -79,20 +82,24 @@ class CodeLoc:
                     loc_line_count += 1
 
         except UnicodeDecodeError:
-            print(f"Error when read: {file_path}. That's not text file, skipping...")
+            self.stdout.show_error("".join([
+                f"Error when read: {file_path}. That's not text file. Stop now",
+                f"Hint: Use --ignore flag to ignore that file: '--ignore {file_path}'"
+            ]))
+            sys.exit(1)
 
         except Exception as e:
-            print(f"Exception: '{e}' when read: {file_path}, skipping...")
+            print(f"Exception: '{e}' when read: {file_path}")
             sys.exit(1)
 
         return loc_line_count, comment_line_count, empty_line_count
 
-    def count_loc(self) -> Dict[str, Dict[str, int]]:
-        result: Dict[str, Dict[str, int]] = {
-            language.name: {"loc": 0, "comment": 0, "empty": 0}
+    def count_loc(self) -> Dict[str, Dict[str, float]]:
+        result: Dict[str, Dict[str, float]] = {
+            language.name: {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
             for language in self.languages
         }
-        result["Unknown"] = {"loc": 0, "comment": 0, "empty": 0}
+        result["Unknown"] = {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
 
         for root, dirs, files in os.walk(self.base_path):
             dirs[:] = [dir for dir in dirs if not 
@@ -115,13 +122,22 @@ class CodeLoc:
 
                 if language:
                     loc_line, comment_line, empty_line = self._count_lines_in_file(file_path = file_path, language = language)
+
+                    try:
+                        file_sizeof = os.path.getsize(file_path) / (1024 * 1024)
+                    except OSError:
+                        file_sizeof = 0.0
+
                     result[language.name]["loc"] += loc_line
                     result[language.name]["comment"] += comment_line
                     result[language.name]["empty"] += empty_line
+                    result[language.name]["size"] += file_sizeof
+
                 else:
                     result["Unknown"]["loc"] += 0
                     result["Unknown"]["comment"] += 0
                     result["Unknown"]["empty"] += 0
+                    result["Unknown"]["size"] += 0.0
 
         return result
 
@@ -130,16 +146,23 @@ class CodeLoc:
 
         print(f"LOC count of directory: {self.base_path}")
         print("-" * 50)
+
         total_loc_count: int = 0
         total_comment: int = 0
         total_empty: int = 0
+        total_project_size: float = 0.0
+        language_count: int = 0
 
         for language, count in loc_count.items():
             loc_line = count["loc"]
             comment_line = count["comment"]
             empty_line = count["empty"]
+            total_sizeof = count["size"]
 
-            if loc_line > 0 or comment_line > 0 or empty_line > 0:
+            if loc_line > 0 or comment_line > 0 or empty_line > 0 or total_sizeof > 0:
+
+                language_count += 1
+    
                 print(f"Language: {language}")
                 print(f"Code: {loc_line} lines")
 
@@ -155,8 +178,13 @@ class CodeLoc:
                 total_loc_count += loc_line
                 total_comment += comment_line
                 total_empty += empty_line
+                total_project_size += total_sizeof
                 
-        print(f"Total:")
-        print(f"  Code: {total_loc_count} lines")
-        print(f"  Comments: {total_comment} lines")
-        print(f"  Empty: {total_empty} lines")
+        self.stdout.show_msg("\n".join([
+            f"[+] Project LOC:",
+            f"[+] Code: {total_loc_count} lines",
+            f"[+] Comments: {total_comment} lines",
+            f"[+] Empty: {total_empty} lines",
+            f"[+] Language(s) used: {language_count} language(s)",
+            f"[+] Total Project Size: {total_project_size:.2f} MB"
+        ]))
