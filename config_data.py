@@ -1,4 +1,4 @@
-# Auto-generated file config
+# Auto-generated file config from YAML configuration.
 CONFIG_DATA = {
   "comment_styles": {
     "c_style": {
