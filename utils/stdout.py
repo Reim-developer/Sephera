@@ -19,7 +19,6 @@ class SepheraStdout:
             border_style = "red"
         )
         self.console.print(panel)
-        sys.exit(1)
 
     def show_msg(self, message: str) -> None:
         panel = Panel.fit(
