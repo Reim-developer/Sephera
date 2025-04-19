@@ -1,17 +1,42 @@
 # sephera/CodeLoc.py
 import os
-from typing import Dict, Optional, Tuple
-from data.Data import LanguageData, LanguageConfig, CommentStyle
+import re
+import sys
+from typing import Dict, Optional, Tuple, List
+
+try:
+    from data.Data import LanguageData, LanguageConfig, CommentStyle
+    from utils.utils import Utils
+except KeyboardInterrupt:
+    print("\n Aborted by user.")
 
 class CodeLoc:
-    def __init__(self) -> None:
+    def __init__(self, base_path: str = ".", ignore_pattern: Optional[List[str]] = None) -> None:
         self.language_data = LanguageData()
+        self.utils = Utils()
+        self.base_path = base_path
         self.languages = self.language_data.get_languages
 
-    def _get_language_for_file(self, file_path: str) -> Optional[LanguageConfig]:
+        self.ignore_regex: List[re.Pattern] = []
+        self.ignore_str: List[str] = []
+        self.ignore_glob: List[str] = []
+
+        if ignore_pattern:
+            for pattern in ignore_pattern:
+                try:
+                    self.ignore_regex.append(re.compile(pattern = pattern))
+                
+                except re.error:
+                    if any(char in pattern for char in "*?[]"):
+                        self.ignore_glob.append(pattern)
+                    
+                    self.ignore_str.append(pattern)
+
+    def _get_language_for_file(self, path: str) -> Optional[LanguageConfig]:
         for language in self.languages:
-            if any(file_path.endswith(extension) for extension in language.extensions):
+            if any(path.endswith(extension) for extension in language.extensions):
                 return language
+            
         return None
 
     def _count_lines_in_file(self, file_path: str, language: LanguageConfig) -> Tuple[int, int, int]:
@@ -52,27 +77,44 @@ class CodeLoc:
                             continue
 
                     loc_line_count += 1
+
         except UnicodeDecodeError:
             print(f"Error when read: {file_path}. That's not text file, skipping...")
+
         except Exception as e:
             print(f"Exception: '{e}' when read: {file_path}, skipping...")
+            sys.exit(1)
 
         return loc_line_count, comment_line_count, empty_line_count
 
-    def count_loc(self, directory: str) -> Dict[str, Dict[str, int]]:
+    def count_loc(self) -> Dict[str, Dict[str, int]]:
         result: Dict[str, Dict[str, int]] = {
             language.name: {"loc": 0, "comment": 0, "empty": 0}
             for language in self.languages
         }
         result["Unknown"] = {"loc": 0, "comment": 0, "empty": 0}
 
-        for root, _, files in os.walk(directory):
+        for root, dirs, files in os.walk(self.base_path):
+            dirs[:] = [dir for dir in dirs if not 
+                            self.utils.is_multi_ignored(
+                                path = os.path.join(root, dir), 
+                                ignore_regex = self.ignore_regex, 
+                                ignore_str = self.ignore_str,
+                                ignore_glob = self.ignore_glob
+                    )]
+
             for file in files:
                 file_path = os.path.join(root, file)
-                language = self._get_language_for_file(file_path = file_path)
+
+                if self.utils.is_multi_ignored(
+                    path = file_path, ignore_str = self.ignore_str, 
+                    ignore_regex = self.ignore_regex, ignore_glob = self.ignore_glob):
+                    continue
+
+                language = self._get_language_for_file(path = file_path)
 
                 if language:
-                    loc_line, comment_line, empty_line = self._count_lines_in_file(file_path = file_path, language=language)
+                    loc_line, comment_line, empty_line = self._count_lines_in_file(file_path = file_path, language = language)
                     result[language.name]["loc"] += loc_line
                     result[language.name]["comment"] += comment_line
                     result[language.name]["empty"] += empty_line
@@ -83,9 +125,10 @@ class CodeLoc:
 
         return result
 
-    def stdout_result(self, directory: str) -> None:
-        loc_count = self.count_loc(directory = directory)
-        print(f"LOC count of directory: {directory}")
+    def stdout_result(self) -> None:
+        loc_count = self.count_loc()
+
+        print(f"LOC count of directory: {self.base_path}")
         print("-" * 50)
         total_loc_count: int = 0
         total_comment: int = 0
