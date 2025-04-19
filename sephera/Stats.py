@@ -6,7 +6,6 @@ try:
     from rich.console import Console
     from chart.Exporter import Exporter
     from rich.table import Table
-    from rich.progress import Progress, SpinnerColumn, TextColumn, TimeElapsedColumn
     from utils.utils import Utils
 except KeyboardInterrupt:
     print("\n Aborted by user.")
@@ -39,34 +38,34 @@ class Stats:
             for root, dirs, files in os.walk(self.base_path):
 
                 dirs[:] = [dir for dir in dirs if not 
-                           self.utils.is_ignored(
-                               path = os.path.join(root, dir), 
-                               ignore_regex = self.ignore_regex, 
-                               ignore_str = self.ignore_str)]
+                            self.utils.is_ignored(
+                                path = os.path.join(root, dir), 
+                                ignore_regex = self.ignore_regex, 
+                                ignore_str = self.ignore_str)]
 
                 for dir in dirs:
-                    full_dir_path = os.path.join(root, dir)
+                        full_dir_path = os.path.join(root, dir)
 
-                    if self.utils.is_hidden_path(path = full_dir_path, base_path = self.base_path):
-                        hidden_folder_count += 1
-                    folder_count += 1
-                
+                        if self.utils.is_hidden_path(path = full_dir_path, base_path = self.base_path):
+                            hidden_folder_count += 1
+                        folder_count += 1
+                    
                 for file in files:
-                    file_count += 1
-                    full_path = os.path.join(root, file)
+                        file_count += 1
+                        full_path = os.path.join(root, file)
 
-                    try:
-                        size = os.path.getsize(full_path)
-                        total_size += size
+                        try:
+                            size = os.path.getsize(full_path)
+                            total_size += size
 
-                        if self.utils.is_hidden_path(full_path, self.base_path):
-                            hidden_file_count += 1
-                            total_hidden_size += size
+                            if self.utils.is_hidden_path(full_path, self.base_path):
+                                hidden_file_count += 1
+                                total_hidden_size += size
 
-                    except Exception as error:
-                        self.console.print(f"[red] Fatal error, use --verbose to display this. Skipping...")
+                        except Exception as error:
+                            self.console.print(f"[red] Fatal error, use --verbose to display this. Skipping...")
 
-            self.console.clear()
+                self.console.clear()
         
         data: dict = {
             "Folder": folder_count,
@@ -87,7 +86,6 @@ class Stats:
         
     
     def _stdout_stats(self, data: dict) -> None:
-        console = Console()
         total = sum(data.values())
         table = Table(title = "Sephera Stats Overview", show_header = True, header_style = "bold magenta")
 
@@ -99,4 +97,4 @@ class Stats:
             percent = (value / total) * 100 if total else 0
             table.add_row(str(key), str(value), f"{percent:.1f}%")
 
-        console.print(table)
+        self.console.print(table)
