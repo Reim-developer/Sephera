@@ -1,15 +1,9 @@
 import argparse
 import sys
-import os
 
 try:
     from rich.console import Console
-    from chart.Exporter import Exporter
-    from sephera.WalkFile import WalkFile
-    from sephera.Stats import Stats
-    from utils.stdout import SepheraStdout
     from handler import Handler
-    from rich.progress import Progress, SpinnerColumn, BarColumn, TextColumn, TimeElapsedColumn
 except KeyboardInterrupt:
     print("\nAborted by user.")
     sys.exit(1)
@@ -24,8 +18,9 @@ class Command:
 
     def setup(self) -> None:
         try:
-            self._set_tree_command(self.sub_command)
+            self._set_tree_command()
             self._set_stats_command()
+            self._set_loc_command()
 
         except Exception as setup_error:
              self.console.print(f"[red] Fatal error when setup command: {setup_error}")
@@ -55,7 +50,7 @@ class Command:
         )
         stats_parser.set_defaults(function = self.handler.stats_command_handler)
 
-    def _set_tree_command(self, tree_command: argparse.ArgumentParser) -> None:
+    def _set_tree_command(self) -> None:
         tree_command = self.sub_command.add_parser("tree", help = "List tree view all files")
         tree_command.add_argument(
             "--path",
@@ -78,4 +73,22 @@ class Command:
             default = None
         )
         tree_command.set_defaults(function = self.handler.tree_command_handler)
+
+    def _set_loc_command(self) -> None:
+        loc_command = self.sub_command.add_parser("loc", help = "LOC your code in project. Quickly")
+        loc_command.add_argument(
+            "--path",
+            type = str,
+            help = "Path to your project.",
+            default = "."
+        )
+        loc_command.add_argument(
+            "--ignore",
+            action = "append",
+            type = str,
+            help = "Regex pattern to ignore files or folders (e.g. --ignore '__pycache__|\\.git')",
+            default = None
+        )
+
+        loc_command.set_defaults(function = self.handler.loc_command_handler)
 
