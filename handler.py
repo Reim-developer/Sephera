@@ -7,6 +7,8 @@ try:
     from sephera.Stats import Stats
     from sephera.WalkFile import WalkFile
     from chart.Exporter import Exporter
+    from utils.utils import Utils
+    from sephera.CodeLoc import CodeLoc
 except KeyboardInterrupt:
     print(f"\n Aborted by user.")
     sys.exit(1)
@@ -14,17 +16,17 @@ except KeyboardInterrupt:
 class Handler:
     def __init__(self) -> None:
         self.console = Console()
-        self.sephera_error = SepheraStdout()
+        self.sephera_stdout = SepheraStdout()
+        self.utils = Utils()
 
     def stats_command_handler(self, args) -> None:
         if not os.path.exists(args.path):
-            self.sephera_error.show_error(f"Fatal error: {args.path} not found.")
+            self.sephera_stdout.show_error(f"Fatal error: {args.path} not found.")
 
         stats = Stats(base_path = args.path, ignore_pattern = args.ignore)
         stats.stats_all_files(output_chart = args.chart)
 
     def tree_command_handler(self, args) -> None:
-
         if not os.path.exists(args.path):
             error = SepheraStdout(console = self.console)
             error.show_error(f"Path: {args.path} not found.")
@@ -43,4 +45,11 @@ class Handler:
                         
             )
             self.console.print(f"[cyan][+] Successfully created chart with name: {args.chart}.png")
+
+    def loc_command_handler(self, args) -> None:
+        if not self.utils.is_path_exists(args.path):
+            self.sephera_stdout.show_error(f"{args.path} not found.")
+
+        codeLoc = CodeLoc(args.path, args.ignore)
+        codeLoc.stdout_result()
     
