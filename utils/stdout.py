@@ -15,7 +15,7 @@ class SepheraStdout:
     def show_error(self, message: str) -> None:
         panel = Panel.fit(
             Text(message, style = "bold red"),
-            title = "[bold white on red] Error",
+            title = "Error",
             border_style = "red"
         )
         self.console.print(panel)
