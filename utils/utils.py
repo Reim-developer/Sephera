@@ -27,9 +27,8 @@ class Utils:
             path_basename = os.path.basename(path)
             ignore_str_set = set(ignore_str)
             
-            for ignore_query in ignore_str_set:
-                if ignore_query == path_basename:
-                    return True
+            if path_basename in ignore_str_set:
+                return True
         
         if ignore_glob:
             path_basename = os.path.basename(path)
