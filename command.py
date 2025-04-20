@@ -14,13 +14,18 @@ class Command:
 
         self.console = Console()
         self.handler = Handler()
-        self.sub_command = self.sephera_parser.add_subparsers(dest = "command", required = True)
-
+        self.sub_command = self.sephera_parser.add_subparsers(dest = "command")
+    
     def setup(self) -> None:
         try:
             self._set_tree_command()
             self._set_stats_command()
             self._set_loc_command()
+            self._set_help_command()
+            
+            args = self.sephera_parser.parse_args()
+            if args.command is None:
+                self.handler.show_usage(args = args)
 
         except Exception as setup_error:
              self.console.print(f"[red] Fatal error when setup command: {setup_error}")
@@ -91,4 +96,8 @@ class Command:
         )
 
         loc_command.set_defaults(function = self.handler.loc_command_handler)
+
+    def _set_help_command(self) -> None:
+        help_command = self.sub_command.add_parser("help", help = "Show help message")
+        help_command.set_defaults(function = self.handler.help_command_handler)
 
