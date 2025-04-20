@@ -1,13 +1,15 @@
-# sephera/CodeLoc.py
 import os
 import re
 import sys
+import time
+import logging
 from typing import Dict, Optional, Tuple, List
 
 try:
     from data.Data import LanguageData, LanguageConfig, CommentStyle
     from utils.utils import Utils
     from utils.stdout import SepheraStdout
+    from rich.console import Console
 except KeyboardInterrupt:
     print("\n Aborted by user.")
 
@@ -23,6 +25,7 @@ class CodeLoc:
         self.ignore_glob: List[str] = []
 
         self.stdout = SepheraStdout()
+        self.console = Console()
 
         if ignore_pattern:
             for pattern in ignore_pattern:
@@ -142,7 +145,15 @@ class CodeLoc:
         return result
 
     def stdout_result(self) -> None:
-        loc_count = self.count_loc()
+        logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
+        start_time: float = time.perf_counter()
+
+        with self.console.status("Processing...", spinner = "material") as progressBar:
+            loc_count = self.count_loc()
+
+        end_time: float = time.perf_counter()
+        self.console.clear()
+        
 
         print(f"LOC count of directory: {self.base_path}")
         print("-" * 50)
@@ -188,3 +199,6 @@ class CodeLoc:
             f"[+] Language(s) used: {language_count} language(s)",
             f"[+] Total Project Size: {total_project_size:.2f} MB"
         ]))
+ 
+        logging.info(f"Scan finished in: {end_time - start_time:.2f}s")
+        
