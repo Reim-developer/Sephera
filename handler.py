@@ -9,6 +9,7 @@ try:
     from chart.Exporter import Exporter
     from utils.utils import Utils
     from sephera.CodeLoc import CodeLoc
+    from sephera.help import SepheraHelp
 except KeyboardInterrupt:
     print(f"\n Aborted by user.")
     sys.exit(1)
@@ -18,6 +19,11 @@ class Handler:
         self.console = Console()
         self.sephera_stdout = SepheraStdout()
         self.utils = Utils()
+        
+    def show_usage(self, args) -> None:
+        if args.command is None:
+            sepheraHelp = SepheraHelp()
+            sepheraHelp.usage()
 
     def stats_command_handler(self, args) -> None:
         if not os.path.exists(args.path):
@@ -56,3 +62,6 @@ class Handler:
         codeLoc = CodeLoc(args.path, args.ignore)
         codeLoc.stdout_result()
     
+    def help_command_handler(self, args) -> None:
+        sepheraHelp = SepheraHelp()
+        sepheraHelp.usage()
