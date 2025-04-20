@@ -1,4 +1,11 @@
-# Auto-generated file config from YAML configuration.
+# ================================================================
+# Auto-generated file config from YAML configuration
+# You can customize this config via config/languages.yml file
+# If this file is not exists, you can find this in:
+# https://github.com/Reim-developer/Sephera/tree/master/config
+# This project is licensed under the GNU General Public License v3.0
+# https://github.com/Reim-developer/Sephera?tab=GPL-3.0-1-ov-file
+# ==============================================================
 CONFIG_DATA = {
   "comment_styles": {
     "c_style": {
@@ -33,6 +40,61 @@ CONFIG_DATA = {
       "single_line": None,
       "multi_line_start": "<!--",
       "multi_line_end": "-->"
+    },
+    "sql_style": {
+      "single_line": "--",
+      "multi_line_start": "/*",
+      "multi_line_end": "*/"
+    },
+    "vim_style": {
+      "single_line": "\"",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "godot_style": {
+      "single_line": "#",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "lua_style": {
+      "single_line": "--",
+      "multi_line_start": "--[[",
+      "multi_line_end": "]]"
+    },
+    "lisp_style": {
+      "single_line": ";",
+      "multi_line_start": "#|",
+      "multi_line_end": "|#"
+    },
+    "asm_style": {
+      "single_line": ";",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "meson_style": {
+      "single_line": "#",
+      "multi_line_start": "/*",
+      "multi_line_end": "*/"
+    },
+    "smalltalk_style": {
+      "single_line": "\"",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "haskell_style": {
+      "single_line": "--",
+      "multi_line_start": "{-",
+      "multi_line_end": "-}"
+    },
+    "nim_style": {
+      "single_line": "#",
+      "multi_line_start": "#[",
+      "multi_line_end": "]#"
+    },
+    "julia_style": {
+      "single_line": "#",
+      "multi_line_start": "#=",
+      "multi_line_end": "=#"
     }
   },
   "languages": [
@@ -194,6 +256,170 @@ CONFIG_DATA = {
         ".dart"
       ],
       "comment_styles": "c_style"
+    },
+    {
+      "name": "Kotlin",
+      "extension": [
+        ".kt"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "SQL",
+      "extension": [
+        ".sql"
+      ],
+      "comment_styles": "sql_style"
+    },
+    {
+      "name": "Vim Script",
+      "extension": [
+        ".vim",
+        ".vimrc"
+      ],
+      "comment_styles": "vim_style"
+    },
+    {
+      "name": "Godot Script",
+      "extension": [
+        ".gd"
+      ],
+      "comment_styles": "godot_style"
+    },
+    {
+      "name": "Lua",
+      "extension": [
+        ".lua"
+      ],
+      "comment_styles": "lua_style"
+    },
+    {
+      "name": "Lisp",
+      "extension": [
+        ".lisp",
+        ".lsp"
+      ],
+      "comment_styles": "lisp_style"
+    },
+    {
+      "name": "Scala",
+      "extension": [
+        ".scala",
+        ".sc"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "CMake",
+      "extension": [
+        ".cmake"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Nix",
+      "extension": [
+        ".nix"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Assembly",
+      "extension": [
+        ".asm"
+      ],
+      "comment_styles": "asm_style"
+    },
+    {
+      "name": "Objective-C",
+      "extension": [
+        ".m"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Objective-C++",
+      "extension": [
+        ".mm"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "PowerShell",
+      "extension": [
+        ".ps1"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Meson",
+      "extension": [
+        ".meson"
+      ],
+      "comment_styles": "meson_style"
+    },
+    {
+      "name": "Makefile",
+      "extension": [
+        "Makefile"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "R",
+      "extension": [
+        ".r"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Zig",
+      "extension": [
+        ".zig"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Scheme",
+      "extension": [
+        ".scm"
+      ],
+      "comment_styles": "lisp_style"
+    },
+    {
+      "name": "Groovy",
+      "extension": [
+        ".groovy"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Smalltalk",
+      "extension": [
+        ".st"
+      ],
+      "comment_styles": "smalltalk_style"
+    },
+    {
+      "name": "Haskell",
+      "extension": [
+        ".hs"
+      ],
+      "comment_styles": "haskell_style"
+    },
+    {
+      "name": "Nim",
+      "extension": [
+        ".nim"
+      ],
+      "comment_styles": "nim_style"
+    },
+    {
+      "name": "Julia",
+      "extension": [
+        ".jl"
+      ],
+      "comment_styles": None
     }
   ]
 }
