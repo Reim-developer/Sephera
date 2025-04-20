@@ -3,7 +3,8 @@
 # Make sure .venv exists. 
 venv = .venv/bin/python
 pip_venv = .venv/bin/pip
-config_python = generate_config.py
+data_config = generate_data_config.py
+help_config = generate_help.py
 
 # Make sure requirements.txt exists
 requirements_pip = requirements.txt
@@ -11,8 +12,11 @@ requirements_pip = requirements.txt
 test:
 	@$(venv) test.py
 
-config:
-	@$(venv) $(config_python)
+gen-data-cfg:
+	@$(venv) $(data_config)
+
+gen-help-cfg:
+	@$(venv) $(help_config)
 
 # Install dependencies from requirements.txt
 deps:
