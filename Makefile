@@ -7,7 +7,6 @@ config_python = generate_config.py
 
 # Make sure requirements.txt exists
 requirements_pip = requirements.txt
-install_command = @pip install -r
 
 test:
 	@$(venv) test.py
@@ -17,4 +16,11 @@ config:
 
 # Install dependencies from requirements.txt
 deps:
-	@$(pip_venv) $(install_command) $(requirements_pip)
+	@$(pip_venv) install -r $(requirements_pip)
+
+# Check venv is exists.
+venv_check:
+	@if [ ! -d ".venv" ]; then \
+		python3 -m venv .venv; \
+	fi
+	@echo "Virtual enviroment is ready. Use source .venv/bin/activate to activate this."
