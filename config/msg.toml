@@ -1,0 +1,10 @@
+[usage]
+main = """ 
+Usage: sephera [options...]
+
+    loc                        Quickly calculate total lines of code in your project.
+    stats                      Show your project stats, size.
+    tree                       Show your project structure tree.
+
+Use `sephera --help [options...]` for more infomation.
+"""
