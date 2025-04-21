@@ -9,10 +9,7 @@ Sephera is a lightweight command-line tool for analyzing and visualizing your pr
 - 🌳 `tree`: Display a directory tree view with optional chart generation.
 
 ## Installation
-
-```bash
-pip install sephera
-```
+* Go to [release page](https://github.com/Reim-developer/Sephera/releases/), choose binary for your OS, just install and use it.
 
 ## Usage
 
