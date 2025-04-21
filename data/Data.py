@@ -2,7 +2,7 @@ from dataclasses import dataclass
 from typing import List, Optional, Dict
 
 try:
-    from config_data import CONFIG_DATA
+    from etc.generate.config_data import CONFIG_DATA
 except KeyboardInterrupt:
     print("\nAborted by user.")
 
