@@ -99,5 +99,10 @@ class Command:
 
     def _set_help_command(self) -> None:
         help_command = self.sub_command.add_parser("help", help = "Show help message")
+        help_command.add_argument(
+            "command",
+            nargs = "*",
+            help = "Display help about a command."
+        )
         help_command.set_defaults(function = self.handler.help_command_handler)
 
