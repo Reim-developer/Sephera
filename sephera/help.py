@@ -1,5 +1,36 @@
-from etc.generate.config_help import MAIN_HELP
+import sys
+try:
+    from etc.generate.config_help import MAIN_HELP, STATS_COMMAND_HELP, LOC_COMMAND_HELP, TREE_COMMAND_HELP
+    from rich.console import Console
+except KeyboardInterrupt:
+    print("\n Aborted by user.")
+    sys.exit(1)
 
 class SepheraHelp:
+    def __init__(self) -> None:
+        self.console = Console()
+    
     def usage(self) -> None:
         print(MAIN_HELP)
+
+    def show_help(self, args: str) -> None:
+        match args.lower().strip():
+            case "loc":
+                self.console.print(f"[cyan] {LOC_COMMAND_HELP}")
+                sys.exit(0)
+                
+            case "stats":
+                self.console.print(f"[cyan] {STATS_COMMAND_HELP}")
+                sys.exit(0)
+
+            case "tree":
+                self.console.print(f"[cyan] {TREE_COMMAND_HELP}")
+                sys.exit(0)
+
+            case _:
+                self.console.print("\n".join([
+                    f"[red]Invalid option: {args}",
+                    "[yellow]Hint: Allowed options: [cyan]loc, stats, tree"
+                ]))
+                sys.exit(1)
+
