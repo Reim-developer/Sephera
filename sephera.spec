@@ -1,6 +1,8 @@
 # -*- mode: python ; coding: utf-8 -*-
+import os
 
 block_cipher = None
+binary_name = os.getenv('BINARY_NAME', 'sephera')
 
 a = Analysis(
     ['main.py'],
@@ -31,7 +33,7 @@ exe = EXE(
     a.binaries,
     a.datas,
     [],
-    name='sephera',
+    name=binary_name,
     debug=False,
     bootloader_ignore_signals=False,
     strip=False,
