@@ -21,7 +21,7 @@ jobs:
 
           - os: windows-latest
             binary_name: sephera.exe
-            artifact_path: dist/sephera
+            artifact_path: dist/sephera.exe
 
           - os: macos-latest
             binary_name: sephera
