@@ -1,9 +1,11 @@
 # Sephera
 
-Sephera is a lightweight command-line tool for analyzing and visualizing your project's structure and codebase.
+**Sephera is a lightweight command-line tool for analyzing and visualizing your project's structure and codebase.**
+
+![CodeLoc Preview](./preview/CodeLoc.gif)
 
 ## Features
-
+- 🚀 Fast, portable, just download and used
 - 🔍 `loc`: Quickly calculate the total lines of code.
 - 📊 `stats`: Show project statistics, including file/folder counts and total size.
 - 🌳 `tree`: Display a directory tree view with optional chart generation.
