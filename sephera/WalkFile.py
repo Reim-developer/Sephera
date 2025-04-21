@@ -67,9 +67,10 @@ class WalkFile:
                         path = full_path, 
                         ignore_regex = self.ignore_regex, ignore_str = self.ignore_str):
                         continue
-
-                    valid_dirs.append(dir)
-                    if dir.startswith("."):
+                    
+                    if not dir.startswith("."):
+                        valid_dirs.append(dir)
+                    else:
                         hidden_folder_count += 1
                 
                 dirs[:] = valid_dirs
@@ -83,13 +84,11 @@ class WalkFile:
                         ignore_regex = self.ignore_regex, ignore_str = self.ignore_str):
                         continue
 
-                    if file.startswith("."):
-                        hidden_file_count += 1
-
-                    else:
+                    if not file.startswith("."):
                         file_count += 1
 
-                #folder_count += len(dirs)
+                    else:
+                        hidden_file_count += 1                 
             
             self.console.clear()
 
@@ -101,6 +100,7 @@ class WalkFile:
             f"[+] {folder_count} Folder. {file_count} File.\n",
             f"[+] {hidden_folder_count} Hidden Folder. {hidden_file_count} Hidden File."
         ]))
+        self.console.print("[cyan][+] Hidden files and folders are not counted towards the total number of files and folders by default.")
 
         return {
             "Files": file_count,
