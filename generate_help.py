@@ -22,7 +22,7 @@ def generate_help() -> None:
     for key, value in usage_help.items():
         first_line.append(f'{key.upper()}_HELP = """{value.strip()}"""\n')
 
-    with open("./config_help.py", "w") as config_help:
+    with open("./etc/generate/config_help.py", "w") as config_help:
         config_help.write("\n".join(first_line))
 
     logging.debug("Generate configuration help successufully.")
