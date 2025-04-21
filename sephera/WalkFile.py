@@ -58,28 +58,38 @@ class WalkFile:
 
         with self.console.status("[bold green] Processing...", spinner = "point") as progressBar:
             for root, dirs, files in os.walk(self.base_path):
+
+                valid_dirs: list = []
                 for dir in list(dirs):
                     full_path = os.path.join(root, dir)
 
-                    if self.utils.is_ignored(path = full_path):
-                        dirs.remove(dir)
+                    if self.utils.is_ignored(
+                        path = full_path, 
+                        ignore_regex = self.ignore_regex, ignore_str = self.ignore_str):
                         continue
-                    
+
+                    valid_dirs.append(dir)
                     if dir.startswith("."):
                         hidden_folder_count += 1
-                    
-                for file in list(files):
+                
+                dirs[:] = valid_dirs
+                folder_count += len(valid_dirs)
+                
+                for file in files:
                     full_path = os.path.join(root, file)
 
-                    if self.utils.is_ignored(path = full_path, ignore_regex = self.ignore_regex, ignore_str = self.ignore_str):
+                    if self.utils.is_ignored(
+                        path = full_path, 
+                        ignore_regex = self.ignore_regex, ignore_str = self.ignore_str):
                         continue
 
                     if file.startswith("."):
                         hidden_file_count += 1
+
                     else:
                         file_count += 1
 
-                folder_count += len(dirs)
+                #folder_count += len(dirs)
             
             self.console.clear()
 
@@ -112,7 +122,11 @@ class WalkFile:
         for i, entry in enumerate(entries):
             full_path = os.path.join(current_dir, entry)
 
-            if self.ignore_regex and self.ignore_regex.search(full_path):
+            if self.utils.is_ignored(
+                path = full_path,
+                ignore_regex = self.ignore_regex,
+                ignore_str = self.ignore_str
+            ):
                 continue
 
             connector = "└── " if i == len(entries) - 1 else "├── "
