@@ -12,7 +12,27 @@
 MAIN_HELP = """Usage: sephera [options...]
 
     loc                        Quickly calculate total lines of code in your project.
-    stats                      Show your project stats, size.
-    tree                       Show your project structure tree.
+    stats                      Show your project stats, size, number of files and folders. Optional chart output.
+    tree                       Show your project structure tree. Optional chart output.
 
-Use `sephera --help [options...]` for more infomation."""
+Use `sephera --help [command]` for more information."""
+
+LOC_COMMAND_HELP = """Usage: sephera loc [arguments...]
+
+Arguments:
+    --path <path>              Path to your project. (Default: current directory)
+    --ignore <pattern>         Regex pattern to ignore files or folders. Can be used multiple times."""
+
+STATS_COMMAND_HELP = """Usage: sephera stats [arguments...]
+
+Arguments:
+    --path <path>              Path to scan. (Default: current directory)
+    --ignore <pattern>         Regex, glob, or name pattern to ignore files or folders (e.g. --ignore '__pycache__')
+    --chart [<save_path>]      Create chart for your stat overview. Default chart name is 'SepheraChart'."""
+
+TREE_COMMAND_HELP = """Usage: sephera tree [arguments...]
+
+Arguments:
+    --path <path>              Path to scan. (Default: current directory)
+    --ignore <pattern>         Regex, or name pattern to ignore files or folders (e.g. --ignore '__pycache__')
+    --chart [<save_path>]      Create chart for your directory tree. Default chart name is 'SepheraChart'."""
