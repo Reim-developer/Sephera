@@ -64,4 +64,8 @@ class Handler:
     
     def help_command_handler(self, args) -> None:
         sepheraHelp = SepheraHelp()
-        sepheraHelp.usage()
+
+        if not args.command:
+            sepheraHelp.usage()
+        else:
+            sepheraHelp.show_help(args = str(args.command[0]))
