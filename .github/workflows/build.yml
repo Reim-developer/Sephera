@@ -48,7 +48,7 @@ jobs:
   
       - name: Build binary with PyInstaller
         run: |
-            pyinstaller --log-level DEBUG --name ${{ matrix.binary_name }} sephera.spec
+            pyinstaller --log-level DEBUG sephera.spec
         env:
             PYTHONPATH: .:etc:etc/generate
 
