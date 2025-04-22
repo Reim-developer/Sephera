@@ -95,6 +95,13 @@ class Command:
             help = "Regex pattern to ignore files or folders (e.g. --ignore '__pycache__|\\.git')",
             default = None
         )
+        loc_command.add_argument(
+            "--export",
+            type = str,
+            nargs = "?",
+            help = "Export LOC count to data file. Support JSON file format.",
+            default = None
+        )
 
         loc_command.set_defaults(function = self.handler.loc_command_handler)
 
