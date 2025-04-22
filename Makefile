@@ -20,6 +20,9 @@ test-version:
 test-is-latest:
 	@$(venv) $(test_entry) test is-latest
 
+test-languages-supports:
+	@$(venv) calc.py
+
 gen-data-cfg:
 	@$(venv) $(data_config)
 
