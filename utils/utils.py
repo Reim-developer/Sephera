@@ -81,9 +81,18 @@ class Utils:
         return version_tag.lstrip("v")
     
     def is_latest_version(self) -> bool:
-        latest_version = version.parse(self.fetch_latest_version())
+        latest_version = self.fetch_latest_version()
         current_version = version.parse(SEPHERA_VERSION)
 
+        if latest_version == '':
+            console = Console()
+
+            console.print("\n".join([
+                "[red][!] Could not get latest version of Sephera, please try again."
+            ]))
+            sys.exit(1)
+
+        latest_version = version.parse(latest_version)
         if latest_version > current_version or latest_version == current_version:
             return True
     
