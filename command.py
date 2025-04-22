@@ -22,6 +22,7 @@ class Command:
             self._set_stats_command()
             self._set_loc_command()
             self._set_help_command()
+            self._set_update_command()
             
             args = self.sephera_parser.parse_args()
             if args.command is None:
@@ -105,4 +106,9 @@ class Command:
             help = "Display help about a command."
         )
         help_command.set_defaults(function = self.handler.help_command_handler)
+
+    def _set_update_command(self) -> None:
+        update_command = self.sub_command.add_parser("update", help = "Update Sephera if latest version is available")
+        update_command.set_defaults(function = self.handler.update_command_handler)
+    
 
