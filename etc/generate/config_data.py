@@ -95,6 +95,56 @@ CONFIG_DATA = {
       "single_line": "#",
       "multi_line_start": "#=",
       "multi_line_end": "=#"
+    },
+    "coffee_script_style": {
+      "single_line": "###",
+      "multi_line_start": "/*",
+      "multi_line_end": "*/"
+    },
+    "basic_style": {
+      "single_line": "'",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "matlab_style": {
+      "single_line": "%",
+      "multi_line_start": "%{",
+      "multi_line_end": "}%"
+    },
+    "ada_style": {
+      "single_line": "--",
+      "multi_line_start": "/*",
+      "multi_line_end": "*/"
+    },
+    "autohotkey_style": {
+      "single_line": ";",
+      "multi_line_start": "/*",
+      "multi_line_end": "*/"
+    },
+    "erlang_style": {
+      "single_line": "%%",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "clojure_style": {
+      "single_line": ";",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "cobol_style": {
+      "single_line": "*>",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "fortran_style": {
+      "single_line": "!",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "ocaml_style": {
+      "single_line": None,
+      "multi_line_start": "(*",
+      "multi_line_end": "*)"
     }
   },
   "languages": [
@@ -116,7 +166,6 @@ CONFIG_DATA = {
       "name": "JavaScript",
       "extension": [
         ".js",
-        ".jsx",
         ".mjs"
       ],
       "comment_styles": "c_style"
@@ -185,7 +234,20 @@ CONFIG_DATA = {
     {
       "name": "TypeScript",
       "extension": [
-        ".ts",
+        ".ts"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "React JavaScript",
+      "extension": [
+        ".jsx"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "React TypeScript",
+      "extension": [
         ".tsx"
       ],
       "comment_styles": "c_style"
@@ -419,7 +481,137 @@ CONFIG_DATA = {
       "extension": [
         ".jl"
       ],
-      "comment_styles": None
+      "comment_styles": "julia_style"
+    },
+    {
+      "name": "Coffee Script",
+      "extension": [
+        ".coffee"
+      ],
+      "comment_styles": "coffee_script_style"
+    },
+    {
+      "name": "BASIC",
+      "extension": [
+        ".bas"
+      ],
+      "comment_styles": "basic_style"
+    },
+    {
+      "name": "MATLAB",
+      "extension": [
+        ".mlx"
+      ],
+      "comment_styles": "matlab_style"
+    },
+    {
+      "name": "Action Script",
+      "extension": [
+        ".as"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Ada",
+      "extension": [
+        ".ada",
+        ".adb"
+      ],
+      "comment_styles": "ada_style"
+    },
+    {
+      "name": "AutoHotkey Script",
+      "extension": [
+        ".ahk"
+      ],
+      "comment_styles": "autohotkey_style"
+    },
+    {
+      "name": "Carbon",
+      "extension": [
+        ".carbon"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Swift",
+      "extension": [
+        ".swift"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Emacs Lisp",
+      "extension": [
+        ".el",
+        ".elc",
+        ".eln"
+      ],
+      "comment_styles": "lisp_style"
+    },
+    {
+      "name": "Fantom",
+      "extension": [
+        ".fan"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Erlang",
+      "extension": [
+        ".erl"
+      ],
+      "comment_styles": "erlang_style"
+    },
+    {
+      "name": "Crytal",
+      "extension": [
+        ".cr"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Clojure",
+      "extension": [
+        ".clj"
+      ],
+      "comment_styles": "clojure_style"
+    },
+    {
+      "name": "COBOL",
+      "extension": [
+        ".cbl"
+      ],
+      "comment_styles": "cobol_style"
+    },
+    {
+      "name": "D",
+      "extension": [
+        ".d"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Dylan",
+      "extension": [
+        ".dylan"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Fortran",
+      "extension": [
+        ".f",
+        ".f95"
+      ],
+      "comment_styles": "fortran_style"
+    },
+    {
+      "name": "OCaml",
+      "extension": [
+        ".ml"
+      ],
+      "comment_styles": "ocaml_style"
     }
   ]
 }
