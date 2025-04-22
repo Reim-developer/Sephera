@@ -9,5 +9,7 @@ let f = function
 
 (* Real code, for test LOC is working. *)
 let f = function
-  | 'A'..'Z' -> "Uppercase"
+  | 'A'..'Z' -> "Uppercase" (* 
+    Special comment again.
+  *)
 
