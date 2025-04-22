@@ -63,7 +63,7 @@ class CodeLoc:
                         empty_line_count += 1
                         continue
 
-                    if comment_style.single_line and line.startswith(comment_style.single_line):
+                    if comment_nesting_level == 0 and comment_style.single_line and line.startswith(comment_style.single_line):
                         comment_line_count += 1
                         continue
 
@@ -88,28 +88,49 @@ class CodeLoc:
                                 break
                         continue
 
+                    
                     if comment_style.multi_line_start and comment_style.multi_line_start in line:
-                        comment_line_count += 1
-                        comment_nesting_level = 1
-
-                        current_line = line[line.find(comment_style.multi_line_start) + len(comment_style.multi_line_start):]
-
-                        while (comment_style.multi_line_start in current_line or 
-                            comment_style.multi_line_end in current_line):
-
-                            start_idx = current_line.find(comment_style.multi_line_start)
-                            end_idx = current_line.find(comment_style.multi_line_end)
-
-                            if start_idx != -1 and (end_idx == -1 or start_idx < end_idx):
-                                comment_nesting_level += 1
-                                current_line = current_line[start_idx + len(comment_style.multi_line_start):]
-
-                            elif end_idx != -1:
-                                comment_nesting_level -= 1
-                                current_line = current_line[end_idx + len(comment_style.multi_line_end):]
+                        
+                        start_pos = line.find(comment_style.multi_line_start)
+                        code_before_comment = line[:start_pos].strip()
+                        
+                        
+                        if code_before_comment:
+                            loc_line_count += 1
+                            
+                            remaining_line = line[start_pos + len(comment_style.multi_line_start):]
+                            
+                            if comment_style.multi_line_end in remaining_line:
+                                pass
 
                             else:
-                                break
+                                comment_nesting_level = 1
+
+                        else:
+                        
+                            comment_line_count += 1
+                            
+                            current_line = line[start_pos + len(comment_style.multi_line_start):]
+
+                            while (comment_style.multi_line_start in current_line or 
+                                comment_style.multi_line_end in current_line):
+
+                                start_idx = current_line.find(comment_style.multi_line_start)
+                                end_idx = current_line.find(comment_style.multi_line_end)
+
+                                if start_idx != -1 and (end_idx == -1 or start_idx < end_idx):
+                                    comment_nesting_level += 1
+                                    current_line = current_line[start_idx + len(comment_style.multi_line_start):]
+
+                                elif end_idx != -1:
+                                    comment_nesting_level -= 1
+                                    current_line = current_line[end_idx + len(comment_style.multi_line_end):]
+
+                                else:
+                                    break
+                                    
+                            if comment_style.multi_line_end not in line:
+                                comment_nesting_level = 1
                         continue
 
                     loc_line_count += 1
