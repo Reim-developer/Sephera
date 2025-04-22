@@ -11,6 +11,7 @@ try:
     from sephera.CodeLoc import CodeLoc
     from sephera.help import SepheraHelp
     from sephera.get_update import GetUpdate
+    from sephera.interactive import SepheraInteractive
 except KeyboardInterrupt:
     print(f"\n Aborted by user.")
     sys.exit(1)
@@ -59,7 +60,17 @@ class Handler:
         if not self.utils.is_path_exists(args.path):
             self.sephera_stdout.show_error(f"{args.path} not found.")
             sys.exit(1)
+        
+        if args.export is None:
+            interactive = SepheraInteractive()
+            
+            try:
+                interactive.codeloc_interactive(args.path)
 
+            except KeyboardInterrupt:
+                self.console.print("\n[cyan][+] Aborted by user.")
+                sys.exit(0)
+            
         codeLoc = CodeLoc(args.path, args.ignore)
         codeLoc.stdout_result()
     
