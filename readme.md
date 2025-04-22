@@ -5,13 +5,19 @@
 ![CodeLoc Preview](./preview/CodeLoc.gif)
 
 ## Features
-- 🚀 Fast, portable, just download and used
-- 🔍 `loc`: Quickly calculate the total lines of code.
-- 📊 `stats`: Show project statistics, including file/folder counts and total size.
-- 🌳 `tree`: Display a directory tree view with optional chart generation.
+- 🚀 **Blazingly fast**: 700k lines counted in just 1 second.
+- ⚙️ **Portable**: Zero setup, just download and run.
+- 🔍 `loc`: Count total lines of code with regex/glob support.
+- 📊 `stats`: Show detailed file/folder stats (count, size, etc.).
+- 🌳 `tree`: Directory tree visualization with optional chart.
+- ❌ Ignore patterns: Regex-based exclusion (`__pycache__`, `.git`, etc.).
+- 📈 Optional chart generation in CLI or image format.
 
 ## Installation
-* Go to [release page](https://github.com/Reim-developer/Sephera/releases/), choose binary for your OS, just install and use it.
+1. Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
+2. Download the binary for your OS.
+3. Add it to PATH (optional).
+4. Run it from anywhere.
 
 ## Usage
 
