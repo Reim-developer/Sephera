@@ -36,7 +36,16 @@ class GetUpdate:
                     self.console.print(f"[red]Invalid option: {prompt_value}. Type '3' to exit.")
                     
     def update_sephera(self) -> None:
-        is_latest_version: bool = self.utils.is_latest_version()
+        try:
+            is_latest_version: bool = self.utils.is_latest_version()
+            
+        except Exception as error:
+            self.console.print("\n".join([
+                "[red][+] Error when fetch latest verion of Sephera:",
+                f"[red][+] Error name: {type(error).__name__}",
+                f"[red][+] Error details: [yellow]{error}"
+            ]))
+            sys.exit(1)
 
         if is_latest_version:
             try:
