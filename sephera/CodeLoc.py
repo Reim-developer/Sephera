@@ -3,6 +3,7 @@ import re
 import sys
 import time
 import logging
+import json
 from typing import Dict, Optional, Tuple, List
 
 try:
@@ -194,6 +195,58 @@ class CodeLoc:
                     result["Unknown"]["size"] += 0.0
 
         return result
+    
+    def export_to_json(self, file_path: str) -> None:
+        start_time: float = time.perf_counter()
+
+        with self.console.status("Processing...", spinner = "material") as progressBar:
+            loc_count = self.count_loc()
+
+        end_time: float = time.perf_counter()
+        self.console.clear()
+
+        total_loc_count: int = 0
+        total_comment: int = 0
+        total_empty: int = 0
+        total_project_size: float = 0.0
+        language_count: int = 0
+
+
+        finish_result = {}
+        for language, count in loc_count.items():
+            loc_line = count["loc"]
+            comment_line = count["comment"]
+            empty_line = count["empty"]
+            total_sizeof = count["size"]
+
+            if loc_line > 0 or comment_line > 0 or empty_line > 0 or total_sizeof > 0:
+
+                language_count += 1
+                language_config  = self.language_data.get_language_by_name(name = language)
+
+                comment_result = (
+                    "N/A" if language_config.comment_style == "no_comment"
+                    else str(comment_line)
+                )
+
+                total_loc_count += loc_line
+                total_comment += comment_line
+                total_empty += empty_line
+                total_project_size += total_sizeof
+
+
+                finish_result[language] = {
+                    "Language:": {
+                        "Language Name:": language,
+                        "Code lines": loc_line,
+                        "Comment lines": comment_result,
+                        "Empty lines": empty_line,
+                        "Size (MB)": f"{total_sizeof:.2f}" 
+                    }
+                }
+
+        with open(file = file_path, mode = "w", encoding = "utf-8") as json_file:
+            json.dump(finish_result, json_file, indent = 4, ensure_ascii = True)
 
     def stdout_result(self) -> None:
         logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
