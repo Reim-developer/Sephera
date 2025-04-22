@@ -16,7 +16,7 @@ class SepheraInteractive:
             
         while True:
             self.console.print("\n".join([
-                    f"[yellow][!] This file {json_file}.json already exists. Do you want:",
+                    f"[yellow][!] This file {json_file} already exists. Do you want:",
                     f"[cyan][1] Replace and override all data in {json_file}.",
                     f"[cyan][2] Save {json_file} to other directory path.",
                     "[cyan][3] Change file name before save.",
@@ -35,10 +35,34 @@ class SepheraInteractive:
                         sys.exit(0)
                         
                 case "2":
-                    pass
+                    while True:
+                        case2_prompt: str = input("Input new direcotory path: ").strip()
+
+                        if not os.path.exists(case2_prompt):
+                            self.console.print(f"[red][!] This directory path: {case2_prompt} not found. Stop now.")
+                            sys.exit(1)
+
+                        codeLoc.export_to_json(file_path = f"{case2_prompt}/{json_file}")
+                        self.console.print("\n".join([
+                            "[cyan][+] Export to JSON file successfully.",
+                            f"[cyan][+] With name: {json_file}",
+                            f"[cyan][+] Save as: {os.path.abspath(json_file)}"
+                        ]))
+                        sys.exit(0)
 
                 case "3":
-                    pass
+                    case3_prompt: str = input("Input new name for file: ").replace(" ", "_")
+
+                    if not case3_prompt.endswith(".json"):
+                        case3_prompt += ".json"
+
+                    codeLoc.export_to_json(file_path = case3_prompt)
+                    self.console.print("\n".join([
+                        "[cyan][+] Export to JSON file successfully.",
+                        f"[cyan][+] With name: {case3_prompt}",
+                        f"[cyan][+] Save as: {os.path.abspath(case3_prompt)}"
+                    ]))
+                    sys.exit(0)
 
                 case "4":
                     sys.exit(0)
@@ -56,14 +80,15 @@ class SepheraInteractive:
                 user_option += ".json"
 
             if user_option == ".json":
-                sys.exit(0)
+                user_option = f"SepheraDefaultLog.json"
 
             if os.path.exists(path = user_option):
                 try:
                     self._code_loc_exist_file_handler(json_file = user_option, base_path = base_path)
 
                 except KeyboardInterrupt:
-                    self.console.print("\n[cyan][+] Aborted by user.")    
+                    self.console.print("\n[cyan][+] Aborted by user.")
+                    sys.exit(0)   
 
             codeLoc = CodeLoc()
             codeLoc.export_to_json(file_path = user_option)
