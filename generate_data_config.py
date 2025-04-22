@@ -12,7 +12,7 @@ def generate_data_config() -> None:
 
     logging.basicConfig(level = logging.DEBUG, format = "%(asctime)s - %(levelname)s - %(message)s")
 
-    with open(file = "./etc/generateconfig_data.py", mode = "w", encoding = "utf-8") as output_file:
+    with open(file = "./etc/generate/config_data.py", mode = "w", encoding = "utf-8") as output_file:
         output_file.write("\n".join([
             "# ================================================================",
             "# Auto-generated file config from YAML configuration",
