@@ -1,16 +1,24 @@
-.PHONY: chart config data preview sephera test utils .venv
+.PHONY: chart config data preview sephera test utils .venv build dist
 
 # Make sure .venv exists. 
 venv = .venv/bin/python
 pip_venv = .venv/bin/pip
 data_config = generate_data_config.py
 help_config = generate_help.py
+test_entry = test.py
 
 # Make sure requirements.txt exists
 requirements_pip = requirements.txt
 
-test:
-	@$(venv) test.py
+# Test case
+test-loc:
+	@$(venv) $(test_entry) test loc
+
+test-version:
+	@$(venv) $(test_entry) test fetch-version
+
+test-is-latest:
+	@$(venv) $(test_entry) test is-latest
 
 gen-data-cfg:
 	@$(venv) $(data_config)
@@ -28,3 +36,10 @@ venv_check:
 		python3 -m venv .venv; \
 	fi
 	@echo "Virtual enviroment is ready. Use source .venv/bin/activate to activate this."
+
+build:
+	@pyinstaller --log-level DEBUG sephera.spec
+	@echo Build successfully.
+
+
+
