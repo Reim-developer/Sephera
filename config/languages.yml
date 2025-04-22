@@ -90,6 +90,56 @@ comment_styles:
     single_line: "#"
     multi_line_start: "#="
     multi_line_end: "=#"
+  
+  coffee_script_style:
+    single_line: "###"
+    multi_line_start: "/*"
+    multi_line_end: "*/"
+
+  basic_style:
+    single_line: "'"
+    multi_line_start: null
+    multi_line_end: null
+  
+  matlab_style:
+    single_line: "%"
+    multi_line_start: "%{"
+    multi_line_end: "}%"
+  
+  ada_style:
+    single_line: "--"
+    multi_line_start: "/*"
+    multi_line_end: "*/"
+
+  autohotkey_style:
+    single_line: ";"
+    multi_line_start: "/*"
+    multi_line_end: "*/"
+  
+  erlang_style:
+    single_line: "%%"
+    multi_line_start: null
+    multi_line_end: null
+  
+  clojure_style:
+    single_line: ";"
+    multi_line_start: null
+    multi_line_end: null
+
+  cobol_style:
+    single_line: "*>"
+    multi_line_start: null
+    multi_line_end: null 
+
+  fortran_style:
+    single_line: "!"
+    multi_line_start: null
+    multi_line_end: null
+
+  ocaml_style:
+    single_line: null
+    multi_line_start: "(*"
+    multi_line_end: "*)"
 
 # Languages extension, name, and comment style configuration.
 languages:
@@ -106,7 +156,6 @@ languages:
   - name: JavaScript
     extension:
       - .js
-      - .jsx
       - .mjs
     comment_styles: c_style
 
@@ -158,6 +207,15 @@ languages:
   - name: TypeScript
     extension:
     - .ts
+    comment_styles: c_style
+
+  - name: React JavaScript
+    extension:
+    - .jsx
+    comment_styles: c_style
+  
+  - name: React TypeScript
+    extension:
     - .tsx
     comment_styles: c_style
   
@@ -326,6 +384,98 @@ languages:
   - name: Julia
     extension:
     - .jl
-    comment_styles:
+    comment_styles: julia_style
 
+  - name: Coffee Script
+    extension:
+    - .coffee
+    comment_styles: coffee_script_style
+
+  - name: BASIC
+    extension:
+    - .bas
+    comment_styles: basic_style
+
+  - name: MATLAB
+    extension:
+    - .mlx
+    comment_styles: matlab_style
   
+  - name: Action Script
+    extension:
+    - .as
+    comment_styles: c_style
+
+  - name: Ada
+    extension:
+    - .ada
+    - .adb
+    comment_styles: ada_style
+
+  - name: AutoHotkey Script
+    extension:
+    - .ahk
+    comment_styles: autohotkey_style
+
+  - name: Carbon
+    extension:
+    - .carbon
+    comment_styles: c_style
+
+  - name: Swift
+    extension:
+    - .swift
+    comment_styles: c_style
+
+  - name: Emacs Lisp
+    extension:
+    - .el
+    - .elc
+    - .eln
+    comment_styles: lisp_style
+
+  - name: Fantom
+    extension:
+    - .fan
+    comment_styles: c_style
+  
+  - name: Erlang
+    extension:
+    - .erl
+    comment_styles: erlang_style
+
+  - name: Crytal
+    extension:
+    - .cr
+    comment_styles: shell_style
+  
+  - name: Clojure
+    extension:
+    - .clj
+    comment_styles: clojure_style
+  
+  - name: COBOL
+    extension:
+    - .cbl
+    comment_styles: cobol_style
+
+  - name: D
+    extension:
+    - .d
+    comment_styles: c_style
+
+  - name: Dylan
+    extension:
+    - .dylan
+    comment_styles: c_style
+
+  - name: Fortran
+    extension:
+    - .f
+    - .f95
+    comment_styles: fortran_style
+  
+  - name: OCaml
+    extension:
+    - .ml
+    comment_styles: ocaml_style
