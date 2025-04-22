@@ -10,6 +10,7 @@ try:
     from utils.utils import Utils
     from utils.stdout import SepheraStdout
     from rich.console import Console
+    from rich.table import Table
 except KeyboardInterrupt:
     print("\n Aborted by user.")
 
@@ -146,6 +147,7 @@ class CodeLoc:
 
     def stdout_result(self) -> None:
         logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
+
         start_time: float = time.perf_counter()
 
         with self.console.status("Processing...", spinner = "material") as progressBar:
@@ -154,9 +156,12 @@ class CodeLoc:
         end_time: float = time.perf_counter()
         self.console.clear()
         
-
-        print(f"LOC count of directory: {self.base_path}")
-        print("-" * 50)
+        table = Table(title = f"LOC count of directory: {self.base_path}")
+        table.add_column("Language", style = "cyan")
+        table.add_column("Code lines", justify = "right", style = "green")
+        table.add_column("Comments lines", justify = "right", style = "yellow")
+        table.add_column("Empty lines", justify = "right", style = "white")
+        table.add_column("Size (MB)", justify = "right", style = "magenta")
 
         total_loc_count: int = 0
         total_comment: int = 0
@@ -174,25 +179,24 @@ class CodeLoc:
 
                 language_count += 1
     
-                print(f"Language: {language}")
-                print(f"Code: {loc_line} lines")
-
                 language_config  = self.language_data.get_language_by_name(name = language)
-                if language_config and language_config.comment_style == "no_comment":
-                    print(f"Comments: This language doesn't support comment")
-                else:
-                    print(f"Comments: {comment_line} lines")
+                comment_result = (
+                    "N/A" if language_config.comment_style == "no_comment"
+                    else str(comment_line)
+                )
 
-                print(f"Empty: {empty_line} lines")
-                print("-" * 50)
-                
+                table.add_row(
+                    language, str(loc_line),
+                    comment_result, str(empty_line),
+                    f"{total_sizeof:.2f}"
+                )
                 total_loc_count += loc_line
                 total_comment += comment_line
                 total_empty += empty_line
                 total_project_size += total_sizeof
-                
+        
+        self.console.print(table)
         self.stdout.show_msg("\n".join([
-            f"[+] Project LOC:",
             f"[+] Code: {total_loc_count} lines",
             f"[+] Comments: {total_comment} lines",
             f"[+] Empty: {total_empty} lines",
