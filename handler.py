@@ -10,6 +10,7 @@ try:
     from utils.utils import Utils
     from sephera.CodeLoc import CodeLoc
     from sephera.help import SepheraHelp
+    from sephera.get_update import GetUpdate
 except KeyboardInterrupt:
     print(f"\n Aborted by user.")
     sys.exit(1)
@@ -69,3 +70,7 @@ class Handler:
             sepheraHelp.usage()
         else:
             sepheraHelp.show_help(args = str(args.command[0]))
+
+    def update_command_handler(self, _) -> None:
+        get_update = GetUpdate()
+        get_update.update_sephera()
