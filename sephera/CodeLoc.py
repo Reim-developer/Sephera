@@ -50,7 +50,7 @@ class CodeLoc:
         loc_line_count: int = 0
         comment_line_count: int = 0
         empty_line_count: int = 0
-        in_multi_line_comment: bool = False
+        comment_nesting_level: int = 0  
 
         comment_style: Optional[CommentStyle] = self.language_data.get_comment_style(language = language)
 
@@ -58,6 +58,7 @@ class CodeLoc:
             with open(file = file_path, mode = "r", encoding = "utf-8") as file:
                 for line in file:
                     line = line.strip()
+
                     if not line:
                         empty_line_count += 1
                         continue
@@ -66,22 +67,50 @@ class CodeLoc:
                         comment_line_count += 1
                         continue
 
-                    if comment_style.multi_line_start and comment_style.multi_line_end:
-                        if in_multi_line_comment:
-                            comment_line_count += 1
+                    if comment_nesting_level > 0:
+                        comment_line_count += 1
+                        current_line = line
 
-                            if comment_style.multi_line_end in line:
-                                in_multi_line_comment = False
-                            continue
+                        while (comment_style.multi_line_start in current_line or 
+                            comment_style.multi_line_end in current_line):
+                            start_idx = current_line.find(comment_style.multi_line_start)
+                            end_idx = current_line.find(comment_style.multi_line_end)
 
-                        if line.startswith(comment_style.multi_line_start):
-                            comment_line_count += 1
+                            if start_idx != -1 and (end_idx == -1 or start_idx < end_idx):
+                                comment_nesting_level += 1
+                                current_line = current_line[start_idx + len(comment_style.multi_line_start):]
 
-                            if comment_style.multi_line_end in line[line.find(comment_style.multi_line_start) + len(comment_style.multi_line_start):]:
-                                continue
+                            elif end_idx != -1:
+                                comment_nesting_level -= 1
+                                current_line = current_line[end_idx + len(comment_style.multi_line_end):]
 
-                            in_multi_line_comment = True
-                            continue
+                            else:
+                                break
+                        continue
+
+                    if comment_style.multi_line_start and comment_style.multi_line_start in line:
+                        comment_line_count += 1
+                        comment_nesting_level = 1
+
+                        current_line = line[line.find(comment_style.multi_line_start) + len(comment_style.multi_line_start):]
+
+                        while (comment_style.multi_line_start in current_line or 
+                            comment_style.multi_line_end in current_line):
+
+                            start_idx = current_line.find(comment_style.multi_line_start)
+                            end_idx = current_line.find(comment_style.multi_line_end)
+
+                            if start_idx != -1 and (end_idx == -1 or start_idx < end_idx):
+                                comment_nesting_level += 1
+                                current_line = current_line[start_idx + len(comment_style.multi_line_start):]
+
+                            elif end_idx != -1:
+                                comment_nesting_level -= 1
+                                current_line = current_line[end_idx + len(comment_style.multi_line_end):]
+
+                            else:
+                                break
+                        continue
 
                     loc_line_count += 1
 
@@ -91,7 +120,7 @@ class CodeLoc:
                 f"Hint: Use --ignore flag to ignore that file: '--ignore {file_path}'"
             ]))
             sys.exit(1)
-
+            
         except Exception as e:
             print(f"Exception: '{e}' when read: {file_path}")
             sys.exit(1)
