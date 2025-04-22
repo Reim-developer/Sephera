@@ -145,6 +145,21 @@ CONFIG_DATA = {
       "single_line": None,
       "multi_line_start": "(*",
       "multi_line_end": "*)"
+    },
+    "eiffel_style": {
+      "single_line": "--",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "pascal_style": {
+      "single_line": "//",
+      "multi_line_start": "{",
+      "multi_line_end": "}"
+    },
+    "elixir_style": {
+      "single_line": "#",
+      "multi_line_start": "@doc \"\"\"",
+      "multi_line_end": "\"\"\""
     }
   },
   "languages": [
@@ -184,6 +199,13 @@ CONFIG_DATA = {
         ".cpp",
         ".cxx",
         ".c++"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "C",
+      "extension": [
+        ".c"
       ],
       "comment_styles": "c_style"
     },
@@ -612,6 +634,35 @@ CONFIG_DATA = {
         ".ml"
       ],
       "comment_styles": "ocaml_style"
+    },
+    {
+      "name": "Eiffel",
+      "extension": [
+        ".e"
+      ],
+      "comment_styles": "eiffel_style"
+    },
+    {
+      "name": "Pascal",
+      "extension": [
+        ".pas"
+      ],
+      "comment_styles": "pascal_style"
+    },
+    {
+      "name": "TCL",
+      "extension": [
+        ".tcl"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Elixir",
+      "extension": [
+        ".ex",
+        ".exs"
+      ],
+      "comment_styles": "elixir_style"
     }
   ]
 }
