@@ -6,3 +6,8 @@ let f = function
   | 'A'..'Z' -> "Uppercase"
     (* Add other cases later... *)
 *)
+
+(* Real code, for test LOC is working. *)
+let f = function
+  | 'A'..'Z' -> "Uppercase"
+
