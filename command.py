@@ -96,10 +96,11 @@ class Command:
             default = None
         )
         loc_command.add_argument(
-            "--export",
+            "--json",
             type = str,
             nargs = "?",
-            help = "Export LOC count to data file. Support JSON file format.",
+            const = "SepheraExport",
+            help = "Export LOC count to JSON file format. e.g --json ('<MyChartSaveDir>')",
             default = None
         )
 
