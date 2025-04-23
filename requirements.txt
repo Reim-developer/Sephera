@@ -2,3 +2,5 @@ matplotlib
 rich
 PyYAML
 requests
+mkdocs
+nuitka
