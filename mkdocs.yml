@@ -1,0 +1,34 @@
+site_name: Sephera CLI Documentation
+repo_name: Reim-developer/Sephera
+
+theme:
+  name: material
+  language: en
+
+  features:
+    - navigation.tabs
+    - navigation.sections
+    - content.code.copy
+    - content.action.edit
+    - navigation.top
+
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: deep purple
+      accent: deep purple
+
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: deep purple
+      accent: deep purple
+
+nav:
+  - Home: index.md
+  - Github: https://github.com/reim-developer/Sephera
+  - Install:
+    - Sephera Install: pages/install.md
+  - Usage:
+    - Sephera Usage: pages/usage.md
+  
+
