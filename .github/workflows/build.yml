@@ -3,57 +3,64 @@ on:
   push:
     branches:
       - master
-  workflow_dispatch:
 
 jobs:
   build:
-    name: Build for ${{ matrix.os }}
-    runs-on: ${{ matrix.os }}
     strategy:
-      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest, macos-latest]
-        include:
-          
-          - os: ubuntu-latest
-            binary_name: sephera
-            artifact_path: dist/sephera
+        os: [macos-latest, ubuntu-latest, windows-latest]
 
-          - os: windows-latest
-            binary_name: sephera.exe
-            artifact_path: dist/sephera.exe  
-            
-          - os: macos-latest
-            binary_name: sephera
-            artifact_path: dist/sephera
+    runs-on: ${{ matrix.os }}
 
     steps:
-      - name: Checkout repository
+      - name: Check-out repository
         uses: actions/checkout@v4
 
-      - name: Set up Python
+      - name: Setup Python
         uses: actions/setup-python@v5
         with:
-          python-version: '3.13.3'
+          python-version: '3.13'
+          architecture: 'x64'
+          
+          cache: 'pip'
+          cache-dependency-path: |
+            **/requirements*.txt
 
-      - name: Install dependencies
-        shell: pwsh
+      - name: Install Dependencies
+        run: |
+          pip install -r requirements.txt
+
+      - name: Install Clang (for Linux and macOS)
+        if: matrix.os != 'windows-latest'
 
         run: |
-          python -m pip install --upgrade pip
-          pip install pyinstaller
-          if (Test-Path requirements.txt) {
-            pip install -r requirements.txt
-          }
-  
-      - name: Build binary with PyInstaller
-        run: |
-            pyinstaller --log-level DEBUG sephera.spec
-        env:
-            PYTHONPATH: .:etc:etc/generate
+          sudo apt-get update && sudo apt-get install -y clang
+        shell: bash
 
-      - name: Upload binary artifact
+      - name: Build Executable
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: main.py
+          mode: onefile
+          output-filename: 'Sephera_${{ runner.os }}'
+
+          extra-args: |
+            --show-progress
+            --nofollow-import-to=tests,examples,test
+            --noinclude-pytest=nofollow
+            --lto=yes
+            ${{ matrix.os != 'windows-latest' && '--clang' || '' }}
+            --jobs=4  
+            --static-libpython=yes
+            --output-dir=build
+
+      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
-          name: ${{ matrix.os }}-binary
-          path: ${{ matrix.artifact_path }}
+          name: ${{ runner.os }} Build
+          path: |
+            build/*.exe
+            build/*.bin
+            build/*.app/**/*
+          include-hidden-files: true
