@@ -33,8 +33,10 @@ jobs:
         uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
-          script-name: Sephera
-          mode: app
+          script-name: main.py
+          mode: onefile
+          lto: yes
+          
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
