@@ -11,7 +11,7 @@ try:
     from sephera.CodeLoc import CodeLoc
     from sephera.help import SepheraHelp
     from sephera.get_update import GetUpdate
-    from sephera.interactive.confirm import ConfirmInteractive
+    from sephera.interactive.option import OptionHandler
 except KeyboardInterrupt:
     print(f"\nAborted by user.")
     sys.exit(1)
@@ -60,34 +60,12 @@ class Handler:
         if not self.utils.is_path_exists(args.path):
             self.sephera_stdout.show_error(f"{args.path} not found.")
             sys.exit(1)
-
-        codeLoc = CodeLoc(args.path, args.ignore)
-        confirmInterative = ConfirmInteractive()
-
+    
         if args.json:
-            if not args.json.endswith(".json"):
-                args.json += ".json"
-
-            codeLoc.export_to_json(file_path = args.json)
-
-            self.console.clear()
-            confirm_result = confirmInterative.verbose_confirm()
-
-            if confirm_result:
-                codeLoc.stdout_result()
-                self.console.print("\n".join([
-                    f"Sucessfully save {args.json}.",
-                    f"Save directory path: {os.path.abspath(args.json)}"
-                ]))
-                sys.exit(0)
-
-            else:
-                self.console.print("\n".join([
-                    f"\nSucessfully save {args.json}.",
-                    f"Save directory path: {os.path.abspath(args.json)}"
-                ]))
-                sys.exit(0)
-
+            option = OptionHandler()
+            option.on_json_export_option(args = args)
+        
+        codeLoc = CodeLoc(args.path, args.ignore)
         codeLoc.stdout_result()
     
     def help_command_handler(self, args) -> None:
