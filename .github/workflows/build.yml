@@ -29,41 +29,15 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Install Clang for Linux
-        if: matrix.os == 'ubuntu-latest'
-        
-        run: |
-          sudo apt-get update && sudo apt-get install -y clang
-        shell: bash
-
-      - name: Install Clang for macOS
-        if: matrix.os == 'macos-latest'
-
-        run: |
-          brew install llvm
-          echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH
-        shell: bash
-
       - name: Build Executable
         uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
-          script-name: main.py
-          mode: onefile
-          output-filename: 'Sephera_${{ runner.os }}'
-          extra-args: |
-            --show-progress
-            --nofollow-import-to=tests,examples,test
-            --noinclude-pytest=nofollow
-            --lto=yes
-            ${{ matrix.os != 'windows-latest' && '--clang' || '' }}
-            --jobs=4
-            --static-libpython=yes
-            --output-dir=build
+          script-name: Sephera
+          mode: app
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
-
         with:
           name: ${{ runner.os }} Build
           path: |
