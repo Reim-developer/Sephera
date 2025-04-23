@@ -19,6 +19,10 @@
 - 🏷️ **Language Detection**: Auto detects 60+ languages.
 - 🧪 **Benchmark**: 1.38M lines scanned in ~1.13s.
 
+## Documentation:
+* [Website version](https://reim-developer.github.io/Sephera/)
+* [Markdown version](./docs/index.md)
+
 ## Installation
 1. Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
 2. Download the binary for your OS.
@@ -31,7 +35,7 @@
 sephera [command] [options...]
 ```
 ## How to use
-Use `sephera help` for more information.
+Use `sephera help` for more information
 
 ## Example
 
