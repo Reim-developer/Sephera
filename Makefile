@@ -40,9 +40,19 @@ venv_check:
 	fi
 	@echo "Virtual enviroment is ready. Use source .venv/bin/activate to activate this."
 
-build:
-	@pyinstaller --log-level DEBUG sephera.spec
-	@echo Build successfully.
+UNAME_S := $(shell uname -s)
+ifeq ($(UNAME_S),Linux)
+	install_task := chmod +x ./install.sh && ./install.sh
 
+else ifeq ($(UNAME_S), Darwin)
+	install_task := chmod +x ./install.sh && ./install.sh
+	
+else
+	@echo "Your OS $(UNAME_S) is not supported. Please build from source manual."
+	
+endif
+
+install:
+	$(install_task)
 
 
