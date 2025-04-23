@@ -230,17 +230,25 @@ class CodeLoc:
                 total_empty += empty_line
                 total_project_size += total_sizeof
 
-
                 finish_result[language] = {
-                    "Language:": {
-                        "Language Name:": language,
                         "Code lines": loc_line,
                         "Comment lines": comment_result,
                         "Empty lines": empty_line,
-                        "Size (MB)": f"{total_sizeof:.2f}" 
-                    }
+                        "Size (MB)": f"{total_sizeof:.2f} MB" 
                 }
 
+        total_data = {
+            "Scan In:": f"{os.path.abspath(path = self.base_path)}",
+                "Total:": {
+                    "Language(s) used:": language_count,
+                    "Code lines": total_loc_count,
+                    "Comment": total_comment,
+                    "Empty": total_empty,
+                    "Project Size (MB):": f"{total_project_size:.2f} MB"
+            }
+        }
+        
+        finish_result = {**total_data, **finish_result}
         with open(file = file_path, mode = "w", encoding = "utf-8") as json_file:
             json.dump(finish_result, json_file, indent = 4, ensure_ascii = True)
 
