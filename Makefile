@@ -42,10 +42,10 @@ venv_check:
 
 UNAME_S := $(shell uname -s)
 ifeq ($(UNAME_S),Linux)
-	install_task := chmod +x ./install.sh && ./install.sh
+	install_task := chmod +x ./build.sh && ./build.sh
 
 else ifeq ($(UNAME_S), Darwin)
-	install_task := chmod +x ./install.sh && ./install.sh
+	install_task := chmod +x ./build.sh && ./build.sh
 	
 else
 	@echo "Your OS $(UNAME_S) is not supported. Please build from source manual."
