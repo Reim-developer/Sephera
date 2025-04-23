@@ -5,13 +5,19 @@
 ![CodeLoc Preview](./preview/CodeLoc.gif)
 
 ## Features
-- 🚀 **Blazingly fast**: 700k lines counted in just 1 second.
+- 🚀 **Blazingly fast**: 700k lines counted in just ~1 second.
 - ⚙️ **Portable**: Zero setup, just download and run.
 - 🔍 `loc`: Count total lines of code with regex/glob support.
 - 📊 `stats`: Show detailed file/folder stats (count, size, etc.).
 - 🌳 `tree`: Directory tree visualization with optional chart.
 - ❌ Ignore patterns: Regex-based exclusion (`__pycache__`, `.git`, etc.).
 - 📈 Optional chart generation in CLI or image format.
+- 🧠 **Verbose Mode**: Interactive prompt to toggle detailed info.
+- 📁 **JSON Export**: Export scan results in structured JSON format.
+- 🔥 **Massive Scan Support**: Handles entire `~/` directory in ~20s.
+- 🎯 **Hardcore File/Folder Ignore**: Directly exclude entire paths.
+- 🏷️ **Language Detection**: Auto detects 60+ languages.
+- 🧪 **Benchmark**: 1.38M lines scanned in ~1.13s.
 
 ## Installation
 1. Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
