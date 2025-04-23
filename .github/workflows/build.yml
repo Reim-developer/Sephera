@@ -21,7 +21,6 @@ jobs:
         with:
           python-version: '3.13'
           architecture: 'x64'
-          
           cache: 'pip'
           cache-dependency-path: |
             **/requirements*.txt
@@ -30,11 +29,19 @@ jobs:
         run: |
           pip install -r requirements.txt
 
-      - name: Install Clang (for Linux and macOS)
-        if: matrix.os != 'windows-latest'
-
+      - name: Install Clang for Linux
+        if: matrix.os == 'ubuntu-latest'
+        
         run: |
           sudo apt-get update && sudo apt-get install -y clang
+        shell: bash
+
+      - name: Install Clang for macOS
+        if: matrix.os == 'macos-latest'
+
+        run: |
+          brew install llvm
+          echo "/usr/local/opt/llvm/bin" >> $GITHUB_PATH
         shell: bash
 
       - name: Build Executable
@@ -44,19 +51,19 @@ jobs:
           script-name: main.py
           mode: onefile
           output-filename: 'Sephera_${{ runner.os }}'
-
           extra-args: |
             --show-progress
             --nofollow-import-to=tests,examples,test
             --noinclude-pytest=nofollow
             --lto=yes
             ${{ matrix.os != 'windows-latest' && '--clang' || '' }}
-            --jobs=4  
+            --jobs=4
             --static-libpython=yes
             --output-dir=build
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
+
         with:
           name: ${{ runner.os }} Build
           path: |
