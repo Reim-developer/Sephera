@@ -1,50 +1,35 @@
 #!/bin/bash
 set -e
 
-ENTRY="main.py"
-OUTPUT="build"
+REPO="Reim-developer/Sephera"
+BINARY_NAME="sephera"
+INSTALL_PATH="/usr/local/bin/$BINARY_NAME"
+
 OS=$(uname -s)
-THREADS=$(nproc)
 
-if [[ "$OS" == "Linux" ]];then
-  if command -v python3 &> /dev/null; then
-      python3 -m nuitka \
-      --onefile \
-      --remove-output \
-      --show-progress \
-      --nofollow-import-to=tests,examples,test \
-      --noinclude-pytest=nofollow \
-      --lto=yes \
-      --clang \
-      --jobs="$THREADS" \
-      --static-libpython=yes \
-      --output-dir=$OUTPUT \
-      $ENTRY
+case "$OS" in
+  Linux)
+    FILE_NAME="sephera_linux"
+    ;;
+  Darwin)
+    FILE_NAME="sephera_macos"
+    ;;
+  *)
+    echo "❌ Unsupported OS: $OS"
+    echo "👉 On Windows, please download manually:"
+    echo "   https://github.com/$REPO/releases"
+    exit 1
+    ;;
+esac
 
-  else 
-      echo "Python is not installed in your Linux system. Stop now."
-  fi
+URL="https://github.com/$REPO/releases/latest/download/$FILE_NAME"
 
-elif [[ "$OS" == "Darwin" ]]; then
-  if command -v python3 &> /dev/null; then
-      python3 -m nuitka \
-      --onefile \
-      --remove-output \
-      --show-progress \
-      --nofollow-import-to=tests,examples,test \
-      --noinclude-pytest=nofollow \
-      --lto=yes \
-      --clang \
-      --jobs="$THREADS" \
-      --static-libpython=yes \
-      --output-dir=$OUTPUT \
-      $ENTRY
+echo "🔽 Downloading $FILE_NAME from $URL"
+curl -L "$URL" -o "$BINARY_NAME"
 
-  else 
-      echo "Python is not installed in your Darwin system. Stop now."
-  fi
+chmod +x "$BINARY_NAME"
 
-else
-  echo "Unsupported operating system: $OS. If you're use Windows, please install via:"
-  echo "https://github.com/reim-developer/Sephera/releases"
-fi
+echo "🚚 Installing to $INSTALL_PATH"
+sudo mv "$BINARY_NAME" "$INSTALL_PATH"
+
+echo "✅ Done! Try running: $BINARY_NAME --help"
