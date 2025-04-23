@@ -197,12 +197,9 @@ class CodeLoc:
         return result
     
     def export_to_json(self, file_path: str) -> None:
-        start_time: float = time.perf_counter()
-
         with self.console.status("Processing...", spinner = "material") as progressBar:
             loc_count = self.count_loc()
 
-        end_time: float = time.perf_counter()
         self.console.clear()
 
         total_loc_count: int = 0
@@ -210,7 +207,6 @@ class CodeLoc:
         total_empty: int = 0
         total_project_size: float = 0.0
         language_count: int = 0
-
 
         finish_result = {}
         for language, count in loc_count.items():
