@@ -1,5 +1,7 @@
 import sys
 import os
+import time
+import logging
 
 try:
     from rich.console import Console
@@ -60,13 +62,23 @@ class Handler:
         if not self.utils.is_path_exists(args.path):
             self.sephera_stdout.show_error(f"{args.path} not found.")
             sys.exit(1)
-    
+        
+        logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
+
         if args.json:
             option = OptionHandler()
             option.on_json_export_option(args = args)
-        
-        codeLoc = CodeLoc(args.path, args.ignore)
+            sys.exit(0)
+
+        start_time: float = time.perf_counter()
+        with self.console.status(status = "Processing...", spinner = "material"):
+            codeLoc = CodeLoc(args.path, args.ignore)
+
+        end_time: float = time.perf_counter()
+        self.console.clear()
+
         codeLoc.stdout_result()
+        logging.info(f"Finished in {end_time - start_time:.2f}s")
     
     def help_command_handler(self, args) -> None:
         sepheraHelp = SepheraHelp()
