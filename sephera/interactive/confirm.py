@@ -18,7 +18,7 @@ class ConfirmInteractive:
                 "[yellow][2] [cyan]No, just show me short-infomation.",
                 "[yellow][!] Default as 2 if you leave blank."
             ]))
-            option: str = input("Your option [1, 2, 3]: ").strip()
+            option: str = input("Your option [1, 2 ]: ").strip()
 
             if not option:
                 return False
