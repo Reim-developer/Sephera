@@ -2,6 +2,10 @@
 
 **Sephera is a lightweight command-line tool for analyzing and visualizing your project's structure and codebase.**
 
+## Documentation:
+* [Website Documentation](https://reim-developer.github.io/Sephera/)
+* [Markdown Documentation](./docs/index.md)
+
 ![CodeLoc Preview](./preview/CodeLoc.gif)
 
 ## Features
@@ -18,10 +22,6 @@
 - 🎯 **Hardcore File/Folder Ignore**: Directly exclude entire paths.
 - 🏷️ **Language Detection**: Auto detects 60+ languages.
 - 🧪 **Benchmark**: 1.38M lines scanned in ~1.13s.
-
-## Documentation:
-* [Website version](https://reim-developer.github.io/Sephera/)
-* [Markdown version](./docs/index.md)
 
 ## Installation
 1. Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
