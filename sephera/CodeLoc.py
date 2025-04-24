@@ -29,6 +29,8 @@ class CodeLoc:
         self.stdout = SepheraStdout()
         self.console = Console()
 
+        self._loc_count = None
+
         if ignore_pattern:
             for pattern in ignore_pattern:
                 try:
@@ -39,6 +41,8 @@ class CodeLoc:
                         self.ignore_glob.append(pattern)
                     else:
                         self.ignore_str.append(pattern)
+        
+        self.count_loc()
 
     def _get_language_for_file(self, path: str) -> Optional[LanguageConfig]:
         for language in self.languages:
@@ -150,58 +154,55 @@ class CodeLoc:
         return loc_line_count, comment_line_count, empty_line_count
 
     def count_loc(self) -> Dict[str, Dict[str, float]]:
-        result: Dict[str, Dict[str, float]] = {
-            language.name: {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
-            for language in self.languages
-        }
-        result["Unknown"] = {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
+        if self._loc_count is None:
 
-        for root, dirs, files in os.walk(self.base_path):
-            dirs[:] = [dir for dir in dirs if not 
-                            self.utils.is_multi_ignored(
-                                path = os.path.join(root, dir), 
-                                ignore_regex = self.ignore_regex, 
-                                ignore_str = self.ignore_str,
-                                ignore_glob = self.ignore_glob
-                    )]
+            self._loc_count: Dict[str, Dict[str, float]] = {
+                language.name: {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
+                for language in self.languages
+            }
+            self._loc_count["Unknown"] = {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
 
-            for file in files:
-                file_path = os.path.join(root, file)
+            for root, dirs, files in os.walk(self.base_path):
+                dirs[:] = [dir for dir in dirs if not 
+                                self.utils.is_multi_ignored(
+                                    path = os.path.join(root, dir), 
+                                    ignore_regex = self.ignore_regex, 
+                                    ignore_str = self.ignore_str,
+                                    ignore_glob = self.ignore_glob
+                        )]
 
-                if self.utils.is_multi_ignored(
-                    path = file_path, ignore_str = self.ignore_str, 
-                    ignore_regex = self.ignore_regex, ignore_glob = self.ignore_glob):
-                    continue
+                for file in files:
+                    file_path = os.path.join(root, file)
 
-                language = self._get_language_for_file(path = file_path)
+                    if self.utils.is_multi_ignored(
+                        path = file_path, ignore_str = self.ignore_str, 
+                        ignore_regex = self.ignore_regex, ignore_glob = self.ignore_glob):
+                        continue
 
-                if language:
-                    loc_line, comment_line, empty_line = self._count_lines_in_file(file_path = file_path, language = language)
+                    language = self._get_language_for_file(path = file_path)
 
-                    try:
-                        file_sizeof = os.path.getsize(file_path) / (1024 * 1024)
-                    except OSError:
-                        file_sizeof = 0.0
+                    if language:
+                        loc_line, comment_line, empty_line = self._count_lines_in_file(file_path = file_path, language = language)
 
-                    result[language.name]["loc"] += loc_line
-                    result[language.name]["comment"] += comment_line
-                    result[language.name]["empty"] += empty_line
-                    result[language.name]["size"] += file_sizeof
+                        try:
+                            file_sizeof = os.path.getsize(file_path) / (1024 * 1024)
+                        except OSError:
+                            file_sizeof = 0.0
 
-                else:
-                    result["Unknown"]["loc"] += 0
-                    result["Unknown"]["comment"] += 0
-                    result["Unknown"]["empty"] += 0
-                    result["Unknown"]["size"] += 0.0
+                        self._loc_count[language.name]["loc"] += loc_line
+                        self._loc_count[language.name]["comment"] += comment_line
+                        self._loc_count[language.name]["empty"] += empty_line
+                        self._loc_count[language.name]["size"] += file_sizeof
 
-        return result
+                    else:
+                        self._loc_count["Unknown"]["loc"] += 0
+                        self._loc_count["Unknown"]["comment"] += 0
+                        self._loc_count["Unknown"]["empty"] += 0
+                        self._loc_count["Unknown"]["size"] += 0.0
+
+        return self._loc_count
     
     def export_to_json(self, file_path: str) -> None:
-        with self.console.status("Processing...", spinner = "material") as progressBar:
-            loc_count = self.count_loc()
-
-        self.console.clear()
-
         total_loc_count: int = 0
         total_comment: int = 0
         total_empty: int = 0
@@ -209,7 +210,7 @@ class CodeLoc:
         language_count: int = 0
 
         finish_result = {}
-        for language, count in loc_count.items():
+        for language, count in self._loc_count.items():
             loc_line = count["loc"]
             comment_line = count["comment"]
             empty_line = count["empty"]
@@ -253,16 +254,6 @@ class CodeLoc:
             json.dump(finish_result, json_file, indent = 4, ensure_ascii = True)
 
     def stdout_result(self) -> None:
-        logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
-
-        start_time: float = time.perf_counter()
-
-        with self.console.status("Processing...", spinner = "material") as progressBar:
-            loc_count = self.count_loc()
-
-        end_time: float = time.perf_counter()
-        self.console.clear()
-        
         table = Table(title = f"LOC count of directory: {self.base_path}")
         table.add_column("Language", style = "cyan")
         table.add_column("Code lines", justify = "right", style = "green")
@@ -276,7 +267,7 @@ class CodeLoc:
         total_project_size: float = 0.0
         language_count: int = 0
 
-        for language, count in loc_count.items():
+        for language, count in self._loc_count.items():
             loc_line = count["loc"]
             comment_line = count["comment"]
             empty_line = count["empty"]
@@ -310,6 +301,5 @@ class CodeLoc:
             f"[+] Language(s) used: {language_count} language(s)",
             f"[+] Total Project Size: {total_project_size:.2f} MB"
         ]))
- 
-        logging.info(f"Scan finished in: {end_time - start_time:.2f}s")
+
         
