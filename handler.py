@@ -8,7 +8,7 @@ try:
     from utils.stdout import SepheraStdout
     from sephera.Stats import Stats
     from sephera.WalkFile import WalkFile
-    from chart.Exporter import Exporter
+    from datalyzer.Exporter import Exporter
     from utils.utils import Utils
     from sephera.CodeLoc import CodeLoc
     from sephera.help import SepheraHelp
@@ -65,9 +65,18 @@ class Handler:
         
         logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
 
+        if args.json and args.md:
+            self.console.print("[yellow][+] You can export one file in this time.")
+            sys.exit(0)
+
         if args.json:
             option = OptionHandler()
             option.on_json_export_option(args = args)
+            sys.exit(0)
+        
+        if args.md:
+            option = OptionHandler()
+            option.on_markdown_export_option(args = args)
             sys.exit(0)
 
         start_time: float = time.perf_counter()
