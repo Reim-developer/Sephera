@@ -4,7 +4,7 @@ from typing import Optional
 
 try:
     from rich.console import Console
-    from chart.Exporter import Exporter
+    from datalyzer.Exporter import Exporter
     from rich.table import Table
     from utils.utils import Utils
 except KeyboardInterrupt:
