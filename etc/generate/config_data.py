@@ -158,7 +158,7 @@ CONFIG_DATA = {
     },
     "elixir_style": {
       "single_line": "#",
-      "multi_line_start": "@doc \"\"\"",
+      "multi_line_start": "\"\"\"",
       "multi_line_end": "\"\"\""
     }
   },
@@ -663,6 +663,35 @@ CONFIG_DATA = {
         ".exs"
       ],
       "comment_styles": "elixir_style"
+    },
+    {
+      "name": "Markdown",
+      "extension": [
+        ".md"
+      ],
+      "comment_styles": "no_comment"
+    },
+    {
+      "name": "M4",
+      "extension": [
+        ".m4"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Kotlin Build Script",
+      "extension": [
+        ".kts"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "V Lang",
+      "extension": [
+        ".v",
+        ".vsh"
+      ],
+      "comment_styles": "c_style"
     }
   ]
 }
