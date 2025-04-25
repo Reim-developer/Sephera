@@ -3,12 +3,21 @@ import os
 import fnmatch
 import requests
 import sys
+import platform
 from typing import Optional, List
 from rich.console import Console
 from __version__ import SEPHERA_VERSION
 from packaging import version
 
 class Utils:
+    def __init__(self) -> None:
+        self.LINUX_PLATFORM: int = 1
+        self.MACOS_PLATFORM: int = 2
+        self.WINDOWS_PLATFORM: int = 3
+        self.UNKNOWN_PLATFORM: int = 4
+
+        self.GITHUB_REPO = "Reim-developer/Sephera"
+
     def is_ignored(self, path: str, ignore_regex: Optional[re.Pattern] = None, ignore_str: Optional[str] = None) -> bool:
         if ignore_regex:
             return bool(ignore_regex.search(path))
@@ -56,13 +65,11 @@ class Utils:
     def fetch_latest_version(self) -> str:
         console = Console()
 
-        GITHUB_REPO = "Reim-developer/Sephera"
-        GITHUB_API = f"https://api.github.com/repos/{GITHUB_REPO}/releases/latest"
-
         request_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
         }
 
+        GITHUB_API = f"https://api.github.com/repos/{self.GITHUB_REPO}/releases/latest"
         try:
             request = requests.get(url = GITHUB_API, headers = request_headers)
 
@@ -88,7 +95,7 @@ class Utils:
             console = Console()
 
             console.print("\n".join([
-                "[red][!] Could not get latest version of Sephera, please try again."
+                "[red][!] Could not get latest version of Sephera, please try again later."
             ]))
             sys.exit(1)
 
@@ -99,6 +106,11 @@ class Utils:
         else:
             return False
 
-
+    def os_detect(self) -> int:
+        match platform.system():
+            case "Windows": return self.WINDOWS_PLATFORM
+            case "Linux": return self.LINUX_PLATFORM
+            case "Darkwin": return self.MACOS_PLATFORM
+            case _: return self.UNKNOWN_PLATFORM
 
         
