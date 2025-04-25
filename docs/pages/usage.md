@@ -1,4 +1,4 @@
-# Basic Usage:
+# Sephera Commands:
 ---
 ## Loc Command
 ---
@@ -38,4 +38,88 @@ sephera loc --ignore "*.py" --ignore "*.js" # Use mutiple --ignore flags.
 ```bash
 sephera loc --json # Will export: SepheraExport.json
 sephera loc --json hello_sephera # Will export: hello_sephera.json
+```
+
+## Update Command
+---
+- **Description:** Update Sephera to the latest version or install it to a different directory path.
+```bash
+sephera update
+```
+---
+- **Note:** When you use this command, if you're on the latest version of Sephera, it will redirect you to interactive mode, like this:
+```bash
+[!] You're using latest version of Sephera, do you want:
+[1] Re-install Sephera.
+[2] Install to another directory path.
+[3] Cancel and exit now.
+Your option [1-3]: 
+```
+- Otherwise, it will automatically update for you.
+
+## Stats Command
+---
+* **Description:** Stats your project metadata, files and folders count, project size
+
+**Arguments:**
+```bash
+--path
+```
+- **Description:** The target directory that you want Sephera to analyze. If the `--path` flag is not provided, it will default to the current directory. This flag is optional.
+```bash
+# Example
+sephera stats --path ~/myProject # For Linux/macOS
+sephera stats --path C:\users\Document\myProject # Windows
+```
+---
+```bash
+--ignore
+```
+- **Description:** Ignores directories or folders. If the --ignore flag is not provided, it will default to the current directory. It supports both regular expressions and exact file/folder names. This flag is optional.
+```bash
+# Example
+sephera stats --ignore node_modules
+```
+---
+```bash
+--chart
+```
+- **Description:** Create chart for your stat overview. Default chart name is 'SepheraChart'.
+```bash
+# Example:
+sephera stats --chart # Will export to default name, as SepheraChart
+sephera stats --chart myCustomizeChart # Will export to myCustomizeChart
+```
+
+## Tree Command
+* **Description:** Show your project structure.
+
+**Arguments:**
+```bash
+--path
+```
+- **Description:** The target directory that you want Sephera to analyze. If the `--path` flag is not provided, it will default to the current directory. This flag is optional.
+```bash
+# Example
+sephera tree --path ~/myProject # For Linux/macOS
+sephera tree --path C:\users\Document\myProject # Windows
+```
+---
+```bash
+--ignore
+```
+- **Description:** Ignores directories or folders. If the --ignore flag is not provided, it will default to the current directory. It supports both regular expressions and exact file/folder names. This flag is optional.
+```bash
+# Example
+sephera tree --ignore node_modules
+```
+---
+```bash
+--chart
+```
+- **Description:** Create chart for your stat overview. Default chart name is 'SepheraChart'.
+```bash
+# Example:
+sephera tree --chart # Will export to default name, as SepheraChart
+sephera tree --chart myCustomizeChart # Will export to myCustomizeChart
 ```
