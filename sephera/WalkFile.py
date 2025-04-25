@@ -113,10 +113,8 @@ class WalkFile:
         try:
             entries = sorted(os.listdir(current_dir))
 
-        except PermissionError:
-            error = SepheraStdout()
-            error.show_error(f"Permission Denied. Skipping: {current_dir}")
-            return
+        except Exception as error:
+            self.stdout.die(error = error)
         
         entries = [e for e in entries if not e.startswith(".")]
         for i, entry in enumerate(entries):
