@@ -100,7 +100,15 @@ class Command:
             type = str,
             nargs = "?",
             const = "SepheraExport",
-            help = "Export LOC count to JSON file format. e.g --json ('<MyChartSaveDir>')",
+            help = "Export LOC count to JSON file format. e.g --json ('<MySaveDir/myJson>')",
+            default = None
+        )
+        loc_command.add_argument(
+            "--md",
+            type = str,
+            nargs = "?",
+            const = "SepheraExport",
+            help = "Export LOC count to Markdown file format. e.g --md ('<MySaveDir/myMarkdown>')",
             default = None
         )
 
