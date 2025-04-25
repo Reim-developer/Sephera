@@ -20,6 +20,14 @@ class SepheraStdout:
         )
         self.console.print(panel)
 
+    def die(self, error: Exception) -> None:
+        self.console.print("\n".join([
+            "[red][+] Error when fetch latest verion of Sephera:",
+            f"[red][+] Error name: {type(error).__name__}",
+            f"[red][+] Error details: [yellow]{error}"
+        ]))
+        sys.exit(1)
+
     def show_msg(self, message: str) -> None:
         panel = Panel.fit(
             Text(text = message, style = "bold cyan"),
