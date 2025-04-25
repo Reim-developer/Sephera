@@ -70,7 +70,7 @@
     <div data-md-component="skip">
       
         
-        <a href="#basic-usage" class="md-skip">
+        <a href="#sephera-commands" class="md-skip">
           Skip to content
         </a>
       
@@ -532,6 +532,33 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#update-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Update Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stats-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stats Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tree-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tree Command
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -583,6 +610,33 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#update-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Update Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#stats-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Stats Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#tree-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Tree Command
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -599,7 +653,7 @@
 
 
 
-<h1 id="basic-usage">Basic Usage:</h1>
+<h1 id="sephera-commands">Sephera Commands:</h1>
 <hr />
 <h2 id="loc-command">Loc Command</h2>
 <hr />
@@ -639,6 +693,93 @@ sephera loc --ignore &quot;*.py&quot; --ignore &quot;*.js&quot; # Use mutiple --
 </ul>
 <pre><code class="language-bash">sephera loc --json # Will export: SepheraExport.json
 sephera loc --json hello_sephera # Will export: hello_sephera.json
+</code></pre>
+<h2 id="update-command">Update Command</h2>
+<hr />
+<ul>
+<li><strong>Description:</strong> Update Sephera to the latest version or install it to a different directory path.</li>
+</ul>
+<pre><code class="language-bash">sephera update
+</code></pre>
+<hr />
+<ul>
+<li><strong>Note:</strong> When you use this command, if you're on the latest version of Sephera, it will redirect you to interactive mode, like this:</li>
+</ul>
+<pre><code class="language-bash">[!] You're using latest version of Sephera, do you want:
+[1] Re-install Sephera.
+[2] Install to another directory path.
+[3] Cancel and exit now.
+Your option [1-3]: 
+</code></pre>
+<ul>
+<li>Otherwise, it will automatically update for you.</li>
+</ul>
+<h2 id="stats-command">Stats Command</h2>
+<hr />
+<ul>
+<li><strong>Description:</strong> Stats your project metadata, files and folders count, project size</li>
+</ul>
+<p><strong>Arguments:</strong></p>
+<pre><code class="language-bash">--path
+</code></pre>
+<ul>
+<li><strong>Description:</strong> The target directory that you want Sephera to analyze. If the <code>--path</code> flag is not provided, it will default to the current directory. This flag is optional.</li>
+</ul>
+<pre><code class="language-bash"># Example
+sephera stats --path ~/myProject # For Linux/macOS
+sephera stats --path C:\users\Document\myProject # Windows
+</code></pre>
+<hr />
+<pre><code class="language-bash">--ignore
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Ignores directories or folders. If the --ignore flag is not provided, it will default to the current directory. It supports both regular expressions and exact file/folder names. This flag is optional.</li>
+</ul>
+<pre><code class="language-bash"># Example
+sephera stats --ignore node_modules
+</code></pre>
+<hr />
+<pre><code class="language-bash">--chart
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Create chart for your stat overview. Default chart name is 'SepheraChart'.</li>
+</ul>
+<pre><code class="language-bash"># Example:
+sephera stats --chart # Will export to default name, as SepheraChart
+sephera stats --chart myCustomizeChart # Will export to myCustomizeChart
+</code></pre>
+<h2 id="tree-command">Tree Command</h2>
+<ul>
+<li><strong>Description:</strong> Show your project structure.</li>
+</ul>
+<p><strong>Arguments:</strong></p>
+<pre><code class="language-bash">--path
+</code></pre>
+<ul>
+<li><strong>Description:</strong> The target directory that you want Sephera to analyze. If the <code>--path</code> flag is not provided, it will default to the current directory. This flag is optional.</li>
+</ul>
+<pre><code class="language-bash"># Example
+sephera tree --path ~/myProject # For Linux/macOS
+sephera tree --path C:\users\Document\myProject # Windows
+</code></pre>
+<hr />
+<pre><code class="language-bash">--ignore
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Ignores directories or folders. If the --ignore flag is not provided, it will default to the current directory. It supports both regular expressions and exact file/folder names. This flag is optional.</li>
+</ul>
+<pre><code class="language-bash"># Example
+sephera tree --ignore node_modules
+</code></pre>
+<hr />
+<pre><code class="language-bash">--chart
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Create chart for your stat overview. Default chart name is 'SepheraChart'.</li>
+</ul>
+<pre><code class="language-bash"># Example:
+sephera tree --chart # Will export to default name, as SepheraChart
+sephera tree --chart myCustomizeChart # Will export to myCustomizeChart
 </code></pre>
 
 
