@@ -5,9 +5,14 @@ import requests
 import sys
 import platform
 from typing import Optional, List
-from rich.console import Console
-from __version__ import SEPHERA_VERSION
-from packaging import version
+
+try:
+    from rich.console import Console
+    from __version__ import SEPHERA_VERSION
+    from packaging import version
+    from .stdout import SepheraStdout
+except KeyboardInterrupt:
+    print("\nAborted by user.")
 
 class Utils:
     def __init__(self) -> None:
@@ -17,6 +22,7 @@ class Utils:
         self.UNKNOWN_PLATFORM: int = 4
 
         self.GITHUB_REPO = "Reim-developer/Sephera"
+        self.stdout = SepheraStdout()
 
     def is_ignored(self, path: str, ignore_regex: Optional[re.Pattern] = None, ignore_str: Optional[str] = None) -> bool:
         if ignore_regex:
@@ -74,17 +80,11 @@ class Utils:
             request = requests.get(url = GITHUB_API, headers = request_headers)
 
         except Exception as error:
-            console.print("\n".join([
-                "[red][+] Error when fetch latest verion of Sephera:",
-                f"[red][+] Error name: {type(error).__name__}",
-                f"[red][+] Error details: [yellow]{error}"
-            ]))
-            sys.exit(1)
+            self.stdout.die(error = error)
 
         data = request.json()
         
         version_tag: str = data.get("tag_name", "")
-
         return version_tag.lstrip("v")
     
     def is_latest_version(self) -> bool:
