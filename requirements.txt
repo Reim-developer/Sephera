@@ -4,3 +4,4 @@ PyYAML
 requests
 mkdocs
 nuitka
+tabulate
