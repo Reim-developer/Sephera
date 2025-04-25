@@ -39,6 +39,16 @@ sephera loc --ignore "*.py" --ignore "*.js" # Use mutiple --ignore flags.
 sephera loc --json # Will export: SepheraExport.json
 sephera loc --json hello_sephera # Will export: hello_sephera.json
 ```
+---
+```bash
+--md
+```
+- **Description:** **Description:** Export result to a .md file. This flag is optional. If no filename is provided, it will default to SepheraExport.md.
+
+```bash
+sephera loc --md # Will export: SepheraExport.md
+sephera loc --md hello_sephera # Will export: hello_sephera.md
+```
 
 ## Update Command
 ---
