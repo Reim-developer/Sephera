@@ -1,8 +1,6 @@
 import os
 import re
 import sys
-import time
-import logging
 import json
 from typing import Dict, Optional, Tuple, List
 
@@ -140,16 +138,8 @@ class CodeLoc:
 
                     loc_line_count += 1
 
-        except UnicodeDecodeError:
-            self.stdout.show_error("".join([
-                f"Error when read: {file_path}. That's not text file. Stop now",
-                f"Hint: Use --ignore flag to ignore that file: '--ignore {file_path}'"
-            ]))
-            sys.exit(1)
-            
-        except Exception as e:
-            print(f"Exception: '{e}' when read: {file_path}")
-            sys.exit(1)
+        except Exception as error:
+            self.stdout.die(error = error)
 
         return loc_line_count, comment_line_count, empty_line_count
 
@@ -201,57 +191,6 @@ class CodeLoc:
                         self._loc_count["Unknown"]["size"] += 0.0
 
         return self._loc_count
-    
-    def export_to_json(self, file_path: str) -> None:
-        total_loc_count: int = 0
-        total_comment: int = 0
-        total_empty: int = 0
-        total_project_size: float = 0.0
-        language_count: int = 0
-
-        finish_result = {}
-        for language, count in self._loc_count.items():
-            loc_line = count["loc"]
-            comment_line = count["comment"]
-            empty_line = count["empty"]
-            total_sizeof = count["size"]
-
-            if loc_line > 0 or comment_line > 0 or empty_line > 0 or total_sizeof > 0:
-
-                language_count += 1
-                language_config  = self.language_data.get_language_by_name(name = language)
-
-                comment_result = (
-                    "N/A" if language_config.comment_style == "no_comment"
-                    else str(comment_line)
-                )
-
-                total_loc_count += loc_line
-                total_comment += comment_line
-                total_empty += empty_line
-                total_project_size += total_sizeof
-
-                finish_result[language] = {
-                        "Code lines": loc_line,
-                        "Comment lines": comment_result,
-                        "Empty lines": empty_line,
-                        "Size (MB)": f"{total_sizeof:.2f} MB" 
-                }
-
-        total_data = {
-            "Scan In:": f"{os.path.abspath(path = self.base_path)}",
-                "Total:": {
-                    "Language(s) used:": language_count,
-                    "Code lines": total_loc_count,
-                    "Comment": total_comment,
-                    "Empty": total_empty,
-                    "Project Size (MB):": f"{total_project_size:.2f} MB"
-            }
-        }
-        
-        finish_result = {**total_data, **finish_result}
-        with open(file = file_path, mode = "w", encoding = "utf-8") as json_file:
-            json.dump(finish_result, json_file, indent = 4, ensure_ascii = True)
 
     def stdout_result(self) -> None:
         table = Table(title = f"LOC count of directory: {self.base_path}")
