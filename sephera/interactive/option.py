@@ -16,6 +16,29 @@ class OptionHandler:
         self.confirmInteractive = ConfirmInteractive()
         logging.basicConfig(level = logging.INFO, format = "[%(levelname)s] %(message)s")
 
+    def on_choose_dir_path(self) -> str:
+        try:
+            self.console.print("[yellow][+] Please input your directory path:")
+            self.console.print("[cyan][+] If you want cancel, just type 'exit'.")
+            while True:
+                option = input(">>> ")
+
+                if not option:
+                    self.console.print("[yellow][!] Directory path is empty.")
+
+                elif option == "exit":
+                    sys.exit(0)
+
+                elif not os.path.exists(option):
+                    self.console.print(f"[yellow][!] Directory path {option} not found.")
+             
+                else:
+                    return option
+            
+        except KeyboardInterrupt:
+            self.console.print("\n[cyan][+] Aborted by user.")
+            sys.exit(1)
+
     def on_json_export_option(self, args: str) -> None:
         start_time = time.perf_counter()
         with self.console.status(status = "Processing...", spinner = "material"):
