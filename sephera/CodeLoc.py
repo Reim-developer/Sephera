@@ -10,7 +10,7 @@ try:
     from rich.console import Console
     from rich.table import Table
 except KeyboardInterrupt:
-    print("\n Aborted by user.")
+    print("\nAborted by user.")
 
 class CodeLoc:
     def __init__(self, base_path: str = ".", ignore_pattern: Optional[List[str]] = None) -> None:
@@ -197,7 +197,7 @@ class CodeLoc:
         return self._loc_count
 
     def stdout_result(self) -> None:
-        table = Table(title = f"LOC count of directory: {self.base_path}")
+        table = Table(title = f"LOC count of directory: {os.path.abspath(self.base_path)}")
         table.add_column("Language", style = "cyan")
         table.add_column("Code lines", justify = "right", style = "green")
         table.add_column("Comments lines", justify = "right", style = "yellow")
