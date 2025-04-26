@@ -4,14 +4,16 @@ import fnmatch
 import requests
 import sys
 import platform
+from sqlite3 import Cursor, Connection
 from typing import Optional, List
-from etc.generate.config_data import CONFIG_DATA
 
 try:
     from rich.console import Console
     from __version__ import SEPHERA_VERSION
     from packaging import version
     from .stdout import SepheraStdout
+    from etc.generate.config_data import CONFIG_DATA
+    from datalyzer.sql import SqlManager
 except KeyboardInterrupt:
     print("\nAborted by user.")
 
@@ -24,6 +26,8 @@ class Utils:
 
         self.GITHUB_REPO = "Reim-developer/Sephera"
         self.stdout = SepheraStdout()
+        self.cursor: Cursor = None
+        self.connection: Connection = None
 
     def is_ignored(self, path: str, ignore_regex: Optional[re.Pattern] = None, ignore_str: Optional[str] = None) -> bool:
         if ignore_regex:
@@ -144,4 +148,11 @@ class Utils:
             case _:
                 return self.UNKNOWN_PLATFORM
 
+    def sql_execute(self, sql: SqlManager, query: str, params: tuple = ()) -> None:
+        try:
+            sql.cursor.execute(query, params)
+            sql.connection.commit()
         
+        except Exception as error:
+            self.stdout.die(error = error)
+            
