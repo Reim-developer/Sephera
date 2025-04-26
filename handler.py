@@ -16,7 +16,7 @@ try:
     from sephera.interactive.option import OptionHandler
     from sephera.fetch_lang_support import FetchLanguage
 except KeyboardInterrupt:
-    print(f"\nAborted by user.")
+    print("\nAborted by user.")
     sys.exit(1)
 
 class Handler:
