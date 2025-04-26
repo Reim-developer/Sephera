@@ -130,5 +130,18 @@ class Utils:
         languages_names = [language["name"] for language in languages]
 
         return languages_names
+    
+    def get_local_data(self) -> str:
+        user_home = os.path.expanduser("~")
+
+        match self.os_detect():
+            case self.WINDOWS_PLATFORM:
+                return os.path.join(user_home, "AppData", "Local")
+            
+            case self.LINUX_PLATFORM | self.MACOS_PLATFORM:
+                return user_home
+            
+            case _:
+                return self.UNKNOWN_PLATFORM
 
         
