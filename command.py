@@ -24,6 +24,7 @@ class Command:
             self._set_help_command()
             self._set_update_command()
             self._set_languages_supports_command()
+            self._set_version_command()
             
             args = self.sephera_parser.parse_args()
             if args.command is None:
@@ -142,5 +143,17 @@ class Command:
 
         languages_support_command.set_defaults(function = self.handler.fetch_languages_supports_handler)
 
+    def _set_version_command(self) -> None:
+        version_command = self.sub_command.add_parser(
+            "version", help = "Display Sephera version."
+        )
+        version_command.add_argument(
+            "--git",
+            type = bool,
+            const = True,
+            nargs = "?",
+            help = "Show the Sephera latest version on GitHub."
+        )
+        version_command.set_defaults(function = self.handler.version_command_handler)
     
 
