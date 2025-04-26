@@ -163,9 +163,7 @@ class Command:
         )
         language_cfg_command.add_argument(
             "--global",
-            type = bool,
-            const = True,
-            nargs = "?",
+            action = "store_true",
             dest = "global_",
             help = "Set the configuration for language detection and LOC count to global."
         )
