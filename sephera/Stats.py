@@ -1,5 +1,6 @@
 import os
 import re
+import sys
 from typing import Optional
 
 try:
@@ -7,14 +8,17 @@ try:
     from datalyzer.Exporter import Exporter
     from rich.table import Table
     from utils.utils import Utils
+    from utils.stdout import SepheraStdout
 except KeyboardInterrupt:
     print("\n Aborted by user.")
+    sys.exit(1)
 
 class Stats:
     def __init__(self, base_path: str = ".", ignore_pattern: Optional[str] = None) -> None:
         self.base_path = base_path
         
         self.console = Console()
+        self.stdout = SepheraStdout()
         self.ignore_regex: Optional[re.Pattern] = None
         self.ignore_str: Optional[str] = None
         self.utils = Utils()
@@ -63,7 +67,7 @@ class Stats:
                                 total_hidden_size += size
 
                         except Exception as error:
-                            self.console.print(f"[red] Fatal error, use --verbose to display this. Skipping...")
+                            self.stdout.die(error = error)
 
                 self.console.clear()
         
