@@ -55,4 +55,6 @@ endif
 install:
 	$(install_task)
 
+check:
+	@ruff check .
 
