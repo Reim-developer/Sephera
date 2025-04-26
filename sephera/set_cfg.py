@@ -6,6 +6,7 @@ try:
     from utils.stdout import SepheraStdout
     from utils.utils import Utils
     from sephera.interactive.confirm import ConfirmInteractive
+    from datalyzer.sql import SqlManager
 except KeyboardInterrupt:
     print("\nAborted by user.")
     sys.exit(1)
@@ -13,6 +14,7 @@ except KeyboardInterrupt:
 class SetConfiguration:
     def __init__(self) -> None:
         self.console = Console()
+        self.sql = SqlManager()
 
     def _get_default_cfg(self) -> str:
         YAML_SOURCE = """\
@@ -43,10 +45,37 @@ languages:
       comment_styles: python_style
 """
         return YAML_SOURCE
+    
+    def setup_settings(self, utils: Utils, stdout: SepheraStdout) -> None:
+        user_local = utils.get_local_data()
+        global_cfg_path = f"{user_local}/.config/Sephera"
+
+        try:
+            open(f"{global_cfg_path}/settings.db", "w").close()
+
+            self.sql.connect_to_sql(db_path = f"{global_cfg_path}/settings.db")
+            self.sql.create_sql_table()
+
+        except Exception as error:
+            stdout.die(error = error)
+
+    def create_settings(self, global_cfg_path) -> None:
+        if not os.path.exists(f"{global_cfg_path}/settings.db"):
+            
+            if not os.path.exists(global_cfg_path):
+                os.makedirs(name = global_cfg_path, exist_ok = True)
+
+            open(f"{global_cfg_path}/settings.db", "w")
 
     def set_language_cfg(self, stdout: SepheraStdout, cfg_name: str = "SepheraCfg.yml", global_cfg: bool = False) -> None:
         YAML_SOURCE = self._get_default_cfg()
+        utils = Utils()
 
+        user_local = utils.get_local_data()
+        global_cfg_path = f"{user_local}/.config/Sephera"
+        self.create_settings(global_cfg_path = global_cfg_path)
+
+        self.setup_settings(utils = utils, stdout = stdout)
         if not global_cfg:
             if os.path.exists(cfg_name):
                 confirm_override = ConfirmInteractive()
@@ -68,12 +97,7 @@ languages:
             ]))
             sys.exit(0)
         
-        utils = Utils()
-        user_local = utils.get_local_data()
-        
         try:
-
-            global_cfg_path = f"{user_local}/.config/Sephera"
             os.makedirs(global_cfg_path, exist_ok = True)
 
             if os.path.exists(f"{global_cfg_path}/{cfg_name}"):
