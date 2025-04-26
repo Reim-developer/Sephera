@@ -22,7 +22,7 @@ class SepheraStdout:
 
     def die(self, error: Exception) -> None:
         self.console.print("\n".join([
-            "[red][+] Error when fetch latest verion of Sephera:",
+            "[red][+] Error when use command:",
             f"[red][+] Error name: {type(error).__name__}",
             f"[red][+] Error details: [yellow]{error}"
         ]))
