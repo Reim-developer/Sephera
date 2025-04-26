@@ -16,6 +16,7 @@ try:
     from sephera.interactive.option import OptionHandler
     from sephera.fetch_lang_support import FetchLanguage
     from sephera.version import VersionCommand
+    from sephera.set_cfg import SetConfiguration
 except KeyboardInterrupt:
     print("\nAborted by user.")
     sys.exit(1)
@@ -114,3 +115,7 @@ class Handler:
         version_command = VersionCommand()
 
         version_command.fetch_version(show_git_version = args.git)
+
+    def language_cfg_handler(self, args) -> None:
+        set_cfg = SetConfiguration()
+        set_cfg.set_language_cfg(stdout = self.sephera_stdout, global_cfg = args.global_)
