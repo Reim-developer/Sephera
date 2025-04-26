@@ -1,6 +1,10 @@
 import sys
 try:
-    from etc.generate.config_help import MAIN_HELP, STATS_COMMAND_HELP, LOC_COMMAND_HELP, TREE_COMMAND_HELP
+    from etc.generate.config_help import (
+        LOC_COMMAND_HELP, STATS_COMMAND_HELP, 
+        TREE_COMMAND_HELP, UPDATE_COMMAND_HELP,
+        LANGUAGE_SUPPORT_COMMAND_HELP, MAIN_HELP
+    )
     from rich.console import Console
 except KeyboardInterrupt:
     print("\n Aborted by user.")
@@ -27,10 +31,15 @@ class SepheraHelp:
                 self.console.print(f"[cyan] {TREE_COMMAND_HELP}")
                 sys.exit(0)
 
+            case "update":
+                self.console.print(f"[cyan]{UPDATE_COMMAND_HELP}")
+
+            case "language-support":
+                self.console.print(f"[cyan]{LANGUAGE_SUPPORT_COMMAND_HELP}")
+
             case _:
                 self.console.print("\n".join([
                     f"[red]Invalid option: {args}",
-                    "[yellow]Hint: Allowed options: [cyan]loc, stats, tree"
+                    "[yellow]Hint: Allowed options: [cyan]loc, stats, tree, update"
                 ]))
                 sys.exit(1)
-
