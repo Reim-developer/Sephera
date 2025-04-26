@@ -69,7 +69,7 @@ class Utils:
     def is_path_exists(self, path: str) -> bool:
         return os.path.exists(path = path)
 
-    def fetch_latest_version(self) -> str:
+    def fetch_latest_version(self, console: Console) -> str:
         request_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
         }
@@ -77,22 +77,22 @@ class Utils:
         GITHUB_API = f"https://api.github.com/repos/{self.GITHUB_REPO}/releases/latest"
         try:
             request = requests.get(url = GITHUB_API, headers = request_headers)
+            request.raise_for_status()
 
         except Exception as error:
+            console.clear()
             self.stdout.die(error = error)
 
         data = request.json()
-        
+
         version_tag: str = data.get("tag_name", "")
         return version_tag.lstrip("v")
     
-    def is_latest_version(self) -> bool:
-        latest_version = self.fetch_latest_version()
+    def is_latest_version(self, console: Console) -> bool:
+        latest_version = self.fetch_latest_version(console = console)
         current_version = version.parse(SEPHERA_VERSION)
 
         if latest_version == '':
-            console = Console()
-
             console.print("\n".join([
                 "[red][!] Could not get latest version of Sephera, please try again later."
             ]))
