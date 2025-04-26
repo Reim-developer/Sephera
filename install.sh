@@ -31,7 +31,7 @@ if command -v curl &> /dev/null; then
 elif command -v wget &> /dev/null; then
     wget -q "$URL" -O "$BINARY_NAME"
 else
-    echo "❌ Neither curl nor wget found. Please install one of them."
+    echo "Neither curl nor wget found. Please install one of them."
     exit 1
 fi
 
