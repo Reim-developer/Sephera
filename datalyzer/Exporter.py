@@ -24,7 +24,7 @@ class Exporter:
         _, ax = plt.subplots(figsize = (8, 6))
         bars = ax.bar(chart_label, chart_values, color = colors, edgecolor = "black")
 
-        with self.console.status("[bold green] Processing...", spinner = "point") as progressBar:
+        with self.console.status("[bold green] Processing...", spinner = "material"):
             for bar in bars:
                 bar_height = bar.get_height()
                 ax.annotate(f"{bar_height}", xy = (bar.get_x() + bar.get_width() / 2, bar_height),
