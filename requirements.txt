@@ -5,3 +5,4 @@ requests
 mkdocs
 nuitka
 tabulate
+ruff
