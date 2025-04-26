@@ -16,6 +16,8 @@ MAIN_HELP = """Usage: sephera [options...]
     tree                       Show your project structure tree. Optional chart output.
     update                     Update Sephera to the latest version or install it to a different directory path.
     language-support           Show the count of languages currently supported by Sephera.
+    version                    Show current or latest Sephera version from GitHub.
+    cfg-language               Set Sephera configuration in your user home directory, e.g. ~/ or AppData/Local
 
 [+] Markdown documentation: https://github.com/Reim-developer/Sephera/tree/master/docs
 [+] Website documentation: https://reim-developer.github.io/Sephera
