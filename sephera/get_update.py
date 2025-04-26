@@ -6,6 +6,7 @@ try:
     from sephera.interactive.confirm import ConfirmInteractive
     from sephera.interactive.option import OptionHandler
     from sephera.net.network_helper import NetworkHelper
+    from utils.stdout import SepheraStdout
 except KeyboardInterrupt:
     print("\n Aborted by user.")
 
@@ -19,7 +20,7 @@ class GetUpdate:
                     
     def update_sephera(self) -> None:
         try:
-            is_latest_version: bool = self.utils.is_latest_version()
+            is_latest_version: bool = self.utils.is_latest_version(console = self.console)
 
             if is_latest_version:
                     user_option = self.confirm_interactive.latest_version_option()
@@ -44,9 +45,5 @@ class GetUpdate:
             self.console.print("\n[cyan][+] Aborted by user.")
 
         except Exception as error:
-            self.console.print("\n".join([
-                "[red][+] Error when fetch latest verion of Sephera:",
-                f"[red][+] Error name: {type(error).__name__}",
-                f"[red][+] Error details: [yellow]{error}"
-            ]))
-            sys.exit(1)
+            stdout = SepheraStdout()
+            stdout.die(error = error)            
