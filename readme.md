@@ -2,15 +2,11 @@
 
 **Sephera is a lightweight command-line tool for analyzing and visualizing your project's structure and codebase.**
 
-## Documentation:
-* [Website Documentation](https://reim-developer.github.io/Sephera/)
-* [Markdown Documentation](./docs/index.md)
-
 ![CodeLoc Preview](./preview/CodeLoc.gif)
 
 ## Features
-- 🚀 **Blazingly fast**: 700k lines counted in just ~1 second.
 - ⚙️ **Portable**: Zero setup, just download and run.
+- ⚙️ **Update online:** Always can update Sephera in your console.
 - 🔍 `loc`: Count total lines of code with regex/glob support.
 - 📊 `stats`: Show detailed file/folder stats (count, size, etc.).
 - 🌳 `tree`: Directory tree visualization with optional chart.
@@ -20,8 +16,12 @@
 - 📁 **JSON Export**: Export scan results in structured JSON format.
 - 🔥 **Massive Scan Support**: Handles entire `~/` directory in ~20s.
 - 🎯 **Hardcore File/Folder Ignore**: Directly exclude entire paths.
-- 🏷️ **Language Detection**: Auto detects 60+ languages.
+- 🏷️ **Language Detection**: Auto detects 70+ languages.
 - 🧪 **Benchmark**: 1.38M lines scanned in ~1.13s.
+
+## For more information, please visit Sephera documentation:
+* [Website Documentation](https://reim-developer.github.io/Sephera/)
+* [Markdown Documentation](./docs/index.md)
 
 ## Installation
 1. Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
