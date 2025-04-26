@@ -15,6 +15,7 @@ try:
     from sephera.get_update import GetUpdate
     from sephera.interactive.option import OptionHandler
     from sephera.fetch_lang_support import FetchLanguage
+    from sephera.version import VersionCommand
 except KeyboardInterrupt:
     print("\nAborted by user.")
     sys.exit(1)
@@ -108,3 +109,8 @@ class Handler:
             fetch_languages.fetch_language_count(verbose = True)
 
         fetch_languages.fetch_language_count()
+
+    def version_command_handler(self, args) -> None:
+        version_command = VersionCommand()
+
+        version_command.fetch_version(show_git_version = args.git)
