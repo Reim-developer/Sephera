@@ -7,7 +7,6 @@ try:
     from rich.console import Console
     from utils.stdout import SepheraStdout
     from utils.utils import Utils
-    from utils.stdout import SepheraStdout
 except KeyboardInterrupt:
     print("\n Aborted by user.")
     sys.exit(1)
@@ -56,7 +55,7 @@ class WalkFile:
         hidden_folder_count: int = 0
         output: list[str] = []
 
-        with self.console.status("[bold green] Processing...", spinner = "point") as progressBar:
+        with self.console.status("[bold green] Processing...", spinner = "material"):
             for root, dirs, files in os.walk(self.base_path):
 
                 valid_dirs: list = []
