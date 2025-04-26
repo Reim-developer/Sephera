@@ -49,3 +49,13 @@ Arguments:
 UPDATE_COMMAND_HELP = """Usage: sephera update
 
 [+] Update Sephera to the latest version or install it to a different directory path."""
+
+VERSION_COMMAND_HELP = """Usage: sephera version [arguments...]
+
+Arguments:
+    --git                      Show the latest version of Sephera from GitHub."""
+
+SET_CFG_COMMAND_HELP = """Usage: sephera cfg-language [arguments...]
+
+Arguments:
+    --global                    Set Sephera configuration in your user home directory, e.g. ~/ or AppData/Local"""
