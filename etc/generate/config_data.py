@@ -160,6 +160,16 @@ CONFIG_DATA = {
       "single_line": "#",
       "multi_line_start": "\"\"\"",
       "multi_line_end": "\"\"\""
+    },
+    "batchfile_style": {
+      "single_line": "REM",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "fsharp_style": {
+      "single_line": "//",
+      "multi_line_start": "(*",
+      "multi_line_end": "*)"
     }
   },
   "languages": [
@@ -692,6 +702,50 @@ CONFIG_DATA = {
         ".vsh"
       ],
       "comment_styles": "c_style"
+    },
+    {
+      "name": "Visual Basic",
+      "extension": [
+        ".vb"
+      ],
+      "comment_styles": "basic_style"
+    },
+    {
+      "name": "Batch File",
+      "extension": [
+        ".bat",
+        ".cmd"
+      ],
+      "comment_styles": "batchfile_style"
+    },
+    {
+      "name": "SCSS",
+      "extension": [
+        ".scss"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "QML",
+      "extension": [
+        ".qml"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Verilog",
+      "extension": [
+        ".vlg",
+        ".verilog"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "F#",
+      "extension": [
+        ".fs"
+      ],
+      "comment_styles": "fsharp_style"
     }
   ]
 }
