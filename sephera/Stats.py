@@ -34,7 +34,7 @@ class Stats:
         hidden_folder_count: int = 0
         total_hidden_size: int = 0
 
-        with self.console.status("[bold green] Processing...", spinner = "point") as progressBar:
+        with self.console.status("[bold green] Processing...", spinner = "material"):
             for root, dirs, files in os.walk(self.base_path):
 
                 dirs[:] = [dir for dir in dirs if not 
