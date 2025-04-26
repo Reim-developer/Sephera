@@ -1,0 +1,20 @@
+# Issue Template - Sephera CLI
+
+## Description of the Issue or Feature Request
+---
+* Clearly describe the bug or the new feature you are requesting.
+* Example: "The `sephera loc` command does not correctly detect `.ts` extensions."
+
+---
+* **Please briefly describe what you expected to happen, like:**
+
+| Sephera Version | Operating System | Current Shell | Python Version |
+|-----------------|------------------|---------------|----------------|
+| e.g: v1.0.0     | e.g: ArchLinux   | e.g: zsh      | e.g: 3.13      |
+
+- **Note:** Current Shell and Python Version are optional.
+Python version is mainly useful if you are building Sephera from source.
+
+## Additional Context
+---
+Add any other context, screenshots, or logs that may help us understand better.
