@@ -5,6 +5,7 @@ import requests
 import sys
 import platform
 from typing import Optional, List
+from etc.generate.config_data import CONFIG_DATA
 
 try:
     from rich.console import Console
@@ -112,5 +113,17 @@ class Utils:
             case "Linux": return self.LINUX_PLATFORM
             case "Darkwin": return self.MACOS_PLATFORM
             case _: return self.UNKNOWN_PLATFORM
+
+    def fetch_support_languages(self) -> int:
+        languages = len(CONFIG_DATA.get("languages", "name"))
+
+        return languages
+    
+    def fetch_support_languages_name(self) -> dict[str]:
+        languages = CONFIG_DATA.get("languages", [])
+
+        languages_names = [language["name"] for language in languages]
+
+        return languages_names
 
         
