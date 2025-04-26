@@ -160,3 +160,42 @@ sephera language-support --list
 [+] Total language(s) supported by Sephera: 73
 [+] Sephera current version: 1.0.0
 ```
+
+## Version Command
+---
+* **Description:** Show current or latest Sephera version from GitHub.
+```bash
+sephera version
+```
+---
+```bash
+--git
+```
+* **Description:** Show the latest version of Sephera from GitHub.
+
+```bash
+# Example
+sephera version --git
+[+] The Sephera latest version on GitHub: 1.0.0
+[+] Your Sephera version: 1.0.0
+[+] You are use the latest version of Sephera
+```
+
+## Cfg-language
+---
+* **Description:** Set configuration language to your current directory.
+```bash
+sephera cfg-language
+```
+---
+```bash
+--global
+```
+* **Description:** Set Sephera configuration in your user home directory, e.g. ~/ or AppData/Local
+
+```bash
+# Example for create global configuration.
+sephera cfg-language --global
+[+] Language detection configuration saved successfully.
+[+] Configuration path: /home/reim/.config/Sephera/SepheraCfg.yml
+```
