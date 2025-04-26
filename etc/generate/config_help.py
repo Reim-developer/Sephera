@@ -14,8 +14,12 @@ MAIN_HELP = """Usage: sephera [options...]
     loc                        Quickly calculate total lines of code in your project.
     stats                      Show your project stats, size, number of files and folders. Optional chart output.
     tree                       Show your project structure tree. Optional chart output.
+    update                     Update Sephera to the latest version or install it to a different directory path.
+    language-support           Show the count of languages currently supported by Sephera.
 
-Use `sephera --help [command]` for more information."""
+[+] Markdown documentation: https://github.com/Reim-developer/Sephera/tree/master/docs
+[+] Website documentation: https://reim-developer.github.io/Sephera
+[+] Use `sephera --help [command]` for more information."""
 
 LOC_COMMAND_HELP = """Usage: sephera loc [arguments...]
 
@@ -36,3 +40,12 @@ Arguments:
     --path <path>              Path to scan. (Default: current directory)
     --ignore <pattern>         Regex, or name pattern to ignore files or folders (e.g. --ignore '__pycache__')
     --chart [<save_path>]      Create chart for your directory tree. Default chart name is 'SepheraChart'."""
+
+LANGUAGE_SUPPORT_COMMAND_HELP = """Usage: sephera language-support [arguments...]
+
+Arguments:
+    --list                     Show the list of language names currently supported by Sephera."""
+
+UPDATE_COMMAND_HELP = """Usage: sephera update
+
+[+] Update Sephera to the latest version or install it to a different directory path."""
