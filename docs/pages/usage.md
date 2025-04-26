@@ -133,3 +133,30 @@ sephera tree --ignore node_modules
 sephera tree --chart # Will export to default name, as SepheraChart
 sephera tree --chart myCustomizeChart # Will export to myCustomizeChart
 ```
+
+## Language Support Command
+---
+* **Description:** Show the count of languages currently supported by Sephera.
+```bash
+sephera language-support
+```
+---
+```bash
+--list
+```
+* **Description:** Show the list of languages currently supported by Sephera.
+```bash
+# Example and output:
+sephera language-support --list
+...
+[66] Eiffel
+[67] Pascal
+[68] TCL
+[69] Elixir
+[70] Markdown
+[71] M4
+[72] Kotlin Build Script
+[73] V Lang
+[+] Total language(s) supported by Sephera: 73
+[+] Sephera current version: 1.0.0
+```
