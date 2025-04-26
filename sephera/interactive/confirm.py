@@ -27,9 +27,14 @@ class ConfirmInteractive:
                 return False
             
             match option:
-                case "1": return True
-                case "2": return False
-                case _: return False
+                case "1": 
+                    return True
+                
+                case "2": 
+                    return False
+                
+                case _: 
+                    return False
 
         except KeyboardInterrupt:
             return False
@@ -63,8 +68,8 @@ class ConfirmInteractive:
                 self.console.print("\n".join([
                     f"[yellow][!] Your file {file_name} is already exists. Do you want",
                     f"[cyan][1] Override all data in {file_name}.",
-                    f"[cyan][2] No override. Cancel write data, and exit now.",
-                    f"[yellow][!] Default as 1 if you leave blank."
+                    "[cyan][2] No override. Cancel write data, and exit now.",
+                    "[yellow][!] Default as 1 if you leave blank."
                 ]))
 
                 option: str = input("Your option [1, 2]: ").strip()
@@ -73,8 +78,11 @@ class ConfirmInteractive:
                     return True
                 
                 match option:
-                    case "1": return True
-                    case "2": return False
+                    case "1": 
+                        return True
+                    
+                    case "2": 
+                        return False
 
                     case _:
                         self.console.print(f"[red] Invalid option: {option}")
