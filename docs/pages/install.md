@@ -14,12 +14,12 @@
 
 * With `cURl`, put this command to your terminal:
 ```bash
-curl -sSL https://raw.githubusercontent.com/Reim-developer/Sephera/main/install.sh | bash
+curl -sSL https://raw.githubusercontent.com/Reim-developer/Sephera/master/install.sh | bash
 ```
 ---
 * With `wget`, put this command to your terminal
 ```bash
-wget -qO- https://raw.githubusercontent.com/Reim-developer/Sephera/main/install.sh | bash
+wget -qO- https://raw.githubusercontent.com/Reim-developer/Sephera/master/install.sh | bash
 ```
 ---
 **In Windows, you can only install via [Github release page](https://github.com/Reim-developer/Sephera/releases), or [build from source](#build-from-source)**
