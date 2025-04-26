@@ -559,6 +559,15 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#language-support-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Language Support Command
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
@@ -632,6 +641,15 @@
   <a href="#tree-command" class="md-nav__link">
     <span class="md-ellipsis">
       Tree Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#language-support-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Language Support Command
     </span>
   </a>
   
@@ -789,6 +807,33 @@ sephera tree --ignore node_modules
 <pre><code class="language-bash"># Example:
 sephera tree --chart # Will export to default name, as SepheraChart
 sephera tree --chart myCustomizeChart # Will export to myCustomizeChart
+</code></pre>
+<h2 id="language-support-command">Language Support Command</h2>
+<hr />
+<ul>
+<li><strong>Description:</strong> Show the count of languages currently supported by Sephera.</li>
+</ul>
+<pre><code class="language-bash">sephera language-support
+</code></pre>
+<hr />
+<pre><code class="language-bash">--list
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Show the list of languages currently supported by Sephera.</li>
+</ul>
+<pre><code class="language-bash"># Example and output:
+sephera language-support --list
+...
+[66] Eiffel
+[67] Pascal
+[68] TCL
+[69] Elixir
+[70] Markdown
+[71] M4
+[72] Kotlin Build Script
+[73] V Lang
+[+] Total language(s) supported by Sephera: 73
+[+] Sephera current version: 1.0.0
 </code></pre>
 
 
