@@ -14,6 +14,7 @@ try:
     from sephera.help import SepheraHelp
     from sephera.get_update import GetUpdate
     from sephera.interactive.option import OptionHandler
+    from sephera.fetch_lang_support import FetchLanguage
 except KeyboardInterrupt:
     print(f"\nAborted by user.")
     sys.exit(1)
@@ -100,3 +101,10 @@ class Handler:
     def update_command_handler(self, _) -> None:
         get_update = GetUpdate()
         get_update.update_sephera()
+
+    def fetch_languages_supports_handler(self, args) -> None:
+        fetch_languages = FetchLanguage()
+        if args.list:
+            fetch_languages.fetch_language_count(verbose = True)
+
+        fetch_languages.fetch_language_count()
