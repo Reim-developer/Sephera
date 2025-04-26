@@ -23,6 +23,7 @@ class Command:
             self._set_loc_command()
             self._set_help_command()
             self._set_update_command()
+            self._set_languages_supports_command()
             
             args = self.sephera_parser.parse_args()
             if args.command is None:
@@ -126,5 +127,20 @@ class Command:
     def _set_update_command(self) -> None:
         update_command = self.sub_command.add_parser("update", help = "Update Sephera if latest version is available")
         update_command.set_defaults(function = self.handler.update_command_handler)
+
+    def _set_languages_supports_command(self) -> None:
+        languages_support_command = self.sub_command.add_parser(
+            "language-support", help = "Fetch languages Sephera can support for LOC count."
+        )
+        languages_support_command.add_argument(
+            "--list",
+            type = bool,
+            const = True,
+            nargs = "?",
+            help = "Show list of languages currently supported by Sephera."
+        )
+
+        languages_support_command.set_defaults(function = self.handler.fetch_languages_supports_handler)
+
     
 
