@@ -70,8 +70,6 @@ class Utils:
         return os.path.exists(path = path)
 
     def fetch_latest_version(self) -> str:
-        console = Console()
-
         request_headers = {
             "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/58.0.3029.110 Safari/537.36"
         }
@@ -109,10 +107,17 @@ class Utils:
 
     def os_detect(self) -> int:
         match platform.system():
-            case "Windows": return self.WINDOWS_PLATFORM
-            case "Linux": return self.LINUX_PLATFORM
-            case "Darkwin": return self.MACOS_PLATFORM
-            case _: return self.UNKNOWN_PLATFORM
+            case "Windows": 
+                return self.WINDOWS_PLATFORM
+            
+            case "Linux": 
+                return self.LINUX_PLATFORM
+            
+            case "Darkwin": 
+                return self.MACOS_PLATFORM
+            
+            case _: 
+                return self.UNKNOWN_PLATFORM
 
     def fetch_support_languages(self) -> int:
         languages = len(CONFIG_DATA.get("languages", "name"))
