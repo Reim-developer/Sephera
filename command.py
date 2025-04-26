@@ -25,6 +25,7 @@ class Command:
             self._set_update_command()
             self._set_languages_supports_command()
             self._set_version_command()
+            self._set_language_cfg_command()
             
             args = self.sephera_parser.parse_args()
             if args.command is None:
@@ -155,5 +156,20 @@ class Command:
             help = "Show the Sephera latest version on GitHub."
         )
         version_command.set_defaults(function = self.handler.version_command_handler)
+
+    def _set_language_cfg_command(self) -> None:
+        language_cfg_command = self.sub_command.add_parser(
+            "cfg-language"
+        )
+        language_cfg_command.add_argument(
+            "--global",
+            type = bool,
+            const = True,
+            nargs = "?",
+            dest = "global_",
+            help = "Set the configuration for language detection and LOC count to global."
+        )
+
+        language_cfg_command.set_defaults(function = self.handler.language_cfg_handler)
     
 
