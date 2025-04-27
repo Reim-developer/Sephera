@@ -25,7 +25,7 @@ class SqlManager:
     def create_sql_table(self) -> None:
         sql_query = """--sql
             CREATE TABLE IF NOT EXISTS config_path (
-                global_cfg_path TEXT,
+                global_cfg_path TEXT PRIMARY KEY,
                 user_cfg_path TEXT,
                 UNIQUE(global_cfg_path)
         )
@@ -41,7 +41,7 @@ class SqlManager:
 
     def set_global_cfg_path(self, global_cfg_path: str) -> None:
         sql_query = """--sql
-            INSERT INTO config_path (global_cfg_path)
+            INSERT OR REPLACE INTO config_path (global_cfg_path)
             VALUES (?)
         """
 
@@ -50,12 +50,21 @@ class SqlManager:
         self.connection.close()
 
     def set_user_cfg_path(self, user_cfg_path: str) -> None:
-        sql_query = """--sql
-            INSERT INTO config_path (user_cfg_path)
-            VALUES (?)
+        sql_check_query = """--sql
+            SELECT COUNT(*) FROM config_path WHERE user_cfg_path = ?
         """
 
-        self.cursor.execute(sql_query, (user_cfg_path,))
+        self.cursor.execute(sql_check_query, (user_cfg_path, ))
+        result = self.cursor.fetchone()
+
+        if result[0] == 0:
+            sql_update_query = """--sql
+                INSERT INTO config_path (user_cfg_path)
+                VALUES (?)
+            """
+
+            self.cursor.execute(sql_update_query, (user_cfg_path,))
+
         self.connection.commit()
         self.connection.close()
         
