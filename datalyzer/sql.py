@@ -23,17 +23,39 @@ class SqlManager:
 
     
     def create_sql_table(self) -> None:
-        sql_query = """\
-        CREATE TABLE IF NOT EXISTS config_path (
-            global_cfg_path TEXT NOT NULL,
-            user_cfg_path TEXT,
-            UNIQUE(global_cfg_path)
+        sql_query = """--sql
+            CREATE TABLE IF NOT EXISTS config_path (
+                global_cfg_path TEXT,
+                user_cfg_path TEXT,
+                UNIQUE(global_cfg_path)
         )
         """
 
         try:
             self.cursor.execute(sql_query)
             self.connection.commit()
+
         except  Exception as error:
             stdout = SepheraStdout()
             stdout.die(error = error)
+
+    def set_global_cfg_path(self, global_cfg_path: str) -> None:
+        sql_query = """--sql
+            INSERT INTO config_path (global_cfg_path)
+            VALUES (?)
+        """
+
+        self.cursor.execute(sql_query, (global_cfg_path,))
+        self.connection.commit()
+        self.connection.close()
+
+    def set_user_cfg_path(self, user_cfg_path: str) -> None:
+        sql_query = """--sql
+            INSERT INTO config_path (user_cfg_path)
+            VALUES (?)
+        """
+
+        self.cursor.execute(sql_query, (user_cfg_path,))
+        self.connection.commit()
+        self.connection.close()
+        
