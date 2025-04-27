@@ -1,7 +1,9 @@
 import argparse
 import logging
 import sys
+import os
 from sephera.CodeLoc import CodeLoc
+from datalyzer.sql import SqlManager
 from utils.utils import Utils
 
 class SepheraTest:
@@ -49,6 +51,12 @@ class SepheraTest:
                 else:
                     self.log.debug("This binary of Sephera it not a latest version")
 
+            case "cfg-path":
+                sql = SqlManager()
+                utils = Utils()
+                sql.connect_to_sql(f"{utils.get_local_data()}/.config/Sephera/settings.db")
+
+                self.log.debug(sql.get_cfg_path())
             case _:
                 self.log.error(f"Test case: {args} not found.")
                 sys.exit(1)
