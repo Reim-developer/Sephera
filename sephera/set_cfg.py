@@ -92,7 +92,7 @@ languages:
             except Exception as error:
                 stdout.die(error = error)
 
-            self.sql.set_user_cfg_path(user_cfg_path = f"{os.getcwd()}/{cfg_name}")
+            self.sql.set_user_cfg_path(user_cfg_path = f"{os.getcwd()}")
             self.console.print("\n".join([
                 "[cyan][+] Language detection configuration saved successfully.",
                 "[cyan][+] Configuration type: User Config",
