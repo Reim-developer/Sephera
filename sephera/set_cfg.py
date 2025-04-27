@@ -77,7 +77,10 @@ languages:
         if not global_cfg:
             if os.path.exists(cfg_name):
                 confirm_override = ConfirmInteractive()
-                confirm_override.override_write_confirm(file_name = cfg_name)
+                confirm_result = confirm_override.override_write_confirm(file_name = cfg_name)
+
+            if not confirm_result:
+                sys.exit(0)
 
             if not cfg_name.endswith(".yml"):
                 cfg_name += ".yml"
@@ -92,7 +95,9 @@ languages:
             self.sql.set_user_cfg_path(user_cfg_path = f"{os.getcwd()}/{cfg_name}")
             self.console.print("\n".join([
                 "[cyan][+] Language detection configuration saved successfully.",
-                f"[cyan][+] Configuration path: {os.path.abspath(cfg_name)}"
+                "[cyan][+] Configuration type: User Config",
+                f"[cyan][+] Configuration path: {os.path.abspath(cfg_name)}",
+                "[cyan][+] Done! This action will also override and update your user configuration."
             ]))
             sys.exit(0)
         
@@ -112,6 +117,7 @@ languages:
             self.sql.set_global_cfg_path(global_cfg_path = f"{global_cfg_path}/{cfg_name}")
             self.console.print("\n".join([
                 "[cyan][+] Language detection configuration saved successfully.",
+                "[cyan][+] Configuration type: Global Configuration.",
                 f"[cyan][+] Configuration path: {os.path.abspath(os.path.join(global_cfg_path, cfg_name))}"
             ]))
             sys.exit(0)
