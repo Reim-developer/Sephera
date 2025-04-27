@@ -23,6 +23,9 @@ test-is-latest:
 test-languages-supports:
 	@$(venv) calc.py
 
+test-cfg:
+	@$(venv) $(test_entry) test cfg-path
+
 gen-data-cfg:
 	@$(venv) $(data_config)
 
