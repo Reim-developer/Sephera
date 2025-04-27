@@ -66,7 +66,7 @@ class ConfirmInteractive:
         try:
             while True:
                 self.console.print("\n".join([
-                    f"[yellow][!] Your file {file_name} is already exists. Do you want",
+                    f"[yellow][!] Your data/config {file_name} is already exists. Do you want",
                     f"[cyan][1] Override all data/config in {file_name}.",
                     "[cyan][2] No override. Cancel write data/config, and exit now.",
                     "[yellow][!] Default as 1 if you leave blank."
