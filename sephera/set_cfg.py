@@ -50,9 +50,7 @@ languages:
         user_local = utils.get_local_data()
         global_cfg_path = f"{user_local}/.config/Sephera"
 
-        try:
-            open(f"{global_cfg_path}/settings.db", "w").close()
-
+        try: 
             self.sql.connect_to_sql(db_path = f"{global_cfg_path}/settings.db")
             self.sql.create_sql_table()
 
@@ -73,8 +71,8 @@ languages:
 
         user_local = utils.get_local_data()
         global_cfg_path = f"{user_local}/.config/Sephera"
+        
         self.create_settings(global_cfg_path = global_cfg_path)
-
         self.setup_settings(utils = utils, stdout = stdout)
         if not global_cfg:
             if os.path.exists(cfg_name):
@@ -91,6 +89,7 @@ languages:
             except Exception as error:
                 stdout.die(error = error)
 
+            self.sql.set_user_cfg_path(user_cfg_path = f"{os.getcwd()}/{cfg_name}")
             self.console.print("\n".join([
                 "[cyan][+] Language detection configuration saved successfully.",
                 f"[cyan][+] Configuration path: {os.path.abspath(cfg_name)}"
@@ -110,6 +109,7 @@ languages:
             with open(file = f"{global_cfg_path}/{cfg_name}", mode = "w", encoding = "utf-8") as cfg_file:
                 cfg_file.write(YAML_SOURCE)
             
+            self.sql.set_global_cfg_path(global_cfg_path = f"{global_cfg_path}/{cfg_name}")
             self.console.print("\n".join([
                 "[cyan][+] Language detection configuration saved successfully.",
                 f"[cyan][+] Configuration path: {os.path.abspath(os.path.join(global_cfg_path, cfg_name))}"
