@@ -40,7 +40,6 @@ jobs:
           script-name: main.py
           mode: onefile
           output-dir: build/cli
-          output-filename: sephera-cli
           lto: yes
       
       - name: Build executable for GUI
@@ -50,9 +49,7 @@ jobs:
           script-name: gui/main.py     
           mode: onefile
           lto: yes
-          output-dir: build/gui        
-          output-filename: sephera-gui  
-          include-package: gui,gui_utils
+          output-dir: build/gui
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
