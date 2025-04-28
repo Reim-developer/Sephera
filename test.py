@@ -1,7 +1,6 @@
 import argparse
 import logging
 import sys
-import os
 from sephera.CodeLoc import CodeLoc
 from datalyzer.sql import SqlManager
 from utils.utils import Utils
