@@ -45,6 +45,8 @@ jobs:
           fi
           
           if [[ "${{ runner.os }}" == "macOS" ]]; then
+            brew install ccache
+            
             python3 -m nuitka main.py \
               --standalone \
               --onefile \
