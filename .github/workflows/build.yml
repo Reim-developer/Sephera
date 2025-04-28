@@ -34,10 +34,16 @@ jobs:
           ruff check .
 
       - name: Build executables manually
+        shell: bash
         run: |
           echo "Building for ${{ runner.os }}..."
-          THREADS=$(nproc)
-
+          
+          if [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
+              THREADS=$(nproc)
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+              THREADS=$(sysctl -n hw.logicalcpu)
+          fi
+          
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             python3 -m nuitka main.py \
               --standalone \
