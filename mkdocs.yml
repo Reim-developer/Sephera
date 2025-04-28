@@ -26,9 +26,15 @@ theme:
 nav:
   - Home: index.md
   - Github: https://github.com/reim-developer/Sephera
+
   - Install:
     - Sephera Install: pages/install.md
+
   - Usage:
     - Sephera Usage: pages/usage.md
+  
+  - Advanced Usage:
+    - Customize via YAML: pages/advanced_usage.md
+  
   
 
