@@ -22,7 +22,7 @@ class SetConfiguration:
 # GitHub: https://github.com/reim-developer/Sephera
 
 # Comment style for your programming language.
-comment_style:
+comment_styles:
     python_style:
         # Comment of language. If the language 
         # does not support it comment type,
