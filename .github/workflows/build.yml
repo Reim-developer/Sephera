@@ -28,40 +28,66 @@ jobs:
       - name: Install Dependencies
         run: |
           pip install -r requirements.txt
-      
+
       - name: Check syntax
         run: |
           ruff check .
 
-      - name: Build executable for CLI
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          nuitka-version: main
-          script-name: main.py
-          mode: onefile
-          enable-console: true
-          output-file: sephera-cli${{ runner.os == 'Windows' && '.exe' || '' }}
-          output-dir: build/cli
-          lto: yes
+      - name: Build executables manually
+        run: |
+          echo "Building for ${{ runner.os }}..."
+          THREADS=$(nproc)
 
-      - name: Build executable for GUI
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          nuitka-version: main
-          script-name: gui/main.py
-          mode: onefile
-          enable-console: false
-          enable-plugins: pyqt5
-          macos-app-mode: gui
-          output-file: sephera-gui${{ runner.os == 'Windows' && '.exe' || '' }}
-          output-dir: build/gui
-          lto: yes
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            python3 -m nuitka main.py \
+              --standalone \
+              --onefile \
+              --enable-console \
+              --lto=yes \
+              --jobs="$THREADS" \
+              --output-dir=build/cli \
+              --output-filename=sephera-cli
+
+            python3 -m nuitka gui/main.py \
+              --standalone \
+              --onefile \
+              --enable-plugins=pyqt5 \
+              --macos-create-app-bundle \
+              --lto=yes \
+              --jobs="$THREADS" \
+              --output-dir=build/gui \
+              --output-filename=sephera-gui
+
+          elif [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
+            ext=""
+            if [[ "${{ runner.os }}" == "Windows" ]]; then
+              ext=".exe"
+            fi
+
+            python3 -m nuitka main.py \
+              --standalone \
+              --onefile \
+              --enable-console \
+              --lto=yes \
+              --jobs="$THREADS" \
+              --output-dir=build/cli \
+              --output-filename=sephera-cli${ext}
+
+            python3 -m nuitka gui/main.py \
+              --standalone \
+              --onefile \
+              --enable-plugins=pyqt5 \
+              --lto=yes \
+              --output-dir=build/gui \
+              --jobs="$THREADS" \
+              --output-filename=sephera-gui${ext}
+          fi
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sephera-${{ runner.os }}
           path: |
-            build/cli/sephera-cli${{ runner.os == 'Windows' && '.exe' || '' }}
-            build/gui/sephera-gui${{ runner.os == 'Windows' && '.exe' || '' }}
+            build/cli/*
+            build/gui/*
           if-no-files-found: error
