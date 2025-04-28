@@ -53,7 +53,7 @@ class CodeLoc:
         comment_line_count: int = 0
         empty_line_count: int = 0
         comment_nesting_level: int = 0  
-
+        
         comment_style: Optional[CommentStyle] = self.language_data.get_comment_style(language = language)
 
         if os.path.getsize(file_path) == 0:
