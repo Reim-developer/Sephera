@@ -38,8 +38,7 @@ jobs:
         with:
           nuitka-version: main
           script-name: main.py
-          standalone: true
-          onefile: true
+          mode: onefile
           enable-console: true
           output-file: sephera-cli${{ runner.os == 'Windows' && '.exe' || '' }}
           output-dir: build/cli
@@ -50,8 +49,7 @@ jobs:
         with:
           nuitka-version: main
           script-name: gui/main.py
-          standalone: true
-          onefile: true
+          mode: onefile
           enable-console: false
           output-file: sephera-gui${{ runner.os == 'Windows' && '.exe' || '' }}
           output-dir: build/gui
