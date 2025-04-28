@@ -33,21 +33,32 @@ jobs:
         run: |
           ruff check .
 
-      - name: Build Executable
+      - name: Build executable for CLI
         uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
           script-name: main.py
           mode: onefile
+          output-dir: build/cli
+          output-filename: sephera-cli
           lto: yes
-          
+      
+      - name: Build executable for GUI
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: gui/main.py     
+          mode: onefile
+          lto: yes
+          output-dir: build/gui        
+          output-filename: sephera-gui  
+          include-package: gui,gui_utils
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: ${{ runner.os }} Build
           path: |
-            build/*.exe
-            build/*.bin
-            build/*.app/**/*
+            build/cli/*
+            build/gui/*
           include-hidden-files: true
