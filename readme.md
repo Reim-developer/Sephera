@@ -4,6 +4,8 @@
 
 ![CodeLoc Preview](./preview/CodeLoc.gif)
 
+![Benchmark test with cloc](./benchmark/benchmark.png)
+
 ## Features
 - ⚙️ **Portable**: Zero setup, just download and run.
 - ⚙️ **Update online:** Always can update Sephera in your console.
