@@ -12,6 +12,8 @@
         <link rel="prev" href="../install/">
       
       
+        <link rel="next" href="../advanced_usage/">
+      
       
       <link rel="icon" href="../../assets/images/favicon.png">
       <meta name="generator" content="mkdocs-1.6.1, mkdocs-material-9.6.12">
@@ -262,6 +264,26 @@
   
   
   Usage
+
+        </a>
+      </li>
+    
+  
+
+      
+        
+  
+  
+  
+  
+    
+    
+      <li class="md-tabs__item">
+        <a href="../advanced_usage/" class="md-tabs__link">
+          
+  
+  
+  Advanced Usage
 
         </a>
       </li>
@@ -568,10 +590,101 @@
   
 </li>
       
+        <li class="md-nav__item">
+  <a href="#version-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Version Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cfg-language" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cfg-language
+    </span>
+  </a>
+  
+</li>
+      
     </ul>
   
 </nav>
       
+    </li>
+  
+
+              
+            
+          </ul>
+        </nav>
+      
+    </li>
+  
+
+    
+      
+      
+  
+  
+  
+  
+    
+    
+    
+    
+      
+      
+        
+      
+    
+    
+    <li class="md-nav__item md-nav__item--nested">
+      
+        
+        
+        <input class="md-nav__toggle md-toggle " type="checkbox" id="__nav_5" >
+        
+          
+          <label class="md-nav__link" for="__nav_5" id="__nav_5_label" tabindex="0">
+            
+  
+  
+  <span class="md-ellipsis">
+    Advanced Usage
+    
+  </span>
+  
+
+            <span class="md-nav__icon md-icon"></span>
+          </label>
+        
+        <nav class="md-nav" data-md-level="1" aria-labelledby="__nav_5_label" aria-expanded="false">
+          <label class="md-nav__title" for="__nav_5">
+            <span class="md-nav__icon md-icon"></span>
+            Advanced Usage
+          </label>
+          <ul class="md-nav__list" data-md-scrollfix>
+            
+              
+                
+  
+  
+  
+  
+    <li class="md-nav__item">
+      <a href="../advanced_usage/" class="md-nav__link">
+        
+  
+  
+  <span class="md-ellipsis">
+    Customize via YAML
+    
+  </span>
+  
+
+      </a>
     </li>
   
 
@@ -650,6 +763,24 @@
   <a href="#language-support-command" class="md-nav__link">
     <span class="md-ellipsis">
       Language Support Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#version-command" class="md-nav__link">
+    <span class="md-ellipsis">
+      Version Command
+    </span>
+  </a>
+  
+</li>
+      
+        <li class="md-nav__item">
+  <a href="#cfg-language" class="md-nav__link">
+    <span class="md-ellipsis">
+      Cfg-language
     </span>
   </a>
   
@@ -834,6 +965,43 @@ sephera language-support --list
 [73] V Lang
 [+] Total language(s) supported by Sephera: 73
 [+] Sephera current version: 1.0.0
+</code></pre>
+<h2 id="version-command">Version Command</h2>
+<hr />
+<ul>
+<li><strong>Description:</strong> Show current or latest Sephera version from GitHub.</li>
+</ul>
+<pre><code class="language-bash">sephera version
+</code></pre>
+<hr />
+<pre><code class="language-bash">--git
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Show the latest version of Sephera from GitHub.</li>
+</ul>
+<pre><code class="language-bash"># Example
+sephera version --git
+[+] The Sephera latest version on GitHub: 1.0.0
+[+] Your Sephera version: 1.0.0
+[+] You are use the latest version of Sephera
+</code></pre>
+<h2 id="cfg-language">Cfg-language</h2>
+<hr />
+<ul>
+<li><strong>Description:</strong> Set configuration language to your current directory.</li>
+</ul>
+<pre><code class="language-bash">sephera cfg-language
+</code></pre>
+<hr />
+<pre><code class="language-bash">--global
+</code></pre>
+<ul>
+<li><strong>Description:</strong> Set Sephera configuration in your user home directory, e.g. ~/ or AppData/Local</li>
+</ul>
+<pre><code class="language-bash"># Example for create global configuration.
+sephera cfg-language --global
+[+] Language detection configuration saved successfully.
+[+] Configuration path: /home/reim/.config/Sephera/SepheraCfg.yml
 </code></pre>
 
 
