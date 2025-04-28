@@ -8,6 +8,7 @@
 
 ## Features
 - ⚙️ **Portable**: Zero setup, just download and run.
+- ⚙️ **Customize:** Enjoy infinite customization through YAML configuration.
 - ⚙️ **Update online:** Always can update Sephera in your console.
 - 🔍 `loc`: Count total lines of code with regex/glob support.
 - 📊 `stats`: Show detailed file/folder stats (count, size, etc.).
