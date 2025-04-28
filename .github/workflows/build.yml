@@ -51,6 +51,7 @@ jobs:
           script-name: gui/main.py
           mode: onefile
           enable-console: false
+          enable-plugins: pyqt5
           output-file: sephera-gui${{ runner.os == 'Windows' && '.exe' || '' }}
           output-dir: build/gui
           lto: yes
