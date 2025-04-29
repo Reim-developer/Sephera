@@ -31,6 +31,10 @@ jobs:
           if [[ "${{runner.os }}" == "Linux" ]]; then
             sudo apt install clang
           fi
+
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+              choco install visualstudio2019buildtools
+          fi
           pip install -r requirements.txt
 
       - name: Check syntax
@@ -93,8 +97,8 @@ jobs:
             ext=""
 
             if [[ "${{ runner.os }}" == "Windows" ]]; then
-              ext=".exe"
               export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
+              ext=".exe"
             fi
 
             python3 -m nuitka main.py \
