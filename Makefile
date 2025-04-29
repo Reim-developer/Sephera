@@ -6,10 +6,13 @@ pip_venv = .venv/bin/pip
 data_config = generate_data_config.py
 help_config = generate_help.py
 test_entry = test.py
+gui_main_entry = gui.main
 
 # Make sure requirements.txt exists
 requirements_pip = requirements.txt
 
+run-gui:
+	@$(venv) -m $(gui_main_entry)
 # Test case
 test-loc:
 	@$(venv) $(test_entry) test loc
