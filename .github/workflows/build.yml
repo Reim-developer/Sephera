@@ -129,11 +129,14 @@ jobs:
 
       - name: Build GUI App for Windows
         shell: bash
+        env:
+          NUITKA_DEPENDS_DOWNLOAD_ALLOWED: "1"
+          NUITKA_DEPENDS_DOWNLOAD_MODE: "cached"
+
         run: |
           if [[ "${{ runner.os }}" == "Windows" ]]; then
                 THREADS=$(nproc)
-                export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
-                export NUITKA_DEPENDS_DOWNLOAD_MODE=cached
+                echo "NUITKA_DEPENDS_DOWNLOAD_ALLOWED=$NUITKA_DEPENDS_DOWNLOAD_ALLOWED"
                 ext=".exe"
 
                 python3 -m nuitka gui/main.py \
