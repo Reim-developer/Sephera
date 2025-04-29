@@ -26,6 +26,7 @@ jobs:
             **/requirements*.txt
 
       - name: Install Dependencies
+        shell: bash
         run: |
           if [[ "${{runner.os }}" == "Linux" ]]; then
             sudo apt install clang
