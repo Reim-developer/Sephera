@@ -75,24 +75,15 @@ jobs:
 
           fi
 
-
       - name: Build CLI for Windows
-        shell: cmd
-        
-        run: |
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-              set NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
-              set NUITKA_DEPENDS_DOWNLOAD_MODE=cached
-              set THREADS=%NUMBER_OF_PROCESSORS%
+        if: runner.os == 'Windows'
 
-              python -m nuitka main.py ^
-              --onefile ^
-              --lto=yes ^
-              --jobs=%THREADS% ^
-              --output-dir=build/cli ^
-              --output-filename=sephera-cli.exe
-
-          fi
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: main.py
+          mode: onefile
+          output-dir: build/cli 
 
       - name: Build GUI App for Linux
         shell: bash
@@ -127,26 +118,14 @@ jobs:
           fi
 
       - name: Build GUI App for Windows
-        shell: cmd
-
-        run: |
-          set NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
-          set NUITKA_DEPENDS_DOWNLOAD_MODE=cached
-          set THREADS=%NUMBER_OF_PROCESSORS%
-
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-                THREADS=$(nproc)
-                echo "NUITKA_DEPENDS_DOWNLOAD_ALLOWED=$NUITKA_DEPENDS_DOWNLOAD_ALLOWED"
-
-                 python -m nuitka gui/main.py ^
-                  --onefile ^
-                  --enable-plugins=pyqt5 ^
-                  --lto=yes ^
-                  --assume-yes-for-downloads ^
-                  --jobs=%THREADS% ^
-                  --output-dir=build/gui ^
-                  --output-filename=sephera-gui.exe
-          fi
+        if: runner.os == 'Windows'
+        
+        uses: Nuitka/Nuitka-Action@main
+        with:
+          nuitka-version: main
+          script-name: main.py
+          mode: onefile
+          output-dir: build/gui 
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
