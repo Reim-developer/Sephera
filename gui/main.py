@@ -1,7 +1,7 @@
 import sys
 import logging
 from __version__ import SEPHERA_VERSION
-from gui.gui_utils.uitls import GuiUtils
+from gui.gui_utils.utils import GuiUtils
 from gui.setup_app import Setup
 from PyQt5.QtWidgets import (
     QApplication, QMainWindow
