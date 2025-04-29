@@ -27,6 +27,9 @@ jobs:
 
       - name: Install Dependencies
         run: |
+          if [[ "${{runner.os }}" == "Linux"]]; then
+            sudo apt install clang
+          fi
           pip install -r requirements.txt
 
       - name: Check syntax
@@ -37,28 +40,47 @@ jobs:
         shell: bash
         run: |
           echo "Building for ${{ runner.os }}..."
-          
+
           if [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
               THREADS=$(nproc)
           elif [[ "${{ runner.os }}" == "macOS" ]]; then
               THREADS=$(sysctl -n hw.logicalcpu)
+          fi
+
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+               python3 -m nuitka main.py \
+              --onefile \
+              --clang \
+              --lto=yes \
+              --jobs="$THREADS" \
+              --output-dir=build/cli \
+              --output-filename=sephera-cli
+
+              python3 -m nuitka gui/main.py \
+                --onefile \
+                --enable-plugins=pyqt5 \
+                --macos-create-app-bundle \
+                --lto=yes \
+                --clang \
+                --jobs="$THREADS" \
+                --output-dir=build/gui \
+                --output-filename=sephera-gui
           fi
           
           if [[ "${{ runner.os }}" == "macOS" ]]; then
             brew install ccache
             
             python3 -m nuitka main.py \
-              --standalone \
               --onefile \
-              --enable-console \
+              --clang
               --lto=yes \
               --jobs="$THREADS" \
               --output-dir=build/cli \
               --output-filename=sephera-cli
 
             python3 -m nuitka gui/main.py \
-              --standalone \
               --onefile \
+              --clang
               --enable-plugins=pyqt5 \
               --macos-create-app-bundle \
               --lto=yes \
@@ -68,22 +90,20 @@ jobs:
 
           elif [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
             ext=""
+
             if [[ "${{ runner.os }}" == "Windows" ]]; then
               ext=".exe"
               export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
             fi
 
             python3 -m nuitka main.py \
-              --standalone \
               --onefile \
-              --enable-console \
               --lto=yes \
               --jobs="$THREADS" \
               --output-dir=build/cli \
               --output-filename=sephera-cli${ext}
 
             python3 -m nuitka gui/main.py \
-              --standalone \
               --onefile \
               --enable-plugins=pyqt5 \
               --lto=yes \
