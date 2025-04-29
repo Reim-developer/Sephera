@@ -3,7 +3,7 @@ from PyQt5.QtWidgets import (
     QTableWidget, QProgressBar
 )
 from PyQt5.QtGui import QPalette
-from gui.gui_utils.uitls import GuiUtils
+from gui.gui_utils.utils import GuiUtils
 from gui.events.open_project import OpenProjectEvent
 from gui.events.start_scan import StartScanEvent
 
@@ -43,7 +43,7 @@ class Setup:
         )
         self.gui_utils.set_button(
             widget = self.widget, button = self.start_scan_btn,
-            text = "Start Scan", geometry = (350, 500, 250, 30)
+            text = "Start Scan", geometry = (300, 500, 250, 30)
         )
         
         self.gui_utils.set_line_edit(
@@ -54,7 +54,7 @@ class Setup:
 
         self.gui_utils.set_table_result(
             widget = self.widget, table_widget = self.show_result_table,
-            geometry = (0, 0, 600, 400)
+            geometry = (0, 100, 550, 300)
         )
        
         self.gui_utils.set_win_color(
@@ -67,7 +67,7 @@ class Setup:
 
         self.gui_utils.set_progress_bar(
             widget = self.widget, progress = self.progress_bar,
-            geometry = (350, 420, 250, 30)
+            geometry = (300, 420, 250, 30)
         )
 
         self.setup_event()
