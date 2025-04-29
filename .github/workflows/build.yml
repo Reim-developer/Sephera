@@ -29,7 +29,7 @@ jobs:
         shell: bash
         run: |
           if [[ "${{runner.os }}" == "Linux" ]]; then
-            sudo apt install clang
+            sudo apt install clang ccache
           fi
 
           if [[ "${{ runner.os }}" == "Windows" ]]; then
@@ -41,99 +41,110 @@ jobs:
         run: |
           ruff check .
 
-      - name: Build CLI executable
+      - name: Build CLI for Linux
         shell: bash
         run: |
-          echo "Building for ${{ runner.os }}..."
-
-          if [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
-              THREADS=$(nproc)
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-              THREADS=$(sysctl -n hw.logicalcpu)
-          fi
-
           if [[ "${{ runner.os }}" == "Linux" ]]; then
-               python3 -m nuitka main.py \
+
+             THREADS=$(nproc)
+              python3 -m nuitka main.py \
               --onefile \
               --clang \
               --lto=yes \
               --jobs="$THREADS" \
               --output-dir=build/cli \
               --output-filename=sephera-cli-linux
-          fi
-          
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            brew install ccache
-            
-            python3 -m nuitka main.py \
-              --onefile \
-              --clang \
-              --lto=yes \
-              --jobs="$THREADS" \
-              --output-dir=build/cli \
-              --output-filename=sephera-cli-macos
+              
           fi
 
-
-          if [[ "${{ runner.os }}" == "Windows" ]]; then
-                export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
-                export NUITKA_DEPENDS_DOWNLOAD_MODE=cached
-                ext=".exe"
-
-              python -m nuitka main.py \
-              --onefile \
-              --lto=yes \
-              --jobs="$THREADS" \
-              --output-dir=build/cli \
-              --output-filename=sephera-cli${ext}
-          fi
-      
-      - name: Build GUI executable
-        shell:  bash
+      - name: Build CLI for macOS
+        shell: bash
         run: |
-          if [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
-          THREADS=$(nproc)
-          elif [[ "${{ runner.os }}" == "macOS" ]]; then
-              THREADS=$(sysctl -n hw.logicalcpu)
-          fi
-          
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-                python3 -m nuitka gui/main.py \
-                --onefile \
-                --enable-plugins=pyqt5 \
-                --lto=yes \
-                --clang \
-                --jobs="$THREADS" \
-                --output-dir=build/gui \
-                --output-filename=sephera-gui
-          fi
-
           if [[ "${{ runner.os }}" == "macOS" ]]; then
-            python3 -m nuitka gui/main.py \
-              --onefile \
-              --clang \
-              --enable-plugins=pyqt5 \
-              --macos-create-app-bundle \
-              --lto=yes \
-              --jobs="$THREADS" \
-              --output-dir=build/gui \
-              --output-filename=sephera-gui
+
+              THREADS=$(sysctl -n hw.logicalcpu)
+              brew install ccache
+              
+              python3 -m nuitka main.py \
+                --onefile \
+                --clang \
+                --lto=yes \
+                --jobs="$THREADS" \
+                --output-dir=build/cli \
+                --output-filename=sephera-cli-macos
+
           fi
 
-          fi [[ "${{ runner.os }}" == "Windows" ]]; then
+
+      - name: Build CLI for Windows
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+
+                THREADS=$(nproc)
+                export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
+                export NUITKA_DEPENDS_DOWNLOAD_MODE=cached
+                ext=".exe"
+
+                python -m nuitka main.py \
+                    --onefile \
+                    --lto=yes \
+                    --jobs="$THREADS" \
+                    --output-dir=build/cli \
+                    --output-filename=sephera-cli${ext}
+
+          fi
+
+      - name: Build GUI App for Linux
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Linux" ]]; then
+            THREADS=$(nproc)
+
+            python3 -m nuitka gui/main.py \
+                       --onefile \
+                       --enable-plugins=pyqt5 \
+                       --lto=yes \
+                       --clang \
+                       --job="$(THREADS)" \
+                       --output-dir=build/gui \
+                       --output-filename=sephera-gui
+          fi
+
+      - name: Build GUI App  for macOS
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "macOS" ]]; then
+            THREADS=$(sysctl -n hw.logicalcpu)
+            python3 -m nuitka gui/main.py \
+                      --onefile \
+                      --clang \
+                      --enable-plugins=pyqt5 \
+                      --macos-create-app-bundle \
+                      --lto=yes \
+                      --jobs="$THREADS" \
+                      --output-dir=build/gui \
+                      --output-filename=sephera-gui
+          fi
+
+      - name: Build GUI App for Windows
+        shell: bash
+        run: |
+          if [[ "${{ runner.os }}" == "Windows" ]]; then
+                THREADS=$(nproc)
                 export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
                 export NUITKA_DEPENDS_DOWNLOAD_MODE=cached
                 ext=".exe"
 
                 python3 -m nuitka gui/main.py \
-              --onefile \
-              --enable-plugins=pyqt5 \
-              --lto=yes \
-              --output-dir=build/gui \
-              --jobs="$THREADS" \
-              --output-filename=sephera-gui${ext}
+                      --onefile \
+                      --enable-plugins=pyqt5 \
+                      --lto=yes \
+                      --assume-yes-for-downloads \
+                      --output-dir=build/gui \
+                      --jobs="$THREADS" \
+                      --output-filename=sephera-gui${ext}
           fi
-
 
       - name: Upload Artifacts
         uses: actions/upload-artifact@v4
