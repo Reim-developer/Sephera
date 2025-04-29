@@ -73,7 +73,7 @@ jobs:
             
             python3 -m nuitka main.py \
               --onefile \
-              --clang
+              --clang \
               --lto=yes \
               --jobs="$THREADS" \
               --output-dir=build/cli \
@@ -81,7 +81,7 @@ jobs:
 
             python3 -m nuitka gui/main.py \
               --onefile \
-              --clang
+              --clang \
               --enable-plugins=pyqt5 \
               --macos-create-app-bundle \
               --lto=yes \
