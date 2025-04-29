@@ -106,7 +106,7 @@ jobs:
                        --enable-plugins=pyqt5 \
                        --lto=yes \
                        --clang \
-                       --job="$(THREADS)" \
+                       --job="$THREADS" \
                        --output-dir=build/gui \
                        --output-filename=sephera-gui
           fi
