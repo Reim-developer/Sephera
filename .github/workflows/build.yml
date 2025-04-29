@@ -52,6 +52,8 @@ jobs:
               --clang \
               --lto=yes \
               --jobs="$THREADS" \
+              --show-progress \
+              --static-libpython=yes \
               --output-dir=build/cli \
               --output-filename=sephera-cli-linux
               
@@ -68,6 +70,8 @@ jobs:
               python3 -m nuitka main.py \
                 --onefile \
                 --clang \
+                --show-progress \
+                --static-libpython=yes \
                 --lto=yes \
                 --jobs="$THREADS" \
                 --output-dir=build/cli \
@@ -96,6 +100,8 @@ jobs:
                        --enable-plugins=pyqt5 \
                        --lto=yes \
                        --clang \
+                       --show-progress \
+                       --static-libpython=yes \
                        --job="$THREADS" \
                        --output-dir=build/gui \
                        --output-filename=sephera-gui
@@ -110,6 +116,8 @@ jobs:
                       --onefile \
                       --clang \
                       --enable-plugins=pyqt5 \
+                      --show-progress \
+                      --static-libpython=yes \
                       --macos-create-app-bundle \
                       --lto=yes \
                       --jobs="$THREADS" \
