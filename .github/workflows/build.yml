@@ -70,6 +70,7 @@ jobs:
             ext=""
             if [[ "${{ runner.os }}" == "Windows" ]]; then
               ext=".exe"
+              export NUITKA_DEPENDS_DOWNLOAD_ALLOWED=1
             fi
 
             python3 -m nuitka main.py \
