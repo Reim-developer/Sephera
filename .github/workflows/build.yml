@@ -91,6 +91,12 @@ jobs:
       - name: Build GUI executable
         shell:  bash
         run: |
+          if [[ "${{ runner.os }}" == "Linux" || "${{ runner.os }}" == "Windows" ]]; then
+          THREADS=$(nproc)
+          elif [[ "${{ runner.os }}" == "macOS" ]]; then
+              THREADS=$(sysctl -n hw.logicalcpu)
+          fi
+          
           if [[ "${{ runner.os }}" == "Linux" ]]; then
                 python3 -m nuitka gui/main.py \
                 --onefile \
