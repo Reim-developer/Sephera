@@ -1,12 +1,17 @@
-from typing import Tuple
+from typing import Tuple, List
 from PyQt5 import QtWidgets
 from PyQt5.QtWidgets import (
     QApplication, QWidget, QPushButton, QLineEdit,
-    QTableWidget, QProgressBar
+    QProgressBar, QMenu, QAction, QScrollBar
 )
 from PyQt5.QtGui import QPalette, QColor
+from gui.etc.subclass import QTableWidgetSubclass
 
-class GuiUtils:      
+class GuiUtils:
+    def __init__(self):
+        self.action: QAction = None
+        self.menu_button = QPushButton()
+
     def move_center(self, app: QApplication, widget: QWidget) -> None:
         screen = app.primaryScreen()
         screen_geometry = screen.availableGeometry()
@@ -30,7 +35,7 @@ class GuiUtils:
                    button: QPushButton, text: str,
                    geometry: Tuple[int, int, int, int],
                    bg_color: str = "#2f3136", fore_color: str = "white", 
-                   set_flat: bool = False) -> None:
+                   set_flat: bool = True) -> None:
         button.setText(text)
         button.setGeometry(
             geometry[0], geometry[1],
@@ -59,7 +64,7 @@ class GuiUtils:
                 QLineEdit {{
                     background-color: {bg_color};
                     color: {fore_color};
-                    border: 1px solid #2f3136;
+                    border: none;
                     
                 }}
                 QLineEdit:focus {{
@@ -67,13 +72,22 @@ class GuiUtils:
                 }}
         """)
         line_edit.setReadOnly(read_only)
-        line_edit.setFocus
 
         line_edit.setParent(widget)
 
     def set_table_result(self, widget: QWidget,
-                       table_widget: QTableWidget, geometry: Tuple[int, int, int, int],
+                       table_widget: QTableWidgetSubclass, geometry: Tuple[int, int, int, int],
                        bg_color: str = "#2f3136", fore_color: str = "white") -> None:
+        scroll_bar = QScrollBar()
+        corner = QPushButton()
+
+        corner.setStyleSheet("background-color: #2f3136")
+        scroll_bar.setStyleSheet("""
+                background-color: #2f3136;
+                color: white;
+                border: none;       
+        """)
+
         table_widget.setGeometry(
             geometry[0], geometry[1],
             geometry[2], geometry[3]
@@ -82,13 +96,12 @@ class GuiUtils:
         table_widget.setStyleSheet(f"""
                 QTableWidget {{
                     background-color: {bg_color};
-                    color: {fore_color};               
-                }}
-
-                QTableWidget:focus {{
-                    border: 1px solid grey;
+                    color: {fore_color};
+                    border: none;               
                 }}
         """)
+        table_widget.setVerticalScrollBar(scroll_bar)
+        table_widget.setCornerWidget(corner)
 
         table_widget.setEditTriggers(QtWidgets.QAbstractItemView.EditTrigger.NoEditTriggers)
         table_widget.setParent(widget)
@@ -114,3 +127,39 @@ class GuiUtils:
             geometry[2], geometry[3]
         )
         progress.setParent(widget)
+
+    def set_menu(self, widget: QWidget, 
+                      menu: QMenu, text: List[str],
+                      geometry: Tuple[int, int, int, int], button_text: str) -> None:
+        
+        
+        self.menu_button.setText(button_text)
+
+        for item in text:
+            action = QAction(item, self.menu_button)
+            menu.addAction(action)
+        
+        self.menu_button.setGeometry(
+            geometry[0], geometry[1],
+            geometry[2], geometry[3]
+        )
+        menu.setStyleSheet("""
+            QMenu {
+                background-color: #2f3136;
+                color: white;
+            }
+        """)
+        
+        self.menu_button.setStyleSheet("""
+            QPushButton {
+                background-color: #2f3136;
+                color: white;
+                border: none;
+            }
+            QPushButton::hover {
+                border: 1px solid grey
+            }
+        """)
+        self.menu_button.setMenu(menu)
+        self.menu_button.setParent(widget)
+
