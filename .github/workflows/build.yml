@@ -87,7 +87,7 @@ jobs:
           nuitka-version: main
           script-name: gui/main.py
           mode: onefile
-          output-file: sephera
+          output-file: sephera.exe
           output-dir: build/cli 
 
       - name: Build GUI App for Linux
@@ -134,7 +134,7 @@ jobs:
           nuitka-version: main
           script-name: gui/main.py
           mode: onefile
-          output-file: sephera-gui
+          output-file: sephera-gui.exe
           output-dir: build/gui 
       
       - name: Upload artifacts for Windows
