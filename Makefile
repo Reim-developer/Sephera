@@ -47,19 +47,10 @@ venv_check:
 	@echo "Virtual enviroment is ready. Use source .venv/bin/activate to activate this."
 
 UNAME_S := $(shell uname -s)
-ifeq ($(UNAME_S),Linux)
-	install_task := chmod +x ./build.sh && ./build.sh
 
-else ifeq ($(UNAME_S), Darwin)
-	install_task := chmod +x ./build.sh && ./build.sh
-	
-else
-	@echo "Your OS $(UNAME_S) is not supported. Please build from source manual."
-	
-endif
-
-install:
-	$(install_task)
+build:
+	@chmod +x ./scripts/build.sh
+	./scripts/build.sh
 
 check:
 	@ruff check .
