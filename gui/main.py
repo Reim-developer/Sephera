@@ -26,7 +26,8 @@ class SepheraGui(QMainWindow):
         self.setup.setup_application(app = self.sephera_app)
         self.show()
 
-if __name__ == "__main__":
+
+def main() -> None:
     try:
         sephera_app = QApplication(sys.argv)
         sephera_gui = SepheraGui(sephera_app = sephera_app)
@@ -40,3 +41,6 @@ if __name__ == "__main__":
     except KeyboardInterrupt:
         logging.info("\nKeyboard interrupt.")
         sys.exit(1)
+
+if __name__ == "__main__":
+    main()
