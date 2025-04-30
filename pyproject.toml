@@ -4,7 +4,7 @@ version = "2.1.0"
 description = "Count, LOC, Stat your project, easy and quickly."
 readme = "readme.md"
 authors = [
-    { name = "Reim-developer", email = "mavis.ngoc.nguyen@gmai.com" }
+    { name = "Reim-developer", email = "mavis.ngoc.nguyen@gmail.com" }
 ]
 
 license = { file = "LICENSE" }
