@@ -55,7 +55,7 @@ jobs:
               --show-progress \
               --static-libpython=yes \
               --output-dir=build/cli \
-              --output-filename=sephera-cli-linux
+              --output-filename=sephera
               
           fi
 
@@ -75,7 +75,7 @@ jobs:
                 --lto=yes \
                 --jobs="$THREADS" \
                 --output-dir=build/cli \
-                --output-filename=sephera-cli-macos
+                --output-filename=sephera
 
           fi
 
@@ -87,6 +87,7 @@ jobs:
           nuitka-version: main
           script-name: gui/main.py
           mode: onefile
+          output-file: sephera
           output-dir: build/cli 
 
       - name: Build GUI App for Linux
@@ -133,13 +134,35 @@ jobs:
           nuitka-version: main
           script-name: gui/main.py
           mode: onefile
+          output-file: sephera-gui
           output-dir: build/gui 
+      
+      - name: Upload artifacts for Windows
+        if: runner.os == 'Windows'
 
-      - name: Upload Artifacts
         uses: actions/upload-artifact@v4
         with:
           name: sephera-${{ runner.os }}
           path: |
-            build/cli/*
-            build/gui/*
-          if-no-files-found: error
+            build/cli/sephera.exe
+            build/gui/sephera-gui.exe
+
+      - name: Upload Artifacts for Linux
+        if: runner.os == 'Linux'
+
+        uses: actions/upload-artifact@v4
+        with:
+          name: sephera-${{ runner.os }}
+          path: |
+            build/cli/sephera
+            build/gui/sephera-gui
+
+      - name: Upload artifacts for macOS
+        if: runner.os == 'macOS'
+
+        uses: actions/upload-artifact@v4
+        with:
+          name: sephera-${{ runner.os }}
+          path: |
+            build/cli/sephera
+            build/gui/sephera-gui
