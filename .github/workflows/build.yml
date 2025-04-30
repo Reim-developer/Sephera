@@ -85,7 +85,7 @@ jobs:
         uses: Nuitka/Nuitka-Action@main
         with:
           nuitka-version: main
-          script-name: gui/main.py
+          script-name: main.py
           mode: onefile
           output-file: sephera.exe
           output-dir: build/cli 
