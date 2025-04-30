@@ -23,7 +23,7 @@ class ScanWorker(QRunnable):
 
     @pyqtSlot()
     def run(self):
-        codeLoc = CodeLoc(base_path=self.path)
+        codeLoc = CodeLoc(base_path = self.path)
         self.signals.finished.emit(codeLoc)
 
 
