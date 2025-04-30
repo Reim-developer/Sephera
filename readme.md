@@ -27,10 +27,18 @@
 * [Markdown Documentation](./docs/index.md)
 
 ## Installation
-1. Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
-2. Download the binary for your OS.
-3. Add it to PATH (optional).
-4. Run it from anywhere.
+**Manual installation**:
+
+* `1` Visit the [release page](https://github.com/Reim-developer/Sephera/releases/).
+* `2` Download the binary for your OS.
+* `3` Add it to PATH (optional).
+* `4` Run it from anywhere.
+---
+**Install via Pip:**
+```bash
+pip install sephera
+```
+* For another install methods, please visit: [Install documentation](https://reim-developer.github.io/Sephera/pages/install/)
 
 ## Usage
 
