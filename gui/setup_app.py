@@ -27,6 +27,11 @@ class Setup:
         self.scan_prj_event = StartScanEvent()
 
         self.sort_by_menu = QMenu()
+        self.export_menu = QMenu()
+
+        self.sort_by_btn = QPushButton()
+        self.export_btn = QPushButton()
+
         self.menu_event = MenuEvent(scanEvent = self.scan_prj_event)
 
     def setup_event(self) -> None:
@@ -43,9 +48,17 @@ class Setup:
 
         self.sort_by_menu.triggered.connect(
             lambda action:
-                self.menu_event.set_menu_action(
+                self.menu_event.set_sort_action(
                     action,
-                    self.gui_utils.menu_button, self.show_result_table
+                    self.sort_by_btn, self.show_result_table
+                )
+        )
+
+        self.export_menu.triggered.connect(
+            lambda action:
+                self.menu_event.set_export_acction(
+                    action = action, button = self.export_btn,
+                    table = self.show_result_table
                 )
         )
 
@@ -91,7 +104,17 @@ class Setup:
                 "Most lines of empty", "Least lines of empty",
                 "Most size", "Least size"
             ], geometry = (0, 50, 150, 30),
+            button = self.sort_by_btn,
             button_text = "Sort by..."
+        )
+
+        self.gui_utils.set_menu(
+            widget = self.widget, menu = self.export_menu,
+            text = [
+                "Export to JSON", "Export to Mardown"
+            ], geometry = (200, 50, 150, 30),
+            button = self.export_btn,
+            button_text = "Export to..."
         )
 
         self.setup_event()
