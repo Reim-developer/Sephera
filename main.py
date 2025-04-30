@@ -17,8 +17,8 @@ class SepheraCli:
         )
         command = Command(sephera_parser = self.sephera_parser)
         command.setup()
-       
-if __name__ == "__main__":
+
+def main() -> None:
     try:
         cli = SepheraCli()
         args = cli.sephera_parser.parse_args()
@@ -27,4 +27,8 @@ if __name__ == "__main__":
             args.function(args)
     
     except KeyboardInterrupt:
-        print("\n Aborted by user.")
+        print("\nAborted by user.")
+        sys.exit(1)
+    
+if __name__ == "__main__":
+   main()
