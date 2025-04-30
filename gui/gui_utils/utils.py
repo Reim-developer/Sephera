@@ -10,7 +10,6 @@ from gui.etc.subclass import QTableWidgetSubclass
 class GuiUtils:
     def __init__(self):
         self.action: QAction = None
-        self.menu_button = QPushButton()
 
     def move_center(self, app: QApplication, widget: QWidget) -> None:
         screen = app.primaryScreen()
@@ -130,16 +129,17 @@ class GuiUtils:
 
     def set_menu(self, widget: QWidget, 
                       menu: QMenu, text: List[str],
-                      geometry: Tuple[int, int, int, int], button_text: str) -> None:
+                      geometry: Tuple[int, int, int, int], 
+                      button: QPushButton, button_text: str) -> None:
         
         
-        self.menu_button.setText(button_text)
+        button.setText(button_text)
 
         for item in text:
-            action = QAction(item, self.menu_button)
+            action = QAction(item, button)
             menu.addAction(action)
         
-        self.menu_button.setGeometry(
+        button.setGeometry(
             geometry[0], geometry[1],
             geometry[2], geometry[3]
         )
@@ -150,7 +150,7 @@ class GuiUtils:
             }
         """)
         
-        self.menu_button.setStyleSheet("""
+        button.setStyleSheet("""
             QPushButton {
                 background-color: #2f3136;
                 color: white;
@@ -160,6 +160,6 @@ class GuiUtils:
                 border: 1px solid grey
             }
         """)
-        self.menu_button.setMenu(menu)
-        self.menu_button.setParent(widget)
+        button.setMenu(menu)
+        button.setParent(widget)
 
