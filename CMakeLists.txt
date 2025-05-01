@@ -17,6 +17,8 @@ set(src
 
     Source/gui/components.cc
     Source/gui/init.cc
+
+    Source/context/context.cc
 )
 
 set(headers
@@ -27,6 +29,8 @@ set(headers
     Source/core/include/loc_count.hpp
     Source/core/include/loc.hpp
     Source/core/include/parser.hpp
+
+    Source/context/include/context.hpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
