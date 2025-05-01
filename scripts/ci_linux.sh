@@ -12,20 +12,18 @@ LDFLAGS="-Wl,--gc-sections -flto=full"
 install_depdendencies() {
     echo "Install depdencencies..."
 
-    if ! command -v cmake &>/dev/null; then
-        sudo apt-get update
+  
+    sudo apt-get update
 
-        sudo apt-get install -y \
-            clang \
-            qt6-base-dev \
-            qt6-base-dev-tools \
-            ninja-build \
-            cmake \
-            libyaml-cpp-dev \
-            libssl-dev \
-            zlib1g-dev
-    fi
-
+    sudo apt-get install -y \
+        clang \
+        qt6-base-dev \
+        qt6-base-dev-tools \
+        ninja-build \
+        cmake \
+        libyaml-cpp-dev \
+        libssl-dev \
+        zlib1g-dev
 }
 
 build_sephera_cpp() {
