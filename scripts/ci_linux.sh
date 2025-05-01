@@ -18,6 +18,7 @@ install_depdendencies() {
         sudo apt-get install -y \
             clang \
             qt6-base-dev \
+            qt6-base-dev-tools \
             ninja-build \
             cmake \
             libyaml-cpp-dev \
