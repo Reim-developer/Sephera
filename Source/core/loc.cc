@@ -1,8 +1,8 @@
-#include "../include/loc.hpp"
+#include "include/loc.hpp"
 #include <fstream>
 #include <iostream>
 
-using namespace fuzzy;
+using namespace sephera_cpp::core;
 using namespace std;
 
 LocCode::LocCode(const std::string& config_path) : language_data(config_path) {}
