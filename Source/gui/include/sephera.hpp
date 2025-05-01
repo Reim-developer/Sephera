@@ -1,6 +1,7 @@
 #ifndef SEPHERA_HPP
 #define SEPHERA_HPP
 
+#include <QGridLayout>
 #include <QMainWindow>
 
 namespace sephera_cpp::gui {
@@ -9,6 +10,9 @@ namespace sephera_cpp::gui {
 
         public:
             explicit SepheraWindow(QWidget *widget = nullptr);
+
+            QGridLayout *layout;
+            QWidget *centralWidget;
             ~SepheraWindow();
     };
 }
