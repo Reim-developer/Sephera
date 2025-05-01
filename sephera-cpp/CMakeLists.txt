@@ -45,3 +45,8 @@ target_link_libraries(
 target_compile_options(
     ${PROJECT_NAME} 
     PRIVATE "$<$<CXX_COMPILER_ID:Clang>:-fno-direct-access-external-data>")
+
+if(FORCE_OPTIMIZED)
+    target_compile_options(${PROJECT_NAME} PRIVATE -O3 -march=native -funroll-loops)
+    set_property(TARGET ${PROJECT_NAME} PROPERTY INTERPROCEDURAL_OPTIMIZATION TRUE)
+endif()
