@@ -1,1 +1,0 @@
-# Sephera C++ implements.
