@@ -36,7 +36,9 @@ os_detect() {
         cp "$cfg_path" "$build_dir"
         cd "$build_dir" || exit 1
         
-        cmake -G "Ninja" ..
+        cmake -G "Ninja" .. \
+            -DCMAKE_CXX_COMPILER="clang++" \
+            -DCMAKE_CXX_FLAGS="-Wall" 
         ninja
         ./"$program_name"
 
