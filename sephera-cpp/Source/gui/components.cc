@@ -4,7 +4,7 @@
 
 using namespace sephera_cpp::gui;
 
-QLineEdit *Components::setLineEdit(QWidget *widget, QLineEdit *lineEdit,
+QLineEdit *Components::setLineEdit(QLineEdit *lineEdit,
                                    QGridLayout *gridLayout, int width, int height,
                                    int row, int column) {
   
@@ -14,7 +14,7 @@ QLineEdit *Components::setLineEdit(QWidget *widget, QLineEdit *lineEdit,
   return lineEdit;
 }
 
-QLabel *Components::setLabel(QWidget *widget, QLabel *label,
+QLabel *Components::setLabel(QLabel *label,
                              QGridLayout *gridLayout, int width, int height,
                              int row, int column, const QString& text) {
   
