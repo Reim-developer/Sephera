@@ -11,7 +11,7 @@ namespace sephera_cpp::core {
         LanguageData language_data;
 
     public:
-        LocCode(const std::string& config_path = "cfg.yml");
+        LocCode(const std::string& config_path = "config.yml");
 
         const LanguageData& get_language_data() const;
 
