@@ -1,13 +1,14 @@
 #include <QApplication>
 #include <QWidget>
+#include "gui/include/sephera.hpp"
+
+using namespace sephera_cpp::gui;
 
 int main(int argc, char *argv[]) {
     QApplication app(argc, argv);
 
-    QWidget window;
-    window.setWindowTitle("Sephera-cpp");
-    window.resize(600, 600);
-    window.show();
+    SepheraWindow sephera_window;
+    sephera_window.show();
 
     return app.exec();
 }
