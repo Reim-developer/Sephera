@@ -11,11 +11,11 @@
 namespace sephera_cpp::gui {
     class Components {
         public:
-            QLineEdit *setLineEdit(QWidget *widget, QLineEdit *lineEdit,
+            QLineEdit *setLineEdit(QLineEdit *lineEdit,
                                    QGridLayout *gridLayout, int width, int height,
                                    int row, int column);
 
-            QLabel *setLabel(QWidget *widget, QLabel *label,
+            QLabel *setLabel(QLabel *label,
                              QGridLayout *gridLayout, int width, int height,
                              int row, int column, const QString& text);
             
