@@ -18,7 +18,7 @@ SepheraWindow::SepheraWindow(QWidget *widget) : QMainWindow(widget) {
     Init *init = new Init();
     
     init->setupGui(this);
-    init->setupContext();
+    init->setupContext(this);
 }
 
 SepheraWindow::~SepheraWindow() {
