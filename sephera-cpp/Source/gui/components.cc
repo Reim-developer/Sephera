@@ -49,3 +49,17 @@ QPushButton *Components::setPushButton(SepheraWindow *sepheraWindow, QPushButton
   
   return button;
 }
+
+QTableWidget *Components::setTableWidget(SepheraWindow *sepheraWindow, QTableWidget *tableWidget,
+                                         QGridLayout *layout, const int width, const int height,
+                                         const int row, const int column) {
+    
+    tableWidget->setRowCount(0);
+    tableWidget->setMinimumSize(width, height);
+
+    tableWidget->setParent(sepheraWindow);
+    layout->addWidget(tableWidget, row, column);
+    
+    return tableWidget;
+  }
+  
