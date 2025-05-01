@@ -48,9 +48,12 @@ venv_check:
 
 UNAME_S := $(shell uname -s)
 
-build:
-	@chmod +x ./scripts/build.sh
-	./scripts/build.sh
+build-py:
+	@chmod +x ./scripts/pybuild.sh
+	./scripts/pybuild.sh
+build-cpp
+	@chmod +x ./scripts/cppbuild.sh
+	./scripts/cppbuild.sh
 
 check:
 	@ruff check .
