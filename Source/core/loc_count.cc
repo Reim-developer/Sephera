@@ -1,10 +1,10 @@
-#include "../include/loc_count.hpp"
-#include "../include/loc.hpp"
+#include "include/loc_count.hpp"
+#include "include/loc.hpp"
 #include <filesystem>
 
 using namespace std::filesystem;
 
-namespace fuzzy {
+namespace sephera_cpp::core {
     LocCounter::LocCounter(LocCode& code_loc, 
                            const std::string& base_path)
         : code_loc_(code_loc), base_path_(base_path) {
