@@ -17,7 +17,7 @@ namespace sephera_cpp::gui {
             void setupContext();
 
         private:
-            Components components;
+            Components *components;
             SepheraContext *context;
 
         public:
