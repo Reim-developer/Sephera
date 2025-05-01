@@ -31,6 +31,7 @@ set(headers
     Source/core/include/parser.hpp
 
     Source/context/include/context.hpp
+    Source/context/include/worker.hpp
 )
 
 find_package(Qt6 REQUIRED COMPONENTS Widgets)
