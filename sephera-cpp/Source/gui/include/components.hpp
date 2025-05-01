@@ -3,6 +3,7 @@
 #include <QLabel>
 #include "sephera.hpp"
 #include <QLineEdit>
+#include <QTableWidget>
 #include <QPushButton>
 #include <QGridLayout>
 #include <QWidget>
@@ -26,6 +27,10 @@ namespace sephera_cpp::gui {
             QPushButton *setPushButton(SepheraWindow *sepheraWindow, QPushButton *button,
                                        QGridLayout *layout, int width, int height,
                                        int row, int column, const QString &text);
+            
+            QTableWidget *setTableWidget(SepheraWindow *sepheraWindow, QTableWidget *tableWidget,
+                                        QGridLayout *layout, const int width, const int height,
+                                        const int row, const int column);
     };
 } // namespace sephera_cpp::gui
 
