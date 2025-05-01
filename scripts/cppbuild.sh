@@ -35,8 +35,9 @@ os_detect() {
 
         cp "$cfg_path" "$build_dir"
         cd "$build_dir" || exit 1
-        cmake ..
-        make 
+        
+        cmake -G "Ninja" ..
+        ninja
         ./"$program_name"
 
         echo "Build SUCCESS | With exit status code: $exit_code"
