@@ -15,12 +15,14 @@ set(src
     Source/core/loc.cc
     Source/core/loc_count.cc
 
-    Source/gui/text_box.cc
+    Source/gui/components.cc
+    Source/gui/init.cc
 )
 
 set(headers
     Source/gui/include/sephera.hpp
-    Source/gui/include/text_box.hpp
+    Source/gui/include/components.hpp
+    Source/gui/include/init.hpp
 
     Source/core/include/loc_count.hpp
     Source/core/include/loc.hpp
