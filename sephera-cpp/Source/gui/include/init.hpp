@@ -3,8 +3,10 @@
 #include <QPushButton>
 #include <QLineEdit>
 #include <QLabel>
+#include <QTableWidget>
 #include "../../context/include/context.hpp"
 #include "components.hpp"
+#include "sephera.hpp"
 
 using namespace sephera_cpp::context;
 
@@ -14,7 +16,7 @@ namespace sephera_cpp::gui {
             Init();
             void setupGui(SepheraWindow *sepheraWindow);
 
-            void setupContext();
+            void setupContext(SepheraWindow *sepheraWindow);
 
         private:
             Components *components;
@@ -26,6 +28,8 @@ namespace sephera_cpp::gui {
             QPushButton *open_project_btn;
             QPushButton *scan_project_btn;
             QPushButton *option_btn;
+            QPushButton *sort_btn;
+            QTableWidget *resultTable;
     };
 
 } // namespace sephera_cpp::gui
