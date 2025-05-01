@@ -1,6 +1,6 @@
-#include "../include/parser.hpp"
+#include "include/parser.hpp"
 
-using namespace fuzzy;
+using namespace sephera_cpp::core;
 
 LanguageData::LanguageData(const std::string& config_path) {
     YAML::Node config = YAML::LoadFile(config_path);
