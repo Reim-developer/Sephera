@@ -44,7 +44,7 @@ build_sephera_cpp() {
 }
 
 main(){
-    # install_depdendencies
+    install_depdendencies
     build_sephera_cpp
 }
 main "$@"
