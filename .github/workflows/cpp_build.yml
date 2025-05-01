@@ -1,0 +1,36 @@
+name: Build Sephera-cpp GUI
+on:
+    push:
+        branches:
+            - master
+
+jobs:
+    build:
+        strategy:
+            matrix:
+                os: [macos-latest, ubuntu-latest, windows-latest]
+
+        runs-on: ${{ matrix.os }}
+        env:
+          BUILD_DIR: ${{ github.workspace }}/sephera-cpp/build
+
+        steps:
+          - name: Check-out repository
+            uses: actions/checkout@v4
+
+          - name: Install dependencies for Linux
+            if: runner.os == 'Linux'
+
+            shell: bash
+            run: |
+                chmod +x ./scripts/ci_linux.sh
+                ./scripts/ci_linux.sh
+
+          - name: Upload Artifact
+            uses: actions/upload-artifact@v4
+            with:
+              name: sephera-cpp-${{ runner.os }}
+              path: ${{ env.BUILD_DIR }}
+              
+                
+
