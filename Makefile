@@ -11,8 +11,6 @@ gui_main_entry = gui.main
 # Make sure requirements.txt exists
 requirements_pip = requirements.txt
 
-run-gui:
-	@$(venv) -m $(gui_main_entry)
 # Test case
 test-loc:
 	@$(venv) $(test_entry) test loc
@@ -51,9 +49,6 @@ UNAME_S := $(shell uname -s)
 build-py:
 	@chmod +x ./scripts/pybuild.sh
 	./scripts/pybuild.sh
-build-cpp
-	@chmod +x ./scripts/cppbuild.sh
-	./scripts/cppbuild.sh
 
 check:
 	@ruff check .
