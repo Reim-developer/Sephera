@@ -89,53 +89,6 @@ jobs:
           mode: onefile
           output-file: sephera.exe
           output-dir: build/cli 
-
-      - name: Build GUI App for Linux
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-            THREADS=$(nproc)
-
-            python3 -m nuitka gui/main.py \
-                       --onefile \
-                       --enable-plugins=pyqt5 \
-                       --lto=yes \
-                       --clang \
-                       --show-progress \
-                       --static-libpython=yes \
-                       --job="$THREADS" \
-                       --output-dir=build/gui \
-                       --output-filename=sephera-gui
-          fi
-
-      - name: Build GUI App  for macOS
-        shell: bash
-        run: |
-          if [[ "${{ runner.os }}" == "macOS" ]]; then
-            THREADS=$(sysctl -n hw.logicalcpu)
-            python3 -m nuitka gui/main.py \
-                      --onefile \
-                      --clang \
-                      --enable-plugins=pyqt5 \
-                      --show-progress \
-                      --static-libpython=yes \
-                      --macos-create-app-bundle \
-                      --lto=yes \
-                      --jobs="$THREADS" \
-                      --output-dir=build/gui \
-                      --output-filename=sephera-gui
-          fi
-
-      - name: Build GUI App for Windows
-        if: runner.os == 'Windows'
-        
-        uses: Nuitka/Nuitka-Action@main
-        with:
-          nuitka-version: main
-          script-name: gui/main.py
-          mode: onefile
-          output-file: sephera-gui.exe
-          output-dir: build/gui 
       
       - name: Upload artifacts for Windows
         if: runner.os == 'Windows'
@@ -145,7 +98,6 @@ jobs:
           name: sephera-${{ runner.os }}
           path: |
             build/cli/sephera.exe
-            build/gui/sephera-gui.exe
 
       - name: Upload Artifacts for Linux
         if: runner.os == 'Linux'
@@ -155,7 +107,6 @@ jobs:
           name: sephera-${{ runner.os }}
           path: |
             build/cli/sephera
-            build/gui/sephera-gui
 
       - name: Upload artifacts for macOS
         if: runner.os == 'macOS'
@@ -165,4 +116,3 @@ jobs:
           name: sephera-${{ runner.os }}
           path: |
             build/cli/sephera
-            build/gui/sephera-gui
