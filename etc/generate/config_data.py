@@ -19,7 +19,9 @@ CONFIG_DATA = {
       "multi_line_end": "\"\"\""
     },
     "shell_style": {
-      "single_line": "#"
+      "single_line": "#",
+      "multi_line_start": None,
+      "multi_line_end": None
     },
     "perl_style": {
       "single_line": "#",
@@ -170,6 +172,16 @@ CONFIG_DATA = {
       "single_line": "//",
       "multi_line_start": "(*",
       "multi_line_end": "*)"
+    },
+    "vhdl_style": {
+      "single_line": "--",
+      "multi_line_start": None,
+      "multi_line_end": None
+    },
+    "tex_style": {
+      "single_line": "%",
+      "multi_line_start": None,
+      "multi_line_end": None
     }
   },
   "languages": [
@@ -746,6 +758,175 @@ CONFIG_DATA = {
         ".fs"
       ],
       "comment_styles": "fsharp_style"
+    },
+    {
+      "name": "Jupyter Notebook",
+      "extension": [
+        ".ipynb"
+      ],
+      "comment_styles": "no_comment"
+    },
+    {
+      "name": "VHDL",
+      "extension": [
+        ".vhd"
+      ],
+      "comment_styles": "vhdl_style"
+    },
+    {
+      "name": "Fish Script",
+      "extension": [
+        ".fish"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Tex",
+      "extension": [
+        ".tex"
+      ],
+      "comment_styles": "tex_style"
+    },
+    {
+      "name": "KornShell",
+      "extension": [
+        ".ksh"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Zsh",
+      "extension": [
+        ".zsh"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Dockerfile",
+      "extension": [
+        "Dockerfile"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Apple Script",
+      "extension": [
+        ".applescript"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Unreal Script",
+      "extension": [
+        ".uc"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "ASP.NET",
+      "extension": [
+        ".asp"
+      ],
+      "comment_styles": "html_style"
+    },
+    {
+      "name": "ASPX",
+      "extension": [
+        ".aspx"
+      ],
+      "comment_styles": "html_style"
+    },
+    {
+      "name": "GLSL",
+      "extension": [
+        ".glsl"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Cg",
+      "extension": [
+        ".cg"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "HLSL",
+      "extension": [
+        ".hlsl"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "OpenCL",
+      "extension": [
+        ".cl"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "CUDA",
+      "extension": [
+        ".cu"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "GraphQL",
+      "extension": [
+        ".gql",
+        ".graphql"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Apache Config",
+      "extension": [
+        ".htaccess"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "TOML",
+      "extension": [
+        ".toml"
+      ],
+      "comment_styles": "shell_style"
+    },
+    {
+      "name": "Jinja2 Template",
+      "extension": [
+        ".j2"
+      ],
+      "comment_styles": "no_comment"
+    },
+    {
+      "name": "GameMarker Studio",
+      "extension": [
+        ".gml"
+      ],
+      "comment_styles": "c_style"
+    },
+    {
+      "name": "Brainfuck",
+      "extension": [
+        ".bf"
+      ],
+      "comment_styles": "no_comment"
+    },
+    {
+      "name": "Chef",
+      "extension": [
+        ".chef"
+      ],
+      "comment_styles": "no_comment"
+    },
+    {
+      "name": "APL",
+      "extension": [
+        ".apl"
+      ],
+      "comment_styles": "no_comment"
     }
   ]
 }
