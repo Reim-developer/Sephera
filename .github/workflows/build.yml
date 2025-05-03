@@ -42,27 +42,18 @@ jobs:
           ruff check .
 
       - name: Build CLI for Linux
+        if: runner.os == 'Linux'
+
         shell: bash
         run: |
-          if [[ "${{ runner.os }}" == "Linux" ]]; then
-
-             THREADS=$(nproc)
-              python3 -m nuitka main.py \
-              --onefile \
-              --clang \
-              --lto=yes \
-              --jobs="$THREADS" \
-              --show-progress \
-              --static-libpython=yes \
-              --output-dir=build/cli \
-              --output-filename=sephera
-              
-          fi
+          chmod +x ./scripts/ci_linux.sh
+          ./scripts/ci_linux.sh
 
       - name: Build CLI for macOS
         if: runner.os == 'macOS'
         shell: bash
         run: |
+          chmod +x ./scripts/ci_macos.sh
           ./scripts/ci_macos.sh
 
       - name: Build CLI for Windows
