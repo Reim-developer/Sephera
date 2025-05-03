@@ -1,7 +1,6 @@
 #!/bin/bash
 
 cli_entry="main.py"
-gui_entry="gui/main.py"
 OUTPUT="build"
 OS=$(uname -s)
 THREADS=$(nproc)
@@ -32,20 +31,6 @@ linux_build() {
       --static-libpython=yes \
       --output-dir=$OUTPUT \
       $cli_entry
-
-      # Build Sephera GUI version.
-      python3 -m nuitka \
-      --onefile \
-      --remove-output \
-      --show-progress \
-      --nofollow-import-to=tests,examples,test \
-      --noinclude-pytest=nofollow \
-      --lto=yes \
-      --clang \
-      --jobs="$THREADS" \
-      --static-libpython=yes \
-      --output-dir=$OUTPUT \
-      $gui_entry
   fi
 }
 
@@ -65,22 +50,7 @@ macos_build() {
       --jobs="$THREADS" \
       --static-libpython=yes \
       --output-dir=$OUTPUT \
-      "$ENTRY"
-
-        # GUI Build
-      python3 -m nuitka \
-      --onefile \
-      --remove-output \
-      --show-progress \
-      --macos-create-app-bundle \
-      --nofollow-import-to=tests,examples,test \
-      --noinclude-pytest=nofollow \
-      --lto=yes \
-      --clang \
-      --jobs="$THREADS" \
-      --static-libpython=yes \
-      --output-dir=$OUTPUT \
-      "$ENTRY"
+      "$ENTRY"    
   fi
 }
 
