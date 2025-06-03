@@ -57,7 +57,7 @@ languages:
         except Exception as error:
             stdout.die(error = error)
 
-    def create_settings(self, global_cfg_path) -> None:
+    def create_settings(self, global_cfg_path: str) -> None:
         if not os.path.exists(f"{global_cfg_path}/settings.db"):
             
             if not os.path.exists(global_cfg_path):
@@ -74,6 +74,8 @@ languages:
         
         self.create_settings(global_cfg_path = global_cfg_path)
         self.setup_settings(utils = utils, stdout = stdout)
+
+        confirm_result = False # Default is FALSE.
         if not global_cfg:
             if os.path.exists(cfg_name):
                 confirm_override = ConfirmInteractive()
