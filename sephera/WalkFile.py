@@ -19,7 +19,7 @@ class WalkFile:
         self.console = Console()
         self.stdout = SepheraStdout()
 
-        self.ignore_regex: Optional[re.Pattern] = None
+        self.ignore_regex: Optional[re.Pattern[str]] = None
         self.ignore_str: Optional[str] = None
         
         if ignore_pattern:
@@ -42,7 +42,7 @@ class WalkFile:
             for file in files:
                 file_path = os.path.join(root, file)
 
-                if self._is_ignored(file_path):
+                if self.utils.is_ignored(file_path):
                     continue
 
                 yield os.path.join(root, file)
@@ -58,7 +58,7 @@ class WalkFile:
         with self.console.status("[bold green] Processing...", spinner = "material"):
             for root, dirs, files in os.walk(self.base_path):
 
-                valid_dirs: list = []
+                valid_dirs: list[str] = []
                 for dir in list(dirs):
                     full_path = os.path.join(root, dir)
 
@@ -114,6 +114,7 @@ class WalkFile:
 
         except Exception as error:
             self.stdout.die(error = error)
+            sys.exit(1)
         
         entries = [e for e in entries if not e.startswith(".")]
         for i, entry in enumerate(entries):
