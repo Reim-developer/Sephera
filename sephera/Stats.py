@@ -19,7 +19,7 @@ class Stats:
         
         self.console = Console()
         self.stdout = SepheraStdout()
-        self.ignore_regex: Optional[re.Pattern] = None
+        self.ignore_regex: Optional[re.Pattern[str]] = None
         self.ignore_str: Optional[str] = None
         self.utils = Utils()
 
@@ -29,7 +29,22 @@ class Stats:
             except re.error:
                 self.ignore_str = ignore_pattern
 
-    def stats_all_files(self, output_chart: str = None) -> None:
+    def _stdout_stats(self, data: dict[str, int | float]) -> None:
+        total = sum(data.values())
+        table = Table(title = "Sephera Stats Overview", show_header = True, header_style = "bold magenta")
+
+        table.add_column("Category")
+        table.add_column("Count", justify = "right")
+        table.add_column("Percent", justify = "right")
+
+        for key, value in data.items():
+            percent = (value / total) * 100 if total else 0
+            table.add_row(str(key), str(value), f"{percent:.1f}%")
+
+        self.console.print(table)
+
+
+    def stats_all_files(self, output_chart: str | None = None) -> None:
         file_count: int = 0
         folder_count: int = 0
         total_size: int = 0
@@ -71,7 +86,7 @@ class Stats:
 
                 self.console.clear()
         
-        data: dict = {
+        data: dict[str, int | float] = {
             "Folder": folder_count,
             "File": file_count,
             "Hidden Folder": hidden_folder_count,
@@ -79,26 +94,14 @@ class Stats:
         }
         
         self._stdout_stats(data = data)
-        exporter = Exporter(output_path = output_chart)
+
+        if output_chart is not None:
+            exporter = Exporter(output_path = output_chart)
 
         print(f"[+] Total Size: {total_size / (1024 ** 2):.2f} MB")
         print(f"[+] Total Hidden Size: {total_hidden_size / (1024 ** 2):.2f} MB")
 
-        if(output_chart):
+        if output_chart:
             exporter.export_stats_chart(data = data, total_size = total_size, total_hidden_size = total_hidden_size)
             print(f"[+] Saved chart as name: {output_chart}")
         
-    
-    def _stdout_stats(self, data: dict) -> None:
-        total = sum(data.values())
-        table = Table(title = "Sephera Stats Overview", show_header = True, header_style = "bold magenta")
-
-        table.add_column("Category")
-        table.add_column("Count", justify = "right")
-        table.add_column("Percent", justify = "right")
-
-        for key, value in data.items():
-            percent = (value / total) * 100 if total else 0
-            table.add_row(str(key), str(value), f"{percent:.1f}%")
-
-        self.console.print(table)
