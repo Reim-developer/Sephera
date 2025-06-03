@@ -75,12 +75,12 @@ class Handler:
 
         if args.json:
             option = OptionHandler()
-            option.on_json_export_option(args = str(args))
+            option.on_json_export_option(args = args) # type: ignore
             sys.exit(0)
         
         if args.md:
             option = OptionHandler()
-            option.on_markdown_export_option(args = str(args))
+            option.on_markdown_export_option(args = args) # type: ignore
             sys.exit(0)
 
         start_time: float = time.perf_counter()
