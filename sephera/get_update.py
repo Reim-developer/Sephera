@@ -9,6 +9,7 @@ try:
     from utils.stdout import SepheraStdout
 except KeyboardInterrupt:
     print("\n Aborted by user.")
+    sys.exit(1)
 
 class GetUpdate:
     def __init__(self) -> None:
@@ -37,6 +38,9 @@ class GetUpdate:
 
                         case self.confirm_interactive.EXIT_CONFIRM:
                             sys.exit(0)
+
+                        case _:
+                            pass # Ignore.
                             
             else:
                 self.network.install_sephera()
