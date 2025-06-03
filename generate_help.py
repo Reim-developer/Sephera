@@ -3,7 +3,7 @@ import logging
 
 def generate_help() -> None:
     toml_source = toml.load("./config/msg.toml")
-    usage_help: list[str, str] = toml_source.get("usage", {})
+    usage_help: dict[str, str] = toml_source.get("usage", {})
     logging.basicConfig(level = logging.DEBUG, format = "%(asctime)s - %(levelname)s - %(message)s")
 
     first_line: list[str] = [
@@ -17,8 +17,8 @@ def generate_help() -> None:
         "# ==============================================================\n"
     ]
 
-    key: str = None
-    value: str = None 
+    key: str = ""
+    value: str = ""
     for key, value in usage_help.items():
         first_line.append(f'{key.upper()}_HELP = """{value.strip()}"""\n')
 
