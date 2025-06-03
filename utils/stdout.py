@@ -26,8 +26,7 @@ class SepheraStdout:
             f"[red][+] Error name: {type(error).__name__}",
             f"[red][+] Error details: [yellow]{error}"
         ]))
-        sys.exit(1)
-
+        
     def show_msg(self, message: str) -> None:
         panel = Panel.fit(
             Text(text = message, style = "bold cyan"),
