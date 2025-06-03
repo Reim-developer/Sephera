@@ -16,6 +16,7 @@ try:
     from datalyzer.sql import SqlManager
 except KeyboardInterrupt:
     print("\nAborted by user.")
+    sys.exit(1)
 
 class Utils:
     def __init__(self) -> None:
@@ -26,10 +27,10 @@ class Utils:
 
         self.GITHUB_REPO = "Reim-developer/Sephera"
         self.stdout = SepheraStdout()
-        self.cursor: Cursor = None
-        self.connection: Connection = None
+        self.cursor: Optional[Cursor] = None
+        self.connection: Optional[Connection] = None
 
-    def is_ignored(self, path: str, ignore_regex: Optional[re.Pattern] = None, ignore_str: Optional[str] = None) -> bool:
+    def is_ignored(self, path: str, ignore_regex: Optional[re.Pattern[str]] = None, ignore_str: Optional[str] = None) -> bool:
         if ignore_regex:
             return bool(ignore_regex.search(path))
         
@@ -39,7 +40,7 @@ class Utils:
         return False
     
     def is_multi_ignored(
-            self, path: str, ignore_regex: Optional[List[re.Pattern]] = None, 
+            self, path: str, ignore_regex: Optional[List[re.Pattern[str]]] = None, 
             ignore_str: Optional[List[str]] = None,
             ignore_glob: Optional[List[str]] = None
         ) -> bool:
@@ -86,6 +87,7 @@ class Utils:
         except Exception as error:
             console.clear()
             self.stdout.die(error = error)
+            sys.exit(1)
 
         data = request.json()
 
@@ -128,14 +130,14 @@ class Utils:
 
         return languages
     
-    def fetch_support_languages_name(self) -> dict[str]:
+    def fetch_support_languages_name(self) -> list[str]:
         languages = CONFIG_DATA.get("languages", [])
 
         languages_names = [language["name"] for language in languages]
 
         return languages_names
     
-    def get_local_data(self) -> str:
+    def get_local_data(self) -> str | int:
         user_home = os.path.expanduser("~")
 
         match self.os_detect():
@@ -148,11 +150,15 @@ class Utils:
             case _:
                 return self.UNKNOWN_PLATFORM
 
-    def sql_execute(self, sql: SqlManager, query: str, params: tuple = ()) -> None:
+    def sql_execute(self, sql: SqlManager, query: str, params: tuple[str | None, ...] = ()) -> None:
         try:
-            sql.cursor.execute(query, params)
-            sql.connection.commit()
+            if sql.cursor is not None:
+                sql.cursor.execute(query, params)
+
+                if sql.connection is not None:
+                    sql.connection.commit()
         
         except Exception as error:
             self.stdout.die(error = error)
+            sys.exit(1)
             
