@@ -126,16 +126,16 @@ class Utils:
                 return self.UNKNOWN_PLATFORM
 
     def fetch_support_languages(self) -> int:
-        languages = len(CONFIG_DATA.get("languages", "name"))
+        languages = len(CONFIG_DATA.get("languages", "name")) # type: ignore
 
         return languages
     
     def fetch_support_languages_name(self) -> list[str]:
         languages = CONFIG_DATA.get("languages", [])
 
-        languages_names = [language["name"] for language in languages]
+        languages_names = [language["name"] for language in languages] # type: ignore
 
-        return languages_names
+        return languages_names # type: ignore
     
     def get_local_data(self) -> str | int:
         user_home = os.path.expanduser("~")
