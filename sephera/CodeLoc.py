@@ -1,9 +1,10 @@
 import os
 import re
-import mmap
+import sys
 from typing import Dict, Optional, Tuple, List
 
 try:
+    import mmap
     from data.Data import LanguageData, LanguageConfig, CommentStyle
     from utils.utils import Utils
     from utils.stdout import SepheraStdout
@@ -11,6 +12,7 @@ try:
     from rich.table import Table
 except KeyboardInterrupt:
     print("\nAborted by user.")
+    sys.exit(1)
 
 class CodeLoc:
     def __init__(self, base_path: str = ".", ignore_pattern: Optional[List[str]] = None) -> None:
@@ -19,14 +21,14 @@ class CodeLoc:
         self.base_path = base_path
         self.languages = self.language_data.get_languages
 
-        self.ignore_regex: List[re.Pattern] = []
+        self.ignore_regex: List[re.Pattern[str]] = []
         self.ignore_str: List[str] = []
         self.ignore_glob: List[str] = []
 
         self.stdout = SepheraStdout()
         self.console = Console()
 
-        self._loc_count = None
+        self.loc_count = None # type: ignore
 
         if ignore_pattern:
             for pattern in ignore_pattern:
@@ -69,8 +71,9 @@ class CodeLoc:
                         if not line:
                             empty_line_count += 1
                             continue
-
-                        if comment_nesting_level == 0 and comment_style.single_line and line.startswith(comment_style.single_line):
+                        
+                        
+                        if comment_nesting_level == 0 and comment_style.single_line and line.startswith(comment_style.single_line): # type: ignore
                             comment_line_count += 1
                             continue
 
@@ -78,36 +81,36 @@ class CodeLoc:
                             comment_line_count += 1
                             current_line = line
 
-                            while (comment_style.multi_line_start in current_line or 
-                                comment_style.multi_line_end in current_line):
-                                start_idx = current_line.find(comment_style.multi_line_start)
-                                end_idx = current_line.find(comment_style.multi_line_end)
+                            while (comment_style.multi_line_start in current_line or # type: ignore
+                                comment_style.multi_line_end in current_line): # type: ignore
+                                start_idx = current_line.find(comment_style.multi_line_start) # type: ignore
+                                end_idx = current_line.find(comment_style.multi_line_end) # type: ignore
 
                                 if start_idx != -1 and (end_idx == -1 or start_idx < end_idx):
                                     comment_nesting_level += 1
-                                    current_line = current_line[start_idx + len(comment_style.multi_line_start):]
+                                    current_line = current_line[start_idx + len(comment_style.multi_line_start):] # type: ignore
 
                                 elif end_idx != -1:
                                     comment_nesting_level -= 1
-                                    current_line = current_line[end_idx + len(comment_style.multi_line_end):]
+                                    current_line = current_line[end_idx + len(comment_style.multi_line_end):] # type: ignore
 
                                 else:
                                     break
                             continue
 
                         
-                        if comment_style.multi_line_start and comment_style.multi_line_start in line:
+                        if comment_style.multi_line_start and comment_style.multi_line_start in line: # type: ignore
                             
-                            start_pos = line.find(comment_style.multi_line_start)
+                            start_pos = line.find(comment_style.multi_line_start) # type: ignore
                             code_before_comment = line[:start_pos].strip()
                             
                             
                             if code_before_comment:
                                 loc_line_count += 1
                                 
-                                remaining_line = line[start_pos + len(comment_style.multi_line_start):]
+                                remaining_line = line[start_pos + len(comment_style.multi_line_start):] # type: ignore
                                 
-                                if comment_style.multi_line_end in remaining_line:
+                                if comment_style.multi_line_end in remaining_line: # type: ignore
                                     pass
 
                                 else:
@@ -117,26 +120,26 @@ class CodeLoc:
                             
                                 comment_line_count += 1
                                 
-                                current_line = line[start_pos + len(comment_style.multi_line_start):]
+                                current_line = line[start_pos + len(comment_style.multi_line_start):] # type: ignore
 
-                                while (comment_style.multi_line_start in current_line or 
-                                    comment_style.multi_line_end in current_line):
+                                while (comment_style.multi_line_start in current_line or # type: ignore
+                                    comment_style.multi_line_end in current_line): # type: ignore
 
-                                    start_idx = current_line.find(comment_style.multi_line_start)
-                                    end_idx = current_line.find(comment_style.multi_line_end)
+                                    start_idx = current_line.find(comment_style.multi_line_start) # type: ignore
+                                    end_idx = current_line.find(comment_style.multi_line_end) # type: ignore
 
                                     if start_idx != -1 and (end_idx == -1 or start_idx < end_idx):
                                         comment_nesting_level += 1
-                                        current_line = current_line[start_idx + len(comment_style.multi_line_start):]
+                                        current_line = current_line[start_idx + len(comment_style.multi_line_start):] # type: ignore
 
                                     elif end_idx != -1:
                                         comment_nesting_level -= 1
-                                        current_line = current_line[end_idx + len(comment_style.multi_line_end):]
+                                        current_line = current_line[end_idx + len(comment_style.multi_line_end):] # type: ignore
 
                                     else:
                                         break
                                         
-                                if comment_style.multi_line_end not in line:
+                                if comment_style.multi_line_end not in line: # type: ignore
                                     comment_nesting_level = 1
                             continue
 
@@ -148,13 +151,13 @@ class CodeLoc:
         return loc_line_count, comment_line_count, empty_line_count
 
     def count_loc(self) -> Dict[str, Dict[str, float]]:
-        if self._loc_count is None:
+        if self.loc_count is None: # type: ignore
 
-            self._loc_count: Dict[str, Dict[str, float]] = {
+            self.loc_count: Dict[str, Dict[str, float]] = {
                 language.name: {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
                 for language in self.languages
             }
-            self._loc_count["Unknown"] = {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
+            self.loc_count["Unknown"] = {"loc": 0, "comment": 0, "empty": 0, "size": 0.0}
 
             for root, dirs, files in os.walk(self.base_path):
                 dirs[:] = [dir for dir in dirs if not 
@@ -183,18 +186,18 @@ class CodeLoc:
                         except OSError:
                             file_sizeof = 0.0
 
-                        self._loc_count[language.name]["loc"] += loc_line
-                        self._loc_count[language.name]["comment"] += comment_line
-                        self._loc_count[language.name]["empty"] += empty_line
-                        self._loc_count[language.name]["size"] += file_sizeof
+                        self.loc_count[language.name]["loc"] += loc_line
+                        self.loc_count[language.name]["comment"] += comment_line
+                        self.loc_count[language.name]["empty"] += empty_line
+                        self.loc_count[language.name]["size"] += file_sizeof
 
                     else:
-                        self._loc_count["Unknown"]["loc"] += 0
-                        self._loc_count["Unknown"]["comment"] += 0
-                        self._loc_count["Unknown"]["empty"] += 0
-                        self._loc_count["Unknown"]["size"] += 0.0
+                        self.loc_count["Unknown"]["loc"] += 0
+                        self.loc_count["Unknown"]["comment"] += 0
+                        self.loc_count["Unknown"]["empty"] += 0
+                        self.loc_count["Unknown"]["size"] += 0.0
 
-        return self._loc_count
+        return self.loc_count
 
     def stdout_result(self) -> None:
         table = Table(title = f"LOC count of directory: {os.path.abspath(self.base_path)}")
@@ -210,7 +213,7 @@ class CodeLoc:
         total_project_size: float = 0.0
         language_count: int = 0
 
-        for language, count in self._loc_count.items():
+        for language, count in self.loc_count.items():
             loc_line = count["loc"]
             comment_line = count["comment"]
             empty_line = count["empty"]
@@ -222,7 +225,7 @@ class CodeLoc:
     
                 language_config  = self.language_data.get_language_by_name(name = language)
                 comment_result = (
-                    "N/A" if language_config.comment_style == "no_comment"
+                    "N/A" if language_config.comment_style == "no_comment" # type: ignore
                     else str(comment_line)
                 )
 
@@ -231,9 +234,9 @@ class CodeLoc:
                     comment_result, str(empty_line),
                     f"{total_sizeof:.2f}"
                 )
-                total_loc_count += loc_line
-                total_comment += comment_line
-                total_empty += empty_line
+                total_loc_count += loc_line # type: ignore
+                total_comment += comment_line # type: ignore
+                total_empty += empty_line # type: ignore
                 total_project_size += total_sizeof
         
         self.console.print(table)
