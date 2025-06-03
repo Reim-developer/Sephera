@@ -44,20 +44,20 @@ class Exporter:
     def _autopct(pct: float) -> str:
         return f"{pct:.1f}%" if pct >= 1.0 else ""
 
-    def export_stats_chart(self, data: dict, total_size: float, total_hidden_size: float) -> None:
+    def export_stats_chart(self, data: dict[str, int | float], total_size: float, total_hidden_size: float) -> None:
         chart_colors: list[str] =  ['#ff9999','#66b3ff','#99ff99','#ffcc99']
 
         threshold_pct: float = 1.0
         total = sum(data.values())
-        filter_labels: list = []
-        filter_values: list = []
+        filter_labels: list[str] = []
+        filter_values: list[str] = []
         other_total: float = 0.0
 
         for label, value in data.items():
             pct = (value / total) * 100
             if pct >= threshold_pct:
                 filter_labels.append(label)
-                filter_values.append(value)
+                filter_values.append(str(value))
             else:
                 other_total += value
         
@@ -65,7 +65,7 @@ class Exporter:
             other_pct = (other_total / total) * 100
 
             filter_labels.append(f"Other: {other_pct:.1f}%")
-            filter_values.append(other_total)
+            filter_values.append(str(other_total))
 
         fig, ax = plt.subplots(figsize = (8, 8))
         ax.pie(filter_values, labels = filter_labels, autopct = self._autopct, startangle = 90, colors = chart_colors, pctdistance = 0.85, labeldistance = 1.1)
@@ -73,7 +73,7 @@ class Exporter:
         centre_circle = plt.Circle((0, 0), 0.70, fc = "white")
         fig.gca().add_artist(centre_circle)
 
-        ax.set_title("Sephera Stats Overview", fontsize = 14)
+        ax.set_title(label = "Sephera Stats Overview", fontsize = 14)
 
         plt.figtext(0.5, -0.15, f"Total Size: {total_size / (1024 ** 2):.2f} MB", ha = "center", fontsize = 12)
         plt.figtext(0.5, -0.20, f"Total Hidden Size: {total_hidden_size / (1024 ** 2):.2f} MB", ha = "center", fontsize = 12)
