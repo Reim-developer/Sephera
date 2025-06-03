@@ -102,6 +102,6 @@ class Stats:
         print(f"[+] Total Hidden Size: {total_hidden_size / (1024 ** 2):.2f} MB")
 
         if output_chart:
-            exporter.export_stats_chart(data = data, total_size = total_size, total_hidden_size = total_hidden_size)
+            exporter.export_stats_chart(data = data, total_size = total_size, total_hidden_size = total_hidden_size) # type: ignore
             print(f"[+] Saved chart as name: {output_chart}")
         
