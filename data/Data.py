@@ -39,32 +39,33 @@ class LanguageData:
             sql.connect_to_sql(db_path = f"{user_home}/.config/Sephera/settings.db")
             cfg_path = sql.get_cfg_path()
 
-            if os.path.exists(cfg_path):
-                with open(file = cfg_path, mode = "r", encoding = "utf-8") as cfg_file:
-                    try:
-                        config_data = yaml.safe_load(cfg_file)
-                    
-                    except Exception as error:
-                        stdout = SepheraStdout()
-                        stdout.die(error = error)
-            else:
-                config_data = CONFIG_DATA
+            if cfg_path:
+                if os.path.exists(cfg_path):
+                    with open(file = cfg_path, mode = "r", encoding = "utf-8") as cfg_file:
+                        try:
+                            config_data = yaml.safe_load(cfg_file)
+                        
+                        except Exception as error:
+                            stdout = SepheraStdout()
+                            stdout.die(error = error)
+                else:
+                    config_data = CONFIG_DATA
 
         else:
             config_data = CONFIG_DATA
 
        
         self._comment_styles: Dict[str, CommentStyle] = {
-                key: CommentStyle(**value) for key, value in config_data["comment_styles"].items()
+                key: CommentStyle(**value) for key, value in config_data["comment_styles"].items() # type: ignore
             }
         
         try:
             self._languages: List[LanguageConfig] = [
                     LanguageConfig(
-                        name = language["name"],
-                        extensions = language["extension"],
-                        comment_style = language["comment_styles"]
-                    ) for language in config_data["languages"]
+                        name = language["name"], # type: ignore
+                        extensions = language["extension"], # type: ignore
+                        comment_style = language["comment_styles"] # type: ignore
+                    ) for language in config_data["languages"] # type: ignore
                 ]
         except Exception as error:
             logging.critical(f"Required value: {error} not found in your YAML configuration.")
