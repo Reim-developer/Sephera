@@ -2,6 +2,7 @@ import sys
 import os
 import time
 import logging
+import argparse
 
 try:
     from rich.console import Console
@@ -27,12 +28,12 @@ class Handler:
         self.sephera_stdout = SepheraStdout()
         self.utils = Utils()
         
-    def show_usage(self, args) -> None:
+    def show_usage(self, args: argparse.Namespace) -> None:
         if args.command is None:
             sepheraHelp = SepheraHelp()
             sepheraHelp.usage()
 
-    def stats_command_handler(self, args) -> None:
+    def stats_command_handler(self, args: argparse.Namespace) -> None:
         if not os.path.exists(args.path):
             self.sephera_stdout.show_error(f"Fatal error: {args.path} not found.")
             sys.exit(1)
@@ -40,9 +41,9 @@ class Handler:
         stats = Stats(base_path = args.path, ignore_pattern = args.ignore)
         stats.stats_all_files(output_chart = args.chart)
 
-    def tree_command_handler(self, args) -> None:
+    def tree_command_handler(self, args: argparse.Namespace) -> None:
         if not os.path.exists(args.path):
-            error = SepheraStdout(console = self.console)
+            error = SepheraStdout()
             error.show_error(f"Path: {args.path} not found.")
             sys.exit(1)
 
@@ -61,7 +62,7 @@ class Handler:
             )
             self.console.print(f"[cyan][+] Successfully created chart with name: {args.chart}.png")
 
-    def loc_command_handler(self, args) -> None:
+    def loc_command_handler(self, args: argparse.Namespace) -> None:
         if not self.utils.is_path_exists(args.path):
             self.sephera_stdout.show_error(f"{args.path} not found.")
             sys.exit(1)
@@ -74,12 +75,12 @@ class Handler:
 
         if args.json:
             option = OptionHandler()
-            option.on_json_export_option(args = args)
+            option.on_json_export_option(args = str(args))
             sys.exit(0)
         
         if args.md:
             option = OptionHandler()
-            option.on_markdown_export_option(args = args)
+            option.on_markdown_export_option(args = str(args))
             sys.exit(0)
 
         start_time: float = time.perf_counter()
@@ -92,7 +93,7 @@ class Handler:
         codeLoc.stdout_result()
         logging.info(f"Finished in {end_time - start_time:.2f}s")
     
-    def help_command_handler(self, args) -> None:
+    def help_command_handler(self, args: argparse.Namespace) -> None:
         sepheraHelp = SepheraHelp()
 
         if not args.command:
@@ -100,22 +101,22 @@ class Handler:
         else:
             sepheraHelp.show_help(args = str(args.command[0]))
 
-    def update_command_handler(self, _) -> None:
+    def update_command_handler(self, args: argparse.Namespace) -> None:
         get_update = GetUpdate()
         get_update.update_sephera()
 
-    def fetch_languages_supports_handler(self, args) -> None:
+    def fetch_languages_supports_handler(self, args: argparse.Namespace) -> None:
         fetch_languages = FetchLanguage()
         if args.list:
             fetch_languages.fetch_language_count(verbose = True)
 
         fetch_languages.fetch_language_count()
 
-    def version_command_handler(self, args) -> None:
+    def version_command_handler(self, args: argparse.Namespace) -> None:
         version_command = VersionCommand()
 
         version_command.fetch_version(show_git_version = args.git)
 
-    def language_cfg_handler(self, args) -> None:
+    def language_cfg_handler(self, args: argparse.Namespace) -> None:
         set_cfg = SetConfiguration()
         set_cfg.set_language_cfg(stdout = self.sephera_stdout, global_cfg = args.global_)
