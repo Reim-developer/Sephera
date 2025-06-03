@@ -21,23 +21,23 @@ class Exporter:
         chart_values: list[int] = [files, dirs, hidden_files, hidden_dirs]
         colors: list[str] = ["#66b3ff", "#99ff99", "#ffcc99", "#ff9999"]
 
-        _, ax = plt.subplots(figsize = (8, 6))
-        bars = ax.bar(chart_label, chart_values, color = colors, edgecolor = "black")
+        _, ax = plt.subplots(figsize = (8, 6)) # type: ignore
+        bars = ax.bar(chart_label, chart_values, color = colors, edgecolor = "black") # type: ignore
 
         with self.console.status("[bold green] Processing...", spinner = "material"):
-            for bar in bars:
-                bar_height = bar.get_height()
-                ax.annotate(f"{bar_height}", xy = (bar.get_x() + bar.get_width() / 2, bar_height),
+            for bar in bars: # type: ignore
+                bar_height = bar.get_height() # type: ignore
+                ax.annotate(f"{bar_height}", xy = (bar.get_x() + bar.get_width() / 2, bar_height), # type: ignore
                 xytext = (0, 5),
                 textcoords = "offset points",
                 ha = "center", va = "bottom", fontsize = 10)
             
-            ax.set_title("Sephera Tree Directory Stats", fontsize = 14, fontweight = "bold")
-            ax.set_ylabel("Count", fontsize = 12)
-            ax.grid(axis = "y", linestyle = "--", alpha = 0.6)
+            ax.set_title("Sephera Tree Directory Stats", fontsize = 14, fontweight = "bold") # type: ignore
+            ax.set_ylabel("Count", fontsize = 12) # type: ignore
+            ax.grid(axis = "y", linestyle = "--", alpha = 0.6) # type: ignore
 
-        plt.tight_layout()
-        plt.savefig(f"{self.output_path}.png")
+        plt.tight_layout() # type: ignore
+        plt.savefig(f"{self.output_path}.png") # type: ignore
         plt.close()
 
     @staticmethod
@@ -67,18 +67,18 @@ class Exporter:
             filter_labels.append(f"Other: {other_pct:.1f}%")
             filter_values.append(str(other_total))
 
-        fig, ax = plt.subplots(figsize = (8, 8))
+        fig, ax = plt.subplots(figsize = (8, 8)) # type: ignore
         ax.pie(filter_values, labels = filter_labels, autopct = self._autopct, startangle = 90, colors = chart_colors, pctdistance = 0.85, labeldistance = 1.1)
 
-        centre_circle = plt.Circle((0, 0), 0.70, fc = "white")
+        centre_circle = plt.Circle((0, 0), 0.70, fc = "white") # type: ignore
         fig.gca().add_artist(centre_circle)
 
-        ax.set_title(label = "Sephera Stats Overview", fontsize = 14)
+        ax.set_title(label = "Sephera Stats Overview", fontsize = 14) # type: ignore
 
-        plt.figtext(0.5, -0.15, f"Total Size: {total_size / (1024 ** 2):.2f} MB", ha = "center", fontsize = 12)
-        plt.figtext(0.5, -0.20, f"Total Hidden Size: {total_hidden_size / (1024 ** 2):.2f} MB", ha = "center", fontsize = 12)
+        plt.figtext(0.5, -0.15, f"Total Size: {total_size / (1024 ** 2):.2f} MB", ha = "center", fontsize = 12) # type: ignore
+        plt.figtext(0.5, -0.20, f"Total Hidden Size: {total_hidden_size / (1024 ** 2):.2f} MB", ha = "center", fontsize = 12) # type: ignore
 
-        plt.savefig(f"{self.output_path}.png", bbox_inches = "tight")
+        plt.savefig(f"{self.output_path}.png", bbox_inches = "tight") # type: ignore
         plt.close()
 
 
@@ -92,7 +92,7 @@ class Exporter:
         markdown_data = []
         markdown_headers = ["Language", "Code lines", "Comment lines", "Empty lines", "Size (MB)"]
 
-        for language, count in codeLoc._loc_count.items():
+        for language, count in codeLoc.loc_count.items():
             loc_line = count["loc"]
             comment_line = count["comment"]
             empty_line = count["empty"]
@@ -104,30 +104,30 @@ class Exporter:
                 language_config  = codeLoc.language_data.get_language_by_name(name = language)
 
                 comment_result = (
-                    "N/A" if language_config.comment_style == "no_comment"
+                    "N/A" if language_config.comment_style == "no_comment" # type: ignore
                     else str(comment_line)
                 )
 
-                markdown_data.append([
+                markdown_data.append([ # type: ignore
                     language, loc_line, comment_result,
                     empty_line, f"{total_sizeof:.2f}"
                 ])
 
-                total_loc_count += loc_line
-                total_comment += comment_line
-                total_empty += empty_line
+                total_loc_count += loc_line # type: ignore
+                total_comment += comment_line # type: ignore
+                total_empty += empty_line # type: ignore
                 total_project_size += total_sizeof
 
                
 
         markdown_table = tabulate(
-            markdown_data, headers = markdown_headers,
+            markdown_data, headers = markdown_headers, # type: ignore
             tablefmt = "github", numalign = "right",
             stralign = "left",
             missingval = "N/A"
         )
 
-        markdown_source = []
+        markdown_source: list[str] = []
         markdown_source.append(f"# LOC Count of directory: {os.path.abspath(codeLoc.base_path)}\n")
         markdown_source.append(markdown_table)
         markdown_source.append("\n## Project Total:")
@@ -149,7 +149,7 @@ class Exporter:
         language_count: int = 0
 
         finish_result = {}
-        for language, count in codeLoc._loc_count.items():
+        for language, count in codeLoc.loc_count.items():
             loc_line = count["loc"]
             comment_line = count["comment"]
             empty_line = count["empty"]
@@ -161,13 +161,13 @@ class Exporter:
                 language_config  = codeLoc.language_data.get_language_by_name(name = language)
 
                 comment_result = (
-                    "N/A" if language_config.comment_style == "no_comment"
+                    "N/A" if language_config.comment_style == "no_comment" # type: ignore
                     else str(comment_line)
                 )
 
-                total_loc_count += loc_line
-                total_comment += comment_line
-                total_empty += empty_line
+                total_loc_count += loc_line # type: ignore
+                total_comment += comment_line # type: ignore
+                total_empty += empty_line # type: ignore
                 total_project_size += total_sizeof
 
                 finish_result[language] = {
@@ -177,7 +177,7 @@ class Exporter:
                         "Size (MB)": f"{total_sizeof:.2f} MB" 
                 }
 
-        total_data = {
+        total_data: dict[str, object] = {
             "Scan In:": f"{os.path.abspath(path = codeLoc.base_path)}",
                 "Total:": {
                     "Language(s) used:": language_count,
@@ -188,6 +188,6 @@ class Exporter:
             }
         }
         
-        finish_result = {**total_data, **finish_result}
+        finish_result: dict[object, object] = {**total_data, **finish_result}
         with open(file = file_path, mode = "w", encoding = "utf-8") as json_file:
             json.dump(finish_result, json_file, indent = 4, ensure_ascii = True)
