@@ -6,7 +6,8 @@
 # This project is licensed under the GNU General Public License v3.0
 # https://github.com/Reim-developer/Sephera?tab=GPL-3.0-1-ov-file
 # ==============================================================
-CONFIG_DATA = {
+
+CONFIG_DATA: dict[str, object] = {
   "comment_styles": {
     "c_style": {
       "single_line": "//",
