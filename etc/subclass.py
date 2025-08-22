@@ -1,18 +1,19 @@
 import argparse
 import sys
 import re
+from typing import NoReturn
 
 try:
     from rich.console import Console
 except KeyboardInterrupt:
     print("\n Aborted by user.")
+    sys.exit(1)
 
 class SepheraArgparse(argparse.ArgumentParser):
-    def error(self, message: str):
-        console = Console()
+    def error(self, message: str) -> NoReturn:
         
         match = re.search(r"invalid choice: '(.+?)'", message)
-
+        console = Console()
         if match:
             wrong_command = match.group(1)
             console.print(f"[red]Unrecognized command: '{wrong_command}'")
@@ -26,7 +27,8 @@ class SepheraArgparse(argparse.ArgumentParser):
                 console.print(f"[red]Missing value for argument: {arg}")
                 sys.exit(1)
 
-        else:
-            console.print(f"[red]Unrecognized arugment: {message.replace("unrecognized arguments:", "").strip()}")
-            sys.exit(1)
+        
+        console.print(f"[red]Unrecognized arugment: {message.replace('unrecognized arguments:', '').strip()}")
+        sys.exit(1)
+        
         

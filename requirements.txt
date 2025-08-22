@@ -7,4 +7,3 @@ nuitka
 tabulate
 ruff
 toml
-PyQt5

@@ -31,8 +31,8 @@ class VersionCommand:
             self.console.print("\n".join([
                 f"[cyan][+] The Sephera latest version on GitHub: {sephera_version}",
                 f"[cyan][+] Your Sephera version: {SEPHERA_VERSION}",
-                f"[cyan][+] You are {"use the latest version of Sephera" 
+                f"[cyan][+] You are {'use the latest version of Sephera' 
                                            if version.parse(SEPHERA_VERSION) == sephera_version 
-                                           else "not use the latest version of Sephera"}" 
+                                           else 'not use the latest version of Sephera'}" 
             ]))
         
