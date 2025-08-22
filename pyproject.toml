@@ -1,21 +1,13 @@
 [project]
 name = "Sephera"
-version = "2.3.1"
+version = "2.3.2"
 description = "Count, LOC, Stat your project, easy and quickly."
 readme = "readme.md"
-authors = [
-    { name = "Reim-developer", email = "mavis.ngoc.nguyen@gmail.com" }
-]
+authors = [{ name = "Reim-developer", email = "mavis.ngoc.nguyen@gmail.com" }]
 
 license = { file = "LICENSE" }
 requires-python = ">=3.10"
-dependencies = [
-    "matplotlib",
-    "rich",
-    "PyYAML",
-    "requests",
-    "tabulate"
-]
+dependencies = ["matplotlib", "rich", "PyYAML", "requests", "tabulate"]
 
 [project.scripts]
 sephera = "main:main"
@@ -31,7 +23,13 @@ Repository = "https://github.com/Reim-developer/Sephera"
 
 [tool.hatch.build.targets.wheel]
 packages = [
-    "sephera", "etc", "utils",
-    "main.py", "command.py", "handler.py",
-    "data", "datalyzer", "__version__.py"
+    "sephera",
+    "etc",
+    "utils",
+    "main.py",
+    "command.py",
+    "handler.py",
+    "data",
+    "datalyzer",
+    "__version__.py",
 ]
