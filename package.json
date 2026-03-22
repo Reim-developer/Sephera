@@ -1,0 +1,10 @@
+{
+	"name": "sephera-dev",
+	"private": true,
+	"scripts": {
+		"pyright": "pyright benchmarks/run.py"
+	},
+	"devDependencies": {
+		"pyright": "1.1.408"
+	}
+}
