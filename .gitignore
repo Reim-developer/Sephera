@@ -1,6 +1,9 @@
-/target
-/.venv
-/benchmarks/generated_corpus/
-/benchmarks/reports/
-/benchmarks/__pycache__/
-/node_modules/
+__pycache__
+build
+dist
+test.json
+SepheraExport.json
+site
+SepheraExport.md
+.vscode
+SepheraCfg.yml
