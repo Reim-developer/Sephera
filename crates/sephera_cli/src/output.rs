@@ -5,7 +5,7 @@ pub fn print_report(report: &CodeLocReport) {
 
     for language_loc in &report.by_language {
         println!(
-            "{}: code={} comment={} empty={} size_bytes={}",
+            "[{}]: code = {} | comment = {} | empty = {} | size_bytes = {}",
             language_loc.language,
             language_loc.metrics.code_lines,
             language_loc.metrics.comment_lines,
@@ -15,7 +15,10 @@ pub fn print_report(report: &CodeLocReport) {
     }
 
     println!(
-        "Totals: code={} comment={} empty={} size_bytes={} files_scanned={} languages_detected={}",
+        "[Totals]: 
+Code = {} | Comment = {} | 
+Empty = {} | Size bytes = {} | Files scanned = {}
+Languages detected = {}",
         report.totals.code_lines,
         report.totals.comment_lines,
         report.totals.empty_lines,
