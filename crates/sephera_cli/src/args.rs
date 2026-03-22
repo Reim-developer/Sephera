@@ -23,11 +23,18 @@ pub enum Commands {
 #[derive(Debug, Args)]
 pub struct LocArgs {
     /// Path to the project directory to analyze
-    #[arg(long, default_value = ".")]
+    #[arg(
+        long,
+        default_value = ".",
+        help = "Path to the project directory to analyze"
+    )]
     pub path: PathBuf,
 
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(long)]
+    #[arg(
+        long,
+        help = "Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes."
+    )]
     pub ignore: Vec<String>,
 }
 
