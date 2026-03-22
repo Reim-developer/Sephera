@@ -14,8 +14,8 @@ from time 			import perf_counter
 from statistics		import fmean, median
 from os 			import cpu_count, environ, name as os_name
 
-DatasetName: TypeAlias = Literal["repo", "small", "medium", "large"]
-DATASET_CHOICES: Final[tuple[DatasetName, ...]] = ("repo", "small", "medium", "large")
+DatasetName: TypeAlias = Literal["repo", "small", "medium", "large", "extra-large"]
+DATASET_CHOICES: Final[tuple[DatasetName, ...]] = ("repo", "small", "medium", "large", "extra-large")
 DEFAULT_DATASETS: Final[tuple[DatasetName, ...]] = ("small", "medium", "large")
 ROOT: Final[Path] = Path(__file__).resolve().parent.parent
 BENCHMARKS_DIR: Final[Path] = ROOT / "benchmarks"
@@ -195,7 +195,7 @@ def main() -> int:
 	REPORTS_DIR.mkdir(parents = True, exist_ok = True)
 
 	build_rust_binaries()
-	generate_benchmark_corpus()
+	generate_benchmark_corpus(args.datasets)
 
 	python_cli = None if args.skip_python else prepare_python_cli()
 	rust_cli = release_binary("sephera_cli")
@@ -234,16 +234,23 @@ def build_rust_binaries() -> None:
 	run_command(["cargo", "build", "--release", "-p", "sephera_cli", "-p", "sephera_tools"])
 
 
-def generate_benchmark_corpus() -> None:
-	run_command(
-		[
-			str(release_binary("sephera_tools")),
-			"generate-benchmark-corpus",
-			"--output",
-			str(CORPUS_DIR),
-			"--clean",
-		]
-	)
+def generate_benchmark_corpus(dataset_names: tuple[DatasetName, ...]) -> None:
+	synthetic_datasets = [
+		dataset_name for dataset_name in dataset_names if dataset_name != "repo"
+	]
+	if not synthetic_datasets:
+		return
+
+	command = [
+		str(release_binary("sephera_tools")),
+		"generate-benchmark-corpus",
+		"--output",
+		str(CORPUS_DIR),
+		"--clean",
+		"--datasets",
+		*synthetic_datasets,
+	]
+	run_command(command)
 
 
 def prepare_python_cli() -> Path:
@@ -282,9 +289,9 @@ def resolve_cases(dataset_names: tuple[DatasetName, ...]) -> list[BenchmarkCase]
 		"small": BenchmarkCase("small", CORPUS_DIR / "small", ()),
 		"medium": BenchmarkCase("medium", CORPUS_DIR / "medium", ()),
 		"large": BenchmarkCase("large", CORPUS_DIR / "large", ()),
+		"extra-large": BenchmarkCase("extra-large", CORPUS_DIR / "extra-large", ()),
 	}
 	return [available_cases[name] for name in dataset_names]
-
 
 def benchmark_case(
 	case: BenchmarkCase,
@@ -684,6 +691,10 @@ def format_optional_str(value: str | None) -> str:
 
 if __name__ == "__main__":
 	raise SystemExit(main())
+
+
+
+
 
 
 
