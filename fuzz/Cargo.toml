@@ -1,0 +1,43 @@
+[package]
+name = "sephera-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+arbitrary = { version = "1.4.2", features = ["derive"] }
+libfuzzer-sys = "0.4.10"
+sephera_cli = { path = "../crates/sephera_cli" }
+sephera_core = { path = "../crates/sephera_core" }
+tempfile = "3.23.0"
+
+[[bin]]
+name = "scan_content_newlines"
+path = "fuzz_targets/scan_content_newlines.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "render_loc_table"
+path = "fuzz_targets/render_loc_table.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "build_context_report"
+path = "fuzz_targets/build_context_report.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "render_context_markdown"
+path = "fuzz_targets/render_context_markdown.rs"
+test = false
+doc = false
+bench = false
