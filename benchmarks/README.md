@@ -1,21 +1,34 @@
-﻿# Benchmarks
+# Benchmarks
 
-This directory contains a reproducible benchmark harness for comparing the Rust CLI in this repository against the published Python Sephera CLI.
+This directory contains the reproducible benchmark harness for the Rust Sephera CLI.
 
-## What the harness does
+The harness is intentionally narrow in scope. It benchmarks the local release binary, records enough machine metadata to make results interpretable, and writes reports that are easy to diff or archive.
 
-`python benchmarks/run.py` performs the following setup and measurement steps:
+## What the Harness Does
+
+`python benchmarks/run.py` performs these steps:
 
 1. Builds `sephera_cli` and `sephera_tools` in release mode.
-2. Generates a deterministic synthetic corpus under `benchmarks/generated_corpus`.
-3. Creates a virtual environment at the repository root.
-4. Installs the published Python CLI with the equivalent shell steps:
-   `python -m venv .venv`
-   `pip install sephera`
-5. Runs both CLIs against the default `small`, `medium`, and `large` datasets.
-6. Writes a machine-readable JSON report and a human-readable Markdown summary to `benchmarks/reports`.
+2. Generates deterministic synthetic corpora under `benchmarks/generated_corpus`.
+3. Runs the Rust CLI against the requested datasets.
+4. Writes a machine-readable JSON report and a human-readable Markdown report to `benchmarks/reports`.
 
-## Captured machine metadata
+## Dataset Policy
+
+Default benchmark suite:
+
+- `small`
+- `medium`
+- `large`
+
+Optional datasets:
+
+- `repo`
+- `extra-large`
+
+`extra-large` targets roughly 2 GiB of generated source data. It is intended as a manual stress benchmark and should not be part of normal edit-compile-test loops or default CI jobs.
+
+## What Gets Recorded
 
 Every benchmark report records:
 
@@ -24,55 +37,55 @@ Every benchmark report records:
 - `platform.processor()`
 - `os.cpu_count()`
 - Python version and Python executable
-- Architecture-related environment variables such as `PROCESSOR_ARCHITECTURE` and `PROCESSOR_IDENTIFIER` when available
-- The exact command lines used for every measured run
+- architecture-related environment variables such as `PROCESSOR_ARCHITECTURE` and `PROCESSOR_IDENTIFIER` when available
+- the exact command line used for each measured run
+- per-run timing samples
+- parsed LOC totals from CLI output
+- captured stdout and stderr
 
-This makes it easier to compare results across CPUs, operating systems, and developer machines.
+The CLI output itself also includes a human-readable `Elapsed:` line. The benchmark harness still uses its own wall-clock timing as the primary measurement, which keeps the report stable even if CLI formatting evolves.
 
 ## Methodology
 
-Default settings use one warmup run and five measured runs per dataset. The reported comparison includes min, mean, median, max, per-run samples, and relative Rust speedup versus Python.
+Default settings use:
 
-Each dataset section in the Markdown report also includes the command line, parsed output summary, and the captured CLI output for both implementations.
+- `1` warmup run
+- `5` measured runs per dataset
 
-The benchmark intentionally excludes one-time setup costs from the steady-state numbers. Building the Rust binaries, creating the virtual environment, and installing the Python package happen before timing starts.
+The report includes:
 
-## Cold-cache vs warm-cache caveat
+- min
+- mean
+- median
+- max
+- per-run samples
+- parsed totals from the CLI output
 
-The default workflow measures warm-ish runs because the filesystem cache is naturally populated after the first invocation. This is closer to repeated local CLI use than to a strict cold-boot scenario.
+One-time setup costs are intentionally excluded from the measured timings. Building binaries and generating the requested datasets happen before timing starts.
 
-If you need cold-cache data for a production investigation, run the benchmark on a freshly rebooted machine or in an isolated environment and document the cache policy next to the results.
+## Cold-Cache vs Warm-Cache Caveat
 
-## Production relevance
+The default workflow measures warm-ish runs because filesystem cache naturally improves after the first invocation. If you need stricter cold-cache data, run the benchmark on a controlled machine and document that cache policy alongside the report.
+
+## Production Relevance
 
 The most production-representative parts of this benchmark are:
 
-- Release-mode Rust binaries
-- The published Python CLI installed in a clean virtual environment
-- Repeated runs over deterministic synthetic corpora
-- Exact command lines captured alongside the timings
+- release-mode Rust binaries
+- repeated runs over deterministic corpora
+- exact commands captured alongside results
+- cross-platform CLI execution through the same user-facing `loc` command
 
 The least production-representative parts are:
 
-- Local developer machine thermal conditions and background processes
-- Warm filesystem caches after the first run
-- Synthetic corpora, which are useful for consistency but never cover every real-world repository shape
+- local background activity
+- thermal throttling or power-management effects
+- warmed filesystem cache after the first invocation
+- synthetic corpora, which improve reproducibility but do not match every real repository layout
 
-## When Rust should win clearly
+## Useful Commands
 
-Rust should usually outperform the Python CLI on larger repositories because this implementation scans bytes directly, can use memory mapping, and parallelizes file work across cores.
-
-You should expect the gap to widen when the directory tree is large, when there are many files per language, or when comment parsing becomes a meaningful share of runtime.
-
-## When Python may be closer
-
-Python can look closer on very small repositories where process startup and argument parsing dominate the total runtime.
-
-The Python CLI may also occasionally be competitive when the workload is tiny, the OS cache is hot, or when benchmark noise from background processes is larger than the actual scan time.
-
-## Useful commands
-
-Run the default synthetic benchmark suite (`small`, `medium`, `large`):
+Run the default benchmark suite (`small`, `medium`, `large`):
 
 ```bash
 python benchmarks/run.py
@@ -84,8 +97,23 @@ Include the current repository as an additional dataset:
 python benchmarks/run.py --datasets repo small medium large
 ```
 
-Run a quick offline smoke test without installing the Python CLI:
+Run only the `large` dataset as a quick smoke benchmark:
 
 ```bash
-python benchmarks/run.py --skip-python --datasets small --warmup 0 --runs 1
+python benchmarks/run.py --datasets large --warmup 0 --runs 1
 ```
+
+Run the opt-in `extra-large` stress benchmark:
+
+```bash
+python benchmarks/run.py --datasets extra-large --warmup 0 --runs 1
+```
+
+## Checked-In Reports
+
+Representative checked-in reports currently include:
+
+- `benchmarks/reports/benchmark-20260322T221333Z.md` for `small`, `medium`, and `large`
+- `benchmarks/reports/benchmark-20260323T211525Z.md` for `extra-large`
+
+These reports are useful as reference points, but they should not be treated as universal performance claims. Hardware, OS behavior, filesystem cache state, and local machine load all matter.
