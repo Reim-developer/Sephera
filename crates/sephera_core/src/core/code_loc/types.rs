@@ -1,4 +1,4 @@
-﻿use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use crate::core::config::CommentStyle;
 
@@ -50,6 +50,7 @@ pub struct CodeLocReport {
     pub totals: LocMetrics,
     pub files_scanned: u64,
     pub languages_detected: usize,
+    pub elapsed: Duration,
 }
 
 #[derive(Debug)]
