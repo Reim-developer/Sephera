@@ -1,0 +1,65 @@
+name: Fuzz
+
+on:
+  workflow_dispatch:
+    inputs:
+      max_total_time:
+        description: Seconds to fuzz each target
+        required: false
+        default: "300"
+  schedule:
+    - cron: "0 3 * * *"
+
+concurrency:
+  group: fuzz-${{ github.workflow }}-${{ github.ref || github.run_id }}
+  cancel-in-progress: false
+
+jobs:
+  extended_fuzz:
+    name: Extended Fuzz (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: scan_content_newlines
+            seed_dir: fuzz/seeds/scan_content_newlines
+          - target: render_loc_table
+            seed_dir: fuzz/seeds/render_loc_table
+          - target: build_context_report
+            seed_dir: fuzz/seeds/build_context_report
+          - target: render_context_markdown
+            seed_dir: fuzz/seeds/render_context_markdown
+    env:
+      FUZZ_MAX_TOTAL_TIME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_total_time || '300' }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Create fuzz log directory
+        run: mkdir -p fuzz/logs
+
+      - name: Run extended fuzz target
+        run: |
+          cargo +nightly fuzz run "${{ matrix.target }}" "${{ matrix.seed_dir }}" -- "-max_total_time=${FUZZ_MAX_TOTAL_TIME}" \
+            | tee "fuzz/logs/${{ matrix.target }}.log"
+
+      - name: Upload extended fuzz artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-extended-${{ matrix.target }}
+          path: |
+            fuzz/logs/${{ matrix.target }}.log
+            fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: warn
