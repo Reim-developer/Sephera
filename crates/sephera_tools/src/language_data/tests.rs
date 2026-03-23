@@ -5,6 +5,10 @@ use super::{
     load_registry_from_yaml, render_language_module,
 };
 
+fn normalize_line_endings(value: &str) -> String {
+    value.replace("\r\n", "\n")
+}
+
 #[test]
 fn parses_valid_yaml_registry() {
     let registry = load_registry_from_yaml(
@@ -108,7 +112,10 @@ fn generated_file_matches_checked_in_snapshot() {
     let committed = fs::read_to_string(default_generated_language_data_path())
         .unwrap_or_default();
 
-    assert_eq!(rendered, committed);
+    assert_eq!(
+        normalize_line_endings(&rendered),
+        normalize_line_endings(&committed)
+    );
 }
 
 #[test]

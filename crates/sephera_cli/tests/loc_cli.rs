@@ -3,7 +3,7 @@ use std::process::Command;
 use tempfile::tempdir;
 
 #[test]
-fn loc_command_prints_plain_text_report() {
+fn loc_command_prints_report_successfully() {
     let temp_dir = tempdir().unwrap();
     std::fs::write(
         temp_dir.path().join("main.rs"),
@@ -18,6 +18,9 @@ fn loc_command_prints_plain_text_report() {
         .unwrap();
 
     assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Elapsed: "));
 }
 
 #[test]

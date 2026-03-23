@@ -4,8 +4,7 @@ on:
   push:
     branches:
       - master
-      - main
-      - rust-version
+      - dev
   pull_request:
 
 concurrency:
@@ -111,3 +110,50 @@ jobs:
           name: benchmark-reports
           path: benchmarks/reports/
           if-no-files-found: error
+
+  fuzz_smoke:
+    name: Fuzz Smoke (${{ matrix.target }})
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - target: scan_content_newlines
+            seed_dir: fuzz/seeds/scan_content_newlines
+          - target: render_loc_table
+            seed_dir: fuzz/seeds/render_loc_table
+          - target: build_context_report
+            seed_dir: fuzz/seeds/build_context_report
+          - target: render_context_markdown
+            seed_dir: fuzz/seeds/render_context_markdown
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@nightly
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-fuzz
+        run: cargo install cargo-fuzz --locked
+
+      - name: Create fuzz log directory
+        run: mkdir -p fuzz/logs
+
+      - name: Run fuzz smoke target
+        run: |
+          cargo +nightly fuzz run "${{ matrix.target }}" "${{ matrix.seed_dir }}" -- -max_total_time=60 \
+            | tee "fuzz/logs/${{ matrix.target }}.log"
+
+      - name: Upload fuzz smoke artifacts
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: fuzz-smoke-${{ matrix.target }}
+          path: |
+            fuzz/logs/${{ matrix.target }}.log
+            fuzz/artifacts/${{ matrix.target }}/
+          if-no-files-found: warn

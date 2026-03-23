@@ -1,5 +1,7 @@
 use crate::core::config::CommentStyle;
 
+use crate::core::line_slices::LineSlices;
+
 use super::types::LocMetrics;
 
 #[derive(Clone, Copy)]
@@ -41,18 +43,9 @@ pub fn scan_content(bytes: &[u8], style: &CommentStyle) -> LocMetrics {
 
     let mut metrics = LocMetrics::zero();
     let mut block_comment_depth = 0_usize;
-    let mut start = 0_usize;
 
-    while start < bytes.len() {
-        let mut end = start;
-        while end < bytes.len() && bytes[end] != b'\n' {
-            end += 1;
-        }
-
-        let line = trim_trailing_carriage_return(&bytes[start..end]);
+    for line in LineSlices::new(bytes) {
         classify_line(line, tokens, &mut block_comment_depth, &mut metrics);
-
-        start = if end < bytes.len() { end + 1 } else { end };
     }
 
     metrics
@@ -138,28 +131,13 @@ fn classify_line(
 #[must_use]
 fn scan_commentless_content(bytes: &[u8]) -> LocMetrics {
     let mut metrics = LocMetrics::zero();
-    let mut start = 0_usize;
-
-    while start < bytes.len() {
-        let mut end = start;
-        while end < bytes.len() && bytes[end] != b'\n' {
-            end += 1;
-        }
-
-        let line = trim_trailing_carriage_return(&bytes[start..end]);
+    for line in LineSlices::new(bytes) {
         if line.iter().all(u8::is_ascii_whitespace) {
             metrics.empty_lines += 1;
         } else {
             metrics.code_lines += 1;
         }
-
-        start = if end < bytes.len() { end + 1 } else { end };
     }
 
     metrics
-}
-
-#[must_use]
-fn trim_trailing_carriage_return(line: &[u8]) -> &[u8] {
-    line.strip_suffix(b"\r").unwrap_or(line)
 }

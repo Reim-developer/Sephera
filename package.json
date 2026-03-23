@@ -2,7 +2,7 @@
 	"name": "sephera-dev",
 	"private": true,
 	"scripts": {
-		"pyright": "pyright benchmarks/run.py"
+		"pyright": "pyright"
 	},
 	"devDependencies": {
 		"pyright": "1.1.408"

@@ -82,8 +82,13 @@ fn is_glob_pattern(pattern: &str) -> bool {
 }
 
 #[must_use]
-fn normalize_relative_path(relative_path: &Path) -> String {
-    relative_path.to_string_lossy().replace('\\', "/")
+pub(super) fn normalize_relative_path(relative_path: &Path) -> String {
+    let normalized = relative_path.to_string_lossy().replace('\\', "/");
+    if normalized.is_empty() {
+        ".".to_owned()
+    } else {
+        normalized
+    }
 }
 
 #[must_use]

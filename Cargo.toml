@@ -1,5 +1,6 @@
 [workspace]
 members = ["crates/sephera_cli", "crates/sephera_core", "crates/sephera_tools"]
+exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]

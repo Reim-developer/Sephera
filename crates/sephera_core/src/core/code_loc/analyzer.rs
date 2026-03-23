@@ -1,13 +1,14 @@
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Instant};
 
-use anyhow::{Context, Result, bail};
+use anyhow::{Context, Result};
 use rayon::prelude::*;
-use walkdir::{DirEntry, WalkDir};
 
-use crate::core::language_data::{builtin_languages, language_for_path};
+use crate::core::{
+    ignore::IgnoreMatcher, language_data::builtin_languages,
+    project_files::collect_project_files,
+};
 
 use super::{
-    ignore::IgnoreMatcher,
     reader::scan_file,
     types::{CodeLocReport, FileJob, LanguageLoc, LocMetrics},
 };
@@ -35,13 +36,7 @@ impl CodeLoc {
     /// # Panics:
     /// File count exceeded the u64 reporting limit.
     pub fn analyze(&self) -> Result<CodeLocReport> {
-        if !self.base_path.exists() {
-            bail!("path `{}` does not exist", self.base_path.display());
-        }
-        if !self.base_path.is_dir() {
-            bail!("path `{}` is not a directory", self.base_path.display());
-        }
-
+        let started_at = Instant::now();
         let file_jobs = self.collect_file_jobs()?;
         let aggregated_metrics = file_jobs
             .par_iter()
@@ -106,63 +101,29 @@ impl CodeLoc {
             totals,
             files_scanned,
             by_language,
+            elapsed: started_at.elapsed(),
         })
     }
 
     fn collect_file_jobs(&self) -> Result<Vec<FileJob>> {
-        let walker = WalkDir::new(&self.base_path)
-            .follow_links(false)
-            .into_iter()
-            .filter_entry(|entry| self.should_visit(entry));
-
         let mut file_jobs = Vec::new();
+        let project_files =
+            collect_project_files(&self.base_path, &self.ignore)?;
 
-        for entry_result in walker {
-            let entry = entry_result.with_context(|| {
-                format!(
-                    "failed to traverse directory `{}`",
-                    self.base_path.display()
-                )
-            })?;
-
-            if !entry.file_type().is_file() {
-                continue;
-            }
-
-            let Some((language_index, language)) =
-                language_for_path(entry.path())
+        for project_file in project_files {
+            let Some((language_index, language)) = project_file.language_match
             else {
                 continue;
             };
 
-            let metadata = entry.metadata().with_context(|| {
-                format!(
-                    "failed to read metadata for `{}`",
-                    entry.path().display()
-                )
-            })?;
-
             file_jobs.push(FileJob {
                 language_style: language.comment_style,
                 language_index,
-                path: entry.into_path(),
-                size_bytes: metadata.len(),
+                path: project_file.absolute_path,
+                size_bytes: project_file.size_bytes,
             });
         }
 
         Ok(file_jobs)
-    }
-
-    fn should_visit(&self, entry: &DirEntry) -> bool {
-        if entry.depth() == 0 {
-            return true;
-        }
-
-        let relative_path = entry
-            .path()
-            .strip_prefix(&self.base_path)
-            .unwrap_or_else(|_| entry.path());
-
-        !self.ignore.is_ignored(relative_path)
     }
 }

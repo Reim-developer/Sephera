@@ -119,6 +119,7 @@ fn analyzes_directory_and_aggregates_per_language_metrics() {
     assert_eq!(report.totals.code_lines, 2);
     assert_eq!(report.totals.comment_lines, 2);
     assert_eq!(report.totals.empty_lines, 1);
+    assert!(report.elapsed >= std::time::Duration::ZERO);
 
     let rust_metrics = report
         .by_language

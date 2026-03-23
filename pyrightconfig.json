@@ -1,3 +1,14 @@
 {
-    "typeCheckingMode": "strict",
+	"typeCheckingMode": "strict",
+	"include": [
+		"benchmarks/run.py",
+		"benchmarks/benchmark_harness.py",
+		"benchmarks/benchmark_model.py",
+		"benchmarks/benchmark_render.py"
+	],
+	"exclude": [
+		"benchmarks/generated_corpus",
+		"benchmarks/reports",
+		"benchmarks/__pycache__"
+	]
 }

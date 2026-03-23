@@ -1,6 +1,10 @@
-﻿/target
+/target
 /.venv
 /benchmarks/generated_corpus/
 /benchmarks/reports/
 /benchmarks/__pycache__/
 /node_modules/
+/fuzz/artifacts/
+/fuzz/corpus/
+/fuzz/target/
+/fuzz/seeds
