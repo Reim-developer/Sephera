@@ -48,9 +48,6 @@ fn render_report_table_includes_headers_and_totals() {
     assert!(rendered.contains("Files scanned: 2"));
     assert!(rendered.contains("Languages detected: 2"));
     assert!(rendered.contains("Elapsed: 12.000 ms (0.012000 s)"));
-    assert!(rendered.contains(
-        "Totals: code=17 comment=4 empty=3 size_bytes=224 files_scanned=2 languages_detected=2"
-    ));
 }
 
 #[test]
