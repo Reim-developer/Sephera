@@ -1,78 +1,114 @@
 # Sephera
 
-Sephera is a Rust workspace that currently focuses on one task: counting source lines across a project tree with the `loc` command.
+Sephera is a Rust workspace for codebase inspection. It currently focuses on two practical workflows:
 
-The current implementation mirrors the core `loc` workflow of the Python Sephera CLI while keeping the scope intentionally narrow. At the moment, the Rust CLI ships plain-text output for `loc`; table, JSON, and Markdown output modes are not implemented yet.
+- `loc`: fast language-aware line counting for project trees
+- `context`: deterministic Markdown or JSON context packs for review, debugging, and LLM-assisted workflows
 
-## Current Features
+The project keeps its scope intentionally narrow. It does not try to be an AI agent framework or a hosted service. The current goal is to provide reliable local analysis primitives that can be composed into larger tooling later.
 
-- `sephera loc --path <PATH> [--ignore <PATTERN>]...`
-- Language detection by file extension and exact file name
-- Generated built-in language registry sourced from `config/languages.yml`
-- Byte-based scanning without decoding the whole file into UTF-8 first
-- Memory-mapped file reads when available, with a normal file-read fallback
-- Parallel project analysis and per-language aggregation
-- Reproducible benchmark harness against the published Python Sephera CLI
+## Key Features
 
-## Workspace Layout
+- Fast `loc` analysis with per-language totals, terminal table output, and elapsed-time reporting
+- Deterministic `context` packs with focus-path prioritization, approximate token budgeting, and export to Markdown or JSON
+- Generated built-in language metadata sourced from [`config/languages.yml`](config/languages.yml)
+- Byte-oriented scanning with memory-mapped reads when available, plus a normal file-read fallback
+- Newline portability for `LF`, `CRLF`, and classic `CR`
+- Shared ignore handling for both `loc` and `context`
+- Reproducible benchmark harness with deterministic synthetic datasets
+- Fuzz targets for newline-sensitive scanning and report rendering
 
-- `crates/sephera_cli`: command-line entrypoint, argument parsing, dispatch, and text output
-- `crates/sephera_core`: scanning engine, ignore handling, language lookup, and aggregation
-- `crates/sephera_tools`: explicit code generation and synthetic benchmark corpus generation
-- `config/languages.yml`: source of truth for built-in language metadata
-- `benchmarks/`: benchmark harness, generated corpora, reports, and methodology notes
+## Commands
 
-## Quick Start
+### `loc`
 
-Build the Rust CLI:
-
-```bash
-cargo build --release -p sephera_cli
-```
-
-Run the `loc` command against the current directory:
+Count lines of code, comments, empty lines, and file sizes for supported languages:
 
 ```bash
 cargo run -p sephera_cli -- loc --path .
 ```
 
-Run a benchmark against the published Python Sephera CLI:
+Ignore paths or basenames with repeated `--ignore` flags:
 
 ```bash
-python benchmarks/run.py --datasets small medium large
+cargo run -p sephera_cli -- loc --path . --ignore target --ignore "*.snap"
 ```
 
-If you change `config/languages.yml`, regenerate the checked-in Rust source:
+### `context`
+
+Build a Markdown context pack for a repository:
+
+```bash
+cargo run -p sephera_cli -- context --path .
+```
+
+Focus on a sub-tree and export Markdown to a file:
+
+```bash
+cargo run -p sephera_cli -- context --path . --focus crates/sephera_core --budget 32k --format markdown --output reports/context.md
+```
+
+Export machine-readable JSON instead:
+
+```bash
+cargo run -p sephera_cli -- context --path . --focus crates/sephera_core --format json --output reports/context.json
+```
+
+The `context` command currently includes:
+
+- structured metadata about the export budget and selected files
+- dominant language summaries
+- grouped file sections such as focus, entrypoints, testing, workflows, and general files
+- excerpt extraction with truncation markers when the token budget is tight
+
+## Workspace Layout
+
+- `crates/sephera_cli`: CLI argument parsing, command dispatch, and output rendering
+- `crates/sephera_core`: shared analysis engine, traversal, ignore matching, `loc`, and `context`
+- `crates/sephera_tools`: explicit code generation and synthetic benchmark corpus generation
+- `config/languages.yml`: editable source of truth for built-in language metadata
+- `benchmarks/`: benchmark harness, generated corpora, reports, and methodology notes
+- `fuzz/`: fuzz targets, seed corpora, and workflow documentation
+
+## Benchmarks
+
+The benchmark harness is Rust-only and measures the local CLI in release mode over deterministic datasets.
+
+- Default datasets: `small`, `medium`, `large`
+- Optional datasets: `repo`, `extra-large`
+- `extra-large` targets roughly 2 GiB of generated source data and is intended as a manual stress benchmark, not a normal CI workload
+
+Useful commands:
+
+```bash
+python benchmarks/run.py
+python benchmarks/run.py --datasets repo small medium large
+python benchmarks/run.py --datasets extra-large --warmup 0 --runs 1
+```
+
+Benchmark reports include:
+
+- machine and interpreter metadata
+- the exact command line used for each run
+- per-run samples with min, mean, median, and max timings
+- parsed LOC totals from CLI output
+- captured stdout and stderr for inspection
+
+For benchmark methodology and report structure, see [`benchmarks/README.md`](benchmarks/README.md).
+
+## Generated Language Data
+
+Built-in language metadata is checked into the repository as generated Rust code. The editable source of truth is [`config/languages.yml`](config/languages.yml).
+
+If you change that YAML file, regenerate the checked-in Rust source with:
 
 ```bash
 cargo run -p sephera_tools -- generate-language-data
 ```
 
-## Benchmarks
-
-The table below summarizes one recent benchmark run recorded on March 22, 2026. This run used the synthetic `small`, `medium`, and `large` corpora generated by `sephera_tools` and compared the Rust CLI against the published Python Sephera CLI.
-
-Environment summary:
-
-- Windows 10
-- AMD64
-- 16 logical CPUs
-- Python 3.14.0
-- 1 warmup run and 5 measured runs per dataset
-
-| Dataset | Files scanned | Total size | Rust median | Python median | Rust speedup vs Python |
-| --- | ---: | ---: | ---: | ---: | ---: |
-| small | 65 | 102,454 bytes | 0.006513s | 0.856252s | 131.47x |
-| medium | 282 | 1,824,552 bytes | 0.011053s | 0.907596s | 82.11x |
-| large | 898 | 14,661,510 bytes | 0.031303s | 1.250675s | 39.95x |
-
-These numbers are useful for tracking the project over time, but they should not be treated as a universal guarantee for every repository shape or machine.
-
-For raw reports and detailed methodology, see `benchmarks/README.md` and the JSON or Markdown reports under `benchmarks/reports/`.
-
 ## Development Checks
 
-The repository currently uses the following checks:
+The repository currently uses these checks:
 
 ```bash
 cargo fmt --all --check
@@ -81,6 +117,17 @@ cargo test --workspace
 npm run pyright
 ```
 
+Fuzzing is available locally with `cargo fuzz`, for example:
+
+```bash
+cargo fuzz run scan_content_newlines
+cargo fuzz run render_loc_table
+cargo fuzz run build_context_report
+cargo fuzz run render_context_markdown
+```
+
+GitHub Actions runs short fuzz smoke jobs in the main CI workflow and exposes a separate `Fuzz` workflow for longer scheduled or manual campaigns.
+
 ## License
 
-This repository is distributed under the GNU General Public License v3.0. See `LICENSE` for the full text.
+This repository is distributed under the GNU General Public License v3.0. See [`LICENSE`](LICENSE) for the full text.
