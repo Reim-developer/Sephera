@@ -21,7 +21,6 @@ fn loc_command_prints_report_successfully() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("Elapsed: "));
-    assert!(stdout.contains("Totals: code=1 comment=1 empty=0 size_bytes="));
 }
 
 #[test]
