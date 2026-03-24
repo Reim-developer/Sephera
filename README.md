@@ -1,65 +1,89 @@
 # Sephera
 
-Sephera is a Rust workspace for codebase inspection. It currently focuses on two practical workflows:
+Sephera is a Rust tool for codebase inspection.
 
-- `loc`: fast language-aware line counting for project trees
+It currently focuses on two practical workflows:
+
+- `loc`: fast, language-aware line counting for project trees
 - `context`: deterministic Markdown or JSON context packs for review, debugging, and LLM-assisted workflows
 
-The project keeps its scope intentionally narrow. It does not try to be an AI agent framework or a hosted service. The current goal is to provide reliable local analysis primitives that can be composed into larger tooling later.
+Sephera is intentionally local-first and narrow in scope. It does not try to be an agent framework, a hosted service, or a provider-specific AI wrapper.
+
+## Why Sephera
+
+Most repository workflows need two kinds of signals:
+
+- trustworthy metrics about the codebase
+- focused context bundles that fit into real prompt budgets
+
+Sephera aims to provide both with predictable local behavior, generated language metadata, and testable output formats.
 
 ## Key Features
 
 - Fast `loc` analysis with per-language totals, terminal table output, and elapsed-time reporting
 - Deterministic `context` packs with focus-path prioritization, approximate token budgeting, and export to Markdown or JSON
+- Repo-level `context` defaults through `.sephera.toml`, with CLI flags overriding config
 - Generated built-in language metadata sourced from [`config/languages.yml`](config/languages.yml)
-- Byte-oriented scanning with memory-mapped reads when available, plus a normal file-read fallback
-- Newline portability for `LF`, `CRLF`, and classic `CR`
-- Shared ignore handling for both `loc` and `context`
-- Reproducible benchmark harness with deterministic synthetic datasets
-- Fuzz targets for newline-sensitive scanning and report rendering
+- Byte-oriented scanning with newline portability for `LF`, `CRLF`, and classic `CR`
+- Reproducible benchmark harness and fuzz targets for stability work
 
-## Commands
+## Quick Start
 
-### `loc`
+The examples below assume a `sephera` binary is available on your `PATH`.
 
-Count lines of code, comments, empty lines, and file sizes for supported languages:
+Count lines of code in the current repository:
 
 ```bash
-cargo run -p sephera_cli -- loc --path .
+sephera loc --path .
 ```
 
-Ignore paths or basenames with repeated `--ignore` flags:
+Build a focused context pack and export it to JSON:
 
 ```bash
-cargo run -p sephera_cli -- loc --path . --ignore target --ignore "*.snap"
+sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
-### `context`
+Configure repo-level defaults for `context`:
 
-Build a Markdown context pack for a repository:
+```toml
+[context]
+focus = ["crates/sephera_core"]
+budget = "64k"
+format = "markdown"
+output = "reports/context.md"
+```
+
+## Benchmarks
+
+The benchmark harness is Rust-only and measures the local CLI over deterministic datasets.
+
+- Default datasets: `small`, `medium`, `large`
+- Optional datasets: `repo`, `extra-large`
+- `extra-large` targets roughly 2 GiB of generated source data and is intended as a manual stress benchmark
+
+Useful commands:
 
 ```bash
-cargo run -p sephera_cli -- context --path .
+python benchmarks/run.py
+python benchmarks/run.py --datasets repo small medium large
+python benchmarks/run.py --datasets extra-large --warmup 0 --runs 1
 ```
 
-Focus on a sub-tree and export Markdown to a file:
+For benchmark methodology, dataset policy, and caveats, see [`benchmarks/README.md`](benchmarks/README.md).
+
+## Documentation
+
+Project documentation now lives in [`docs/`](docs/). The docs site assumes an installed `sephera` binary for user-facing examples and treats `cargo run -p sephera_cli -- ...` as a contributor-only workflow.
+
+Useful local commands:
 
 ```bash
-cargo run -p sephera_cli -- context --path . --focus crates/sephera_core --budget 32k --format markdown --output reports/context.md
+npm run docs:dev
+npm run docs:build
+npm run docs:preview
 ```
 
-Export machine-readable JSON instead:
-
-```bash
-cargo run -p sephera_cli -- context --path . --focus crates/sephera_core --format json --output reports/context.json
-```
-
-The `context` command currently includes:
-
-- structured metadata about the export budget and selected files
-- dominant language summaries
-- grouped file sections such as focus, entrypoints, testing, workflows, and general files
-- excerpt extraction with truncation markers when the token budget is tight
+The docs site is built as a static Astro Starlight project so it can be deployed to Vercel or any other static host later.
 
 ## Workspace Layout
 
@@ -70,45 +94,7 @@ The `context` command currently includes:
 - `benchmarks/`: benchmark harness, generated corpora, reports, and methodology notes
 - `fuzz/`: fuzz targets, seed corpora, and workflow documentation
 
-## Benchmarks
-
-The benchmark harness is Rust-only and measures the local CLI in release mode over deterministic datasets.
-
-- Default datasets: `small`, `medium`, `large`
-- Optional datasets: `repo`, `extra-large`
-- `extra-large` targets roughly 2 GiB of generated source data and is intended as a manual stress benchmark, not a normal CI workload
-
-Useful commands:
-
-```bash
-python benchmarks/run.py
-python benchmarks/run.py --datasets repo small medium large
-python benchmarks/run.py --datasets extra-large --warmup 0 --runs 1
-```
-
-Benchmark reports include:
-
-- machine and interpreter metadata
-- the exact command line used for each run
-- per-run samples with min, mean, median, and max timings
-- parsed LOC totals from CLI output
-- captured stdout and stderr for inspection
-
-For benchmark methodology and report structure, see [`benchmarks/README.md`](benchmarks/README.md).
-
-## Generated Language Data
-
-Built-in language metadata is checked into the repository as generated Rust code. The editable source of truth is [`config/languages.yml`](config/languages.yml).
-
-If you change that YAML file, regenerate the checked-in Rust source with:
-
-```bash
-cargo run -p sephera_tools -- generate-language-data
-```
-
 ## Development Checks
-
-The repository currently uses these checks:
 
 ```bash
 cargo fmt --all --check
@@ -116,17 +102,6 @@ cargo clippy --workspace --all-targets --all-features -- -D warnings
 cargo test --workspace
 npm run pyright
 ```
-
-Fuzzing is available locally with `cargo fuzz`, for example:
-
-```bash
-cargo fuzz run scan_content_newlines
-cargo fuzz run render_loc_table
-cargo fuzz run build_context_report
-cargo fuzz run render_context_markdown
-```
-
-GitHub Actions runs short fuzz smoke jobs in the main CI workflow and exposes a separate `Fuzz` workflow for longer scheduled or manual campaigns.
 
 ## License
 
