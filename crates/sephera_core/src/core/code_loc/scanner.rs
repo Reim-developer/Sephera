@@ -30,6 +30,12 @@ impl CommentTokens<'_> {
     }
 }
 
+#[derive(Clone, Copy)]
+enum CommentStartMatch {
+    SingleLine,
+    MultiLine(usize),
+}
+
 #[must_use]
 pub fn scan_content(bytes: &[u8], style: &CommentStyle) -> LocMetrics {
     if bytes.is_empty() {
@@ -99,20 +105,20 @@ fn classify_line(
             continue;
         }
 
-        if let Some(single_line) = tokens.single_line
-            && line[index..].starts_with(single_line)
+        if let Some(comment_start) = match_comment_start(&line[index..], tokens)
         {
-            has_comment = true;
-            break;
-        }
-
-        if let Some(multi_line_start) = tokens.multi_line_start
-            && line[index..].starts_with(multi_line_start)
-        {
-            *block_comment_depth = 1;
-            has_comment = true;
-            index += multi_line_start.len();
-            continue;
+            match comment_start {
+                CommentStartMatch::SingleLine => {
+                    has_comment = true;
+                    break;
+                }
+                CommentStartMatch::MultiLine(length) => {
+                    *block_comment_depth = 1;
+                    has_comment = true;
+                    index += length;
+                    continue;
+                }
+            }
         }
 
         has_code = true;
@@ -140,4 +146,31 @@ fn scan_commentless_content(bytes: &[u8]) -> LocMetrics {
     }
 
     metrics
+}
+
+fn match_comment_start(
+    line: &[u8],
+    tokens: CommentTokens<'_>,
+) -> Option<CommentStartMatch> {
+    let single_line_length = tokens
+        .single_line
+        .filter(|single_line| line.starts_with(single_line))
+        .map(<[u8]>::len);
+    let multi_line_length = tokens
+        .multi_line_start
+        .filter(|multi_line_start| line.starts_with(multi_line_start))
+        .map(<[u8]>::len);
+
+    match (single_line_length, multi_line_length) {
+        (Some(single_line_length), Some(multi_line_length))
+            if multi_line_length >= single_line_length =>
+        {
+            Some(CommentStartMatch::MultiLine(multi_line_length))
+        }
+        (Some(_), Some(_) | None) => Some(CommentStartMatch::SingleLine),
+        (None, Some(multi_line_length)) => {
+            Some(CommentStartMatch::MultiLine(multi_line_length))
+        }
+        (None, None) => None,
+    }
 }
