@@ -59,7 +59,7 @@ fn loc_command_prints_table_report() {
     )
     .unwrap();
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sephera_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
         .args(["loc", "--path"])
         .arg(temp_dir.path())
         .output()

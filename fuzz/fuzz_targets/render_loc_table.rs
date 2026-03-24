@@ -1,6 +1,6 @@
 #![no_main]
 
-use std::path::PathBuf;
+use std::{path::PathBuf, time::Duration};
 
 use libfuzzer_sys::fuzz_target;
 use sephera_cli::render_report_table;
@@ -38,6 +38,7 @@ fuzz_target!(|data: &[u8]| {
         totals,
         files_scanned,
         languages_detected: language_count,
+        elapsed: Duration::ZERO,
     };
 
     let _ = render_report_table(&report);

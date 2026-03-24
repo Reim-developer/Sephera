@@ -9,6 +9,7 @@ use sephera_core::core::{
 
 use crate::{
     args::{Cli, Commands, ContextArgs, ContextFormat, LocArgs},
+    context_config::{ResolvedContextOptions, resolve_context_options},
     output::{
         emit_rendered_output, print_report, render_context_json,
         render_context_markdown,
@@ -49,19 +50,28 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
 }
 
 fn run_context(arguments: ContextArgs) -> Result<()> {
-    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
-    let report = ContextBuilder::new(
-        arguments.path,
-        ignore,
-        arguments.focus,
-        arguments.budget,
-    )
-    .build()?;
+    let resolved = resolve_context_options(arguments)?;
+    execute_context(resolved)
+}
 
-    let rendered = match arguments.format {
+fn execute_context(arguments: ResolvedContextOptions) -> Result<()> {
+    let ResolvedContextOptions {
+        base_path,
+        ignore,
+        focus,
+        budget,
+        format,
+        output,
+    } = arguments;
+
+    let ignore = IgnoreMatcher::from_patterns(&ignore)?;
+    let report =
+        ContextBuilder::new(base_path, ignore, focus, budget).build()?;
+
+    let rendered = match format {
         ContextFormat::Markdown => render_context_markdown(&report),
         ContextFormat::Json => render_context_json(&report),
     };
 
-    emit_rendered_output(arguments.output.as_deref(), &rendered)
+    emit_rendered_output(output.as_deref(), &rendered)
 }

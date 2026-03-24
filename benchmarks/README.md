@@ -108,12 +108,3 @@ Run the opt-in `extra-large` stress benchmark:
 ```bash
 python benchmarks/run.py --datasets extra-large --warmup 0 --runs 1
 ```
-
-## Checked-In Reports
-
-Representative checked-in reports currently include:
-
-- `benchmarks/reports/benchmark-20260322T221333Z.md` for `small`, `medium`, and `large`
-- `benchmarks/reports/benchmark-20260323T211525Z.md` for `extra-large`
-
-These reports are useful as reference points, but they should not be treated as universal performance claims. Hardware, OS behavior, filesystem cache state, and local machine load all matter.
