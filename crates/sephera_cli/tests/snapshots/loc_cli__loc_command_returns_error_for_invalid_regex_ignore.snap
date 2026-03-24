@@ -1,0 +1,9 @@
+---
+source: crates/sephera_cli/tests/loc_cli.rs
+description: LOC command should error when regex ignore pattern is invalid
+expression: stderr
+---
+error: invalid regex ignore pattern `(`: regex parse error:
+    (
+    ^
+error: unclosed group

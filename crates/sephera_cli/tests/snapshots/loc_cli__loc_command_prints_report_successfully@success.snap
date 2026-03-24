@@ -1,0 +1,16 @@
+---
+source: crates/sephera_cli/tests/loc_cli.rs
+description: LOC command should print a formatted table report
+expression: normalized
+---
+Scanning: [TEMP_PATH]
+
+╭──────────┬──────┬─────────┬───────┬──────────────╮
+│ Language ┆ Code ┆ Comment ┆ Empty ┆ Size (bytes) │
+╞══════════╪══════╪═════════╪═══════╪══════════════╡
+│ Rust     ┆    1 ┆       1 ┆     0 ┆           24 │
+│ Totals   ┆    1 ┆       1 ┆     0 ┆           24 │
+╰──────────┴──────┴─────────┴───────┴──────────────╯
+Files scanned: 1
+Languages detected: 1
+Elapsed: [TIMING]

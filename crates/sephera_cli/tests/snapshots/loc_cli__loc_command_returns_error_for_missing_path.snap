@@ -1,0 +1,6 @@
+---
+source: crates/sephera_cli/tests/loc_cli.rs
+description: LOC command should error when path does not exist
+expression: stderr
+---
+error: path `missing-path-for-sephera-cli-test` does not exist
