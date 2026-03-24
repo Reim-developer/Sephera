@@ -20,6 +20,16 @@ The current terminal output is a table with per-language rows, totals, and elaps
 sephera loc --path .
 ```
 
+## Demo
+
+<figure class="demo-card">
+  <header>
+    <strong><code>sephera loc --path crates/sephera_core</code></strong>
+    <span>fast table output with totals and elapsed time</span>
+  </header>
+  <img src="/demo/loc.png" alt="Terminal demo of sephera loc showing per-language totals in a table." loading="lazy" />
+</figure>
+
 ## Ignore patterns
 
 Repeat `--ignore` to combine multiple patterns:
