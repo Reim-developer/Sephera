@@ -10,11 +10,27 @@ const HASH_STYLE: CommentStyle =
     CommentStyle::new(Some("#"), None, None);
 const HTML_STYLE: CommentStyle =
     CommentStyle::new(None, Some("<!--"), Some("-->"));
-const STYLES: [&CommentStyle; 4] = [
+const TRIPLE_QUOTE_STYLE: CommentStyle =
+    CommentStyle::new(Some("#"), Some("\"\"\""), Some("\"\"\""));
+const PASCAL_STYLE: CommentStyle =
+    CommentStyle::new(Some("//"), Some("{"), Some("}"));
+const LISP_STYLE: CommentStyle =
+    CommentStyle::new(Some(";"), Some("#|"), Some("|#"));
+const BATCH_STYLE: CommentStyle = CommentStyle::new(Some("REM"), None, None);
+const QUOTE_STYLE: CommentStyle = CommentStyle::new(Some("\""), None, None);
+const JULIA_STYLE: CommentStyle =
+    CommentStyle::new(Some("#"), Some("#="), Some("=#"));
+const STYLES: [&CommentStyle; 10] = [
     &COMMENTLESS_STYLE,
     &C_STYLE,
     &HASH_STYLE,
     &HTML_STYLE,
+    &TRIPLE_QUOTE_STYLE,
+    &PASCAL_STYLE,
+    &LISP_STYLE,
+    &BATCH_STYLE,
+    &QUOTE_STYLE,
+    &JULIA_STYLE,
 ];
 
 fuzz_target!(|data: &[u8]| {
