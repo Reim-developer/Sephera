@@ -108,7 +108,7 @@ def main() -> int:
 	build_rust_binaries()
 	generate_benchmark_corpus(args.datasets)
 
-	rust_cli = release_binary("sephera_cli")
+	rust_cli = release_binary("sephera")
 	cases = resolve_cases(args.datasets)
 	results = [
 		benchmark_case(
