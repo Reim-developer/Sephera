@@ -2,9 +2,11 @@ import { defineConfig } from 'astro/config';
 import starlight from '@astrojs/starlight';
 
 export default defineConfig({
+	site: "https://sephera.vercel.app",
 	integrations: [
 		starlight({
 			title: 'Sephera Docs',
+			disable404Route: true,
 			description:
 				'Documentation for Sephera, a Rust tool focused on fast LOC analysis and deterministic LLM-ready context packs.',
 			sidebar: [
