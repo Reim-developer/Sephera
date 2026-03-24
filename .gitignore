@@ -11,3 +11,4 @@
 /fuzz/target/
 /fuzz/seeds
 **/*.snap
+.astro
