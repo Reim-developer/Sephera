@@ -61,8 +61,14 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
+      - name: Install cargo-insta
+        run: cargo install cargo-insta --locked
+
       - name: Run tests
         run: cargo test --workspace
+
+      - name: Verify snapshots
+        run: cargo insta test --review --workspace
 
   pyright:
     name: Pyright
