@@ -1,22 +1,41 @@
 # Sephera
 
-Sephera is a Rust tool for codebase inspection.
+[![CI](https://img.shields.io/github/actions/workflow/status/Reim-developer/Sephera/ci.yml?branch=master&label=ci)](https://github.com/Reim-developer/Sephera/actions/workflows/ci.yml)
+[![Docs](https://img.shields.io/website?url=https%3A%2F%2Fsephera.vercel.app&label=docs)](https://sephera.vercel.app)
+[![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-It currently focuses on two practical workflows:
+Sephera is a local-first Rust CLI for understanding codebases quickly and producing deterministic context packs for review, debugging, and LLM workflows.
 
-- `loc`: fast, language-aware line counting for project trees
-- `context`: deterministic Markdown or JSON context packs for review, debugging, and LLM-assisted workflows
+Documentation: <https://sephera.vercel.app>
 
-Sephera is intentionally local-first and narrow in scope. It does not try to be an agent framework, a hosted service, or a provider-specific AI wrapper.
+Sephera currently focuses on two practical commands:
+
+- `loc`: fast, language-aware line counting across project trees
+- `context`: deterministic Markdown or JSON bundles that stay within real prompt budgets
+
+It is intentionally narrow in scope. Sephera does not try to be an agent runtime, a hosted service, or a provider-specific AI wrapper.
 
 ## Why Sephera
 
-Most repository workflows need two kinds of signals:
+Most codebase tooling falls into one of two buckets:
 
-- trustworthy metrics about the codebase
-- focused context bundles that fit into real prompt budgets
+- metrics tools that tell you how large a repository is
+- AI helpers that try to ingest too much code at once
 
-Sephera aims to provide both with predictable local behavior, generated language metadata, and testable output formats.
+Sephera sits between those extremes. It gives you reliable structural signals from the repository, then turns those signals into focused context that is easier for both humans and LLMs to work with.
+
+## Why not `cloc` or `tokei`?
+
+If you only need line counts, `cloc` and `tokei` are excellent tools and already solve that job well.
+
+Sephera is useful when you need more than raw totals:
+
+- `loc` is only one half of the workflow
+- `context` turns repository structure into deterministic Markdown or JSON bundles
+- `.sephera.toml` lets teams keep shared context defaults in the repository
+- focus paths and approximate token budgets make output more practical for LLM use
+
+The goal is not to replace every code metrics tool. The goal is to pair trustworthy repository signals with context export that is actually usable in modern review and AI-assisted workflows.
 
 ## Key Features
 
@@ -25,7 +44,14 @@ Sephera aims to provide both with predictable local behavior, generated language
 - Repo-level `context` defaults through `.sephera.toml`, with CLI flags overriding config
 - Generated built-in language metadata sourced from [`config/languages.yml`](config/languages.yml)
 - Byte-oriented scanning with newline portability for `LF`, `CRLF`, and classic `CR`
-- Reproducible benchmark harness and fuzz targets for stability work
+- Reproducible benchmark harness, regression suites, and fuzz targets for stability work
+
+## Common Uses
+
+- Inspect a repository before refactoring or reviewing changes
+- Build a focused context bundle for ChatGPT, Claude, Gemini, or internal tooling
+- Prepare a structured handoff for another engineer or agent
+- Export machine-readable context for downstream automation
 
 ## Quick Start
 
@@ -53,6 +79,16 @@ format = "markdown"
 output = "reports/context.md"
 ```
 
+## Terminal Demos
+
+`loc` produces a fast, readable terminal summary for project trees:
+
+<img src="docs/public/demo/loc.gif" alt="Sephera loc terminal demo" width="960" />
+
+`context` builds a structured pack that can be exported for people or tooling:
+
+<img src="docs/public/demo/context.gif" alt="Sephera context terminal demo" width="960" />
+
 ## Benchmarks
 
 The benchmark harness is Rust-only and measures the local CLI over deterministic datasets.
@@ -69,13 +105,15 @@ python benchmarks/run.py --datasets repo small medium large
 python benchmarks/run.py --datasets extra-large --warmup 0 --runs 1
 ```
 
-For benchmark methodology, dataset policy, and caveats, see [`benchmarks/README.md`](benchmarks/README.md).
+Benchmark methodology, dataset policy, and caveats are documented in [`benchmarks/README.md`](benchmarks/README.md) and on the docs site.
 
 ## Documentation
 
-Project documentation now lives in [`docs/`](docs/). The docs site assumes an installed `sephera` binary for user-facing examples and treats `cargo run -p sephera_cli -- ...` as a contributor-only workflow.
+Public documentation: <https://sephera.vercel.app>
 
-Useful local commands:
+Docs source lives in [`docs/`](docs/), built as a static Astro Starlight site.
+
+Useful local docs commands:
 
 ```bash
 npm run docs:dev
@@ -83,15 +121,14 @@ npm run docs:build
 npm run docs:preview
 ```
 
-The docs site is built as a static Astro Starlight project so it can be deployed to Vercel or any other static host later.
-
 ## Workspace Layout
 
-- `crates/sephera_cli`: CLI argument parsing, command dispatch, and output rendering
+- `crates/sephera_cli`: CLI argument parsing, command dispatch, config resolution, and output rendering
 - `crates/sephera_core`: shared analysis engine, traversal, ignore matching, `loc`, and `context`
 - `crates/sephera_tools`: explicit code generation and synthetic benchmark corpus generation
 - `config/languages.yml`: editable source of truth for built-in language metadata
 - `benchmarks/`: benchmark harness, generated corpora, reports, and methodology notes
+- `docs/`: public documentation site
 - `fuzz/`: fuzz targets, seed corpora, and workflow documentation
 
 ## Development Checks
