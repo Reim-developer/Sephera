@@ -83,11 +83,11 @@ output = "reports/context.md"
 
 `loc` produces a fast, readable terminal summary for project trees:
 
-<img src="docs/public/demo/loc.gif" alt="Sephera loc terminal demo" width="960" />
+<img src="docs/public/demo/loc.png" alt="Sephera loc terminal demo" width="960" />
 
 `context` builds a structured pack that can be exported for people or tooling:
 
-<img src="docs/public/demo/context.gif" alt="Sephera context terminal demo" width="960" />
+<img src="docs/public/demo/context.png" alt="Sephera context terminal demo" width="960" />
 
 ## Benchmarks
 
