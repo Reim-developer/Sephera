@@ -6,6 +6,7 @@ export default defineConfig({
 	integrations: [
 		starlight({
 			title: 'Sephera Docs',
+			disable404Route: true,
 			description:
 				'Documentation for Sephera, a Rust tool focused on fast LOC analysis and deterministic LLM-ready context packs.',
 			sidebar: [
