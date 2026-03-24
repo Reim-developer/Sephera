@@ -46,6 +46,27 @@ Build a focused context pack and export it to JSON:
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
+## Terminal demos
+
+<div class="demo-grid">
+  <figure class="demo-card">
+    <header>
+      <strong><code>sephera loc</code></strong>
+      <span>language-aware repository totals</span>
+    </header>
+    <img src="/demo/loc.png" alt="Terminal demo of sephera loc rendering a table report." loading="lazy" />
+  </figure>
+  <figure class="demo-card">
+    <header>
+      <strong><code>sephera context</code></strong>
+      <span>deterministic context bundles for people and tools</span>
+    </header>
+    <img src="/demo/context.png" alt="Terminal demo of sephera context building a structured context pack." loading="lazy" />
+  </figure>
+</div>
+
+<p class="demo-note">The demos above are illustrative captures of the CLI workflows described throughout the docs.</p>
+
 ## Where to go next
 
 - Start with [Getting Started](/getting-started/)
