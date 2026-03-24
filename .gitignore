@@ -11,4 +11,5 @@
 /fuzz/target/
 /fuzz/seeds
 **/*.snap
+!crates/sephera_cli/tests/snapshots/*.snap
 .astro
