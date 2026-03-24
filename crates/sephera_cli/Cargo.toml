@@ -2,6 +2,12 @@
 name = "sephera_cli"
 version = "0.1.0"
 edition = "2024"
+default-run = "sephera"
+autobins = false
+
+[[bin]]
+name = "sephera"
+path = "src/main.rs"
 
 [dependencies]
 anyhow = "1.0.102"
