@@ -4,7 +4,10 @@
 /benchmarks/reports/
 /benchmarks/__pycache__/
 /node_modules/
+/docs/node_modules/
+/docs/dist/
 /fuzz/artifacts/
 /fuzz/corpus/
 /fuzz/target/
 /fuzz/seeds
+**/*.snap
