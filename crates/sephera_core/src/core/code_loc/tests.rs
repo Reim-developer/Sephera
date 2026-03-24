@@ -3,6 +3,7 @@ use std::fs;
 use tempfile::tempdir;
 
 use super::{CodeLoc, IgnoreMatcher, LocMetrics, scan_content};
+use crate::core::config::CommentStyle;
 use crate::core::language_data::{
     C_STYLE, HTML_STYLE, LISP_STYLE, NO_COMMENT, PYTHON_STYLE, SHELL_STYLE,
     SQL_STYLE,
@@ -80,6 +81,16 @@ fn counts_commentless_formats_with_crlf_and_without_trailing_newline() {
 fn treats_whitespace_inside_block_comment_as_empty() {
     let metrics = scan_content(b"/*\n   \n*/\n", &C_STYLE);
     assert_metrics(metrics, 0, 2, 1, 0);
+}
+
+#[test]
+fn prefers_longer_multiline_token_when_it_overlaps_single_line_prefix() {
+    const PREFIX_OVERLAP_STYLE: CommentStyle =
+        CommentStyle::new(Some("#"), Some("#="), Some("=#"));
+
+    let metrics =
+        scan_content(b"#=\ncomment\n=#\nvalue\n", &PREFIX_OVERLAP_STYLE);
+    assert_metrics(metrics, 1, 3, 0, 0);
 }
 
 #[test]
