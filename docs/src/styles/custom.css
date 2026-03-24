@@ -1,0 +1,33 @@
+:root {
+	--sl-color-accent-low: #1a2b2b;
+	--sl-color-accent: #1f8a70;
+	--sl-color-accent-high: #d5f2e8;
+	--sl-color-white: #f7f3ea;
+	--sl-color-gray-1: #ede6d7;
+	--sl-color-gray-2: #d8ccb8;
+	--sl-color-gray-3: #b5a58b;
+	--sl-color-gray-4: #7f715b;
+	--sl-color-gray-5: #564b3c;
+	--sl-color-gray-6: #2f2a25;
+	--sl-color-black: #1a1815;
+}
+
+[data-theme='light'] {
+	--sl-color-accent-low: #e4f5ef;
+	--sl-color-accent: #18725c;
+	--sl-color-accent-high: #12372b;
+	--sl-color-white: #ffffff;
+	--sl-color-gray-1: #f8f4ec;
+	--sl-color-gray-2: #efe5d6;
+	--sl-color-gray-3: #d7c5af;
+	--sl-color-gray-4: #8b7760;
+	--sl-color-gray-5: #5e4f40;
+	--sl-color-gray-6: #2f2822;
+	--sl-color-black: #181512;
+}
+
+.hero {
+	background:
+		radial-gradient(circle at top right, rgb(31 138 112 / 0.22), transparent 30%),
+		radial-gradient(circle at bottom left, rgb(188 121 69 / 0.18), transparent 28%);
+}
