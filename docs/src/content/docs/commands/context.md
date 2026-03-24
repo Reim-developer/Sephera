@@ -29,6 +29,16 @@ Generate Markdown to standard output:
 sephera context --path .
 ```
 
+## Demo
+
+<figure class="demo-card">
+  <header>
+    <strong><code>sephera context --no-config --path crates/sephera_core --focus src/core/context --budget 8k</code></strong>
+    <span>grouped context output with bounded excerpts</span>
+  </header>
+  <img src="/demo/context.png" alt="Terminal demo of sephera context building a grouped Markdown context pack." loading="lazy" />
+</figure>
+
 Focus on a sub-tree and export Markdown:
 
 ```bash
