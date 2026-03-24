@@ -1,20 +1,21 @@
 use std::path::PathBuf;
 
 use clap::{Args, Parser, Subcommand, ValueEnum};
+use serde::Deserialize;
 
 use crate::budget::parse_token_budget;
 
-const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows.";
+const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows. The `context` command can also load defaults from `.sephera.toml` and lets CLI flags override them.";
 
-const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --format json --output reports/context.json";
+const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json";
 
 const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nIgnore patterns containing `*`, `?`, or `[` are treated as globs. All other ignore patterns are compiled as regular expressions and matched against normalized relative paths.";
 
 const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"";
 
-const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. By default the result is written to standard output; use `--output` to export it to a file.";
+const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `.sephera.toml`, then explicit CLI flags.";
 
-const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
+const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -77,12 +78,31 @@ pub struct ContextArgs {
     )]
     pub path: PathBuf,
 
+    /// Explicit Sephera config file. When provided, auto-discovery is skipped.
+    #[arg(
+        long,
+        value_name = "FILE",
+        conflicts_with = "no_config",
+        help = "Explicit `.sephera.toml` path for the context command.",
+        long_help = "Explicit `.sephera.toml` path for the context command. Relative paths are resolved from the current working directory. When this flag is present, Sephera skips auto-discovery and only loads the specified file."
+    )]
+    pub config: Option<PathBuf>,
+
+    /// Disable `.sephera.toml` loading for this invocation.
+    #[arg(
+        long,
+        conflicts_with = "config",
+        help = "Disable `.sephera.toml` loading for this invocation.",
+        long_help = "Disable `.sephera.toml` loading for this invocation. When set, Sephera skips both auto-discovery and explicit config loading, and falls back to built-in defaults plus CLI flags."
+    )]
+    pub no_config: bool,
+
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
         long,
         value_name = "PATTERN",
         help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Values from `.sephera.toml` are loaded first, then repeated CLI flags are appended."
     )]
     pub ignore: Vec<String>,
 
@@ -91,53 +111,53 @@ pub struct ContextArgs {
         long,
         value_name = "PATH",
         help = "Focused file or directory inside the base path.",
-        long_help = "Focused file or directory inside the base path. Repeat this flag to prioritize multiple files or directories. Focused paths must resolve inside `--path`."
+        long_help = "Focused file or directory inside the base path. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then repeated CLI flags are appended. Focused paths must resolve inside `--path`."
     )]
     pub focus: Vec<PathBuf>,
 
     /// Approximate token budget, for example `32000`, `32k`, or `1m`
     #[arg(
         long,
-        default_value = "128k",
         value_parser = parse_token_budget,
         value_name = "TOKENS",
         help = "Approximate token budget, for example `32000`, `32k`, or `1m`.",
-        long_help = "Approximate token budget for the generated context pack. This is a model-agnostic estimate, not tokenizer-exact accounting. Supported suffixes are `k` for thousands and `m` for millions."
+        long_help = "Approximate token budget for the generated context pack. This is a model-agnostic estimate, not tokenizer-exact accounting. Supported suffixes are `k` for thousands and `m` for millions. When omitted, Sephera uses `.sephera.toml` if present, otherwise the built-in default of `128k`."
     )]
-    pub budget: u64,
+    pub budget: Option<u64>,
 
     /// Output format for the generated context pack
     #[arg(
         long,
         value_enum,
-        default_value_t = ContextFormat::Markdown,
         value_name = "FORMAT",
         help = "Output format for the generated context pack.",
-        long_help = "Output format for the generated context pack. Use `markdown` for a human-readable export that is easy to paste into chat tools, or `json` for machine-readable automation."
+        long_help = "Output format for the generated context pack. Use `markdown` for a human-readable export that is easy to paste into chat tools, or `json` for machine-readable automation. When omitted, Sephera uses `.sephera.toml` if present, otherwise the built-in default of `markdown`."
     )]
-    pub format: ContextFormat,
+    pub format: Option<ContextFormat>,
 
     /// Optional file path for exporting the rendered context pack
     #[arg(
         long,
         value_name = "FILE",
         help = "Optional file path for exporting the rendered context pack.",
-        long_help = "Optional file path for exporting the rendered context pack. Parent directories are created automatically when needed. When omitted, Sephera writes the result to standard output."
+        long_help = "Optional file path for exporting the rendered context pack. Parent directories are created automatically when needed. When omitted, Sephera uses `.sephera.toml` if present, otherwise writes the result to standard output."
     )]
     pub output: Option<PathBuf>,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
 pub enum ContextFormat {
     #[value(
         name = "markdown",
         help = "Render a human-readable context pack for copy-paste workflows."
     )]
+    #[serde(rename = "markdown")]
     Markdown,
     #[value(
         name = "json",
         help = "Render a machine-readable context pack for automation."
     )]
+    #[serde(rename = "json")]
     Json,
 }
 
@@ -171,6 +191,8 @@ mod tests {
             "context",
             "--path",
             "demo",
+            "--config",
+            ".sephera.toml",
             "--focus",
             "crates/sephera_core",
             "--budget",
@@ -186,11 +208,15 @@ mod tests {
             Commands::Context(arguments) => {
                 assert_eq!(arguments.path, std::path::PathBuf::from("demo"));
                 assert_eq!(
+                    arguments.config,
+                    Some(std::path::PathBuf::from(".sephera.toml"))
+                );
+                assert_eq!(
                     arguments.focus,
                     vec![std::path::PathBuf::from("crates/sephera_core")]
                 );
-                assert_eq!(arguments.budget, 32_000);
-                assert_eq!(arguments.format, ContextFormat::Json);
+                assert_eq!(arguments.budget, Some(32_000));
+                assert_eq!(arguments.format, Some(ContextFormat::Json));
                 assert_eq!(
                     arguments.output,
                     Some(std::path::PathBuf::from("reports/context.json"))
@@ -206,6 +232,7 @@ mod tests {
         let help = command.render_long_help().to_string();
 
         assert!(help.contains("LLM-ready context packs"));
+        assert!(help.contains(".sephera.toml"));
         assert!(help.contains("reports/context.json"));
     }
 
@@ -220,8 +247,27 @@ mod tests {
 
         assert!(context_help.contains("markdown"));
         assert!(context_help.contains("json"));
+        assert!(context_help.contains("--config <FILE>"));
+        assert!(context_help.contains("--no-config"));
         assert!(context_help.contains("--output <FILE>"));
+        assert!(context_help.contains("built-in defaults"));
         assert!(context_help.contains("reports/context.md"));
         assert!(context_help.contains("reports/context.json"));
+    }
+
+    #[test]
+    fn rejects_conflicting_context_config_flags() {
+        let error = Cli::try_parse_from([
+            "sephera",
+            "context",
+            "--path",
+            "demo",
+            "--config",
+            ".sephera.toml",
+            "--no-config",
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--no-config"));
     }
 }
