@@ -8,7 +8,10 @@ anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
 comfy-table = "7.2.1"
 sephera_core.workspace = true
+serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+toml = "0.9.8"
 
 [dev-dependencies]
+insta = { version = "1.46.3", features = ["filters"] }
 tempfile = "3.23.0"
