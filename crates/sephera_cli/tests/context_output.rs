@@ -39,7 +39,7 @@ fn context_command_prints_markdown_context_pack() {
         b"#[test]\nfn smoke() {\n    assert_eq!(2 + 2, 4);\n}\n",
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sephera_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
         .args([
             "context",
             "--path",
@@ -77,7 +77,7 @@ fn context_command_prints_valid_json_report() {
         b"pub fn value() -> u64 {\n    42\n}\n",
     );
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sephera_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
         .args([
             "context",
             "--path",
@@ -116,7 +116,7 @@ fn context_command_writes_markdown_to_output_file() {
 
     let output_path = temp_dir.path().join("reports").join("context.md");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sephera_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
         .args([
             "context",
             "--path",
@@ -152,7 +152,7 @@ fn context_command_writes_json_to_output_file() {
 
     let output_path = temp_dir.path().join("exports").join("context.json");
 
-    let output = Command::new(env!("CARGO_BIN_EXE_sephera_cli"))
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
         .args([
             "context",
             "--path",
