@@ -34,7 +34,10 @@ export default defineConfig({
 				},
 				{
 					label: 'Architecture',
-					items: [{ slug: 'architecture/overview' }],
+					items: [
+						{ slug: 'architecture/overview' },
+						{ slug: 'architecture/releasing' },
+					],
 				},
 			],
 			customCss: ['./src/styles/custom.css'],
