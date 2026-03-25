@@ -63,6 +63,8 @@ Install the published CLI from `crates.io`:
 cargo install sephera
 ```
 
+If you do not want a local Rust toolchain, download a prebuilt archive from [GitHub Releases](https://github.com/Reim-developer/Sephera/releases). Release assets ship as zipped or tarball binaries for the mainstream desktop targets supported by the release workflow.
+
 If you are working from source instead, see the contributor workflow in the docs.
 
 ## Quick Start
