@@ -18,7 +18,7 @@ A context pack currently contains:
 
 - structured metadata about the selected budget and files
 - dominant language summaries
-- grouped file sections such as focus, entrypoints, testing, workflows, and general files
+- grouped file sections such as focus, changes, entrypoints, testing, workflows, and general files
 - excerpts with truncation markers when the budget is tight
 
 ## Basic usage
@@ -57,6 +57,40 @@ Export JSON instead:
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
+Build a review pack from Git changes:
+
+```bash
+sephera context --path . --diff HEAD~1 --budget 32k
+```
+
+Center the pack on your current working tree:
+
+```bash
+sephera context --path . --diff working-tree
+```
+
+## Git-aware diff mode
+
+`context --diff <SPEC>` is a Git-only mode that prioritizes changed files before pulling in support files from the usual heuristics.
+
+Built-in keywords:
+
+- `working-tree`: staged changes + unstaged changes + untracked files
+- `staged`: staged changes only
+- `unstaged`: unstaged changes + untracked files
+
+Any other value is treated as a single base ref and compared against `HEAD` through merge-base semantics. Common examples:
+
+- `origin/master`
+- `HEAD~1`
+
+Important behavior:
+
+- explicit `--focus` still wins over diff matches
+- changed files stay inside the selected `--path`
+- deleted files are counted in diff metadata but skipped from excerpts because there is no workspace content left to read
+- renamed files use the new path in the final report
+
 ## Budget model
 
 The budget is an approximate token budget, not tokenizer-exact accounting. Sephera uses it to decide how much metadata and excerpt content can fit into a report without turning it into an unbounded repository dump.
@@ -80,6 +114,12 @@ Apply a named profile:
 
 ```bash
 sephera context --path . --profile review
+```
+
+Use a profile and still override the diff target from the CLI:
+
+```bash
+sephera context --path . --profile review --diff staged
 ```
 
 See the dedicated configuration page for details and examples.

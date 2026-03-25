@@ -15,11 +15,12 @@ pub(super) fn rank_candidates(candidates: &mut [ContextCandidate]) {
 const fn selection_priority(selection_class: SelectionClass) -> u8 {
     match selection_class {
         SelectionClass::FocusedFile => 0,
-        SelectionClass::FocusedDescendant => 1,
-        SelectionClass::Manifest => 2,
-        SelectionClass::Workflow => 3,
-        SelectionClass::Entrypoint => 4,
-        SelectionClass::AdjacentTest => 5,
-        SelectionClass::General => 6,
+        SelectionClass::DiffFile => 1,
+        SelectionClass::FocusedDescendant => 2,
+        SelectionClass::Manifest => 3,
+        SelectionClass::Workflow => 4,
+        SelectionClass::Entrypoint => 5,
+        SelectionClass::AdjacentTest => 6,
+        SelectionClass::General => 7,
     }
 }

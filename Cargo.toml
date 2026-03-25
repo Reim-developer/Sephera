@@ -4,7 +4,7 @@ exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "0.2.1"
+version = "0.3.0"
 edition = "2024"
 authors = ["reim"]
 license = "GPL-3.0-only"
@@ -13,7 +13,7 @@ homepage = "https://sephera.vercel.app"
 rust-version = "1.85"
 
 [workspace.dependencies]
-sephera_core = { path = "crates/sephera_core", version = "0.2.1" }
+sephera_core = { path = "crates/sephera_core", version = "0.3.0" }
 
 [profile.release]
 opt-level = 3

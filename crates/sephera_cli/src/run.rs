@@ -12,10 +12,12 @@ use crate::{
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
+    context_diff::resolve_context_diff,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
         render_context_json, render_context_markdown,
     },
+    progress::CliProgress,
 };
 
 #[must_use]
@@ -45,8 +47,10 @@ fn dispatch(cli: Cli) -> Result<()> {
 }
 
 fn run_loc(arguments: LocArgs) -> Result<()> {
+    let progress = CliProgress::start("Analyzing line counts...");
     let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
     let report = CodeLoc::new(arguments.path, ignore).analyze()?;
+    progress.finish();
     print_report(&report);
     Ok(())
 }
@@ -66,19 +70,41 @@ fn execute_context(arguments: ResolvedContextOptions) -> Result<()> {
         base_path,
         ignore,
         focus,
+        diff,
         budget,
         format,
         output,
     } = arguments;
 
+    let progress = CliProgress::start("Preparing context inputs...");
     let ignore = IgnoreMatcher::from_patterns(&ignore)?;
-    let report =
-        ContextBuilder::new(base_path, ignore, focus, budget).build()?;
+    let diff_selection = diff
+        .as_deref()
+        .map(|spec| {
+            progress.set_message("Resolving Git diff...");
+            resolve_context_diff(&base_path, spec)
+        })
+        .transpose()?;
+    progress.set_message("Building context pack...");
+    let builder = ContextBuilder::new(&base_path, ignore, focus, budget);
+    let builder = match diff_selection {
+        Some(diff_selection) => builder.with_diff_selection(diff_selection),
+        None => builder,
+    };
+    let report = builder.build()?;
 
+    progress.set_message("Rendering context pack...");
     let rendered = match format {
         ContextFormat::Markdown => render_context_markdown(&report),
         ContextFormat::Json => render_context_json(&report),
     };
 
+    let writes_to_stdout = output.is_none();
+    if !writes_to_stdout {
+        progress.set_message("Writing output...");
+    }
+    if writes_to_stdout {
+        progress.finish();
+    }
     emit_rendered_output(output.as_deref(), &rendered)
 }

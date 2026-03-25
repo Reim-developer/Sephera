@@ -77,6 +77,7 @@ fn convert_context_section(
     Ok(LoadedContextSection {
         ignore: context.ignore,
         focus: resolve_relative_paths(config_directory, context.focus),
+        diff: context.diff,
         budget,
         format: context.format,
         output: context
@@ -117,7 +118,7 @@ mod tests {
         let config_path = temp_dir.path().join(".sephera.toml");
         std::fs::write(
             &config_path,
-            "[context]\nignore = [\"target\"]\nfocus = [\"src\"]\nbudget = \"64k\"\nformat = \"json\"\noutput = \"reports/context.json\"\n\n[profiles.review.context]\nfocus = [\"tests\"]\nformat = \"markdown\"\n",
+            "[context]\nignore = [\"target\"]\nfocus = [\"src\"]\ndiff = \"working-tree\"\nbudget = \"64k\"\nformat = \"json\"\noutput = \"reports/context.json\"\n\n[profiles.review.context]\nfocus = [\"tests\"]\ndiff = \"origin/master\"\nformat = \"markdown\"\n",
         )
         .unwrap();
 
@@ -125,6 +126,7 @@ mod tests {
 
         assert_eq!(loaded.context.ignore, vec!["target"]);
         assert_eq!(loaded.context.focus, vec![temp_dir.path().join("src")]);
+        assert_eq!(loaded.context.diff.as_deref(), Some("working-tree"));
         assert_eq!(loaded.context.budget, Some(64_000));
         assert_eq!(loaded.context.format, Some(ContextFormat::Json));
         assert_eq!(
@@ -138,6 +140,15 @@ mod tests {
                 .expect("profile should exist")
                 .focus,
             vec![temp_dir.path().join("tests")]
+        );
+        assert_eq!(
+            loaded
+                .profiles
+                .get("review")
+                .expect("profile should exist")
+                .diff
+                .as_deref(),
+            Some("origin/master")
         );
     }
 

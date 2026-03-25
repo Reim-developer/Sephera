@@ -10,7 +10,7 @@ Sephera is a Rust workspace for codebase inspection. It currently focuses on two
 - `loc` for fast, language-aware line counting
 - `context` for deterministic Markdown or JSON context packs
 
-The current docs reflect the `v0.2.x` release line.
+The current docs reflect the `v0.3.x` release line.
 
 The project is intentionally narrow in scope. It does not try to be an AI agent framework or a hosted service. The goal is to provide reliable local analysis primitives that fit naturally into review, debugging, and prompting workflows.
 
@@ -26,7 +26,7 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 ## Current capabilities
 
 - Fast `loc` analysis with per-language totals, table output, and elapsed-time reporting
-- Deterministic `context` packs with focus-path prioritization and approximate token budgeting
+- Deterministic `context` packs with focus-path prioritization, Git diff awareness, and approximate token budgeting
 - Repo-level defaults and named profiles through `.sephera.toml`
 - Export to Markdown for human copy-paste workflows and JSON for automation
 - Generated language metadata sourced from `config/languages.yml`
@@ -49,6 +49,12 @@ Build a focused context pack and export it to JSON:
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
+Build a review pack from recent Git changes:
+
+```bash
+sephera context --path . --diff HEAD~1 --budget 32k
+```
+
 List configured profiles for the current repository:
 
 ```bash
@@ -68,7 +74,7 @@ sephera context --path . --list-profiles
   <figure class="demo-card">
     <header>
       <strong><code>sephera context</code></strong>
-      <span>deterministic context bundles for people and tools</span>
+      <span>deterministic context bundles for people, tools, and Git review flows</span>
     </header>
     <img src="/demo/context.png" alt="Terminal demo of sephera context building a structured context pack." loading="lazy" />
   </figure>

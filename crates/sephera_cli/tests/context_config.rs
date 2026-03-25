@@ -15,6 +15,36 @@ fn write_file(
     std::fs::write(absolute_path, contents).unwrap();
 }
 
+fn run_git(repo_root: &std::path::Path, args: &[&str]) -> std::process::Output {
+    Command::new("git")
+        .current_dir(repo_root)
+        .args(args)
+        .output()
+        .unwrap_or_else(|error| panic!("failed to run git {:?}: {error}", args))
+}
+
+fn assert_git_ok(repo_root: &std::path::Path, args: &[&str]) {
+    let output = run_git(repo_root, args);
+    assert!(
+        output.status.success(),
+        "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
+        args,
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr),
+    );
+}
+
+fn init_git_repo(repo_root: &std::path::Path) {
+    assert_git_ok(repo_root, &["init"]);
+    assert_git_ok(repo_root, &["config", "user.name", "Sephera Tests"]);
+    assert_git_ok(repo_root, &["config", "user.email", "tests@example.com"]);
+}
+
+fn commit_all(repo_root: &std::path::Path, message: &str) {
+    assert_git_ok(repo_root, &["add", "-A"]);
+    assert_git_ok(repo_root, &["commit", "-m", message]);
+}
+
 fn build_demo_repo() -> tempfile::TempDir {
     let temp_dir = tempdir().unwrap();
     write_file(
@@ -349,4 +379,93 @@ fn config_focus_must_resolve_inside_the_base_path() {
 
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("must resolve inside"));
+}
+
+#[test]
+fn config_diff_value_is_applied_when_cli_omits_diff() {
+    let temp_dir = build_demo_repo();
+    init_git_repo(temp_dir.path());
+    commit_all(temp_dir.path(), "initial");
+    write_file(
+        temp_dir.path(),
+        ".sephera.toml",
+        b"[context]\ndiff = \"working-tree\"\nformat = \"json\"\noutput = \"reports/context.json\"\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/lib.rs",
+        b"pub fn answer() -> u64 {\n    99\n}\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args(["context", "--path", temp_dir.path().to_str().unwrap()])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let exported = std::fs::read_to_string(
+        temp_dir.path().join("reports").join("context.json"),
+    )
+    .unwrap();
+    let parsed_json: Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(parsed_json["metadata"]["diff"]["spec"], "working-tree");
+    assert_eq!(parsed_json["metadata"]["diff"]["changed_files_detected"], 2);
+    assert!(
+        parsed_json["files"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|file| file["relative_path"] == "src/lib.rs")
+    );
+}
+
+#[test]
+fn cli_diff_overrides_selected_profile_diff_value() {
+    let temp_dir = build_demo_repo();
+    init_git_repo(temp_dir.path());
+    commit_all(temp_dir.path(), "initial");
+    write_file(
+        temp_dir.path(),
+        ".sephera.toml",
+        b"[context]\ndiff = \"working-tree\"\nformat = \"json\"\n\n[profiles.review.context]\ndiff = \"unstaged\"\noutput = \"reports/review.json\"\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/lib.rs",
+        b"pub fn answer() -> u64 {\n    7\n}\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/main.rs",
+        b"fn main() {\n    println!(\"staged\");\n}\n",
+    );
+    assert_git_ok(temp_dir.path(), &["add", "src/main.rs"]);
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "context",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--profile",
+            "review",
+            "--diff",
+            "staged",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let exported = std::fs::read_to_string(
+        temp_dir.path().join("reports").join("review.json"),
+    )
+    .unwrap();
+    let parsed_json: Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(parsed_json["metadata"]["diff"]["spec"], "staged");
+    assert_eq!(parsed_json["metadata"]["diff"]["changed_files_detected"], 1);
+    assert!(parsed_json["files"].as_array().unwrap().iter().any(|file| {
+        file["relative_path"] == "src/main.rs"
+            && file["selection_class"] == "diff-file"
+    }));
 }

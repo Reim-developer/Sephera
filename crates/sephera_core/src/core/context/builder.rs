@@ -1,4 +1,7 @@
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::{Path, PathBuf},
+};
 
 use anyhow::{Context, Result};
 
@@ -22,8 +25,8 @@ use super::{
     grouping::summarize_groups,
     ranker::rank_candidates,
     types::{
-        ContextFile, ContextLanguageSummary, ContextMetadata, ContextReport,
-        SelectionClass,
+        ContextDiffMetadata, ContextDiffSelection, ContextFile,
+        ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
     },
 };
 
@@ -32,6 +35,7 @@ pub struct ContextBuilder {
     pub base_path: PathBuf,
     pub ignore: IgnoreMatcher,
     pub focus_paths: Vec<PathBuf>,
+    pub diff_selection: Option<ContextDiffSelection>,
     pub budget_tokens: u64,
 }
 
@@ -47,8 +51,18 @@ impl ContextBuilder {
             base_path: base_path.into(),
             ignore,
             focus_paths,
+            diff_selection: None,
             budget_tokens,
         }
+    }
+
+    #[must_use]
+    pub fn with_diff_selection(
+        mut self,
+        diff_selection: ContextDiffSelection,
+    ) -> Self {
+        self.diff_selection = Some(diff_selection);
+        self
     }
 
     /// # Errors
@@ -63,12 +77,21 @@ impl ContextBuilder {
             collect_project_files(&self.base_path, &self.ignore)?;
         let resolved_focuses =
             resolve_focus_paths(&self.base_path, &self.focus_paths)?;
-        let context_project_files =
-            filter_context_project_files(&project_files, &resolved_focuses);
+        let diff_paths = normalize_diff_paths(
+            self.diff_selection.as_ref().map_or(&[][..], |selection| {
+                selection.changed_paths.as_slice()
+            }),
+        );
+        let context_project_files = filter_context_project_files(
+            &project_files,
+            &resolved_focuses,
+            &diff_paths,
+        );
         let dominant_languages = summarize_languages(&context_project_files);
         let mut candidates = collect_context_candidates(
             &context_project_files,
             &resolved_focuses,
+            &diff_paths,
         )?;
         rank_candidates(&mut candidates);
 
@@ -85,12 +108,27 @@ impl ContextBuilder {
         let truncated_files =
             u64::try_from(files.iter().filter(|file| file.truncated).count())
                 .context("file count exceeded the u64 reporting limit")?;
+        let changed_files_selected =
+            count_selected_changed_files(&files, &diff_paths)?;
         let groups = summarize_groups(&files);
 
         Ok(ContextReport {
             metadata: ContextMetadata {
                 base_path: self.base_path.clone(),
                 focus_paths: display_focus_paths(&resolved_focuses),
+                diff: self.diff_selection.as_ref().map(|selection| {
+                    ContextDiffMetadata {
+                        spec: selection.spec.clone(),
+                        repo_root: selection.repo_root.clone(),
+                        changed_files_detected: selection
+                            .changed_files_detected,
+                        changed_files_in_scope: selection
+                            .changed_files_in_scope,
+                        changed_files_selected,
+                        skipped_deleted_or_missing: selection
+                            .skipped_deleted_or_missing,
+                    }
+                }),
                 budget_tokens: budget.total_tokens(),
                 metadata_budget_tokens: budget.metadata_tokens(),
                 excerpt_budget_tokens: budget.excerpt_tokens(),
@@ -187,4 +225,33 @@ fn select_context_files(
     }
 
     Ok(files)
+}
+
+fn normalize_diff_paths(paths: &[PathBuf]) -> BTreeSet<String> {
+    paths
+        .iter()
+        .map(|path| normalize_relative_path(path))
+        .collect()
+}
+
+fn normalize_relative_path(path: &Path) -> String {
+    let normalized = path.to_string_lossy().replace('\\', "/");
+    if normalized.is_empty() {
+        ".".to_owned()
+    } else {
+        normalized
+    }
+}
+
+fn count_selected_changed_files(
+    files: &[ContextFile],
+    diff_paths: &BTreeSet<String>,
+) -> Result<u64> {
+    u64::try_from(
+        files
+            .iter()
+            .filter(|file| diff_paths.contains(file.relative_path.as_str()))
+            .count(),
+    )
+    .context("file count exceeded the u64 reporting limit")
 }

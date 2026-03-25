@@ -86,7 +86,7 @@ sephera-{tag}-{target}.tar.gz
 Example:
 
 ```text
-sephera-v0.2.1-x86_64-unknown-linux-musl.tar.gz
+sephera-v0.3.0-x86_64-unknown-linux-musl.tar.gz
 ```
 
 ## crates.io checklist

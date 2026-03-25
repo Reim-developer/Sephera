@@ -37,8 +37,9 @@ pub(super) fn summarize_groups(
     summaries
 }
 
-pub(super) const GROUP_ORDER: [ContextGroupKind; 6] = [
+pub(super) const GROUP_ORDER: [ContextGroupKind; 7] = [
     ContextGroupKind::Focus,
+    ContextGroupKind::Changes,
     ContextGroupKind::Entrypoints,
     ContextGroupKind::Testing,
     ContextGroupKind::ProjectMetadata,

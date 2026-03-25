@@ -5,7 +5,7 @@ description: Build Sephera locally, run the CLI, and preview the documentation s
 
 # Getting Started
 
-This guide targets the `v0.2.x` release line.
+This guide targets the `v0.3.x` release line.
 
 ## Requirements
 
@@ -42,6 +42,14 @@ Build a context pack:
 ```bash
 sephera context --path . --focus crates/sephera_core --budget 32k
 ```
+
+Build a review-oriented context pack from Git changes:
+
+```bash
+sephera context --path . --diff HEAD~1 --budget 32k
+```
+
+`--diff` is a Git-only feature. Built-in modes are `working-tree`, `staged`, and `unstaged`. Any other value is treated as a base ref compared against `HEAD` through merge-base semantics.
 
 List configured profiles when the repository has a `.sephera.toml` file:
 

@@ -45,6 +45,34 @@ fn write_metadata(output: &mut String, metadata: &ContextMetadata) {
         "Focus paths",
         &format_focus_paths(&metadata.focus_paths),
     );
+    if let Some(diff) = &metadata.diff {
+        write_metadata_row(output, "Diff spec", &format!("`{}`", diff.spec));
+        write_metadata_row(
+            output,
+            "Diff repo root",
+            &format!("`{}`", diff.repo_root.display()),
+        );
+        write_metadata_row(
+            output,
+            "Changed files detected",
+            &diff.changed_files_detected.to_string(),
+        );
+        write_metadata_row(
+            output,
+            "Changed files in scope",
+            &diff.changed_files_in_scope.to_string(),
+        );
+        write_metadata_row(
+            output,
+            "Changed files selected",
+            &diff.changed_files_selected.to_string(),
+        );
+        write_metadata_row(
+            output,
+            "Skipped deleted or missing",
+            &diff.skipped_deleted_or_missing.to_string(),
+        );
+    }
     write_metadata_row(
         output,
         "Budget tokens",
