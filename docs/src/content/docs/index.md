@@ -10,6 +10,8 @@ Sephera is a Rust workspace for codebase inspection. It currently focuses on two
 - `loc` for fast, language-aware line counting
 - `context` for deterministic Markdown or JSON context packs
 
+The current docs reflect the `v0.2.x` release line.
+
 The project is intentionally narrow in scope. It does not try to be an AI agent framework or a hosted service. The goal is to provide reliable local analysis primitives that fit naturally into review, debugging, and prompting workflows.
 
 ## Why it exists
@@ -25,6 +27,7 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 
 - Fast `loc` analysis with per-language totals, table output, and elapsed-time reporting
 - Deterministic `context` packs with focus-path prioritization and approximate token budgeting
+- Repo-level defaults and named profiles through `.sephera.toml`
 - Export to Markdown for human copy-paste workflows and JSON for automation
 - Generated language metadata sourced from `config/languages.yml`
 - Byte-oriented scanning with newline portability across `LF`, `CRLF`, and classic `CR`
@@ -44,6 +47,12 @@ Build a focused context pack and export it to JSON:
 
 ```bash
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
+```
+
+List configured profiles for the current repository:
+
+```bash
+sephera context --path . --list-profiles
 ```
 
 ## Terminal demos
