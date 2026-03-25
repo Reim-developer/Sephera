@@ -7,7 +7,7 @@ description: Configure repo-level defaults for the context command.
 
 Sephera currently supports repo-level configuration for the `context` command through a `.sephera.toml` file.
 
-This page reflects the `v0.2.x` configuration model.
+This page reflects the `v0.3.x` configuration model.
 
 ## Discovery rules
 
@@ -32,7 +32,7 @@ Scalar values from CLI override config values. Repeated CLI lists are appended t
 
 ## Supported sections
 
-`v0.2.x` supports two configuration layers:
+`v0.3.x` supports two configuration layers:
 
 - `[context]`
 - `[profiles.<name>.context]`
@@ -49,6 +49,9 @@ ignore = ["target", "*.snap"]
 # Prioritize these paths when building the context pack.
 focus = ["crates/sephera_core"]
 
+# Optionally center the pack on Git changes.
+diff = "working-tree"
+
 # Approximate token budget for the report.
 budget = "64k"
 
@@ -59,7 +62,8 @@ format = "markdown"
 output = "reports/context.md"
 
 [profiles.review.context]
-# Review can narrow focus and tighten the budget.
+# Review can compare the current branch to a base ref.
+diff = "origin/master"
 focus = ["crates/sephera_core", "crates/sephera_cli"]
 budget = "32k"
 output = "reports/review.md"
@@ -101,6 +105,31 @@ Example:
 ```toml
 [context]
 focus = ["crates/sephera_core", "crates/sephera_cli"]
+```
+
+### `diff`
+
+`diff` tells `context` to prioritize files from Git changes.
+
+Supported values:
+
+- `"working-tree"`
+- `"staged"`
+- `"unstaged"`
+- a single base ref such as `"origin/master"` or `"HEAD~1"`
+
+Semantics:
+
+- the three built-in keywords are shortcuts for common working tree modes
+- any other value is treated as a base ref and compared against `HEAD` through merge-base semantics
+- deleted files are counted in diff metadata but skipped from excerpts
+- a CLI `--diff` value overrides the config value
+
+Example:
+
+```toml
+[context]
+diff = "working-tree"
 ```
 
 ### `budget`
@@ -176,10 +205,10 @@ When you select a profile, Sephera merges values in this order:
 
 That means:
 
-- profile scalar values such as `budget`, `format`, and `output` override `[context]`
+- profile scalar values such as `diff`, `budget`, `format`, and `output` override `[context]`
 - profile list values such as `ignore` and `focus` are appended after `[context]`
 - repeated CLI `--ignore` and `--focus` flags are appended last
-- explicit CLI scalars still win over the selected profile
+- explicit CLI scalars such as `--diff`, `--budget`, `--format`, and `--output` still win over the selected profile
 
 ### Listing profiles
 
@@ -197,7 +226,7 @@ sephera context --path . --profile review
 
 ## What is intentionally not configurable yet
 
-`v0.2.x` keeps the config surface narrow on purpose. The following are still CLI-only:
+`v0.3.x` keeps the config surface narrow on purpose. The following are still CLI-only:
 
 - `path`
 - `config`
@@ -228,5 +257,5 @@ sephera context --path . --no-config --budget 32k
 Select a profile and still override one field from the CLI:
 
 ```bash
-sephera context --path . --profile review --budget 48k
+sephera context --path . --profile review --diff staged --budget 48k
 ```
