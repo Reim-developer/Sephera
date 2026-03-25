@@ -4,9 +4,13 @@ exclude = ["fuzz"]
 resolver = "3"
 
 [workspace.package]
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 authors = ["reim"]
+license = "GPL-3.0-only"
+repository = "https://github.com/Reim-developer/Sephera"
+homepage = "https://sephera.vercel.app"
+rust-version = "1.85"
 
 [workspace.dependencies]
-sephera_core = { path = "crates/sephera_core" }
+sephera_core = { path = "crates/sephera_core", version = "0.2.0" }

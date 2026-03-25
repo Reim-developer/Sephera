@@ -29,6 +29,12 @@ Generate Markdown to standard output:
 sephera context --path .
 ```
 
+List the profiles available for the current repository config:
+
+```bash
+sephera context --path . --list-profiles
+```
+
 ## Demo
 
 <figure class="demo-card">
@@ -63,10 +69,17 @@ Examples:
 
 ## Defaults and overrides
 
-`context` now supports repo-level defaults through `.sephera.toml`. The precedence order is:
+`context` now supports repo-level defaults and named profiles through `.sephera.toml`. The precedence order is:
 
 1. built-in defaults
 2. `.sephera.toml`
-3. explicit CLI flags
+3. selected profile, if any
+4. explicit CLI flags
+
+Apply a named profile:
+
+```bash
+sephera context --path . --profile review
+```
 
 See the dedicated configuration page for details and examples.

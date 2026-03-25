@@ -70,6 +70,25 @@ jobs:
       - name: Verify snapshots
         run: cargo insta test --review --workspace
 
+  publish_dry_run:
+    name: Publish Dry Run
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Dry-run publish sephera_core
+        run: cargo publish --dry-run -p sephera_core
+
+      - name: Dry-run publish sephera with local sephera_core patch
+        run: cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
+
   pyright:
     name: Pyright
     runs-on: ubuntu-latest
@@ -88,6 +107,26 @@ jobs:
 
       - name: Run Pyright
         run: npm run pyright
+
+  docs:
+    name: Docs Build
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install docs dependencies
+        run: npm --prefix docs ci
+
+      - name: Build docs site
+        run: npm run docs:build
 
   benchmark:
     name: Benchmark

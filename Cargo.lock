@@ -624,8 +624,8 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
-name = "sephera_cli"
-version = "0.1.0"
+name = "sephera"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -640,7 +640,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "globset",
@@ -655,7 +655,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_tools"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "anyhow",
  "clap",

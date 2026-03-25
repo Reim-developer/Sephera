@@ -7,6 +7,8 @@ description: Configure repo-level defaults for the context command.
 
 Sephera currently supports repo-level configuration for the `context` command through a `.sephera.toml` file.
 
+This page reflects the `v0.2.x` configuration model.
+
 ## Discovery rules
 
 When you run `sephera context`, the CLI behaves like this:
@@ -23,22 +25,113 @@ Configuration precedence is:
 
 1. built-in defaults
 2. `.sephera.toml`
-3. explicit CLI flags
+3. an optional named profile selected with `--profile`
+4. explicit CLI flags
 
-Scalar values from CLI override config values. Repeated CLI lists are appended to list values from the config file.
+Scalar values from CLI override config values. Repeated CLI lists are appended to list values from the config file and the selected profile.
 
-## Supported fields
+## Supported sections
 
-V1 supports the `[context]` table:
+`v0.2.x` supports two configuration layers:
+
+- `[context]`
+- `[profiles.<name>.context]`
+
+`[context]` defines shared defaults for the repository. `[profiles.<name>.context]` defines named overrides that can be activated with `sephera context --profile <name>`.
+
+## Annotated example
+
+```toml
+[context]
+# Ignore low-signal paths. Globs match basenames, other patterns are regexes.
+ignore = ["target", "*.snap"]
+
+# Prioritize these paths when building the context pack.
+focus = ["crates/sephera_core"]
+
+# Approximate token budget for the report.
+budget = "64k"
+
+# Export format. Supported values are "markdown" and "json".
+format = "markdown"
+
+# Optional output path. If omitted, the report is written to stdout.
+output = "reports/context.md"
+
+[profiles.review.context]
+# Review can narrow focus and tighten the budget.
+focus = ["crates/sephera_core", "crates/sephera_cli"]
+budget = "32k"
+output = "reports/review.md"
+
+[profiles.debug.context]
+# Debug can prefer JSON and keep a larger budget.
+budget = "96k"
+format = "json"
+output = "reports/debug.json"
+```
+
+## `[context]` field reference
+
+### `ignore`
+
+`ignore` is a list of patterns that should be excluded before context candidates are selected.
+
+- patterns containing `*`, `?`, or `[` are treated as globs
+- other values are compiled as regexes
+- config-provided values are used first, then repeated CLI `--ignore` flags are appended
+
+Example:
 
 ```toml
 [context]
 ignore = ["target", "*.snap"]
-focus = ["crates/sephera_core"]
-budget = "64k"
-format = "markdown"
-output = "reports/context.md"
 ```
+
+### `focus`
+
+`focus` is a list of paths Sephera should prioritize when ranking files for the final context pack.
+
+- focus paths are resolved relative to the directory containing `.sephera.toml`
+- resolved focus paths must still remain inside the selected `--path`
+- config focus entries are used first, then repeated CLI `--focus` flags are appended
+
+Example:
+
+```toml
+[context]
+focus = ["crates/sephera_core", "crates/sephera_cli"]
+```
+
+### `budget`
+
+`budget` controls the approximate token budget used by `context`.
+
+Supported forms:
+
+- integer values such as `32000`
+- shorthand strings such as `"32k"` or `"1m"`
+
+The budget is model-agnostic and approximate. It is used to bound excerpts and metadata, not to reproduce a provider-specific tokenizer exactly.
+
+### `format`
+
+`format` selects the output representation.
+
+Supported values:
+
+- `"markdown"` for human-readable context packs
+- `"json"` for machine-readable automation or downstream tools
+
+If the CLI also specifies `--format`, the CLI wins.
+
+### `output`
+
+`output` is optional. When present, Sephera writes the result to that file instead of standard output.
+
+- output paths in config are resolved relative to the directory containing `.sephera.toml`
+- parent directories are created as needed
+- a CLI `--output` value overrides the config value
 
 ## Relative path behavior
 
@@ -47,6 +140,70 @@ output = "reports/context.md"
 - resolved `focus` paths must still stay inside `--path`
 
 If a focus path resolves outside the selected base path, Sephera fails fast with a clear error.
+
+## Profiles
+
+Profiles let one repository keep multiple named `context` presets without repeating the same long CLI every time.
+
+### Shape
+
+Each profile lives under:
+
+```toml
+[profiles.<name>.context]
+```
+
+Examples:
+
+```toml
+[profiles.review.context]
+focus = ["crates/sephera_core"]
+budget = "32k"
+
+[profiles.debug.context]
+budget = "96k"
+format = "json"
+```
+
+### Merge behavior
+
+When you select a profile, Sephera merges values in this order:
+
+1. built-in defaults
+2. `[context]`
+3. `[profiles.<name>.context]`
+4. explicit CLI flags
+
+That means:
+
+- profile scalar values such as `budget`, `format`, and `output` override `[context]`
+- profile list values such as `ignore` and `focus` are appended after `[context]`
+- repeated CLI `--ignore` and `--focus` flags are appended last
+- explicit CLI scalars still win over the selected profile
+
+### Listing profiles
+
+Use the CLI to inspect available profiles:
+
+```bash
+sephera context --path . --list-profiles
+```
+
+Select one:
+
+```bash
+sephera context --path . --profile review
+```
+
+## What is intentionally not configurable yet
+
+`v0.2.x` keeps the config surface narrow on purpose. The following are still CLI-only:
+
+- `path`
+- `config`
+- `no-config`
+
+That keeps config discovery and path resolution predictable while the command surface is still evolving.
 
 ## CLI examples
 
@@ -66,4 +223,10 @@ Ignore config and force CLI-only values:
 
 ```bash
 sephera context --path . --no-config --budget 32k
+```
+
+Select a profile and still override one field from the CLI:
+
+```bash
+sephera context --path . --profile review --budget 48k
 ```

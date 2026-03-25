@@ -5,11 +5,21 @@ description: Build Sephera locally, run the CLI, and preview the documentation s
 
 # Getting Started
 
+This guide targets the `v0.2.x` release line.
+
 ## Requirements
 
 - Rust toolchain
 - Node.js for docs tooling and Pyright
 - Python if you want to run the benchmark harness
+
+## Install from crates.io
+
+Install the published CLI:
+
+```bash
+cargo install sephera
+```
 
 ## Use the CLI
 
@@ -27,12 +37,18 @@ Build a context pack:
 sephera context --path . --focus crates/sephera_core --budget 32k
 ```
 
+List configured profiles when the repository has a `.sephera.toml` file:
+
+```bash
+sephera context --path . --list-profiles
+```
+
 ## Develop from source
 
 If you are working directly from the repository, you can run the CLI with Cargo:
 
 ```bash
-cargo run -p sephera_cli -- context --path . --focus crates/sephera_core --budget 32k
+cargo run -p sephera -- context --path . --focus crates/sephera_core --budget 32k
 ```
 
 ## Core development checks

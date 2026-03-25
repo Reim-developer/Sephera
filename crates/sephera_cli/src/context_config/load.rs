@@ -1,15 +1,18 @@
 use std::{
+    collections::BTreeMap,
     fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result};
 
-use super::types::{ContextToml, LoadedContextConfig, SepheraToml};
+use super::types::{
+    ContextToml, LoadedContextSection, LoadedSepheraConfig, SepheraToml,
+};
 
 pub(super) fn load_context_config(
     config_path: &Path,
-) -> Result<LoadedContextConfig> {
+) -> Result<LoadedSepheraConfig> {
     let raw_config = fs::read_to_string(config_path).with_context(|| {
         format!("failed to read config file `{}`", config_path.display())
     })?;
@@ -18,28 +21,60 @@ pub(super) fn load_context_config(
             format!("failed to parse config file `{}`", config_path.display())
         })?;
 
-    convert_context_config(config_path, parsed.context)
+    convert_context_config(config_path, parsed)
 }
 
 fn convert_context_config(
     config_path: &Path,
-    context: ContextToml,
-) -> Result<LoadedContextConfig> {
+    config: SepheraToml,
+) -> Result<LoadedSepheraConfig> {
     let config_directory =
         config_path.parent().unwrap_or_else(|| Path::new("."));
+    let context = convert_context_section(
+        config_path,
+        config_directory,
+        "context",
+        config.context,
+    )?;
+    let profiles = config
+        .profiles
+        .into_iter()
+        .map(|(name, profile)| {
+            convert_context_section(
+                config_path,
+                config_directory,
+                &format!("profiles.{name}.context"),
+                profile.context,
+            )
+            .map(|section| (name, section))
+        })
+        .collect::<Result<BTreeMap<_, _>>>()?;
+
+    Ok(LoadedSepheraConfig {
+        source_path: config_path.to_path_buf(),
+        context,
+        profiles,
+    })
+}
+
+fn convert_context_section(
+    config_path: &Path,
+    config_directory: &Path,
+    field_prefix: &str,
+    context: ContextToml,
+) -> Result<LoadedContextSection> {
     let budget = context
         .budget
         .map(super::types::TokenBudgetValue::parse)
         .transpose()
         .with_context(|| {
             format!(
-                "failed to parse `context.budget` in `{}`",
+                "failed to parse `{field_prefix}.budget` in `{}`",
                 config_path.display()
             )
         })?;
 
-    Ok(LoadedContextConfig {
-        source_path: config_path.to_path_buf(),
+    Ok(LoadedContextSection {
         ignore: context.ignore,
         focus: resolve_relative_paths(config_directory, context.focus),
         budget,
@@ -82,19 +117,27 @@ mod tests {
         let config_path = temp_dir.path().join(".sephera.toml");
         std::fs::write(
             &config_path,
-            "[context]\nignore = [\"target\"]\nfocus = [\"src\"]\nbudget = \"64k\"\nformat = \"json\"\noutput = \"reports/context.json\"\n",
+            "[context]\nignore = [\"target\"]\nfocus = [\"src\"]\nbudget = \"64k\"\nformat = \"json\"\noutput = \"reports/context.json\"\n\n[profiles.review.context]\nfocus = [\"tests\"]\nformat = \"markdown\"\n",
         )
         .unwrap();
 
         let loaded = load_context_config(&config_path).unwrap();
 
-        assert_eq!(loaded.ignore, vec!["target"]);
-        assert_eq!(loaded.focus, vec![temp_dir.path().join("src")]);
-        assert_eq!(loaded.budget, Some(64_000));
-        assert_eq!(loaded.format, Some(ContextFormat::Json));
+        assert_eq!(loaded.context.ignore, vec!["target"]);
+        assert_eq!(loaded.context.focus, vec![temp_dir.path().join("src")]);
+        assert_eq!(loaded.context.budget, Some(64_000));
+        assert_eq!(loaded.context.format, Some(ContextFormat::Json));
         assert_eq!(
-            loaded.output,
+            loaded.context.output,
             Some(temp_dir.path().join("reports").join("context.json"))
+        );
+        assert_eq!(
+            loaded
+                .profiles
+                .get("review")
+                .expect("profile should exist")
+                .focus,
+            vec![temp_dir.path().join("tests")]
         );
     }
 
@@ -106,7 +149,7 @@ mod tests {
 
         let loaded = load_context_config(&config_path).unwrap();
 
-        assert_eq!(loaded.budget, Some(32_000));
+        assert_eq!(loaded.context.budget, Some(32_000));
     }
 
     #[test]

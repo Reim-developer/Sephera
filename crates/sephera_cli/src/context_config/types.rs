@@ -1,4 +1,4 @@
-use std::path::PathBuf;
+use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Deserialize;
 
@@ -8,8 +8,14 @@ pub const CONFIG_FILE_NAME: &str = ".sephera.toml";
 pub const DEFAULT_CONTEXT_BUDGET: u64 = 128_000;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct LoadedContextConfig {
+pub struct LoadedSepheraConfig {
     pub source_path: PathBuf,
+    pub context: LoadedContextSection,
+    pub profiles: BTreeMap<String, LoadedContextSection>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct LoadedContextSection {
     pub ignore: Vec<String>,
     pub focus: Vec<PathBuf>,
     pub budget: Option<u64>,
@@ -27,11 +33,25 @@ pub struct ResolvedContextOptions {
     pub output: Option<PathBuf>,
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AvailableContextProfiles {
+    pub source_path: Option<PathBuf>,
+    pub profiles: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum ResolvedContextCommand {
+    Execute(ResolvedContextOptions),
+    ListProfiles(AvailableContextProfiles),
+}
+
 #[derive(Debug, Default, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct SepheraToml {
     #[serde(default)]
     pub context: ContextToml,
+    #[serde(default)]
+    pub profiles: BTreeMap<String, ProfileToml>,
 }
 
 #[derive(Debug, Default, Deserialize)]
@@ -44,6 +64,13 @@ pub struct ContextToml {
     pub budget: Option<TokenBudgetValue>,
     pub format: Option<ContextFormat>,
     pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ProfileToml {
+    #[serde(default)]
+    pub context: ContextToml,
 }
 
 #[derive(Debug, Clone, Deserialize)]

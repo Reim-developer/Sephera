@@ -4,9 +4,11 @@
 [![Docs](https://img.shields.io/website?url=https%3A%2F%2Fsephera.vercel.app&label=docs)](https://sephera.vercel.app)
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
-Sephera is a local-first Rust CLI for understanding codebases quickly and producing deterministic context packs for review, debugging, and LLM workflows.
+Sephera is a local-first Rust CLI for two jobs that are usually split across separate tools: repository metrics and deterministic context export.
 
 Documentation: <https://sephera.vercel.app>
+
+Current release line: `v0.2.0` (pre-1.0).
 
 Sephera currently focuses on two practical commands:
 
@@ -41,7 +43,7 @@ The goal is not to replace every code metrics tool. The goal is to pair trustwor
 
 - Fast `loc` analysis with per-language totals, terminal table output, and elapsed-time reporting
 - Deterministic `context` packs with focus-path prioritization, approximate token budgeting, and export to Markdown or JSON
-- Repo-level `context` defaults through `.sephera.toml`, with CLI flags overriding config
+- Repo-level `context` defaults and named profiles through `.sephera.toml`, with CLI flags overriding config
 - Generated built-in language metadata sourced from [`config/languages.yml`](config/languages.yml)
 - Byte-oriented scanning with newline portability for `LF`, `CRLF`, and classic `CR`
 - Reproducible benchmark harness, regression suites, and fuzz targets for stability work
@@ -52,6 +54,16 @@ The goal is not to replace every code metrics tool. The goal is to pair trustwor
 - Build a focused context bundle for ChatGPT, Claude, Gemini, or internal tooling
 - Prepare a structured handoff for another engineer or agent
 - Export machine-readable context for downstream automation
+
+## Install
+
+Install the published CLI from `crates.io`:
+
+```bash
+cargo install sephera
+```
+
+If you are working from source instead, see the contributor workflow in the docs.
 
 ## Quick Start
 
@@ -69,6 +81,12 @@ Build a focused context pack and export it to JSON:
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
+List the profiles available for the current repository:
+
+```bash
+sephera context --path . --list-profiles
+```
+
 Configure repo-level defaults for `context`:
 
 ```toml
@@ -77,7 +95,14 @@ focus = ["crates/sephera_core"]
 budget = "64k"
 format = "markdown"
 output = "reports/context.md"
+
+[profiles.review.context]
+focus = ["crates/sephera_core", "crates/sephera_cli"]
+budget = "32k"
+output = "reports/review.md"
 ```
+
+The configuration model is documented in more detail on the docs site, including discovery rules, precedence, path resolution, field-by-field behavior for `[context]`, and named profiles under `[profiles.<name>.context]`.
 
 ## Terminal Demos
 

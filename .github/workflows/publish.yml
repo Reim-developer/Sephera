@@ -1,0 +1,118 @@
+name: Publish
+
+on:
+  workflow_dispatch:
+    inputs:
+      publish_core:
+        description: Publish sephera_core
+        required: true
+        default: true
+        type: boolean
+      publish_cli:
+        description: Publish sephera
+        required: true
+        default: true
+        type: boolean
+
+concurrency:
+  group: publish-${{ github.workflow }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  publish:
+    name: Publish crates.io packages
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Validate selected packages
+        shell: bash
+        run: |
+          if [[ "${{ inputs.publish_core }}" != "true" && "${{ inputs.publish_cli }}" != "true" ]]; then
+            echo "::error::Select at least one package to publish."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install docs dependencies
+        run: npm --prefix docs ci
+
+      - name: Validate crates.io token
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          if [[ -z "${CARGO_REGISTRY_TOKEN}" ]]; then
+            echo "::error::Missing CRATES_IO_TOKEN. Add it to the protected 'release' environment secrets before running this workflow."
+            exit 1
+          fi
+
+      - name: Run release checks
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace
+          npm run docs:build
+          cargo publish --dry-run -p sephera_core
+          cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
+
+      - name: Read workspace version
+        shell: bash
+        run: |
+          VERSION="$(python3 - <<'PY'
+          import tomllib
+          from pathlib import Path
+
+          cargo_toml = Path("Cargo.toml")
+          data = tomllib.loads(cargo_toml.read_text(encoding = "utf-8"))
+          print(data["workspace"]["package"]["version"])
+          PY
+          )"
+          echo "SEPHERA_VERSION=$VERSION" >> "$GITHUB_ENV"
+
+      - name: Publish sephera_core
+        if: ${{ inputs.publish_core }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish -p sephera_core
+
+      - name: Wait for sephera_core to reach crates.io index
+        if: ${{ inputs.publish_core && inputs.publish_cli }}
+        shell: bash
+        run: |
+          for attempt in {1..20}; do
+            if cargo search sephera_core --limit 1 | grep -q "\"${SEPHERA_VERSION}\""; then
+              echo "sephera_core ${SEPHERA_VERSION} is visible in the crates.io index."
+              exit 0
+            fi
+
+            echo "Waiting for sephera_core ${SEPHERA_VERSION} to propagate (attempt ${attempt}/20)..."
+            sleep 15
+          done
+
+          echo "::error::Timed out waiting for sephera_core ${SEPHERA_VERSION} to appear in the crates.io index."
+          exit 1
+
+      - name: Publish sephera
+        if: ${{ inputs.publish_cli }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish -p sephera

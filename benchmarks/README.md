@@ -1,4 +1,4 @@
-# Benchmarks
+﻿# Benchmarks
 
 This directory contains the reproducible benchmark harness for the Rust Sephera CLI.
 
@@ -8,7 +8,7 @@ The harness is intentionally narrow in scope. It benchmarks the local release bi
 
 `python benchmarks/run.py` performs these steps:
 
-1. Builds `sephera_cli` and `sephera_tools` in release mode.
+1. Builds `sephera` and `sephera_tools` in release mode.
 2. Generates deterministic synthetic corpora under `benchmarks/generated_corpus`.
 3. Runs the Rust CLI against the requested datasets.
 4. Writes a machine-readable JSON report and a human-readable Markdown report to `benchmarks/reports`.
