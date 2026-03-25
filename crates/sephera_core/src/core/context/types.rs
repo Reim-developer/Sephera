@@ -25,6 +25,8 @@ impl ContextReport {
 pub struct ContextMetadata {
     pub base_path: PathBuf,
     pub focus_paths: Vec<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub diff: Option<ContextDiffMetadata>,
     pub budget_tokens: u64,
     pub metadata_budget_tokens: u64,
     pub excerpt_budget_tokens: u64,
@@ -34,6 +36,26 @@ pub struct ContextMetadata {
     pub files_considered: u64,
     pub files_selected: u64,
     pub truncated_files: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct ContextDiffMetadata {
+    pub spec: String,
+    pub repo_root: PathBuf,
+    pub changed_files_detected: u64,
+    pub changed_files_in_scope: u64,
+    pub changed_files_selected: u64,
+    pub skipped_deleted_or_missing: u64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ContextDiffSelection {
+    pub spec: String,
+    pub repo_root: PathBuf,
+    pub changed_paths: Vec<PathBuf>,
+    pub changed_files_detected: u64,
+    pub changed_files_in_scope: u64,
+    pub skipped_deleted_or_missing: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
@@ -75,6 +97,7 @@ pub struct ContextExcerpt {
 #[serde(rename_all = "kebab-case")]
 pub enum ContextGroupKind {
     Focus,
+    Changes,
     ProjectMetadata,
     Workflows,
     Entrypoints,
@@ -87,6 +110,7 @@ impl ContextGroupKind {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::Focus => "focus",
+            Self::Changes => "changes",
             Self::ProjectMetadata => "project-metadata",
             Self::Workflows => "workflows",
             Self::Entrypoints => "entrypoints",
@@ -99,6 +123,7 @@ impl ContextGroupKind {
     pub const fn label(self) -> &'static str {
         match self {
             Self::Focus => "Focus",
+            Self::Changes => "Changes",
             Self::ProjectMetadata => "Project Metadata",
             Self::Workflows => "Workflows",
             Self::Entrypoints => "Entrypoints",
@@ -112,6 +137,7 @@ impl ContextGroupKind {
 #[serde(rename_all = "kebab-case")]
 pub enum SelectionClass {
     FocusedFile,
+    DiffFile,
     FocusedDescendant,
     Manifest,
     Workflow,
@@ -127,6 +153,7 @@ impl SelectionClass {
             Self::FocusedFile | Self::FocusedDescendant => {
                 ContextGroupKind::Focus
             }
+            Self::DiffFile => ContextGroupKind::Changes,
             Self::Manifest => ContextGroupKind::ProjectMetadata,
             Self::Workflow => ContextGroupKind::Workflows,
             Self::Entrypoint => ContextGroupKind::Entrypoints,
@@ -139,6 +166,7 @@ impl SelectionClass {
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::FocusedFile => "focused-file",
+            Self::DiffFile => "diff-file",
             Self::FocusedDescendant => "focused-descendant",
             Self::Manifest => "manifest",
             Self::Workflow => "workflow",
