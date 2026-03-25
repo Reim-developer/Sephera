@@ -9,10 +9,13 @@ use sephera_core::core::{
 
 use crate::{
     args::{Cli, Commands, ContextArgs, ContextFormat, LocArgs},
-    context_config::{ResolvedContextOptions, resolve_context_options},
+    context_config::{
+        ResolvedContextCommand, ResolvedContextOptions,
+        resolve_context_options,
+    },
     output::{
-        emit_rendered_output, print_report, render_context_json,
-        render_context_markdown,
+        emit_rendered_output, print_available_profiles, print_report,
+        render_context_json, render_context_markdown,
     },
 };
 
@@ -50,8 +53,13 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
 }
 
 fn run_context(arguments: ContextArgs) -> Result<()> {
-    let resolved = resolve_context_options(arguments)?;
-    execute_context(resolved)
+    match resolve_context_options(arguments)? {
+        ResolvedContextCommand::Execute(resolved) => execute_context(resolved),
+        ResolvedContextCommand::ListProfiles(profiles) => {
+            print_available_profiles(&profiles);
+            Ok(())
+        }
+    }
 }
 
 fn execute_context(arguments: ResolvedContextOptions) -> Result<()> {
