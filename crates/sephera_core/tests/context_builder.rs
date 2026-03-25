@@ -2,7 +2,9 @@ use std::path::Path;
 
 use sephera_core::core::{
     code_loc::IgnoreMatcher,
-    context::{ContextBuilder, ContextGroupKind, SelectionClass},
+    context::{
+        ContextBuilder, ContextDiffSelection, ContextGroupKind, SelectionClass,
+    },
 };
 use tempfile::{TempDir, tempdir};
 
@@ -286,4 +288,108 @@ fn skips_low_signal_directories_unless_focused() {
             .iter()
             .any(|file| file.relative_path.starts_with(".venv/"))
     );
+}
+
+#[test]
+fn diff_selection_prioritizes_changed_files_after_explicit_focus() {
+    let temp_dir = build_demo_repo();
+
+    let report = ContextBuilder::new(
+        temp_dir.path(),
+        IgnoreMatcher::empty(),
+        vec!["src/lib.rs".into()],
+        32_000,
+    )
+    .with_diff_selection(ContextDiffSelection {
+        spec: String::from("working-tree"),
+        repo_root: temp_dir.path().to_path_buf(),
+        changed_paths: vec!["src/main.rs".into(), "tests/basic.rs".into()],
+        changed_files_detected: 2,
+        changed_files_in_scope: 2,
+        skipped_deleted_or_missing: 0,
+    })
+    .build()
+    .unwrap();
+
+    assert_eq!(report.metadata.focus_paths, vec!["src/lib.rs"]);
+    let diff_metadata = report.metadata.diff.as_ref().unwrap();
+    assert_eq!(diff_metadata.spec, "working-tree");
+    assert_eq!(diff_metadata.changed_files_detected, 2);
+    assert_eq!(diff_metadata.changed_files_in_scope, 2);
+    assert_eq!(diff_metadata.changed_files_selected, 2);
+    assert_eq!(
+        report.files.first().map(|file| file.relative_path.as_str()),
+        Some("src/lib.rs")
+    );
+    assert_eq!(
+        report.files.first().map(|file| file.selection_class),
+        Some(SelectionClass::FocusedFile)
+    );
+    assert_eq!(
+        report.groups.first().map(|group| group.group),
+        Some(ContextGroupKind::Focus)
+    );
+    assert!(
+        report
+            .groups
+            .iter()
+            .any(|group| group.group == ContextGroupKind::Changes)
+    );
+    assert!(report.files.iter().any(|file| {
+        file.relative_path == "src/main.rs"
+            && file.selection_class == SelectionClass::DiffFile
+            && file.group == ContextGroupKind::Changes
+    }));
+    assert!(report.files.iter().any(|file| {
+        file.relative_path == "tests/basic.rs"
+            && file.selection_class == SelectionClass::DiffFile
+            && file.group == ContextGroupKind::Changes
+    }));
+}
+
+#[test]
+fn diff_selection_keeps_low_signal_changed_files_in_scope() {
+    let temp_dir = tempdir().unwrap();
+    write_file(
+        temp_dir.path(),
+        ".venv/lib/python/site.py",
+        b"print('changed')\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/main.rs",
+        b"fn main() {\n    println!(\"signal\");\n}\n",
+    );
+
+    let report = ContextBuilder::new(
+        temp_dir.path(),
+        IgnoreMatcher::empty(),
+        Vec::new(),
+        8_000,
+    )
+    .with_diff_selection(ContextDiffSelection {
+        spec: String::from("working-tree"),
+        repo_root: temp_dir.path().to_path_buf(),
+        changed_paths: vec![".venv/lib/python/site.py".into()],
+        changed_files_detected: 1,
+        changed_files_in_scope: 1,
+        skipped_deleted_or_missing: 0,
+    })
+    .build()
+    .unwrap();
+
+    assert_eq!(report.metadata.files_considered, 2);
+    assert_eq!(
+        report
+            .metadata
+            .diff
+            .as_ref()
+            .unwrap()
+            .changed_files_selected,
+        1
+    );
+    assert!(report.files.iter().any(|file| {
+        file.relative_path == ".venv/lib/python/site.py"
+            && file.selection_class == SelectionClass::DiffFile
+    }));
 }
