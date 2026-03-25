@@ -35,7 +35,9 @@ The workflow:
 It expects:
 
 - a protected `release` environment
-- a `CRATES_IO_TOKEN` secret with publish access
+- a `CRATES_IO_TOKEN` secret in that `release` environment, with publish access
+
+If the workflow editor shows a warning such as `Context access might be invalid: CRATES_IO_TOKEN`, that usually means the secret is not visible to static analysis from the repository alone. The workflow still works once `CRATES_IO_TOKEN` is created in the protected `release` environment.
 
 ## Checklist
 
