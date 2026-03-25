@@ -1,7 +1,17 @@
 [package]
-name = "sephera_cli"
-version = "0.1.0"
+name = "sephera"
+version.workspace = true
 edition = "2024"
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Local-first Rust CLI for repository metrics and deterministic LLM context packs."
+documentation = "https://docs.rs/sephera"
+readme = "README.crates-io.md"
+keywords = ["loc", "context", "code-analysis", "cli", "llm"]
+categories = ["command-line-utilities", "development-tools"]
 default-run = "sephera"
 autobins = false
 
