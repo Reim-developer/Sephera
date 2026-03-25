@@ -10,8 +10,7 @@ use sephera_core::core::{
 use crate::{
     args::{Cli, Commands, ContextArgs, ContextFormat, LocArgs},
     context_config::{
-        ResolvedContextCommand, ResolvedContextOptions,
-        resolve_context_options,
+        ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
     output::{
         emit_rendered_output, print_available_profiles, print_report,

@@ -8,9 +8,8 @@ use super::{
     discovery::discover_config_path,
     load::load_context_config,
     types::{
-        AvailableContextProfiles, DEFAULT_CONTEXT_BUDGET,
-        LoadedContextSection, LoadedSepheraConfig, ResolvedContextCommand,
-        ResolvedContextOptions,
+        AvailableContextProfiles, DEFAULT_CONTEXT_BUDGET, LoadedContextSection,
+        LoadedSepheraConfig, ResolvedContextCommand, ResolvedContextOptions,
     },
 };
 
@@ -98,7 +97,9 @@ fn merge_context_sources(
             .or_else(|| {
                 selected_profile.and_then(|profile| profile.output.clone())
             })
-            .or_else(|| base_context.and_then(|context| context.output.clone())),
+            .or_else(|| {
+                base_context.and_then(|context| context.output.clone())
+            }),
     })
 }
 
@@ -415,7 +416,11 @@ mod tests {
         )
         .unwrap_err();
 
-        assert!(error.to_string().contains("no `.sephera.toml` file was found"));
+        assert!(
+            error
+                .to_string()
+                .contains("no `.sephera.toml` file was found")
+        );
     }
 
     #[test]

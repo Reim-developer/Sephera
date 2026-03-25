@@ -15,9 +15,9 @@ fn render_available_profiles(profiles: &AvailableContextProfiles) -> String {
             source_path.display(),
             profiles.profiles.join("\n")
         ),
-        None => String::from(
-            "No `.sephera.toml` file found for the selected path.",
-        ),
+        None => {
+            String::from("No `.sephera.toml` file found for the selected path.")
+        }
     }
 }
 
