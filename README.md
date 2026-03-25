@@ -8,7 +8,7 @@ Sephera is a local-first Rust CLI for two jobs that are usually split across sep
 
 Documentation: <https://sephera.vercel.app>
 
-Current release line: `v0.2.1` (pre-1.0).
+Current release line: `v0.3.0` (pre-1.0).
 
 Sephera currently focuses on two practical commands:
 
