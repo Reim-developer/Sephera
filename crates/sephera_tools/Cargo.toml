@@ -2,6 +2,13 @@
 name = "sephera_tools"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Internal code generation and benchmark corpus tooling for Sephera."
+publish = false
 
 [[bin]]
 name = "sephera_tools"
