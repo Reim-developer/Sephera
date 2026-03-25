@@ -21,6 +21,12 @@ Install the published CLI:
 cargo install sephera
 ```
 
+## Install from GitHub Releases
+
+If you do not want to install Rust locally, download a prebuilt archive from [GitHub Releases](https://github.com/Reim-developer/Sephera/releases).
+
+Binary releases are a good fit when you want a fast local install on a supported desktop target and do not need Cargo on the machine itself. `cargo install sephera` remains the default path when you already use the Rust toolchain.
+
 ## Use the CLI
 
 The user-facing examples in this documentation assume `sephera` is installed and available on your `PATH`.
