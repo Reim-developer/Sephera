@@ -82,6 +82,12 @@ fn merge_context_sources(
         base_path: arguments.path,
         ignore,
         focus,
+        diff: arguments
+            .diff
+            .or_else(|| {
+                selected_profile.and_then(|profile| profile.diff.clone())
+            })
+            .or_else(|| base_context.and_then(|context| context.diff.clone())),
         budget: arguments
             .budget
             .or_else(|| selected_profile.and_then(|profile| profile.budget))
@@ -179,6 +185,7 @@ mod tests {
             list_profiles: false,
             ignore: Vec::new(),
             focus: Vec::new(),
+            diff: None,
             budget: None,
             format: None,
             output: None,
@@ -199,6 +206,7 @@ mod tests {
             context: LoadedContextSection {
                 ignore: vec!["target".to_owned()],
                 focus: vec![temp_dir.path().join("src")],
+                diff: Some(String::from("origin/master")),
                 budget: Some(16_000),
                 format: Some(ContextFormat::Markdown),
                 output: Some(temp_dir.path().join("config.md")),
@@ -215,6 +223,7 @@ mod tests {
                 base_path: temp_dir.path().to_path_buf(),
                 ignore: vec!["target".to_owned()],
                 focus: vec![temp_dir.path().join("src")],
+                diff: Some(String::from("origin/master")),
                 budget: 48_000,
                 format: ContextFormat::Json,
                 output: Some(temp_dir.path().join("cli.json")),
@@ -228,6 +237,7 @@ mod tests {
         let arguments = ContextArgs {
             ignore: vec!["*.snap".to_owned()],
             focus: vec![std::path::PathBuf::from("tests")],
+            diff: Some(String::from("working-tree")),
             ..context_args(temp_dir.path())
         };
         let config = Some(LoadedSepheraConfig {
@@ -235,6 +245,7 @@ mod tests {
             context: LoadedContextSection {
                 ignore: vec!["target".to_owned()],
                 focus: vec![temp_dir.path().join("src")],
+                diff: Some(String::from("origin/master")),
                 budget: None,
                 format: None,
                 output: None,
@@ -253,6 +264,7 @@ mod tests {
                 std::path::PathBuf::from("tests")
             ]
         );
+        assert_eq!(resolved.diff.as_deref(), Some("working-tree"));
     }
 
     #[test]
@@ -264,6 +276,7 @@ mod tests {
 
         assert_eq!(resolved.budget, 128_000);
         assert_eq!(resolved.format, ContextFormat::Markdown);
+        assert_eq!(resolved.diff, None);
         assert_eq!(resolved.output, None);
     }
 
@@ -287,6 +300,7 @@ mod tests {
         .unwrap();
 
         assert_eq!(loaded.source_path, explicit_config);
+        assert_eq!(loaded.context.diff, None);
         assert_eq!(loaded.context.budget, Some(32_000));
     }
 
@@ -327,6 +341,7 @@ mod tests {
 
         assert_eq!(resolved.base_path, nested);
         assert_eq!(resolved.ignore, vec!["target"]);
+        assert_eq!(resolved.diff, None);
         assert_eq!(resolved.budget, 64_000);
     }
 
@@ -342,6 +357,7 @@ mod tests {
             context: LoadedContextSection {
                 ignore: vec![String::from("target")],
                 focus: vec![temp_dir.path().join("src")],
+                diff: Some(String::from("origin/master")),
                 budget: Some(16_000),
                 format: Some(ContextFormat::Markdown),
                 output: Some(temp_dir.path().join("base.md")),
@@ -351,6 +367,7 @@ mod tests {
                 LoadedContextSection {
                     ignore: vec![String::from("dist")],
                     focus: vec![temp_dir.path().join("tests")],
+                    diff: Some(String::from("working-tree")),
                     budget: Some(32_000),
                     format: Some(ContextFormat::Json),
                     output: Some(temp_dir.path().join("profile.json")),
@@ -366,6 +383,7 @@ mod tests {
             resolved.focus,
             vec![temp_dir.path().join("src"), temp_dir.path().join("tests")]
         );
+        assert_eq!(resolved.diff.as_deref(), Some("working-tree"));
         assert_eq!(resolved.budget, 32_000);
         assert_eq!(resolved.format, ContextFormat::Json);
         assert_eq!(resolved.output, Some(temp_dir.path().join("profile.json")));
@@ -376,6 +394,7 @@ mod tests {
         let temp_dir = tempdir().unwrap();
         let arguments = ContextArgs {
             profile: Some(String::from("review")),
+            diff: Some(String::from("unstaged")),
             budget: Some(48_000),
             format: Some(ContextFormat::Markdown),
             output: Some(temp_dir.path().join("cli.md")),
@@ -389,6 +408,7 @@ mod tests {
                 LoadedContextSection {
                     ignore: Vec::new(),
                     focus: Vec::new(),
+                    diff: Some(String::from("working-tree")),
                     budget: Some(32_000),
                     format: Some(ContextFormat::Json),
                     output: Some(temp_dir.path().join("profile.json")),
@@ -399,6 +419,7 @@ mod tests {
         let resolved =
             merge_context_sources(arguments, config.as_ref()).unwrap();
 
+        assert_eq!(resolved.diff.as_deref(), Some("unstaged"));
         assert_eq!(resolved.budget, 48_000);
         assert_eq!(resolved.format, ContextFormat::Markdown);
         assert_eq!(resolved.output, Some(temp_dir.path().join("cli.md")));
