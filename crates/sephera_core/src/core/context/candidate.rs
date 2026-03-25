@@ -1,4 +1,4 @@
-use std::{ffi::OsStr, path::Path};
+use std::{collections::BTreeSet, ffi::OsStr, path::Path};
 
 use anyhow::Result;
 
@@ -28,11 +28,14 @@ pub(super) struct ContextCandidate {
 pub(super) fn collect_context_candidates(
     project_files: &[ProjectFile],
     focuses: &[ResolvedFocus],
+    diff_paths: &BTreeSet<String>,
 ) -> Result<Vec<ContextCandidate>> {
     let mut candidates = Vec::new();
 
     for project_file in project_files {
-        if !is_context_candidate(project_file) || project_file.size_bytes == 0 {
+        if !is_context_candidate(project_file, diff_paths)
+            || project_file.size_bytes == 0
+        {
             continue;
         }
         if project_file.size_bytes > MAX_CANDIDATE_BYTES {
@@ -52,7 +55,11 @@ pub(super) fn collect_context_candidates(
             language: project_file
                 .language_match
                 .map(|(_, language)| language.name),
-            selection_class: classify_selection(project_file, focuses),
+            selection_class: classify_selection(
+                project_file,
+                focuses,
+                diff_paths,
+            ),
             size_bytes: project_file.size_bytes,
         });
     }
@@ -64,11 +71,13 @@ pub(super) fn collect_context_candidates(
 pub(super) fn filter_context_project_files(
     project_files: &[ProjectFile],
     focuses: &[ResolvedFocus],
+    diff_paths: &BTreeSet<String>,
 ) -> Vec<ProjectFile> {
     project_files
         .iter()
         .filter(|project_file| {
             classify_focus(project_file, focuses).is_some()
+                || diff_paths.contains(&project_file.normalized_relative_path)
                 || !is_low_signal_path(&project_file.normalized_relative_path)
         })
         .cloned()
@@ -78,12 +87,15 @@ pub(super) fn filter_context_project_files(
 fn classify_selection(
     project_file: &ProjectFile,
     focuses: &[ResolvedFocus],
+    diff_paths: &BTreeSet<String>,
 ) -> SelectionClass {
     if let Some(selection_class) = classify_focus(project_file, focuses) {
         return selection_class;
     }
 
-    if is_workflow_file(&project_file.normalized_relative_path) {
+    if diff_paths.contains(&project_file.normalized_relative_path) {
+        SelectionClass::DiffFile
+    } else if is_workflow_file(&project_file.normalized_relative_path) {
         SelectionClass::Workflow
     } else if is_manifest_or_metadata_file(&project_file.relative_path) {
         SelectionClass::Manifest
@@ -96,8 +108,12 @@ fn classify_selection(
     }
 }
 
-fn is_context_candidate(project_file: &ProjectFile) -> bool {
-    project_file.language_match.is_some()
+fn is_context_candidate(
+    project_file: &ProjectFile,
+    diff_paths: &BTreeSet<String>,
+) -> bool {
+    diff_paths.contains(&project_file.normalized_relative_path)
+        || project_file.language_match.is_some()
         || is_manifest_or_metadata_file(&project_file.relative_path)
         || is_workflow_file(&project_file.normalized_relative_path)
 }
