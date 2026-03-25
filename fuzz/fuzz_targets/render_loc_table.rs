@@ -3,7 +3,7 @@
 use std::{path::PathBuf, time::Duration};
 
 use libfuzzer_sys::fuzz_target;
-use sephera_cli::render_report_table;
+use sephera::render_report_table;
 use sephera_core::core::code_loc::{CodeLocReport, LanguageLoc, LocMetrics};
 
 const LANGUAGE_NAMES: [&str; 6] =
