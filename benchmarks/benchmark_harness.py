@@ -1,4 +1,4 @@
-from __future__ import annotations
+﻿from __future__ import annotations
 
 from argparse import ArgumentParser, ArgumentTypeError
 from dataclasses import asdict
@@ -144,7 +144,7 @@ def main() -> int:
 
 
 def build_rust_binaries() -> None:
-	run_command(["cargo", "build", "--release", "-p", "sephera_cli", "-p", "sephera_tools"])
+	run_command(["cargo", "build", "--release", "-p", "sephera", "-p", "sephera_tools"])
 
 
 def generate_benchmark_corpus(dataset_names: tuple[DatasetName, ...]) -> None:
@@ -318,3 +318,4 @@ def positive_int(value: str) -> int:
 	if parsed <= 0:
 		raise ArgumentTypeError("expected a positive integer")
 	return parsed
+
