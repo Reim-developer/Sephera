@@ -2,6 +2,16 @@
 name = "sephera_core"
 version.workspace = true
 edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Shared analysis engine behind the Sephera CLI for LOC metrics and context building."
+documentation = "https://docs.rs/sephera_core"
+readme = "README.crates-io.md"
+keywords = ["loc", "context", "analysis", "codebase", "scanner"]
+categories = ["development-tools", "text-processing"]
 
 [lib]
 crate-type = ["rlib"]
