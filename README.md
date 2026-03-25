@@ -13,7 +13,7 @@ Current release line: `v0.2.1` (pre-1.0).
 Sephera currently focuses on two practical commands:
 
 - `loc`: fast, language-aware line counting across project trees
-- `context`: deterministic Markdown or JSON bundles that stay within real prompt budgets
+- `context`: deterministic Markdown or JSON bundles for full repos, focused paths, and Git-backed review flows that stay within real prompt budgets
 
 It is intentionally narrow in scope. Sephera does not try to be an agent runtime, a hosted service, or a provider-specific AI wrapper.
 
@@ -42,7 +42,7 @@ The goal is not to replace every code metrics tool. The goal is to pair trustwor
 ## Key Features
 
 - Fast `loc` analysis with per-language totals, terminal table output, and elapsed-time reporting
-- Deterministic `context` packs with focus-path prioritization, approximate token budgeting, and export to Markdown or JSON
+- Deterministic `context` packs with focus-path prioritization, Git diff awareness, approximate token budgeting, and export to Markdown or JSON
 - Repo-level `context` defaults and named profiles through `.sephera.toml`, with CLI flags overriding config
 - Generated built-in language metadata sourced from [`config/languages.yml`](config/languages.yml)
 - Byte-oriented scanning with newline portability for `LF`, `CRLF`, and classic `CR`
@@ -51,6 +51,7 @@ The goal is not to replace every code metrics tool. The goal is to pair trustwor
 ## Common Uses
 
 - Inspect a repository before refactoring or reviewing changes
+- Build a review pack from `HEAD~1`, `origin/master`, or your current working tree
 - Build a focused context bundle for ChatGPT, Claude, Gemini, or internal tooling
 - Prepare a structured handoff for another engineer or agent
 - Export machine-readable context for downstream automation
@@ -83,6 +84,12 @@ Build a focused context pack and export it to JSON:
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
+Build a review-focused pack from Git changes:
+
+```bash
+sephera context --path . --diff HEAD~1 --budget 32k
+```
+
 List the profiles available for the current repository:
 
 ```bash
@@ -99,6 +106,7 @@ format = "markdown"
 output = "reports/context.md"
 
 [profiles.review.context]
+diff = "origin/master"
 focus = ["crates/sephera_core", "crates/sephera_cli"]
 budget = "32k"
 output = "reports/review.md"
