@@ -5,17 +5,17 @@ use serde::Deserialize;
 
 use crate::budget::parse_token_budget;
 
-const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows. The `context` command can also load defaults and named profiles from `.sephera.toml`, then let explicit CLI flags override them.";
+const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows. The `context` command can also load defaults and named profiles from `.sephera.toml`, let explicit CLI flags override them, and build packs centered on Git changes via `--diff`.";
 
-const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json";
+const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff working-tree\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json";
 
 const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nIgnore patterns containing `*`, `?`, or `[` are treated as globs. All other ignore patterns are compiled as regular expressions and matched against normalized relative paths.";
 
 const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"";
 
-const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags.";
+const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode.";
 
-const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
+const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -114,6 +114,7 @@ pub struct ContextArgs {
         conflicts_with = "profile",
         conflicts_with = "ignore",
         conflicts_with = "focus",
+        conflicts_with = "diff",
         conflicts_with = "budget",
         conflicts_with = "format",
         conflicts_with = "output",
@@ -139,6 +140,15 @@ pub struct ContextArgs {
         long_help = "Focused file or directory inside the base path. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended. Focused paths must resolve inside `--path`."
     )]
     pub focus: Vec<PathBuf>,
+
+    /// Git diff source used to prioritize changed files in the context pack.
+    #[arg(
+        long,
+        value_name = "SPEC",
+        help = "Git diff source used to prioritize changed files in the context pack.",
+        long_help = "Git diff source used to prioritize changed files in the context pack. Built-in keywords are `working-tree`, `staged`, and `unstaged`. Any other value is treated as a single Git base ref and compared against `HEAD` through merge-base semantics. Values from `.sephera.toml` are loaded first, then profile values override them, then an explicit CLI value wins."
+    )]
+    pub diff: Option<String>,
 
     /// Approximate token budget, for example `32000`, `32k`, or `1m`
     #[arg(
@@ -222,6 +232,8 @@ mod tests {
             "review",
             "--focus",
             "crates/sephera_core",
+            "--diff",
+            "origin/master",
             "--budget",
             "32k",
             "--format",
@@ -243,6 +255,7 @@ mod tests {
                     arguments.focus,
                     vec![std::path::PathBuf::from("crates/sephera_core")]
                 );
+                assert_eq!(arguments.diff.as_deref(), Some("origin/master"));
                 assert_eq!(arguments.budget, Some(32_000));
                 assert_eq!(arguments.format, Some(ContextFormat::Json));
                 assert_eq!(
@@ -263,6 +276,7 @@ mod tests {
         assert!(help.contains(".sephera.toml"));
         assert!(help.contains("reports/context.json"));
         assert!(help.contains("--list-profiles"));
+        assert!(help.contains("--diff working-tree"));
     }
 
     #[test]
@@ -280,11 +294,14 @@ mod tests {
         assert!(context_help.contains("--no-config"));
         assert!(context_help.contains("--profile <NAME>"));
         assert!(context_help.contains("--list-profiles"));
+        assert!(context_help.contains("--diff <SPEC>"));
         assert!(context_help.contains("--output <FILE>"));
         assert!(context_help.contains("built-in defaults"));
         assert!(context_help.contains("[profiles.<name>.context]"));
         assert!(context_help.contains("reports/context.md"));
         assert!(context_help.contains("reports/context.json"));
+        assert!(context_help.contains("origin/master"));
+        assert!(context_help.contains("working-tree"));
     }
 
     #[test]
@@ -311,6 +328,8 @@ mod tests {
             "--path",
             "demo",
             "--list-profiles",
+            "--diff",
+            "working-tree",
             "--format",
             "json",
         ])
