@@ -55,6 +55,16 @@ jobs:
       - name: Install docs dependencies
         run: npm --prefix docs ci
 
+      - name: Validate crates.io token
+        shell: bash
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: |
+          if [[ -z "${CARGO_REGISTRY_TOKEN}" ]]; then
+            echo "::error::Missing CRATES_IO_TOKEN. Add it to the protected 'release' environment secrets before running this workflow."
+            exit 1
+          fi
+
       - name: Run release checks
         run: |
           cargo fmt --all --check
