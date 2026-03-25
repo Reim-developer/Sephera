@@ -5,17 +5,17 @@ use serde::Deserialize;
 
 use crate::budget::parse_token_budget;
 
-const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows. The `context` command can also load defaults from `.sephera.toml` and lets CLI flags override them.";
+const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows. The `context` command can also load defaults and named profiles from `.sephera.toml`, then let explicit CLI flags override them.";
 
-const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json";
+const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json";
 
 const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nIgnore patterns containing `*`, `?`, or `[` are treated as globs. All other ignore patterns are compiled as regular expressions and matched against normalized relative paths.";
 
 const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"";
 
-const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `.sephera.toml`, then explicit CLI flags.";
+const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags.";
 
-const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
+const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -97,12 +97,37 @@ pub struct ContextArgs {
     )]
     pub no_config: bool,
 
+    /// Named profile from `.sephera.toml` under `[profiles.<name>.context]`.
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "no_config",
+        help = "Named context profile from `.sephera.toml`.",
+        long_help = "Named context profile from `.sephera.toml`, resolved under `[profiles.<name>.context]`. Profile values layer on top of `[context]`, then explicit CLI flags still win. This flag requires config loading to stay enabled."
+    )]
+    pub profile: Option<String>,
+
+    /// List available context profiles from the resolved `.sephera.toml` file and exit.
+    #[arg(
+        long,
+        conflicts_with = "no_config",
+        conflicts_with = "profile",
+        conflicts_with = "ignore",
+        conflicts_with = "focus",
+        conflicts_with = "budget",
+        conflicts_with = "format",
+        conflicts_with = "output",
+        help = "List available context profiles and exit.",
+        long_help = "List available context profiles from the resolved `.sephera.toml` file and exit. Sephera uses either `--config <FILE>` or the normal auto-discovery rules. This mode does not build a context pack."
+    )]
+    pub list_profiles: bool,
+
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
         long,
         value_name = "PATTERN",
         help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Values from `.sephera.toml` are loaded first, then repeated CLI flags are appended."
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended."
     )]
     pub ignore: Vec<String>,
 
@@ -111,7 +136,7 @@ pub struct ContextArgs {
         long,
         value_name = "PATH",
         help = "Focused file or directory inside the base path.",
-        long_help = "Focused file or directory inside the base path. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then repeated CLI flags are appended. Focused paths must resolve inside `--path`."
+        long_help = "Focused file or directory inside the base path. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended. Focused paths must resolve inside `--path`."
     )]
     pub focus: Vec<PathBuf>,
 
@@ -121,7 +146,7 @@ pub struct ContextArgs {
         value_parser = parse_token_budget,
         value_name = "TOKENS",
         help = "Approximate token budget, for example `32000`, `32k`, or `1m`.",
-        long_help = "Approximate token budget for the generated context pack. This is a model-agnostic estimate, not tokenizer-exact accounting. Supported suffixes are `k` for thousands and `m` for millions. When omitted, Sephera uses `.sephera.toml` if present, otherwise the built-in default of `128k`."
+        long_help = "Approximate token budget for the generated context pack. This is a model-agnostic estimate, not tokenizer-exact accounting. Supported suffixes are `k` for thousands and `m` for millions. When omitted, Sephera uses a selected profile if present, otherwise `.sephera.toml`, otherwise the built-in default of `128k`."
     )]
     pub budget: Option<u64>,
 
@@ -131,7 +156,7 @@ pub struct ContextArgs {
         value_enum,
         value_name = "FORMAT",
         help = "Output format for the generated context pack.",
-        long_help = "Output format for the generated context pack. Use `markdown` for a human-readable export that is easy to paste into chat tools, or `json` for machine-readable automation. When omitted, Sephera uses `.sephera.toml` if present, otherwise the built-in default of `markdown`."
+        long_help = "Output format for the generated context pack. Use `markdown` for a human-readable export that is easy to paste into chat tools, or `json` for machine-readable automation. When omitted, Sephera uses a selected profile if present, otherwise `.sephera.toml`, otherwise the built-in default of `markdown`."
     )]
     pub format: Option<ContextFormat>,
 
@@ -140,7 +165,7 @@ pub struct ContextArgs {
         long,
         value_name = "FILE",
         help = "Optional file path for exporting the rendered context pack.",
-        long_help = "Optional file path for exporting the rendered context pack. Parent directories are created automatically when needed. When omitted, Sephera uses `.sephera.toml` if present, otherwise writes the result to standard output."
+        long_help = "Optional file path for exporting the rendered context pack. Parent directories are created automatically when needed. When omitted, Sephera uses a selected profile if present, otherwise `.sephera.toml`, otherwise writes the result to standard output."
     )]
     pub output: Option<PathBuf>,
 }
@@ -193,6 +218,8 @@ mod tests {
             "demo",
             "--config",
             ".sephera.toml",
+            "--profile",
+            "review",
             "--focus",
             "crates/sephera_core",
             "--budget",
@@ -211,6 +238,7 @@ mod tests {
                     arguments.config,
                     Some(std::path::PathBuf::from(".sephera.toml"))
                 );
+                assert_eq!(arguments.profile.as_deref(), Some("review"));
                 assert_eq!(
                     arguments.focus,
                     vec![std::path::PathBuf::from("crates/sephera_core")]
@@ -234,6 +262,7 @@ mod tests {
         assert!(help.contains("LLM-ready context packs"));
         assert!(help.contains(".sephera.toml"));
         assert!(help.contains("reports/context.json"));
+        assert!(help.contains("--list-profiles"));
     }
 
     #[test]
@@ -249,8 +278,11 @@ mod tests {
         assert!(context_help.contains("json"));
         assert!(context_help.contains("--config <FILE>"));
         assert!(context_help.contains("--no-config"));
+        assert!(context_help.contains("--profile <NAME>"));
+        assert!(context_help.contains("--list-profiles"));
         assert!(context_help.contains("--output <FILE>"));
         assert!(context_help.contains("built-in defaults"));
+        assert!(context_help.contains("[profiles.<name>.context]"));
         assert!(context_help.contains("reports/context.md"));
         assert!(context_help.contains("reports/context.json"));
     }
@@ -269,5 +301,21 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("--no-config"));
+    }
+
+    #[test]
+    fn rejects_list_profiles_with_context_output_flags() {
+        let error = Cli::try_parse_from([
+            "sephera",
+            "context",
+            "--path",
+            "demo",
+            "--list-profiles",
+            "--format",
+            "json",
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--list-profiles"));
     }
 }
