@@ -10,7 +10,7 @@ cargo-fuzz = true
 [dependencies]
 arbitrary = { version = "1.4.2", features = ["derive"] }
 libfuzzer-sys = "0.4.10"
-sephera_cli = { path = "../crates/sephera_cli" }
+sephera = { path = "../crates/sephera_cli" }
 sephera_core = { path = "../crates/sephera_core" }
 tempfile = "3.23.0"
 
