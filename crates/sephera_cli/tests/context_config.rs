@@ -82,6 +82,45 @@ fn auto_discovery_applies_context_config_for_json_output() {
 }
 
 #[test]
+fn selected_profile_overrides_base_context_values() {
+    let temp_dir = build_demo_repo();
+    write_file(
+        temp_dir.path(),
+        ".sephera.toml",
+        b"[context]\nfocus = [\"src/lib.rs\"]\nbudget = \"16k\"\nformat = \"markdown\"\n\n[profiles.review.context]\nfocus = [\"tests/basic.rs\"]\nbudget = \"64k\"\nformat = \"json\"\noutput = \"reports/review.json\"\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "context",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--profile",
+            "review",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let exported = std::fs::read_to_string(
+        temp_dir.path().join("reports").join("review.json"),
+    )
+    .unwrap();
+    let parsed_json: Value = serde_json::from_str(&exported).unwrap();
+    assert_eq!(parsed_json["metadata"]["budget_tokens"], 64_000);
+    assert_eq!(
+        parsed_json["metadata"]["focus_paths"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|value| value.as_str().unwrap())
+            .collect::<Vec<_>>(),
+        vec!["src/lib.rs", "tests/basic.rs"]
+    );
+}
+
+#[test]
 fn cli_scalar_flags_override_config_values() {
     let temp_dir = build_demo_repo();
     write_file(
@@ -112,6 +151,39 @@ fn cli_scalar_flags_override_config_values() {
     let exported = std::fs::read_to_string(override_path).unwrap();
     let parsed_json: Value = serde_json::from_str(&exported).unwrap();
     assert_eq!(parsed_json["metadata"]["budget_tokens"], 32_000);
+}
+
+#[test]
+fn cli_override_still_wins_over_selected_profile() {
+    let temp_dir = build_demo_repo();
+    write_file(
+        temp_dir.path(),
+        ".sephera.toml",
+        b"[context]\nformat = \"markdown\"\n\n[profiles.debug.context]\nbudget = \"64k\"\nformat = \"json\"\noutput = \"reports/debug.json\"\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "context",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--profile",
+            "debug",
+            "--budget",
+            "32k",
+            "--format",
+            "markdown",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let exported = std::fs::read_to_string(
+        temp_dir.path().join("reports").join("debug.json"),
+    )
+    .unwrap();
+    assert!(exported.starts_with("# Sephera Context Pack"));
 }
 
 #[test]
@@ -146,6 +218,55 @@ fn explicit_config_path_bypasses_auto_discovery() {
 }
 
 #[test]
+fn list_profiles_prints_available_names_from_auto_discovered_config() {
+    let temp_dir = build_demo_repo();
+    write_file(
+        temp_dir.path(),
+        ".sephera.toml",
+        b"[profiles.review.context]\nformat = \"markdown\"\n\n[profiles.debug.context]\nformat = \"json\"\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "context",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--list-profiles",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(stdout.contains("Config:"));
+    assert!(stdout.contains("Profiles:"));
+    assert!(stdout.contains("debug"));
+    assert!(stdout.contains("review"));
+}
+
+#[test]
+fn list_profiles_reports_missing_config_cleanly() {
+    let temp_dir = build_demo_repo();
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "context",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--list-profiles",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert_eq!(
+        String::from_utf8(output.stdout).unwrap().trim(),
+        "No `.sephera.toml` file found for the selected path."
+    );
+}
+
+#[test]
 fn no_config_disables_auto_discovery() {
     let temp_dir = build_demo_repo();
     write_file(
@@ -175,6 +296,33 @@ fn no_config_disables_auto_discovery() {
 
     let stdout = String::from_utf8(output.stdout).unwrap();
     assert!(stdout.contains("# Sephera Context Pack"));
+}
+
+#[test]
+fn missing_profile_returns_clear_error() {
+    let temp_dir = build_demo_repo();
+    write_file(
+        temp_dir.path(),
+        ".sephera.toml",
+        b"[context]\nformat = \"markdown\"\n",
+    );
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "context",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--profile",
+            "review",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+
+    let stderr = String::from_utf8(output.stderr).unwrap();
+    assert!(stderr.contains("profile `review` was not found"));
+    assert!(stderr.contains("no profiles are defined"));
 }
 
 #[test]
