@@ -678,7 +678,7 @@ checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
 name = "sephera"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -694,7 +694,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_core"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "globset",
@@ -709,7 +709,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_tools"
-version = "0.2.1"
+version = "0.3.0"
 dependencies = [
  "anyhow",
  "clap",
