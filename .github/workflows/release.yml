@@ -1,0 +1,237 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+    inputs:
+      ref:
+        description: Git ref to build (tag, branch, or commit SHA). Defaults to the selected tag.
+        required: false
+        type: string
+      tag:
+        description: Existing git tag to publish or update on GitHub Releases.
+        required: true
+        type: string
+      prerelease:
+        description: Mark this manual release as a prerelease.
+        required: true
+        default: true
+        type: boolean
+      draft:
+        description: Create or update the release as a draft.
+        required: true
+        default: false
+        type: boolean
+
+concurrency:
+  group: release-${{ github.workflow }}-${{ github.event.inputs.tag || github.ref_name || github.run_id }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  prepare:
+    name: Prepare release metadata
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.prepare.outputs.ref }}
+      tag: ${{ steps.prepare.outputs.tag }}
+      prerelease: ${{ steps.prepare.outputs.prerelease }}
+      draft: ${{ steps.prepare.outputs.draft }}
+    steps:
+      - name: Resolve release metadata
+        id: prepare
+        shell: bash
+        run: |
+          if [[ "${{ github.event_name }}" == "workflow_dispatch" ]]; then
+            REF="${{ inputs.ref }}"
+            TAG="${{ inputs.tag }}"
+
+            if [[ -z "${REF}" ]]; then
+              REF="${TAG}"
+            fi
+
+            PRERELEASE="${{ inputs.prerelease }}"
+            DRAFT="${{ inputs.draft }}"
+          else
+            REF="${GITHUB_REF}"
+            TAG="${GITHUB_REF_NAME}"
+            PRERELEASE="false"
+            DRAFT="false"
+          fi
+
+          if [[ -z "${TAG}" ]]; then
+            echo "::error::Release tag cannot be empty."
+            exit 1
+          fi
+
+          echo "ref=${REF}" >> "$GITHUB_OUTPUT"
+          echo "tag=${TAG}" >> "$GITHUB_OUTPUT"
+          echo "prerelease=${PRERELEASE}" >> "$GITHUB_OUTPUT"
+          echo "draft=${DRAFT}" >> "$GITHUB_OUTPUT"
+
+  preflight:
+    name: Release Preflight
+    runs-on: ubuntu-latest
+    needs: prepare
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+          fetch-depth: 0
+
+      - name: Validate manual release tag
+        if: ${{ github.event_name == 'workflow_dispatch' }}
+        shell: bash
+        run: |
+          TAG_COMMIT="$(git rev-parse --verify "refs/tags/${{ needs.prepare.outputs.tag }}^{commit}")"
+          HEAD_COMMIT="$(git rev-parse HEAD^{commit})"
+
+          if [[ "${TAG_COMMIT}" != "${HEAD_COMMIT}" ]]; then
+            echo "::error::The selected ref does not match refs/tags/${{ needs.prepare.outputs.tag }}."
+            echo "::error::Expected ${TAG_COMMIT}, got ${HEAD_COMMIT}."
+            exit 1
+          fi
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          cache: npm
+          cache-dependency-path: docs/package-lock.json
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install docs dependencies
+        run: npm --prefix docs ci
+
+      - name: Run release checks
+        run: |
+          cargo fmt --all --check
+          cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo test --workspace
+          npm run docs:build
+
+  build:
+    name: Build release (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    needs:
+      - prepare
+      - preflight
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: sephera.exe
+            archive_ext: zip
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-musl
+            binary_name: sephera
+            archive_ext: tar.gz
+          - os: macos-13
+            target: x86_64-apple-darwin
+            binary_name: sephera
+            archive_ext: tar.gz
+          - os: macos-14
+            target: aarch64-apple-darwin
+            binary_name: sephera
+            archive_ext: tar.gz
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: ${{ needs.prepare.outputs.ref }}
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install musl tools
+        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        run: sudo apt-get update && sudo apt-get install --yes musl-tools
+
+      - name: Build release binary
+        run: cargo build --locked --release --bin sephera --target ${{ matrix.target }}
+
+      - name: Package Windows archive
+        if: ${{ runner.os == 'Windows' }}
+        shell: pwsh
+        run: |
+          $archiveBase = "sephera-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}"
+          $packageDir = Join-Path "dist" $archiveBase
+
+          New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
+          Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" (Join-Path $packageDir "${{ matrix.binary_name }}")
+          Copy-Item "LICENSE" (Join-Path $packageDir "LICENSE")
+
+          Compress-Archive -Path $packageDir -DestinationPath "dist/$archiveBase.zip" -Force
+
+      - name: Package Unix archive
+        if: ${{ runner.os != 'Windows' }}
+        shell: bash
+        run: |
+          ARCHIVE_BASE="sephera-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}"
+          PACKAGE_DIR="dist/${ARCHIVE_BASE}"
+
+          mkdir -p "${PACKAGE_DIR}"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${PACKAGE_DIR}/${{ matrix.binary_name }}"
+          cp "LICENSE" "${PACKAGE_DIR}/LICENSE"
+
+          tar -C dist -czf "dist/${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}"
+
+      - name: Upload packaged archive
+        uses: actions/upload-artifact@v4
+        with:
+          name: release-${{ matrix.target }}
+          path: dist/sephera-${{ needs.prepare.outputs.tag }}-${{ matrix.target }}.${{ matrix.archive_ext }}
+          if-no-files-found: error
+
+  publish:
+    name: Publish GitHub Release
+    runs-on: ubuntu-latest
+    needs:
+      - prepare
+      - build
+    permissions:
+      contents: write
+    steps:
+      - name: Download packaged archives
+        uses: actions/download-artifact@v4
+        with:
+          pattern: release-*
+          merge-multiple: true
+          path: release-assets
+
+      - name: Generate checksums
+        shell: bash
+        run: |
+          cd release-assets
+          sha256sum sephera-* > SHA256SUMS.txt
+
+      - name: Publish release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ needs.prepare.outputs.tag }}
+          draft: ${{ needs.prepare.outputs.draft == 'true' }}
+          prerelease: ${{ needs.prepare.outputs.prerelease == 'true' }}
+          overwrite_files: true
+          fail_on_unmatched_files: true
+          files: |
+            release-assets/sephera-*
+            release-assets/SHA256SUMS.txt

@@ -14,3 +14,9 @@ rust-version = "1.85"
 
 [workspace.dependencies]
 sephera_core = { path = "crates/sephera_core", version = "0.2.0" }
+
+[profile.release]
+opt-level = 3
+lto = "thin"
+codegen-units = 1
+strip = "symbols"
