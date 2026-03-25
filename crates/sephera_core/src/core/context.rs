@@ -12,6 +12,7 @@ mod types;
 
 pub use builder::ContextBuilder;
 pub use types::{
-    ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary,
-    ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
+    ContextDiffMetadata, ContextDiffSelection, ContextExcerpt, ContextFile,
+    ContextGroupKind, ContextGroupSummary, ContextLanguageSummary,
+    ContextMetadata, ContextReport, SelectionClass,
 };
