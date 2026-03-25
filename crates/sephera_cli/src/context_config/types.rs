@@ -18,6 +18,7 @@ pub struct LoadedSepheraConfig {
 pub struct LoadedContextSection {
     pub ignore: Vec<String>,
     pub focus: Vec<PathBuf>,
+    pub diff: Option<String>,
     pub budget: Option<u64>,
     pub format: Option<ContextFormat>,
     pub output: Option<PathBuf>,
@@ -28,6 +29,7 @@ pub struct ResolvedContextOptions {
     pub base_path: PathBuf,
     pub ignore: Vec<String>,
     pub focus: Vec<PathBuf>,
+    pub diff: Option<String>,
     pub budget: u64,
     pub format: ContextFormat,
     pub output: Option<PathBuf>,
@@ -61,6 +63,7 @@ pub struct ContextToml {
     pub ignore: Vec<String>,
     #[serde(default)]
     pub focus: Vec<PathBuf>,
+    pub diff: Option<String>,
     pub budget: Option<TokenBudgetValue>,
     pub format: Option<ContextFormat>,
     pub output: Option<PathBuf>,
