@@ -2,6 +2,8 @@ use std::path::PathBuf;
 
 use serde::Serialize;
 
+use crate::core::compression::CompressionMode;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextReport {
     pub metadata: ContextMetadata,
@@ -27,6 +29,7 @@ pub struct ContextMetadata {
     pub focus_paths: Vec<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub diff: Option<ContextDiffMetadata>,
+    pub compression_mode: CompressionMode,
     pub budget_tokens: u64,
     pub metadata_budget_tokens: u64,
     pub excerpt_budget_tokens: u64,
@@ -81,6 +84,7 @@ pub struct ContextFile {
     pub size_bytes: u64,
     pub estimated_tokens: u64,
     pub truncated: bool,
+    pub compressed: bool,
     pub group: ContextGroupKind,
     pub selection_class: SelectionClass,
     pub excerpt: ContextExcerpt,

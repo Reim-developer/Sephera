@@ -2,18 +2,20 @@
 
 [![CI](https://img.shields.io/github/actions/workflow/status/Reim-developer/Sephera/ci.yml?branch=master&label=ci)](https://github.com/Reim-developer/Sephera/actions/workflows/ci.yml)
 [![Docs](https://img.shields.io/website?url=https%3A%2F%2Fsephera.vercel.app&label=docs)](https://sephera.vercel.app)
+[![Crates.io](https://img.shields.io/crates/v/sephera.svg)](https://crates.io/crates/sephera)
 [![License: GPLv3](https://img.shields.io/badge/license-GPLv3-blue.svg)](LICENSE)
 
 Sephera is a local-first Rust CLI for two jobs that are usually split across separate tools: repository metrics and deterministic context export.
 
 Documentation: <https://sephera.vercel.app>
 
-Current release line: `v0.3.0` (pre-1.0).
+Current release line: `v0.4.0` (pre-1.0).
 
-Sephera currently focuses on two practical commands:
+Sephera currently focuses on three practical commands:
 
 - `loc`: fast, language-aware line counting across project trees
-- `context`: deterministic Markdown or JSON bundles for full repos, focused paths, and Git-backed review flows that stay within real prompt budgets
+- `context`: deterministic Markdown or JSON bundles with AST compression, focus paths, and Git diff awareness
+- `mcp`: built-in MCP server for direct AI agent integration
 
 It is intentionally narrow in scope. Sephera does not try to be an agent runtime, a hosted service, or a provider-specific AI wrapper.
 
@@ -39,10 +41,48 @@ Sephera is useful when you need more than raw totals:
 
 The goal is not to replace every code metrics tool. The goal is to pair trustworthy repository signals with context export that is actually usable in modern review and AI-assisted workflows.
 
+## AST Compression
+
+Sephera can compress source files using Tree-sitter to extract only structural information—function signatures, type definitions, imports, and trait declarations—while replacing implementation bodies with `{ ... }`.
+
+This typically reduces token usage by 50-70% without losing the API surface or architectural overview of the codebase.
+
+Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C++, C.
+
+```bash
+sephera context --path . --compress signatures --budget 64k
+sephera context --path . --compress skeleton
+```
+
+## MCP Server
+
+Sephera includes a built-in MCP (Model Context Protocol) server that exposes `loc` and `context` as tools over stdio transport.
+
+This allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly without shell wrappers.
+
+```bash
+sephera mcp
+```
+
+Example MCP client configuration (Claude Desktop):
+
+```json
+{
+  "mcpServers": {
+    "sephera": {
+      "command": "sephera",
+      "args": ["mcp"]
+    }
+  }
+}
+```
+
 ## Key Features
 
 - Fast `loc` analysis with per-language totals, terminal table output, and elapsed-time reporting
 - Deterministic `context` packs with focus-path prioritization, Git diff awareness, approximate token budgeting, and export to Markdown or JSON
+- Tree-sitter AST compression for context excerpts (signatures, skeleton modes) with 50-70% token reduction
+- Built-in MCP server for direct AI agent integration over stdio
 - Repo-level `context` defaults and named profiles through `.sephera.toml`, with CLI flags overriding config
 - Generated built-in language metadata sourced from [`config/languages.yml`](config/languages.yml)
 - Byte-oriented scanning with newline portability for `LF`, `CRLF`, and classic `CR`
@@ -55,6 +95,8 @@ The goal is not to replace every code metrics tool. The goal is to pair trustwor
 - Build a focused context bundle for ChatGPT, Claude, Gemini, or internal tooling
 - Prepare a structured handoff for another engineer or agent
 - Export machine-readable context for downstream automation
+- Reduce context token usage with AST compression while preserving API surface
+- Connect AI agents directly to Sephera through the MCP server
 
 ## Install
 
@@ -76,6 +118,18 @@ Count lines of code in the current repository:
 
 ```bash
 sephera loc --path .
+```
+
+Compress context excerpts to reduce token usage:
+
+```bash
+sephera context --path . --compress signatures --budget 64k
+```
+
+Start MCP server for AI agent integration:
+
+```bash
+sephera mcp
 ```
 
 Build a focused context pack and export it to JSON:
@@ -102,6 +156,7 @@ Configure repo-level defaults for `context`:
 [context]
 focus = ["crates/sephera_core"]
 budget = "64k"
+compress = "signatures"
 format = "markdown"
 output = "reports/context.md"
 
@@ -160,6 +215,7 @@ npm run docs:preview
 
 - `crates/sephera_cli`: CLI argument parsing, command dispatch, config resolution, and output rendering
 - `crates/sephera_core`: shared analysis engine, traversal, ignore matching, `loc`, and `context`
+- `crates/sephera_mcp`: MCP server implementation (Model Context Protocol)
 - `crates/sephera_tools`: explicit code generation and synthetic benchmark corpus generation
 - `config/languages.yml`: editable source of truth for built-in language metadata
 - `benchmarks/`: benchmark harness, generated corpora, reports, and methodology notes

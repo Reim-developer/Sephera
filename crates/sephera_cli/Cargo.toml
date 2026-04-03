@@ -7,10 +7,10 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "Local-first Rust CLI for repository metrics and deterministic LLM context packs."
+description = "Local-first Rust CLI for repository metrics and deterministic LLM context packs with AST compression and MCP."
 documentation = "https://docs.rs/sephera"
 readme = "README.crates-io.md"
-keywords = ["loc", "context", "code-analysis", "cli", "llm"]
+keywords = ["loc", "context", "mcp", "llm", "tree-sitter"]
 categories = ["command-line-utilities", "development-tools"]
 default-run = "sephera"
 autobins = false
@@ -25,8 +25,10 @@ clap = { version = "4.6.0", features = ["derive"] }
 comfy-table = "7.2.1"
 indicatif = "0.18.4"
 sephera_core.workspace = true
+sephera_mcp.workspace = true
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
+tokio = { version = "1", features = ["rt"] }
 toml = "0.9.8"
 
 [dev-dependencies]

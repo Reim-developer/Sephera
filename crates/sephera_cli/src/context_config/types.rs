@@ -2,7 +2,10 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Deserialize;
 
-use crate::{args::ContextFormat, budget::parse_token_budget};
+use crate::{
+    args::{ContextCompress, ContextFormat},
+    budget::parse_token_budget,
+};
 
 pub const CONFIG_FILE_NAME: &str = ".sephera.toml";
 pub const DEFAULT_CONTEXT_BUDGET: u64 = 128_000;
@@ -20,6 +23,7 @@ pub struct LoadedContextSection {
     pub focus: Vec<PathBuf>,
     pub diff: Option<String>,
     pub budget: Option<u64>,
+    pub compress: Option<ContextCompress>,
     pub format: Option<ContextFormat>,
     pub output: Option<PathBuf>,
 }
@@ -31,6 +35,7 @@ pub struct ResolvedContextOptions {
     pub focus: Vec<PathBuf>,
     pub diff: Option<String>,
     pub budget: u64,
+    pub compress: Option<ContextCompress>,
     pub format: ContextFormat,
     pub output: Option<PathBuf>,
 }
@@ -65,6 +70,7 @@ pub struct ContextToml {
     pub focus: Vec<PathBuf>,
     pub diff: Option<String>,
     pub budget: Option<TokenBudgetValue>,
+    pub compress: Option<ContextCompress>,
     pub format: Option<ContextFormat>,
     pub output: Option<PathBuf>,
 }

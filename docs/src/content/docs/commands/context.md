@@ -20,6 +20,7 @@ A context pack currently contains:
 - dominant language summaries
 - grouped file sections such as focus, changes, entrypoints, testing, workflows, and general files
 - excerpts with truncation markers when the budget is tight
+- compressed AST excerpts when `--compress` is enabled
 
 ## Basic usage
 
@@ -57,6 +58,12 @@ Export JSON instead:
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
 ```
 
+Compress AST out of files using Tree-sitter, retaining only function signatures, structs, and imports:
+
+```bash
+sephera context --path . --compress signatures
+```
+
 Build a review pack from Git changes:
 
 ```bash
@@ -90,6 +97,19 @@ Important behavior:
 - changed files stay inside the selected `--path`
 - deleted files are counted in diff metadata but skipped from excerpts because there is no workspace content left to read
 - renamed files use the new path in the final report
+
+## AST Compression
+
+The `--compress` flag tells Sephera to use Tree-sitter to drop implementations and compress source files into API-only excerpts, significantly reducing the prompt burden. It replaces complex blocks with `{ ... }`.
+
+Supported modes:
+
+- `none` (default): Standard full-text excerpts.
+- `signatures`: Retains structs, traits, imports, and function signatures. Eliminates implementation code.
+- `skeleton`: Similar to `signatures`, but keeps control-flow structures (such as `if`, `for`, `match`) without internal block details.
+
+Languages with built-in AST support: Rust, Python, TypeScript, JavaScript, Go, Java, C++, C.
+If a file's language is unsupported, Sephera automatically falls back to `none` (full excerpt) for that file.
 
 ## Budget model
 

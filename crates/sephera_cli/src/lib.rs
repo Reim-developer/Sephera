@@ -1,4 +1,4 @@
-﻿#![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
+#![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
 mod args;
 mod budget;

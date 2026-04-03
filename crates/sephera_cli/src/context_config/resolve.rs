@@ -93,6 +93,10 @@ fn merge_context_sources(
             .or_else(|| selected_profile.and_then(|profile| profile.budget))
             .or_else(|| base_context.and_then(|context| context.budget))
             .unwrap_or(DEFAULT_CONTEXT_BUDGET),
+        compress: arguments
+            .compress
+            .or_else(|| selected_profile.and_then(|profile| profile.compress))
+            .or_else(|| base_context.and_then(|context| context.compress)),
         format: arguments
             .format
             .or_else(|| selected_profile.and_then(|profile| profile.format))
@@ -187,6 +191,7 @@ mod tests {
             focus: Vec::new(),
             diff: None,
             budget: None,
+            compress: None,
             format: None,
             output: None,
         }
@@ -208,6 +213,7 @@ mod tests {
                 focus: vec![temp_dir.path().join("src")],
                 diff: Some(String::from("origin/master")),
                 budget: Some(16_000),
+                compress: None,
                 format: Some(ContextFormat::Markdown),
                 output: Some(temp_dir.path().join("config.md")),
             },
@@ -225,6 +231,7 @@ mod tests {
                 focus: vec![temp_dir.path().join("src")],
                 diff: Some(String::from("origin/master")),
                 budget: 48_000,
+                compress: None,
                 format: ContextFormat::Json,
                 output: Some(temp_dir.path().join("cli.json")),
             }
@@ -247,6 +254,7 @@ mod tests {
                 focus: vec![temp_dir.path().join("src")],
                 diff: Some(String::from("origin/master")),
                 budget: None,
+                compress: None,
                 format: None,
                 output: None,
             },
@@ -359,6 +367,7 @@ mod tests {
                 focus: vec![temp_dir.path().join("src")],
                 diff: Some(String::from("origin/master")),
                 budget: Some(16_000),
+                compress: None,
                 format: Some(ContextFormat::Markdown),
                 output: Some(temp_dir.path().join("base.md")),
             },
@@ -369,6 +378,7 @@ mod tests {
                     focus: vec![temp_dir.path().join("tests")],
                     diff: Some(String::from("working-tree")),
                     budget: Some(32_000),
+                    compress: None,
                     format: Some(ContextFormat::Json),
                     output: Some(temp_dir.path().join("profile.json")),
                 },
@@ -410,6 +420,7 @@ mod tests {
                     focus: Vec::new(),
                     diff: Some(String::from("working-tree")),
                     budget: Some(32_000),
+                    compress: None,
                     format: Some(ContextFormat::Json),
                     output: Some(temp_dir.path().join("profile.json")),
                 },

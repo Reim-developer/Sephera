@@ -86,8 +86,11 @@ jobs:
       - name: Dry-run publish sephera_core
         run: cargo publish --dry-run -p sephera_core
 
-      - name: Dry-run publish sephera with local sephera_core patch
-        run: cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
+      - name: Dry-run publish sephera_mcp with local sephera_core patch
+        run: cargo publish --dry-run -p sephera_mcp --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
+
+      - name: Dry-run publish sephera with local patches
+        run: cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'" --config "patch.crates-io.sephera_mcp.path='crates/sephera_mcp'"
 
   pyright:
     name: Pyright

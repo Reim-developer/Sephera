@@ -7,7 +7,7 @@ description: Configure repo-level defaults for the context command.
 
 Sephera currently supports repo-level configuration for the `context` command through a `.sephera.toml` file.
 
-This page reflects the `v0.3.x` configuration model.
+This page reflects the `v0.4.x` configuration model.
 
 ## Discovery rules
 
@@ -54,6 +54,9 @@ diff = "working-tree"
 
 # Approximate token budget for the report.
 budget = "64k"
+
+# AST Compression mode ("none", "signatures", or "skeleton").
+compress = "signatures"
 
 # Export format. Supported values are "markdown" and "json".
 format = "markdown"
@@ -143,6 +146,23 @@ Supported forms:
 
 The budget is model-agnostic and approximate. It is used to bound excerpts and metadata, not to reproduce a provider-specific tokenizer exactly.
 
+### `compress`
+
+`compress` controls whether and how code excerpts are compressed using Tree-sitter.
+
+Supported values:
+
+- `"none"` (default): full source code is exported
+- `"signatures"`: removes all implementations and only exports type definitions, trait declarations, imports, and function signatures.
+- `"skeleton"`: similar to `signatures`, but keeps control-flow skeletons (`if`, `for`, `match`) without internal block details.
+
+Example:
+
+```toml
+[context]
+compress = "signatures"
+```
+
 ### `format`
 
 `format` selects the output representation.
@@ -205,10 +225,10 @@ When you select a profile, Sephera merges values in this order:
 
 That means:
 
-- profile scalar values such as `diff`, `budget`, `format`, and `output` override `[context]`
+- profile scalar values such as `diff`, `budget`, `compress`, `format`, and `output` override `[context]`
 - profile list values such as `ignore` and `focus` are appended after `[context]`
 - repeated CLI `--ignore` and `--focus` flags are appended last
-- explicit CLI scalars such as `--diff`, `--budget`, `--format`, and `--output` still win over the selected profile
+- explicit CLI scalars such as `--diff`, `--budget`, `--compress`, `--format`, and `--output` still win over the selected profile
 
 ### Listing profiles
 

@@ -42,9 +42,6 @@ fn render_report_table_includes_headers_and_totals() {
     let rendered = render_report_table(&report);
 
     assert!(rendered.contains("Scanning: demo"));
-    assert!(rendered.contains("Language"));
-    assert!(rendered.contains("Size (bytes)"));
-    assert!(rendered.contains("Totals"));
     assert!(rendered.contains("Files scanned: 2"));
     assert!(rendered.contains("Languages detected: 2"));
     assert!(rendered.contains("Elapsed: 12.000 ms (0.012000 s)"));

@@ -6,6 +6,7 @@ use std::{
 use anyhow::{Context, Result};
 
 use crate::core::{
+    compression::CompressionMode,
     ignore::IgnoreMatcher,
     project_files::{ProjectFile, collect_project_files},
 };
@@ -37,6 +38,7 @@ pub struct ContextBuilder {
     pub focus_paths: Vec<PathBuf>,
     pub diff_selection: Option<ContextDiffSelection>,
     pub budget_tokens: u64,
+    pub compression_mode: CompressionMode,
 }
 
 impl ContextBuilder {
@@ -53,6 +55,7 @@ impl ContextBuilder {
             focus_paths,
             diff_selection: None,
             budget_tokens,
+            compression_mode: CompressionMode::None,
         }
     }
 
@@ -62,6 +65,12 @@ impl ContextBuilder {
         diff_selection: ContextDiffSelection,
     ) -> Self {
         self.diff_selection = Some(diff_selection);
+        self
+    }
+
+    #[must_use]
+    pub const fn with_compression(mut self, mode: CompressionMode) -> Self {
+        self.compression_mode = mode;
         self
     }
 
@@ -96,7 +105,8 @@ impl ContextBuilder {
         rank_candidates(&mut candidates);
 
         let budget = ContextBudget::new(self.budget_tokens);
-        let files = select_context_files(&candidates, budget)?;
+        let files =
+            select_context_files(&candidates, budget, self.compression_mode)?;
         let estimated_excerpt_tokens =
             files.iter().map(|file| file.estimated_tokens).sum::<u64>();
         let estimated_metadata_tokens = estimate_metadata_tokens(
@@ -129,6 +139,7 @@ impl ContextBuilder {
                             .skipped_deleted_or_missing,
                     }
                 }),
+                compression_mode: self.compression_mode,
                 budget_tokens: budget.total_tokens(),
                 metadata_budget_tokens: budget.metadata_tokens(),
                 excerpt_budget_tokens: budget.excerpt_tokens(),
@@ -187,6 +198,7 @@ fn summarize_languages(
 fn select_context_files(
     candidates: &[ContextCandidate],
     budget: ContextBudget,
+    compression_mode: CompressionMode,
 ) -> Result<Vec<ContextFile>> {
     let mut files = Vec::new();
     let mut used_tokens = 0_u64;
@@ -214,7 +226,8 @@ fn select_context_files(
 
         let is_partial_budget =
             remaining_tokens < excerpt_token_cap(exact_focus);
-        let context_file = build_context_file(candidate, remaining_tokens)?;
+        let context_file =
+            build_context_file(candidate, remaining_tokens, compression_mode)?;
         used_tokens = used_tokens.saturating_add(context_file.estimated_tokens);
 
         if context_file.truncated && is_partial_budget {

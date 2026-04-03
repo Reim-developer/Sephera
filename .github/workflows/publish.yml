@@ -8,6 +8,11 @@ on:
         required: true
         default: true
         type: boolean
+      publish_mcp:
+        description: Publish sephera_mcp
+        required: true
+        default: true
+        type: boolean
       publish_cli:
         description: Publish sephera
         required: true
@@ -34,7 +39,7 @@ jobs:
       - name: Validate selected packages
         shell: bash
         run: |
-          if [[ "${{ inputs.publish_core }}" != "true" && "${{ inputs.publish_cli }}" != "true" ]]; then
+          if [[ "${{ inputs.publish_core }}" != "true" && "${{ inputs.publish_mcp }}" != "true" && "${{ inputs.publish_cli }}" != "true" ]]; then
             echo "::error::Select at least one package to publish."
             exit 1
           fi
@@ -72,7 +77,8 @@ jobs:
           cargo test --workspace
           npm run docs:build
           cargo publish --dry-run -p sephera_core
-          cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
+          cargo publish --dry-run -p sephera_mcp --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
+          cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'" --config "patch.crates-io.sephera_mcp.path='crates/sephera_mcp'"
 
       - name: Read workspace version
         shell: bash
@@ -109,6 +115,29 @@ jobs:
           done
 
           echo "::error::Timed out waiting for sephera_core ${SEPHERA_VERSION} to appear in the crates.io index."
+          exit 1
+
+      - name: Publish sephera_mcp
+        if: ${{ inputs.publish_mcp }}
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
+        run: cargo publish -p sephera_mcp
+
+      - name: Wait for sephera_mcp to reach crates.io index
+        if: ${{ inputs.publish_mcp && inputs.publish_cli }}
+        shell: bash
+        run: |
+          for attempt in {1..20}; do
+            if cargo search sephera_mcp --limit 1 | grep -q "\"${SEPHERA_VERSION}\""; then
+              echo "sephera_mcp ${SEPHERA_VERSION} is visible in the crates.io index."
+              exit 0
+            fi
+
+            echo "Waiting for sephera_mcp ${SEPHERA_VERSION} to propagate (attempt ${attempt}/20)..."
+            sleep 15
+          done
+
+          echo "::error::Timed out waiting for sephera_mcp ${SEPHERA_VERSION} to appear in the crates.io index."
           exit 1
 
       - name: Publish sephera
