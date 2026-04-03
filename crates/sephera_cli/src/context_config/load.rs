@@ -79,6 +79,7 @@ fn convert_context_section(
         focus: resolve_relative_paths(config_directory, context.focus),
         diff: context.diff,
         budget,
+        compress: context.compress,
         format: context.format,
         output: context
             .output
