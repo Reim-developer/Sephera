@@ -270,7 +270,10 @@ mod tests {
         });
 
         let result = server.context(param);
-        assert!(result.is_ok(), "context tool should succeed for manifest dir");
+        assert!(
+            result.is_ok(),
+            "context tool should succeed for manifest dir"
+        );
         let output = result.unwrap();
         assert!(output.contains("\"files_considered\""));
         assert!(output.contains("\"budget_tokens\""));
