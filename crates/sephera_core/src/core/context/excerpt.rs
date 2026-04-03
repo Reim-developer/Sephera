@@ -1,6 +1,9 @@
 use anyhow::Result;
 
-use crate::core::line_slices::LineSlices;
+use crate::core::{
+    compression::{CompressionMode, SupportedLanguage, compress_source},
+    line_slices::LineSlices,
+};
 
 use super::{
     budget::estimate_tokens_from_bytes,
@@ -21,12 +24,39 @@ const FOCUSED_EXCERPT_TOKEN_LIMIT: u64 = 4_000;
 pub(super) fn build_context_file(
     candidate: &ContextCandidate,
     allowed_tokens: u64,
+    compression_mode: CompressionMode,
 ) -> Result<ContextFile> {
     let file_bytes = read_full_bytes(&candidate.absolute_path)?;
     let excerpt_bytes = strip_utf8_bom(&file_bytes);
     let exact_focus = candidate.selection_class == SelectionClass::FocusedFile;
     let excerpt_token_limit =
         excerpt_token_cap(exact_focus).min(allowed_tokens);
+
+    // Try compression when enabled and language is supported.
+    if compression_mode.is_enabled() {
+        if let Some(compressed) =
+            try_compressed_excerpt(candidate, excerpt_bytes, compression_mode)
+        {
+            let estimated_tokens =
+                estimate_tokens_from_bytes(string_len_u64(&compressed.content));
+            let line_count = compressed.content.lines().count().max(1);
+            return Ok(ContextFile {
+                relative_path: candidate.normalized_relative_path.clone(),
+                language: candidate.language,
+                size_bytes: candidate.size_bytes,
+                estimated_tokens,
+                truncated: false,
+                compressed: true,
+                group: candidate.selection_class.group_kind(),
+                selection_class: candidate.selection_class,
+                excerpt: ContextExcerpt {
+                    line_start: 1,
+                    line_end: u64::try_from(line_count).unwrap_or(u64::MAX),
+                    content: compressed.content,
+                },
+            });
+        }
+    }
 
     let (excerpt, estimated_tokens, truncated) = if should_include_full_file(
         candidate.size_bytes,
@@ -52,10 +82,34 @@ pub(super) fn build_context_file(
         size_bytes: candidate.size_bytes,
         estimated_tokens,
         truncated,
+        compressed: false,
         group: candidate.selection_class.group_kind(),
         selection_class: candidate.selection_class,
         excerpt,
     })
+}
+
+/// Attempts to produce a compressed excerpt via Tree-sitter. Returns `None`
+/// when the language is not supported for compression or when compression
+/// fails (in which case we fall back to normal excerpt logic).
+fn try_compressed_excerpt(
+    candidate: &ContextCandidate,
+    _excerpt_bytes: &[u8],
+    compression_mode: CompressionMode,
+) -> Option<crate::core::compression::CompressedOutput> {
+    let language_name = candidate.language?;
+    let ts_language = SupportedLanguage::from_language_name(language_name)?;
+
+    let full_bytes = std::fs::read(&candidate.absolute_path).ok()?;
+    let result =
+        compress_source(&full_bytes, ts_language, compression_mode).ok()?;
+
+    // Only use compressed output if it actually extracted something.
+    if result.items_extracted > 0 {
+        Some(result)
+    } else {
+        None
+    }
 }
 
 #[must_use]
