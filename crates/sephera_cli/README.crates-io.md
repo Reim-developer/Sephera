@@ -5,10 +5,11 @@ Sephera is a local-first Rust CLI for two jobs that are usually split across sep
 - repository metrics
 - deterministic context export
 
-It currently focuses on two practical commands:
+It currently focuses on three practical commands:
 
 - `loc`: fast, language-aware line counting across project trees
-- `context`: deterministic Markdown or JSON bundles for full repos, focused paths, and Git-backed review flows
+- `context`: deterministic Markdown or JSON bundles with AST compression
+- `mcp`: built-in MCP server for direct AI agent integration
 
 Sephera is intentionally narrow in scope. It does not try to be an agent runtime, a hosted service, or a provider-specific AI wrapper.
 
@@ -30,6 +31,18 @@ Build a focused context pack and export it to JSON:
 
 ```bash
 sephera context --path . --focus crates/sephera_core --format json --output reports/context.json
+```
+
+Compress context excerpts to reduce token usage (supports 8 languages):
+
+```bash
+sephera context --path . --compress signatures --budget 64k
+```
+
+Start MCP server for AI agent integration:
+
+```bash
+sephera mcp
 ```
 
 Build a review-focused pack from Git changes:
@@ -54,7 +67,9 @@ Sephera is useful when you need more than raw totals:
 - `context` turns repository structure into deterministic Markdown or JSON bundles
 - `context --diff` can center those bundles on a branch, commit, or current working tree
 - `.sephera.toml` lets teams keep shared context defaults and named profiles in the repository
+- AST compression reduces token usage by 50-70% while preserving API surface
 - focus paths and approximate token budgets make output more practical for LLM use
+- `sephera mcp` provides direct integration with AI agents like Claude Desktop
 
 The goal is not to replace every code metrics tool. The goal is to pair trustworthy repository signals with context export that is actually usable in modern review and AI-assisted workflows.
 
