@@ -42,6 +42,11 @@ pub enum Commands {
         after_long_help = CONTEXT_AFTER_LONG_HELP
     )]
     Context(ContextArgs),
+    /// Start an MCP (Model Context Protocol) server over stdio
+    #[command(
+        long_about = "Start an MCP server that exposes Sephera tools (loc, context) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly."
+    )]
+    Mcp,
 }
 
 #[derive(Debug, Args)]
@@ -160,6 +165,16 @@ pub struct ContextArgs {
     )]
     pub budget: Option<u64>,
 
+    /// Compression mode for context excerpts using Tree-sitter AST extraction
+    #[arg(
+        long,
+        value_enum,
+        value_name = "MODE",
+        help = "Compress context excerpts using Tree-sitter AST extraction.",
+        long_help = "Compress context excerpts using Tree-sitter AST extraction. Use `signatures` to keep only function signatures, type definitions, and imports (typically 50–70 % fewer tokens). Use `skeleton` to also keep top-level control flow. When omitted, Sephera uses a selected profile if present, otherwise `.sephera.toml`, otherwise no compression."
+    )]
+    pub compress: Option<ContextCompress>,
+
     /// Output format for the generated context pack
     #[arg(
         long,
@@ -178,6 +193,22 @@ pub struct ContextArgs {
         long_help = "Optional file path for exporting the rendered context pack. Parent directories are created automatically when needed. When omitted, Sephera uses a selected profile if present, otherwise `.sephera.toml`, otherwise writes the result to standard output."
     )]
     pub output: Option<PathBuf>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
+pub enum ContextCompress {
+    #[value(
+        name = "signatures",
+        help = "Extract only function signatures, type definitions, and imports."
+    )]
+    #[serde(rename = "signatures")]
+    Signatures,
+    #[value(
+        name = "skeleton",
+        help = "Extract signatures plus top-level control flow."
+    )]
+    #[serde(rename = "skeleton")]
+    Skeleton,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -215,7 +246,7 @@ mod tests {
                 assert_eq!(arguments.path, std::path::PathBuf::from("demo"));
                 assert_eq!(arguments.ignore, vec!["*.rs", "target"]);
             }
-            Commands::Context(_) => panic!("expected loc command"),
+            _ => panic!("expected loc command"),
         }
     }
 
@@ -263,7 +294,7 @@ mod tests {
                     Some(std::path::PathBuf::from("reports/context.json"))
                 );
             }
-            Commands::Loc(_) => panic!("expected context command"),
+            _ => panic!("expected context command"),
         }
     }
 
