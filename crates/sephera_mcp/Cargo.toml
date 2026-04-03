@@ -1,0 +1,25 @@
+[package]
+name = "sephera_mcp"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "MCP server for Sephera — exposes LOC analysis and context packs to AI agents over the Model Context Protocol."
+documentation = "https://docs.rs/sephera_mcp"
+keywords = ["mcp", "ai", "context", "llm", "tree-sitter"]
+categories = ["command-line-utilities", "development-tools"]
+
+[lib]
+crate-type = ["rlib"]
+
+[dependencies]
+anyhow = "1"
+rmcp = { version = "1.3.0", features = ["server", "macros", "transport-io"] }
+schemars = "1"
+sephera_core.workspace = true
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+tokio = { version = "1", features = ["full"] }
