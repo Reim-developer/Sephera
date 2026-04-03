@@ -7,10 +7,10 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "Shared analysis engine behind the Sephera CLI for LOC metrics and context building."
+description = "Shared analysis engine behind the Sephera CLI for LOC metrics, context building, and Tree-sitter AST compression."
 documentation = "https://docs.rs/sephera_core"
 readme = "README.crates-io.md"
-keywords = ["loc", "context", "analysis", "codebase", "scanner"]
+keywords = ["loc", "context", "tree-sitter", "compression", "scanner"]
 categories = ["development-tools", "text-processing"]
 
 [lib]
@@ -24,6 +24,15 @@ phf = { version = "0.11.3", features = ["macros"] }
 rayon = "1.11.0"
 regex = "1.12.2"
 serde = { version = "1.0.228", features = ["derive"] }
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+tree-sitter-python = "0.25"
+tree-sitter-typescript = "0.23"
+tree-sitter-javascript = "0.25"
+tree-sitter-go = "0.25"
+tree-sitter-java = "0.23"
+tree-sitter-cpp = "0.23"
+tree-sitter-c = "0.23"
 walkdir = "2.5.0"
 
 [dev-dependencies]
