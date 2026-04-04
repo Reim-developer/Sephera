@@ -1,4 +1,4 @@
-use crate::context_config::types::AvailableContextProfiles;
+use crate::context_config::AvailableContextProfiles;
 
 pub fn print_available_profiles(profiles: &AvailableContextProfiles) {
     println!("{}", render_available_profiles(profiles));
@@ -25,7 +25,7 @@ fn render_available_profiles(profiles: &AvailableContextProfiles) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use crate::context_config::types::AvailableContextProfiles;
+    use crate::context_config::AvailableContextProfiles;
 
     use super::render_available_profiles;
 
