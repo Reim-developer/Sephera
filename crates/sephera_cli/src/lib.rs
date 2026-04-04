@@ -3,7 +3,6 @@
 mod args;
 mod budget;
 pub(crate) mod context_config;
-mod context_diff;
 mod output;
 mod progress;
 mod run;
