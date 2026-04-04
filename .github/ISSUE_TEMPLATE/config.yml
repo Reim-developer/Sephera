@@ -1,0 +1,11 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://sephera.vercel.app
+    about: Read installation, command, and configuration docs before opening a usage question.
+  - name: Project README
+    url: https://github.com/Reim-developer/Sephera#readme
+    about: Review the project overview, feature set, and quick-start examples.
+  - name: Report a security vulnerability privately
+    url: https://github.com/Reim-developer/Sephera/security/policy
+    about: Do not open a public issue for security vulnerabilities. Use the private reporting process described in the security policy.
