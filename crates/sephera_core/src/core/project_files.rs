@@ -17,10 +17,37 @@ pub struct ProjectFile {
     pub language_match: Option<LanguageMatch>,
 }
 
+/// Collects metadata for all regular files under `base_path`, excluding entries matched by the ignore matcher.
+///
+/// The function walks `base_path` recursively (without following symlinks), filters entries using `ignore`,
+/// and returns a sorted list of `ProjectFile` records containing each file's absolute and relative paths,
+/// a normalized relative path, detected language match, and size in bytes. The returned list is sorted by
+/// `normalized_relative_path` using lexicographic ordering.
+///
 /// # Errors
 ///
-/// Returns an error when the target path is invalid, traversal fails, or file metadata cannot be
-/// read.
+/// Returns an error when:
+/// - `base_path` does not exist,
+/// - `base_path` is not a directory,
+/// - directory traversal fails,
+/// - a file's path cannot be made relative to `base_path`,
+/// - filesystem metadata for a file cannot be read.
+///
+/// # Examples
+///
+/// ```
+/// use tempfile::tempdir;
+/// use std::fs::write;
+/// use sephera_core::core::{collect_project_files, IgnoreMatcher};
+///
+/// let dir = tempdir().unwrap();
+/// let base = dir.path();
+/// write(base.join("main.rs"), "fn main() {}").unwrap();
+///
+/// let files = collect_project_files(base, &IgnoreMatcher::empty()).unwrap();
+/// assert_eq!(files.len(), 1);
+/// assert!(files[0].normalized_relative_path.ends_with("main.rs"));
+/// ```
 pub fn collect_project_files(
     base_path: &Path,
     ignore: &IgnoreMatcher,

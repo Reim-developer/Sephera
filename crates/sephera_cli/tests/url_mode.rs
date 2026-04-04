@@ -7,6 +7,23 @@ use std::{
 use serde_json::Value;
 use tempfile::{TempDir, tempdir};
 
+/// Write bytes to a file path under a base directory, creating any missing parent directories.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// use tempfile::tempdir;
+/// // create a temporary directory
+/// let tmp = tempdir().unwrap();
+/// let base = tmp.path();
+/// // write a file at "sub/dir/example.txt"
+/// write_file(base, "sub/dir/example.txt", b"hello").unwrap_or(());
+/// let p = base.join("sub/dir/example.txt");
+/// assert!(p.exists());
+/// assert_eq!(std::fs::read(&p).unwrap(), b"hello");
+/// ```
+fn write_file(base_dir: &Path, relative_path: &str, contents: &[u8]) {
 fn write_file(base_dir: &Path, relative_path: &str, contents: &[u8]) {
     let absolute_path = base_dir.join(relative_path);
     if let Some(parent) = absolute_path.parent() {
@@ -15,6 +32,21 @@ fn write_file(base_dir: &Path, relative_path: &str, contents: &[u8]) {
     fs::write(absolute_path, contents).unwrap();
 }
 
+/// Run `git` with the given arguments in the specified working directory.
+///
+/// Returns the spawned process's `Output` (captured stdout/stderr and exit status).
+///
+/// Panics if the `git` process cannot be spawned.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let out = run_git(Path::new("."), &["--version"]);
+/// assert!(out.status.success());
+/// let stdout = String::from_utf8_lossy(&out.stdout);
+/// assert!(stdout.contains("git"), "expected git version output");
+/// ```
 fn run_git(repo_root: &Path, args: &[&str]) -> Output {
     Command::new("git")
         .current_dir(repo_root)
@@ -23,6 +55,27 @@ fn run_git(repo_root: &Path, args: &[&str]) -> Output {
         .unwrap_or_else(|error| panic!("failed to run git {:?}: {error}", args))
 }
 
+/// Ensures a git command executed in the repository at `repo_root` completes successfully.
+///
+/// Runs `git` with the provided `args` in the working directory `repo_root` and asserts that the
+/// process exits with a success status. On failure the assertion message includes the command
+/// arguments and the command's `stdout` and `stderr` output.
+///
+/// # Parameters
+///
+/// - `repo_root` — path to the git repository where the command will be executed.
+/// - `args` — git CLI arguments to pass (for example `&["init"]` or `&["commit", "-m", "msg"]`).
+///
+/// # Examples
+///
+/// ```
+/// # use std::path::Path;
+/// # fn try_example() {
+/// let tmp = tempfile::tempdir().unwrap();
+/// // initialize an empty repository; this will panic if `git init` fails
+/// assert_git_ok(tmp.path(), &["init"]);
+/// # }
+/// ```
 fn assert_git_ok(repo_root: &Path, args: &[&str]) {
     let output = run_git(repo_root, args);
     assert!(
@@ -34,21 +87,71 @@ fn assert_git_ok(repo_root: &Path, args: &[&str]) {
     );
 }
 
+/// Initializes a new Git repository at `repo_root` and configures a default committer.
+///
+/// Runs `git init` and sets `user.name` to `"Sephera Tests"` and `user.email` to
+/// `"tests@example.com"`. Panics if any of the underlying Git commands fail.
+///
+/// # Examples
+///
+/// ```
+/// use tempfile::tempdir;
+/// let tmp = tempdir().unwrap();
+/// init_git_repo(tmp.path());
+/// ```
 fn init_git_repo(repo_root: &Path) {
     assert_git_ok(repo_root, &["init"]);
     assert_git_ok(repo_root, &["config", "user.name", "Sephera Tests"]);
     assert_git_ok(repo_root, &["config", "user.email", "tests@example.com"]);
 }
 
+/// Stages all working-tree changes in the repository and creates a commit with the provided message.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// // assume `repo` is an initialized git repository path
+/// let repo: &Path = Path::new("/path/to/repo");
+/// commit_all(repo, "initial commit");
+/// ```
 fn commit_all(repo_root: &Path, message: &str) {
     assert_git_ok(repo_root, &["add", "-A"]);
     assert_git_ok(repo_root, &["commit", "-m", message]);
 }
 
+/// Constructs a file:// URL pointing to the given repository path.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let url = super::remote_repo_url(Path::new("/tmp/repo"));
+/// assert!(url.starts_with("file://"));
+/// ```
+///
+/// # Returns
+///
+/// A `String` containing the `file://` URL that prefixes the repository path.
 fn remote_repo_url(repo_root: &Path) -> String {
     format!("file://{}", repo_root.display())
 }
 
+/// Creates a temporary Git repository populated with a minimal Rust package.
+///
+/// The repository is initialized with a commit and contains `Cargo.toml`, `src/lib.rs`,
+/// and `src/main.rs`. The created `TempDir` is returned so callers can use its path
+/// (for example as a `file://` URL) and keep the repository alive for the duration
+/// of the test.
+///
+/// # Examples
+///
+/// ```
+/// let repo = build_remote_repo();
+/// let repo_path = repo.path();
+/// assert!(repo_path.join("Cargo.toml").exists());
+/// assert!(repo_path.join("src/lib.rs").exists());
+/// ```
 fn build_remote_repo() -> TempDir {
     let temp_dir = tempdir().unwrap();
     init_git_repo(temp_dir.path());

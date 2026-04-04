@@ -12,13 +12,28 @@ use crate::core::compression::{SupportedLanguage, new_parser};
 
 use super::types::ImportStatement;
 
-/// Extracts all import statements from a source file using Tree-sitter.
+/// Collects import/include/use statements found in the given source for the specified language.
 ///
-/// Returns an empty `Vec` if the language is not supported or parsing fails.
+/// Parses `source` with a Tree-sitter parser for `language`, walks the syntax tree, and returns a
+/// vector of `ImportStatement` records discovered at any nesting depth.
+///
+/// # Returns
+///
+/// A `Vec<ImportStatement>` containing each discovered import; the vector will be empty when no
+/// import-like nodes are found for the language or in the provided source.
 ///
 /// # Errors
 ///
-/// Returns an error if parser creation or parsing fails.
+/// Returns an error if creating the parser for `language` or producing an initial parse tree fails.
+///
+/// # Examples
+///
+/// ```
+/// let src = b"use std::collections::HashMap;\n";
+/// let imports = extract_imports(src, SupportedLanguage::Rust).unwrap();
+/// assert_eq!(imports.len(), 1);
+/// assert_eq!(imports[0].raw_path, "std::collections::HashMap");
+/// ```
 pub fn extract_imports(
     source: &[u8],
     language: SupportedLanguage,
@@ -36,7 +51,22 @@ pub fn extract_imports(
     Ok(imports)
 }
 
-/// Recursively walks the AST to find import nodes at any nesting depth.
+/// Traverse an AST subtree and append any import/include/use statements found to `imports`.
+///
+/// The function inspects `node` and all of its descendants for language-specific import
+/// constructs and pushes discovered `ImportStatement` values into the provided `imports` vector.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Given a parsed tree `tree` and a root node `node` for a supported language:
+/// // let source: &[u8] = b"import './mod';";
+/// // let node = tree.root_node();
+/// // let language = SupportedLanguage::JavaScript;
+/// let mut imports: Vec<ImportStatement> = Vec::new();
+/// // collect_imports_recursive(source, &node, language, &mut imports);
+/// // assert!(!imports.is_empty());
+/// ```
 fn collect_imports_recursive(
     source: &[u8],
     node: &Node<'_>,
@@ -53,7 +83,25 @@ fn collect_imports_recursive(
     }
 }
 
-/// Attempts to extract import information from a single AST node.
+/// Dispatches an AST node to the language-specific extractor and returns any import statements found.
+///
+/// # Returns
+///
+/// `Some(Vec<ImportStatement>)` containing one or more extracted import statements when the node
+/// corresponds to an import/include/use construct for the given language; `None` when the node
+/// does not match any import form for that language.
+///
+/// # Examples
+///
+/// ```ignore
+/// // Illustrative usage (requires creating a `Node` from a parsed tree)
+/// let imports = try_extract_import(source_bytes, &node, SupportedLanguage::Python);
+/// if let Some(stmts) = imports {
+///     for s in stmts {
+///         println!("{}", s.raw_path);
+///     }
+/// }
+/// ```
 fn try_extract_import(
     source: &[u8],
     node: &Node<'_>,
@@ -75,13 +123,26 @@ fn try_extract_import(
 
 // ---- Rust ----
 
-/// Extracts `use` declarations from Rust source.
+/// Extracts Rust `use` import statements from a Tree-sitter `use_declaration` node.
 ///
-/// Handles:
-/// - `use std::io;`
-/// - `use crate::core::graph;`
-/// - `use super::types::*;`
-/// - `use std::collections::{HashMap, BTreeMap};`
+/// Returns `None` if the node is not a `use_declaration`. For a matching node, returns
+/// one or more `ImportStatement` values: a single entry for a simple `use` path, or
+/// multiple entries when the declaration uses a grouped import (`{ ... }`), where each
+/// group member is expanded into a full path.
+///
+/// # Examples
+///
+/// ```
+/// // Given a `use` declaration node for `use std::collections::{HashMap, BTreeMap};`:
+/// // (assume `node` refers to that `use_declaration`)
+/// let src = b"use std::collections::{HashMap, BTreeMap};";
+/// // ...obtain `node` via your Tree-sitter parser...
+/// // if let Some(imports) = extract_rust_import(src, &node) {
+/// //     assert_eq!(imports.len(), 2);
+/// //     assert_eq!(imports[0].raw_path, "std::collections::HashMap");
+/// //     assert_eq!(imports[1].raw_path, "std::collections::BTreeMap");
+/// // }
+/// ```
 fn extract_rust_import(
     source: &[u8],
     node: &Node<'_>,
@@ -184,7 +245,17 @@ fn extract_python_import(
 
 // ---- TypeScript / JavaScript ----
 
-/// Extracts `import` declarations and `require()` calls from JS/TS source.
+/// Extracts module paths from JavaScript/TypeScript import/export statements and CommonJS `require()` calls.
+///
+/// Returns `Some(Vec<ImportStatement>)` containing one or more extracted import paths with their source line when the given node represents an import-like construct; returns `None` when the node does not match any recognized import form.
+///
+/// # Examples
+///
+/// ```
+/// // Given a parsed JS/TS AST node representing `import {x} from "./mod";` or `import "./side-effect";`,
+/// // calling `extract_js_ts_import(source_bytes, &node)` yields an `ImportStatement` with `raw_path` == "./mod" or "./side-effect".
+/// # let _ = ();
+/// ```
 fn extract_js_ts_import(
     source: &[u8],
     node: &Node<'_>,
@@ -252,7 +323,26 @@ fn extract_js_ts_import(
 
 // ---- Go ----
 
-/// Extracts `import` declarations from Go source.
+/// Extracts import paths from a Go `import_declaration` node.
+///
+/// Returns `Some(Vec<ImportStatement>)` containing one entry per import spec or
+/// string-literal import found under the given `import_declaration` node,
+/// with each `ImportStatement.raw_path` set to the unquoted import path and
+/// `line` set to the spec's starting line (1-based). Returns `None` if the
+/// node is not an `import_declaration` or if no import paths are present.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Parse Go source into a tree-sitter node (using the module's `new_parser`)
+/// // and pass the `import_declaration` node to `extract_go_import`.
+/// let src = br#"import ("fmt"\n"os")"#;
+/// let mut parser = new_parser(SupportedLanguage::Go).unwrap();
+/// let tree = parser.parse(src, None).unwrap();
+/// let root = tree.root_node();
+/// // Walk to find an `import_declaration` node in the tree, then:
+/// // let imports = extract_go_import(src, &import_decl_node);
+/// ```
 fn extract_go_import(
     source: &[u8],
     node: &Node<'_>,
@@ -319,7 +409,19 @@ fn extract_go_import(
     }
 }
 
-/// Extracts the import path from a Go `import_spec` node.
+/// Extracts the string path literal from a Go `import_spec` AST node.
+///
+/// Searches the `import_spec`'s children for an `interpreted_string_literal`, trims surrounding
+/// double quotes, and returns the contained path if non-empty.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Given a parsed Go `import_spec` node representing ` "fmt" `,
+/// // this will return `Some("fmt".to_string())`.
+/// let path = extract_go_import_spec(b"\"fmt\"", &some_import_spec_node);
+/// ```
+fn
 fn extract_go_import_spec(source: &[u8], node: &Node<'_>) -> Option<String> {
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
@@ -336,7 +438,23 @@ fn extract_go_import_spec(source: &[u8], node: &Node<'_>) -> Option<String> {
 
 // ---- Java ----
 
-/// Extracts `import` declarations from Java source.
+/// Extracts Java `import` declarations and returns the import path with its source line.
+///
+/// This recognizes both `import ...;` and `import static ...;`, strips the leading keywords
+/// and the trailing semicolon, and returns a single `ImportStatement` containing the cleaned
+/// path and the 1-based line number where the declaration starts.
+///
+/// # Examples
+///
+/// ```
+/// // Parse Java imports using the public helper; this is the simplest way to obtain nodes
+/// // for language-specific extractors like `extract_java_import`.
+/// let src = b"import static java.util.Collections.*;\nclass X {}\n";
+/// let imports = extract_imports(src, SupportedLanguage::Java).unwrap();
+/// assert_eq!(imports.len(), 1);
+/// assert_eq!(imports[0].raw_path, "java.util.Collections.*");
+/// assert_eq!(imports[0].line, 1);
+/// ```
 fn extract_java_import(
     source: &[u8],
     node: &Node<'_>,
@@ -363,7 +481,22 @@ fn extract_java_import(
 
 // ---- C / C++ ----
 
-/// Extracts `#include` directives from C/C++ source.
+/// Extracts C/C++ `#include` directives from a `preproc_include` node.
+///
+/// Recognizes both quoted includes (`"file.h"`) and system includes (`<stdio.h>`).
+/// For quoted includes the returned `ImportStatement.raw_path` is the path without surrounding quotes (e.g., `myheader.h`).
+/// For system includes the returned `ImportStatement.raw_path` preserves angle brackets (e.g., `<stdio.h>`).
+/// The `ImportStatement.line` is derived from the include node's starting row (1-based).
+///
+/// # Examples
+///
+/// ```no_run
+/// // Given a parsed C/C++ AST, obtain a `preproc_include` `node` and call:
+/// // let src = b"#include \"foo.h\"";
+/// // let imports = extract_c_cpp_import(src, &node);
+/// // If the node represents `#include "foo.h"`, `imports` will be:
+/// // Some(vec![ImportStatement { raw_path: "foo.h".to_string(), line: 1 }])
+/// ```
 fn extract_c_cpp_import(
     source: &[u8],
     node: &Node<'_>,
@@ -405,7 +538,18 @@ fn extract_c_cpp_import(
     None
 }
 
-/// Returns the text content of a Tree-sitter node.
+/// Extracts the UTF-8 text slice corresponding to a syntax `node` from the provided source bytes.
+///
+/// The returned string is created from the node's byte range (the end is clamped to the source length)
+/// and has trailing whitespace removed. If the node's start byte is beyond the end of `source`,
+/// an empty string is returned.
+///
+/// # Examples
+///
+/// ```
+/// // Given a parsed Tree-sitter `node`, obtain its text from the source bytes:
+/// // let text = node_text(source.as_bytes(), &node);
+/// ```
 fn node_text(source: &[u8], node: &Node<'_>) -> String {
     let start = node.start_byte();
     let end = node.end_byte().min(source.len());

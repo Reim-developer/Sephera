@@ -42,6 +42,20 @@ pub fn run() -> Result<()> {
     dispatch(cli)
 }
 
+/// Dispatches a parsed CLI to its corresponding command handler.
+///
+/// Matches the provided `Cli`'s command and invokes the associated handler function.
+///
+/// # Returns
+///
+/// `Ok(())` if the selected command completes successfully, otherwise an error returned by that command.
+///
+/// # Examples
+///
+/// ```
+/// let cli = Cli::parse();
+/// dispatch(cli).expect("command failed");
+/// ```
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Loc(arguments) => run_loc(arguments),
@@ -56,6 +70,20 @@ fn run_mcp() -> Result<()> {
     runtime.block_on(sephera_mcp::run_mcp_server())
 }
 
+/// Analyze a source (path, URL, or git ref) for lines of code and print a CodeLoc report.
+///
+/// This resolves the input source, applies the provided ignore patterns, computes line-count metrics,
+/// and writes the resulting report to stdout. On success the function completes normally; on failure
+/// it returns an error describing what went wrong (source resolution, ignore parsing, or analysis).
+///
+/// # Examples
+///
+/// ```no_run
+/// use crate::cli::LocArgs;
+/// // Provide the desired input via LocArgs (path, url, git_ref, ignore, etc.)
+/// let args = LocArgs::default();
+/// let _ = run_loc(args);
+/// ```
 fn run_loc(arguments: LocArgs) -> Result<()> {
     let progress = CliProgress::start("Analyzing line counts...");
     let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
@@ -73,6 +101,25 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
     Ok(())
 }
 
+/// Dispatches the context subcommand: either executes the prepared context pack or prints available profiles.
+///
+/// Resolves the provided CLI arguments into a concrete context command; if resolution yields an execution request, runs the context execution flow, otherwise prints the available profiles.
+///
+/// # Parameters
+///
+/// - `arguments`: CLI arguments for the context command.
+///
+/// # Returns
+///
+/// `Ok(())` on success; an error if option resolution or the requested command execution fails.
+///
+/// # Examples
+///
+/// ```
+/// // Conceptual usage:
+/// // let args = ContextArgs::parse(); // obtain parsed CLI args
+/// // run_context(args).expect("context command failed");
+/// ```
 fn run_context(arguments: ContextArgs) -> Result<()> {
     match resolve_context_options(arguments)? {
         ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
@@ -83,6 +130,24 @@ fn run_context(arguments: ContextArgs) -> Result<()> {
     }
 }
 
+/// Execute a resolved context command: build the context report, render it in the requested format, and emit the rendered output.
+///
+/// Builds a context report from `arguments`, renders it as either Markdown or JSON depending on `arguments.format`, and writes the result to stdout or to the file specified by `arguments.output`.
+///
+/// # Parameters
+///
+/// - `arguments`: Resolved context execution options that control input selection, rendering format (`"markdown"` or `"json"`), and the optional output destination.
+///
+/// # Returns
+///
+/// `Ok(())` on success, or an error if building the report, rendering, or emitting the output fails.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Given a previously resolved `ResolvedContextOptions` named `opts`:
+/// // execute_context(&opts)?;
+/// ```
 fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
     let progress = CliProgress::start("Preparing context inputs...");
     progress.set_message("Building context pack...");
@@ -105,6 +170,16 @@ fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
     emit_rendered_output(arguments.output.as_deref(), &rendered)
 }
 
+/// Analyze a codebase's dependency graph for the given arguments and emit the rendered output.
+///
+/// This function resolves the input source, extracts imports, builds a dependency graph
+/// (optionally scoped to what depends on a given path), renders the graph in the
+/// requested format, and writes the result to either stdout or the specified output file.
+///
+/// # Returns
+///
+/// `Ok(())` on success, or an error if source resolution, graph construction, rendering,
+/// or output emission fails.
 fn run_graph(arguments: &GraphArgs) -> Result<()> {
     let progress = CliProgress::start("Analyzing dependency graph...");
     let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;

@@ -26,6 +26,35 @@ pub struct ResolvedSource {
 }
 
 impl ResolvedSource {
+    /// Indicates whether the resolved source was produced from a remote checkout.
+    ///
+    /// `true` if the resolved source contains a `TempDir` checkout guard, `false` otherwise.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use tempfile::tempdir;
+    /// use std::path::PathBuf;
+    ///
+    /// let local = ResolvedSource {
+    ///     analysis_path: PathBuf::from("."),
+    ///     repo_root: PathBuf::from("."),
+    ///     display_path: None,
+    ///     display_repo_root: None,
+    ///     checkout_guard: None,
+    /// };
+    /// assert!(!local.is_remote());
+    ///
+    /// let guard = tempdir().unwrap();
+    /// let remote = ResolvedSource {
+    ///     analysis_path: PathBuf::from("."),
+    ///     repo_root: PathBuf::from("."),
+    ///     display_path: None,
+    ///     display_repo_root: None,
+    ///     checkout_guard: Some(guard),
+    /// };
+    /// assert!(remote.is_remote());
+    /// ```
     #[must_use]
     pub const fn is_remote(&self) -> bool {
         self.checkout_guard.is_some()
@@ -52,14 +81,31 @@ enum ParsedRemoteSource {
     },
 }
 
-/// Resolves a local path or remote repository URL into a concrete analysis
-/// source on disk.
+/// Resolve a SourceRequest into a concrete on-disk analysis source.
+///
+/// This accepts either a local path, an empty request (both `path` and `url` absent),
+/// or a remote repository URL (including supported tree URLs), and returns the
+/// concrete analysis path, repository root, optional display fields, and an optional
+/// checkout guard that keeps a temporary clone alive while held.
 ///
 /// # Errors
 ///
-/// Returns an error when the request is invalid, the URL cannot be parsed,
-/// cloning or checkout fails, or a tree URL cannot be resolved to a valid
-/// directory in the temporary checkout.
+/// Returns an error when:
+/// - both `path` and `url` are provided (they are mutually exclusive),
+/// - `git_ref` is provided without a `url`,
+/// - a `git_ref` is combined with a tree URL,
+/// - the URL cannot be parsed or is unsupported,
+/// - cloning or checkout fails, or
+/// - the resolved analysis path does not exist or is not a directory.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::PathBuf;
+/// let req = crate::core::runtime::source::SourceRequest::default();
+/// let resolved = crate::core::runtime::source::resolve_source(&req).unwrap();
+/// assert!(resolved.analysis_path.exists());
+/// ```
 pub fn resolve_source(request: &SourceRequest) -> Result<ResolvedSource> {
     match (&request.path, &request.url) {
         (Some(_), Some(_)) => {
@@ -104,6 +150,44 @@ pub fn resolve_source(request: &SourceRequest) -> Result<ResolvedSource> {
     }
 }
 
+/// Clones a parsed remote repository into a temporary checkout and returns the resolved on-disk
+/// analysis path along with human-facing display metadata.
+///
+/// For repository-style inputs this optionally checks out the provided `git_ref`. For tree-style
+/// inputs it resolves the tree ref and optional subpath and uses that to determine the analysis
+/// directory and display URL. The returned `ResolvedSource` contains a `checkout_guard` that keeps
+/// the temporary checkout alive while the value is held.
+///
+/// # Errors
+///
+/// Returns an error if creating the temporary checkout, cloning, resolving or checking out refs,
+/// or if the computed analysis path does not exist or is not a directory.
+///
+/// # Parameters
+///
+/// - `git_ref`: Optional raw git ref to checkout for repository inputs; ignored for tree inputs
+///   (tree refs are resolved from the URL).
+///
+/// # Returns
+///
+/// A `ResolvedSource` containing:
+/// - `repo_root`: path to the cloned repository inside the temporary checkout,
+/// - `analysis_path`: path within the checkout to analyze,
+/// - optional `display_path` and `display_repo_root` for presentation,
+/// - `checkout_guard: Some(TempDir)` which preserves the temporary checkout for the caller.
+///
+/// # Examples
+///
+/// ```no_run
+/// # use crate::core::runtime::source::{ParsedRemoteSource, ResolvedSource};
+/// # // assume `parse_remote_source` exists and returns a `ParsedRemoteSource::Repo`
+/// let parsed = ParsedRemoteSource::Repo {
+///     clone_url: "https://example.com/org/repo".to_string(),
+///     display_repo_root: "https://example.com/org/repo".to_string(),
+/// };
+/// let resolved: ResolvedSource = resolve_remote_source(parsed, None).expect("clone and resolve");
+/// assert!(resolved.analysis_path.exists());
+/// ```
 fn resolve_remote_source(
     parsed_source: ParsedRemoteSource,
     git_ref: Option<&str>,
@@ -194,6 +278,40 @@ fn resolve_remote_source(
     })
 }
 
+/// Resolve a git ref and an optional repository subdirectory from the tail segments of a tree-style URL.
+///
+/// Attempts to interpret a prefix of `tail_segments` as a git ref. If a prefix successfully resolves
+/// to a commit-ish and can be checked out, returns the checked-out ref and any remaining segments
+/// joined as a sub-path under the repository. If the prefix consumes all segments, the returned
+/// sub-path is `None`.
+///
+/// # Parameters
+///
+/// - `repo_root`: Path to the cloned repository where refs will be resolved and checked out.
+/// - `tail_segments`: The path segments after the repository portion of a tree URL; some prefix
+///   of these segments will be interpreted as a git ref and the remainder (if any) as a subdirectory.
+///
+/// # Returns
+///
+/// A tuple `(resolved_ref, sub_path)` where `resolved_ref` is the ref string that was resolved and
+/// checked out, and `sub_path` is `Some(path)` when remaining tail segments map to a subdirectory,
+/// or `None` when there is no subdirectory.
+///
+/// # Errors
+///
+/// Returns an error if `tail_segments` is empty or if no prefix of `tail_segments` can be resolved
+/// to a valid git ref and checked out.
+///
+/// # Examples
+///
+/// ```
+/// # use std::path::Path;
+/// # // The example assumes a repository exists at `/tmp/repo` and appropriate git refs;
+/// let repo = Path::new("/tmp/repo");
+/// let tail = vec!["main".to_string(), "src".to_string()];
+/// // On success this might return ("main".to_string(), Some("src".to_string()))
+/// let result = resolve_tree_checkout(repo, &tail);
+/// ```
 fn resolve_tree_checkout(
     repo_root: &Path,
     tail_segments: &[String],
@@ -220,6 +338,28 @@ fn resolve_tree_checkout(
     )
 }
 
+/// Resolve a git commit-ish for a repository and check it out in detached HEAD mode.
+///
+/// Attempts to resolve `raw_ref` to a commit. If unresolved locally, also tries `origin/<raw_ref>`.
+/// After successfully resolving a commit, performs `git checkout --detach <resolved_commit>`.
+///
+/// # Errors
+///
+/// Returns an error if `raw_ref` is empty, if the ref cannot be resolved to a commit, or if the
+/// checkout operation fails.
+///
+/// # Returns
+///
+/// The trimmed `raw_ref` string that was requested.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// // Resolve and checkout "main" in the repository at "/tmp/repo"
+/// let out = resolve_checkout_ref(Path::new("/tmp/repo"), " main ").unwrap();
+/// assert_eq!(out, "main");
+/// ```
 fn resolve_checkout_ref(repo_root: &Path, raw_ref: &str) -> Result<String> {
     let trimmed_ref = raw_ref.trim();
     if trimmed_ref.is_empty() {
@@ -245,6 +385,28 @@ fn resolve_checkout_ref(repo_root: &Path, raw_ref: &str) -> Result<String> {
     Ok(trimmed_ref.to_owned())
 }
 
+/// Resolves a git commit-ish (branch, tag, ref, or commit) to a commit hash.
+///
+/// The function verifies that `candidate` refers to a commit and returns the resolved
+/// commit identifier as a `String`. Returns an error if the candidate cannot be
+/// resolved to a commit in the repository at `repo_root`.
+///
+/// # Parameters
+///
+/// - `repo_root`: filesystem path to the git repository root to query.
+/// - `candidate`: commit-ish to resolve (e.g., branch name, tag, ref, or commit).
+///
+/// # Returns
+///
+/// `String` containing the resolved commit hash.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let sha = resolve_commitish(Path::new("."), "HEAD").unwrap();
+/// assert!(!sha.is_empty());
+/// ```
 fn resolve_commitish(repo_root: &Path, candidate: &str) -> Result<String> {
     git_stdout_string(
         repo_root,
@@ -257,6 +419,29 @@ fn resolve_commitish(repo_root: &Path, candidate: &str) -> Result<String> {
     )
 }
 
+/// Parses a user-supplied remote repository or tree URL into a `ParsedRemoteSource`.
+///
+/// Accepts SCP-style git URLs (e.g. `git@host:owner/repo.git`), `http`/`https` URLs
+/// (including GitHub/GitLab tree URL forms), and `ssh`/`file` URLs. Errors if the
+/// input is empty, cannot be parsed, or has an unsupported scheme.
+///
+/// # Returns
+///
+/// A `ParsedRemoteSource` that describes how the URL should be cloned and whether
+/// it encodes a repository root or a tree (ref + optional subpath).
+///
+/// # Examples
+///
+/// ```
+/// let repo = parse_remote_source("git@github.com:owner/repo.git").unwrap();
+/// match repo {
+///     ParsedRemoteSource::Repo { clone_url, display_repo_root } => {
+///         assert!(clone_url.contains("git@github.com:owner/repo.git"));
+///         assert!(display_repo_root.contains("git@github.com:owner/repo"));
+///     }
+///     _ => panic!("expected Repo variant"),
+/// }
+/// ```
 fn parse_remote_source(raw_url: &str) -> Result<ParsedRemoteSource> {
     let trimmed_url = raw_url.trim();
     if trimmed_url.is_empty() {
@@ -283,6 +468,29 @@ fn parse_remote_source(raw_url: &str) -> Result<ParsedRemoteSource> {
     }
 }
 
+/// Parses an HTTP/HTTPS repository URL and returns a `ParsedRemoteSource` describing
+/// either a repository clone URL or a tree URL (host+ref+optional subpath) for GitHub or GitLab.
+///
+/// This function:
+/// - Requires at least two path segments (owner and repository) and errors otherwise.
+/// - Detects GitLab tree URLs of the form `.../-/tree/<ref>/...` and GitHub tree URLs
+///   of the form `.../tree/<ref>/...`, returning `ParsedRemoteSource::Tree` with
+///   the repository clone root and the remaining tail segments.
+/// - Rejects blob URLs (any path segment equal to `"blob"`).
+/// - For plain repository URLs returns `ParsedRemoteSource::Repo` with `clone_url` and
+///   a `display_repo_root` (trailing slashes and a trailing `.git` are stripped for display).
+///
+/// # Examples
+///
+/// ```
+/// use url::Url;
+/// use crate::parse_http_remote_source;
+/// use crate::ParsedRemoteSource;
+///
+/// let url = Url::parse("https://github.com/owner/repo").unwrap();
+/// let parsed = parse_http_remote_source(&url).unwrap();
+/// assert!(matches!(parsed, ParsedRemoteSource::Repo { .. }));
+/// ```
 fn parse_http_remote_source(parsed_url: &Url) -> Result<ParsedRemoteSource> {
     let path_segments = parsed_url
         .path_segments()
@@ -366,6 +574,18 @@ fn parse_http_remote_source(parsed_url: &Url) -> Result<ParsedRemoteSource> {
     })
 }
 
+/// Construct the canonical "<scheme>://<host>[:port]/<repo_segments...>" repository root for an HTTP(S) URL.
+///
+/// `repo_segments` are the path segments that identify the repository (e.g., `["owner", "repo"]`).
+///
+/// # Examples
+///
+/// ```
+/// use url::Url;
+/// let url = Url::parse("https://example.com:8443/owner/repo/tree/main/path").unwrap();
+/// let root = build_http_repo_root(&url, &["owner", "repo"]);
+/// assert_eq!(root, "https://example.com:8443/owner/repo");
+/// ```
 fn build_http_repo_root(parsed_url: &Url, repo_segments: &[&str]) -> String {
     let mut repo_root = format!(
         "{}://{}",
@@ -381,6 +601,35 @@ fn build_http_repo_root(parsed_url: &Url, repo_segments: &[&str]) -> String {
     repo_root
 }
 
+/// Format a repository tree URL for display using the hosting style, git ref, and optional subpath.
+///
+/// The returned string combines the repository root with the appropriate tree path for the hosting
+/// service and appends `sub_path` if provided and non-empty.
+///
+/// # Returns
+///
+/// A formatted display URL combining the repository root, the tree/ref segment for the given
+/// hosting style, and the optional subpath.
+///
+/// # Examples
+///
+/// ```
+/// let url = render_tree_display_url(
+///     TreeHostingStyle::GitHub,
+///     "https://github.com/example/repo",
+///     "main",
+///     Some("src/lib"),
+/// );
+/// assert_eq!(url, "https://github.com/example/repo/tree/main/src/lib");
+///
+/// let url2 = render_tree_display_url(
+///     TreeHostingStyle::GitLab,
+///     "https://gitlab.com/example/repo",
+///     "feature/branch",
+///     None,
+/// );
+/// assert_eq!(url2, "https://gitlab.com/example/repo/-/tree/feature/branch");
+/// ```
 fn render_tree_display_url(
     style: TreeHostingStyle,
     repo_root: &str,
@@ -402,6 +651,17 @@ fn render_tree_display_url(
     rendered
 }
 
+/// Detects whether a string is an SCP-style Git URL (for example `git@host:owner/repo`).
+///
+/// Returns `true` if the input contains `@` and `:`, does not contain `://`, and has non-empty text on both sides of the first `:`.
+///
+/// # Examples
+///
+/// ```
+/// assert!(is_scp_style_git_url("git@github.com:owner/repo.git"));
+/// assert!(!is_scp_style_git_url("https://github.com/owner/repo"));
+/// assert!(!is_scp_style_git_url("user@host:"));
+/// ```
 fn is_scp_style_git_url(raw_url: &str) -> bool {
     raw_url.contains('@')
         && raw_url.contains(':')
@@ -411,10 +671,46 @@ fn is_scp_style_git_url(raw_url: &str) -> bool {
             .is_some_and(|(left, right)| !left.is_empty() && !right.is_empty())
 }
 
+/// Removes any trailing '/' characters from the given URL string.
+///
+/// Returns a `String` containing the input with trailing '/' characters removed.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(strip_trailing_slash("https://example.com/"), "https://example.com");
+/// assert_eq!(strip_trailing_slash("https://example.com///"), "https://example.com");
+/// assert_eq!(strip_trailing_slash("https://example.com/path"), "https://example.com/path");
+/// ```
 fn strip_trailing_slash(raw_url: &str) -> String {
     raw_url.trim_end_matches('/').to_owned()
 }
 
+/// Normalizes a repository URL or path by removing trailing slashes and a trailing `.git` suffix.
+///
+/// The returned string has any trailing `/` characters removed, and if the result ends with
+/// `.git` that suffix is removed as well.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(
+///     crate::strip_trailing_git_suffix("https://example.com/org/repo.git/"),
+///     "https://example.com/org/repo"
+/// );
+/// assert_eq!(
+///     crate::strip_trailing_git_suffix("git@github.com:org/repo.git"),
+///     "git@github.com:org/repo"
+/// );
+/// assert_eq!(
+///     crate::strip_trailing_git_suffix("https://example.com/org/repo/"),
+///     "https://example.com/org/repo"
+/// );
+/// assert_eq!(
+///     crate::strip_trailing_git_suffix("plain-repo"),
+///     "plain-repo"
+/// );
+/// ```
 fn strip_trailing_git_suffix(raw_url: &str) -> String {
     strip_trailing_slash(raw_url)
         .trim_end_matches(".git")
@@ -429,6 +725,14 @@ mod tests {
 
     use super::*;
 
+    /// Runs the `git` command with the provided arguments in `repo_root`, panicking if the command cannot be started or if it exits with a non-zero status.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// let repo = std::path::Path::new(".");
+    /// run_git(repo, &["--version"]);
+    /// ```
     fn run_git(repo_root: &Path, args: &[&str]) {
         let output = Command::new("git")
             .current_dir(repo_root)
@@ -446,17 +750,61 @@ mod tests {
         );
     }
 
+    /// Initializes a new git repository at the given path and sets a default committer identity.
+    
+    ///
+    
+    /// Configures `user.name` to "Sephera Tests" and `user.email` to "tests@example.com" in the repository.
+    
+    ///
+    
+    /// # Examples
+    
+    ///
+    
+    /// ```
+    
+    /// let td = tempfile::tempdir().unwrap();
+    
+    /// let repo = td.path().join("repo");
+    
+    /// std::fs::create_dir_all(&repo).unwrap();
+    
+    /// init_repo(&repo);
+    
+    /// assert!(repo.join(".git").exists());
+    
+    /// ```
     fn init_repo(repo_root: &Path) {
         run_git(repo_root, &["init"]);
         run_git(repo_root, &["config", "user.name", "Sephera Tests"]);
         run_git(repo_root, &["config", "user.email", "tests@example.com"]);
     }
 
+    /// Stages all changes (including additions, modifications, and deletions) under `repo_root` and creates a commit with the given `message`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Stage and commit all changes in the repository at `/path/to/repo`.
+    /// // commit_all(Path::new("/path/to/repo"), "Save workspace changes");
+    /// ```
     fn commit_all(repo_root: &Path, message: &str) {
         run_git(repo_root, &["add", "-A"]);
         run_git(repo_root, &["commit", "-m", message]);
     }
 
+    /// Writes `contents` to a file located at `repo_root` joined with `relative_path`, creating any missing parent directories.
+    ///
+    /// `relative_path` is interpreted relative to `repo_root`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    /// // Writes "hello" to "<repo_root>/sub/dir/file.txt"
+    /// write_file(Path::new("/tmp/myrepo"), "sub/dir/file.txt", "hello");
+    /// ```
     fn write_file(repo_root: &Path, relative_path: &str, contents: &str) {
         let absolute_path = repo_root.join(relative_path);
         if let Some(parent) = absolute_path.parent() {

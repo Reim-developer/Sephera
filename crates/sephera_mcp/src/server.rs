@@ -46,13 +46,29 @@ impl Default for SepheraServer {
 /// Tool implementations exposed through the Model Context Protocol.
 #[tool_router]
 impl SepheraServer {
-    /// Count lines of code for supported languages in a directory tree.
+    /// Counts lines of code, comment lines, and empty lines per recognized language for a given source.
     ///
-    /// Returns a summary table of code, comment, and empty lines per language,
-    /// plus aggregate totals.
+    /// Given exactly one of a filesystem `path` or a repository `url` (optionally with `ref`) and an optional list of ignore patterns, analyzes the source tree and produces a human-readable summary listing per-language metrics and aggregate totals.
+    ///
+    /// Returns: A formatted summary string with a header (`Files scanned`, `Languages detected`), one line per language (`"{language}: {code} code, {comment} comment, {empty} empty ({bytes} bytes)"`), and a final `Total: ...` line with aggregated metrics.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Construct parameters for a local directory
+    /// let params = LocInput {
+    ///     path: Some("src".into()),
+    ///     url: None,
+    ///     git_ref: None,
+    ///     ignore: None,
+    /// };
+    /// let server = SepheraServer::new();
+    /// let summary = server.loc(rmcp::handler::server::wrapper::Parameters(params)).unwrap();
+    /// assert!(summary.contains("Files scanned:"));
+    /// ```
     #[tool(
-        name = "loc",
-        description = "Count lines of code, comment lines, and empty lines for supported languages in a directory tree. Accepts exactly one of path or url, plus an optional ref for repo URLs. Returns per-language metrics and aggregate totals."
+    name = "loc",
+    description = "Count lines of code, comment lines, and empty lines for supported languages in a directory tree. Accepts exactly one of path or url, plus an optional ref for repo URLs. Returns per-language metrics and aggregate totals."
     )]
     fn loc(
         &self,
@@ -98,13 +114,42 @@ impl SepheraServer {
         Ok(output)
     }
 
-    /// Build an LLM-ready context pack for a repository or focused sub-paths.
+    /// Builds an LLM-ready context pack for a repository or focused sub-paths.
     ///
-    /// Returns the context pack as JSON for structured consumption by AI
-    /// agents.
+    /// Accepts exactly one of `path` or `url`. Supports optional config loading, profile
+    /// selection or listing, base-ref diffs, focus paths, ignore patterns, budget and
+    /// compression modes. When `list_profiles=true` returns profile metadata as JSON;
+    /// when `format=markdown` returns a rendered Markdown context pack; otherwise returns
+    /// a pretty-printed JSON representation of the generated context report.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::handler::server::wrapper::Parameters;
+    ///
+    /// // Request a context pack for a local path and get pretty JSON (default).
+    /// let params = Parameters(crate::inputs::ContextInput {
+    ///     path: Some(".".to_string()),
+    ///     url: None,
+    ///     git_ref: None,
+    ///     config: None,
+    ///     no_config: None,
+    ///     profile: None,
+    ///     list_profiles: None,
+    ///     focus: None,
+    ///     ignore: None,
+    ///     diff: None,
+    ///     budget: None,
+    ///     compress: None,
+    ///     format: None,
+    /// });
+    /// // `server` is an instance of `SepheraServer`.
+    /// let result = server.context(params);
+    /// assert!(result.is_ok());
+    /// ```
     #[tool(
-        name = "context",
-        description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
+    name = "context",
+    description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
     )]
     fn context(
         &self,
@@ -154,13 +199,39 @@ impl SepheraServer {
         }
     }
 
-    /// Build a dependency graph report for a repository or focused sub-paths.
+    /// Builds a dependency graph report for a repository or specified sub-paths.
     ///
-    /// Returns the graph report as JSON, including optional reverse dependency
-    /// filtering via `depends_on`.
+    /// Accepts exactly one of `path` or `url` (with an optional `ref` for repository URLs), optional `focus` paths,
+    /// `ignore` patterns, a traversal `depth`, and an optional reverse-dependency `depends_on` query. The resulting
+    /// report is returned as pretty-printed JSON.
+    ///
+    /// # Returns
+    ///
+    /// A pretty-printed JSON string containing the graph report, including nodes, edges, depth metadata, and the
+    /// optional `base_path` when a display path is available.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use rmcp::handler::server::wrapper::Parameters;
+    ///
+    /// let server = SepheraServer::new();
+    /// let input = GraphInput {
+    ///     path: Some(".".to_string()),
+    ///     url: None,
+    ///     git_ref: None,
+    ///     focus: None,
+    ///     ignore: None,
+    ///     depth: None,
+    ///     depends_on: None,
+    /// };
+    /// let params = Parameters(input);
+    /// let json = server.graph(params).expect("graph generation failed");
+    /// assert!(json.trim_start().starts_with('{'));
+    /// ```
     #[tool(
-        name = "graph",
-        description = "Build a dependency graph for a repository or focused sub-paths. Accepts exactly one of path or url, plus an optional ref for repo URLs. Supports traversal depth and reverse dependency queries through depends_on. Returns structured JSON."
+    name = "graph",
+    description = "Build a dependency graph for a repository or focused sub-paths. Accepts exactly one of path or url, plus an optional ref for repo URLs. Supports traversal depth and reverse dependency queries through depends_on. Returns structured JSON."
     )]
     fn graph(
         &self,
@@ -260,6 +331,28 @@ struct GraphInput {
     depends_on: Option<String>,
 }
 
+/// Builds an `IgnoreMatcher` from an optional list of ignore patterns.
+///
+/// If `ignore_patterns` is `None`, an empty pattern list is used. Pattern parsing
+/// errors are converted into an `rmcp::ErrorData::internal_error` with a
+/// prefixed message.
+///
+/// # Parameters
+///
+/// - `ignore_patterns`: Optional list of ignore patterns (glob-like strings). `None` is treated as an empty list.
+///
+/// # Returns
+///
+/// `Ok(IgnoreMatcher)` constructed from the provided patterns, `Err(rmcp::ErrorData)` if pattern parsing failed.
+///
+/// # Examples
+///
+/// ```
+/// # use rmcp::ErrorData;
+/// # // pretend IgnoreMatcher is in scope for the example
+/// let matcher = build_ignore_matcher(Some(vec!["target/*".into(), "*.lock".into()]));
+/// assert!(matcher.is_ok());
+/// ```
 fn build_ignore_matcher(
     ignore_patterns: Option<Vec<String>>,
 ) -> Result<IgnoreMatcher, rmcp::ErrorData> {
@@ -273,6 +366,19 @@ fn build_ignore_matcher(
     )
 }
 
+/// Creates a closure that converts an `anyhow::Error` into an `rmcp::ErrorData::internal_error`
+/// whose message is prefixed with the given static `prefix`.
+///
+/// The returned closure formats the error as `"{prefix}: {error}"` and places it in the
+/// `internal_error` variant.
+///
+/// # Examples
+///
+/// ```no_run
+/// let mapper = map_internal_error("loc failed");
+/// let err = anyhow::anyhow!("unable to read file");
+/// let _error_data = mapper(err);
+/// ```
 fn map_internal_error(
     prefix: &'static str,
 ) -> impl Fn(anyhow::Error) -> rmcp::ErrorData {
@@ -281,6 +387,20 @@ fn map_internal_error(
     }
 }
 
+/// Serializes a value to pretty-printed JSON or returns an MCP internal error.
+///
+/// # Returns
+/// A `String` containing pretty-formatted JSON on success; an `rmcp::ErrorData::internal_error` describing the serialization failure otherwise.
+///
+/// # Examples
+///
+/// ```
+/// #[derive(serde::Serialize)]
+/// struct S { a: i32 }
+/// let s = S { a: 1 };
+/// let json = crate::serialize_json(&s).unwrap();
+/// assert!(json.contains("\"a\": 1"));
+/// ```
 fn serialize_json<T: serde::Serialize>(
     value: &T,
 ) -> Result<String, rmcp::ErrorData> {
@@ -292,6 +412,26 @@ fn serialize_json<T: serde::Serialize>(
     })
 }
 
+/// Renders a ContextReport as a Markdown "Sephera Context Pack".
+///
+/// Produces a complete Markdown document containing metadata, dominant languages,
+/// group summaries, and per-file excerpts derived from `report`.
+///
+/// # Parameters
+///
+/// - `report`: The context report to render.
+///
+/// # Returns
+///
+/// A `String` containing the generated Markdown document.
+///
+/// # Examples
+///
+/// ```
+/// let report = sephera_core::core::context::ContextReport::default();
+/// let md = render_context_markdown(&report);
+/// assert!(md.starts_with("# Sephera Context Pack"));
+/// ```
 fn render_context_markdown(
     report: &sephera_core::core::context::ContextReport,
 ) -> String {
@@ -638,6 +778,24 @@ mod tests {
 
     use super::*;
 
+    /// Writes `contents` to a file located at `base_dir`/`relative_path`, creating any missing parent directories.
+    ///
+    /// The `relative_path` is interpreted relative to `base_dir`. Parent directories will be created with
+    /// default permissions if they do not exist. The function will panic if directory creation or file
+    /// writing fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::fs;
+    /// use std::path::Path;
+    ///
+    /// let tmp = tempfile::tempdir().unwrap();
+    /// let base = tmp.path();
+    /// write_file(base, "sub/dir/example.txt", b"hello");
+    /// let got = fs::read_to_string(base.join("sub/dir/example.txt")).unwrap();
+    /// assert_eq!(got, "hello");
+    /// ```
     fn write_file(
         base_dir: &std::path::Path,
         relative_path: &str,
@@ -650,6 +808,23 @@ mod tests {
         fs::write(absolute_path, contents).unwrap();
     }
 
+    /// Runs `git` with the given arguments in `repo_root` and asserts the command succeeds.
+    ///
+    /// Panics if the `git` executable cannot be started or if the command exits with a non‑zero
+    /// status. On failure, the panic message includes the provided arguments and the captured
+    /// `stdout` and `stderr`.
+    ///
+    /// # Parameters
+    ///
+    /// - `repo_root`: working directory in which to run `git`.
+    /// - `args`: slice of arguments to pass to `git` (e.g., `&["init"]`, `&["commit", "-m", "msg"]`).
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// // Run `git --version` in the current directory (requires `git` to be available).
+    /// run_git(std::path::Path::new("."), &["--version"]);
+    /// ```
     fn run_git(repo_root: &Path, args: &[&str]) {
         let output = Command::new("git")
             .current_dir(repo_root)
@@ -667,17 +842,58 @@ mod tests {
         );
     }
 
+    /// Initializes a new Git repository at the given path and configures a local user name and email.
+    ///
+    /// This creates a repository (equivalent to `git init`) in `repo_root` and sets `user.name` to
+    /// "Sephera Tests" and `user.email` to "tests@example.com" in the repository's local Git config.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use tempfile::tempdir;
+    ///
+    /// let dir = tempdir().unwrap();
+    /// let repo_path = dir.path();
+    /// init_git_repo(repo_path);
+    /// assert!(repo_path.join(".git").exists());
+    /// ```
     fn init_git_repo(repo_root: &Path) {
         run_git(repo_root, &["init"]);
         run_git(repo_root, &["config", "user.name", "Sephera Tests"]);
         run_git(repo_root, &["config", "user.email", "tests@example.com"]);
     }
 
+    /// Stages all changes and creates a commit in the specified Git repository using the given message.
+    ///
+    /// `repo_root` is the path to the repository working directory. `message` is used as the commit message.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    ///
+    /// // Stage all files and commit with message "chore: update"
+    /// commit_all(Path::new("/path/to/repo"), "chore: update");
+    /// ```
     fn commit_all(repo_root: &Path, message: &str) {
         run_git(repo_root, &["add", "-A"]);
         run_git(repo_root, &["commit", "-m", message]);
     }
 
+    /// Constructs a file:// URL for the given repository path.
+    ///
+    /// The returned string is the file URL formed by prefixing `file://` to the path's display representation.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    ///
+    /// let p = Path::new("/tmp/myrepo");
+    /// let url = remote_repo_url(p);
+    /// assert_eq!(url, "file:///tmp/myrepo");
+    /// ```
     fn remote_repo_url(repo_root: &Path) -> String {
         format!("file://{}", repo_root.display())
     }

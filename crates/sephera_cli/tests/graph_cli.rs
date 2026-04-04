@@ -3,6 +3,19 @@ use std::process::Command;
 use serde_json::Value;
 use tempfile::tempdir;
 
+/// Writes `contents` to a file located at `base_dir.join(relative_path)`, creating any missing parent directories.
+///
+/// This function joins `base_dir` and `relative_path` to form the target path, ensures the parent directory exists, and writes the provided bytes to the file. It will panic on any failure to create directories or write the file.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let dir = tempfile::tempdir().unwrap();
+/// let base = dir.path();
+/// write_file(base, "sub/hello.txt", b"hello world");
+/// assert_eq!(std::fs::read(base.join("sub/hello.txt")).unwrap(), b"hello world");
+/// ```
 fn write_file(
     base_dir: &std::path::Path,
     relative_path: &str,
@@ -15,6 +28,24 @@ fn write_file(
     std::fs::write(absolute_path, contents).unwrap();
 }
 
+/// Integration test that verifies `sephera graph` produces a JSON graph filtered to reverse
+/// dependencies of a given file at depth 1.
+///
+/// Runs the compiled `sephera` CLI with `--what-depends-on src/util.rs --depth 1 --format json`
+/// against a temporary crate, then asserts the parsed JSON's `query.depends_on` and `depth`
+/// fields and that the resulting `nodes` include `src/main.rs`, `src/service.rs`, and
+/// `src/util.rs` but exclude `src/other.rs`.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::process::Command;
+/// let out = Command::new(env!("CARGO_BIN_EXE_sephera"))
+///     .args(["graph", "--path", "/tmp/project", "--what-depends-on", "src/util.rs", "--depth", "1", "--format", "json"])
+///     .output()
+///     .unwrap();
+/// assert!(out.status.success());
+/// ```
 #[test]
 fn graph_command_filters_reverse_dependencies_in_json() {
     let temp_dir = tempdir().unwrap();

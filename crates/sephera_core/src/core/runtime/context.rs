@@ -115,6 +115,24 @@ enum TokenBudgetValue {
 }
 
 impl TokenBudgetValue {
+    /// Parses a TokenBudgetValue into a positive `u64`.
+    ///
+    /// Returns `Ok(u64)` when the value is a positive integer or a parsable non-empty string
+    /// representing a positive token budget (supports suffix multipliers like `k`/`m`).
+    /// Returns an error if the integer is zero or the string is empty/invalid/overflows.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use crate::token_budget::TokenBudgetValue;
+    /// // integer case
+    /// let v = TokenBudgetValue::Integer(150);
+    /// assert_eq!(v.parse().unwrap(), 150u64);
+    ///
+    /// // string case with multiplier
+    /// let s = TokenBudgetValue::String("2k".into());
+    /// assert_eq!(s.parse().unwrap(), 2_000u64);
+    /// ```
     fn parse(self) -> Result<u64> {
         match self {
             Self::Integer(value) if value > 0 => Ok(value),
@@ -124,14 +142,39 @@ impl TokenBudgetValue {
     }
 }
 
-/// Resolves config, source selection, and CLI-compatible defaults for a
-/// `context` invocation.
+/// Resolves the source, optional config, and final execution options for a `context` command.
+///
+/// When profile listing is requested returns `ResolvedContextCommand::ListProfiles`; otherwise
+/// returns `ResolvedContextCommand::Execute` with merged settings from CLI, selected profile,
+/// and base config (if any).
 ///
 /// # Errors
 ///
-/// Returns an error when source resolution fails, config loading fails, the
-/// selected profile is invalid, or any requested format/compression option is
-/// not supported.
+/// Returns an error when any of the following occur:
+/// - source resolution fails,
+/// - config discovery or loading fails,
+/// - a requested profile is invalid or missing,
+/// - a provided compression or format option is not supported.
+///
+/// # Examples
+///
+/// ```
+/// // Construct a CLI-like request (fields shown illustratively)
+/// let req = ContextCommandInput {
+///     source: "path/to/dir".into(),
+///     list_profiles: false,
+///     ..Default::default()
+/// };
+/// let cmd = resolve_context_command(req).expect("resolve");
+/// match cmd {
+///     ResolvedContextCommand::Execute(opts) => {
+///         // use resolved options to build a report...
+///     }
+///     ResolvedContextCommand::ListProfiles(profiles) => {
+///         // list available profiles...
+///     }
+/// }
+/// ```
 pub fn resolve_context_command(
     mut request: ContextCommandInput,
 ) -> Result<ResolvedContextCommand> {
@@ -155,12 +198,29 @@ pub fn resolve_context_command(
     )))
 }
 
-/// Builds the final context report from resolved context options.
+/// Builds a ContextReport from fully resolved execution options.
+///
+/// This produces a context analysis report using the provided ignore patterns,
+/// focus list, budget, compression mode, and optional diff selection from
+/// `options`. When the source contains display path metadata, the report's
+/// display-related fields are rewritten to those values before returning.
 ///
 /// # Errors
 ///
-/// Returns an error when ignore patterns are invalid, diff resolution fails,
-/// context building fails, or the compression mode is invalid.
+/// Returns an error if any of the following occur:
+/// - an ignore pattern is invalid,
+/// - the configured compression mode is not `none`, `signatures`, or `skeleton`,
+/// - diff resolution fails for the provided diff spec,
+/// - building the context report fails for any other reason.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Obtain ResolvedContextOptions via CLI parsing / config merging in real usage.
+/// let options = /* resolved options */ unimplemented!();
+/// let report = sephera::context::build_context_report(&options).unwrap();
+/// // use `report`...
+/// ```
 pub fn build_context_report(
     options: &ResolvedContextOptions,
 ) -> Result<ContextReport> {
@@ -207,6 +267,24 @@ pub fn build_context_report(
     Ok(report)
 }
 
+/// Loads and optionally parses the selected `.sephera.toml` configuration for the given request and source.
+///
+/// If `request.no_config` is true, returns `Ok(None)`. If `request.config` is provided, resolves that explicit
+/// path via `resolve_explicit_config_path`; otherwise attempts discovery starting from `source.analysis_path` via
+/// `discover_config_path`. When a config path is found, loads and converts it with `load_context_config`. Any errors
+/// from path resolution, discovery, or config loading are propagated.
+///
+/// # Examples
+///
+/// ```no_run
+/// // `request` and `source` are assumed to be available in the calling context.
+/// let loaded = load_selected_config(&request, &source)?;
+/// if let Some(config) = loaded {
+///     println!("Loaded config at {:?}", config.source_path);
+/// } else {
+///     println!("No config used");
+/// }
+/// ```
 fn load_selected_config(
     request: &ContextCommandInput,
     source: &ResolvedSource,
@@ -225,6 +303,28 @@ fn load_selected_config(
         .transpose()
 }
 
+/// Merge CLI request, selected profile, and base config into fully-resolved context options.
+///
+/// The CLI `request` has highest precedence, then the selected profile (if any), then the base
+/// `[context]` from the loaded config. Lists (`ignore`, `focus`) are concatenated in that order.
+/// `diff`, `budget`, `compress`, `format`, and `output` are selected using the same precedence;
+/// `budget` falls back to `DEFAULT_CONTEXT_BUDGET` and `format` falls back to `"markdown"` if none
+/// are provided. When `output` is present and the source indicates a remote auto-discovery scenario,
+/// the output path is remapped relative to the discovered config location.
+///
+/// # Examples
+///
+/// ```no_run
+/// use crate::context::{merge_context_sources, ContextCommandInput, ResolvedSource, LoadedSepheraConfig};
+///
+/// // Construct `request`, `source`, and optional `config` according to your application.
+/// let request: ContextCommandInput = /* CLI-parsed input */;
+/// let source: ResolvedSource = /* resolved analysis source */;
+/// let config: Option<&LoadedSepheraConfig> = /* loaded config or None */;
+///
+/// let resolved = merge_context_sources(request, source, config).expect("merge failed");
+/// // `resolved` now contains the final execution options (ignore, focus, diff, budget, etc.).
+/// ```
 fn merge_context_sources(
     request: ContextCommandInput,
     source: ResolvedSource,
@@ -297,6 +397,29 @@ fn merge_context_sources(
     })
 }
 
+/// Gathers available context profile names and an optional display path for the loaded config.
+///
+/// The returned `AvailableContextProfiles` contains `source_path` set to the rendered config path
+/// (via `display_config_path`) when a config is provided, and `profiles` containing the names of
+/// profiles defined in the config; when `config` is `None`, `profiles` is an empty list.
+///
+/// # Examples
+///
+/// ```rust
+/// # // Example is ignored for doctest compilation; adapt to real types when used.
+/// # ignore
+/// use crate::{list_profiles, AvailableContextProfiles, ResolvedSource, LoadedSepheraConfig};
+///
+/// // With no config
+/// let source = /* obtain ResolvedSource */ unimplemented!();
+/// let result: AvailableContextProfiles = list_profiles(None, &source);
+/// assert!(result.profiles.is_empty());
+///
+/// // With a config (pseudo-code)
+/// let config: LoadedSepheraConfig = /* load or construct */ unimplemented!();
+/// let result = list_profiles(Some(&config), &source);
+/// // `result.source_path` is the display path for config; `result.profiles` contains profile names.
+/// ```
 fn list_profiles(
     config: Option<&LoadedSepheraConfig>,
     source: &ResolvedSource,
@@ -310,6 +433,31 @@ fn list_profiles(
     }
 }
 
+/// Resolves the CLI-selected profile name against a loaded config and returns the matching profile section if any.
+///
+/// If no profile was requested on the CLI, this returns `Ok(None)`. If a profile name was requested but no
+/// configuration was loaded, this returns an error indicating the missing `.sephera.toml`. If the requested
+/// profile name does not exist in the loaded config, this returns an error listing available profiles and the
+/// displayed config path.
+///
+/// # Returns
+///
+/// `Ok(Some(&LoadedContextSection))` if the profile exists, `Ok(None)` if no profile was requested, and `Err` if a
+/// profile was requested but the config was missing or the profile name was not found.
+///
+/// # Examples
+///
+/// ```no_run
+/// // Illustrative usage (types omitted for brevity):
+/// // let request = ContextCommandInput { profile: Some("dev".into()), .. };
+/// // let config: Option<LoadedSepheraConfig> = ...;
+/// // let source: ResolvedSource = ...;
+/// // match resolve_selected_profile(&request, config.as_ref(), &source) {
+/// //     Ok(Some(profile)) => println!("selected profile: {:?}", profile),
+/// //     Ok(None) => println!("no profile requested"),
+/// //     Err(e) => eprintln!("error selecting profile: {}", e),
+/// // }
+/// ```
 fn resolve_selected_profile<'config>(
     request: &ContextCommandInput,
     config: Option<&'config LoadedSepheraConfig>,
@@ -339,6 +487,16 @@ fn resolve_selected_profile<'config>(
     )
 }
 
+/// Locates a configuration file by searching the discovery anchor and its ancestor directories.
+///
+/// Starts from the discovery anchor derived from `base_path` and walks upward, returning the first found path to `CONFIG_FILE_NAME` if one exists.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let _ = discover_config_path(Path::new("."));
+/// ```
 fn discover_config_path(base_path: &Path) -> Result<Option<PathBuf>> {
     let anchor = discovery_anchor(base_path)?;
     let mut current = Some(anchor.as_path());
@@ -355,6 +513,28 @@ fn discover_config_path(base_path: &Path) -> Result<Option<PathBuf>> {
     Ok(None)
 }
 
+/// Determines the directory anchor to start config discovery from.
+///
+/// If `base_path` is absolute, the anchor is `base_path` itself. If `base_path` is relative,
+/// it is joined onto the current working directory to produce an absolute path used as the
+/// anchor. If the resulting absolute path refers to a file, the anchor is that file's parent
+/// directory (or the file path itself if the parent is unavailable); otherwise the anchor is
+/// the absolute path.
+///
+/// # Errors
+///
+/// Returns an error if resolving the current working directory fails while converting a
+/// relative `base_path` to an absolute path.
+///
+/// # Examples
+///
+/// ```
+/// # use std::path::Path;
+/// # fn run() -> anyhow::Result<()> {
+/// let anchor = sephera::context::discovery_anchor(Path::new("src/lib.rs"))?;
+/// assert!(anchor.ends_with("src"));
+/// # Ok(()) }
+/// ```
 fn discovery_anchor(base_path: &Path) -> Result<PathBuf> {
     let absolute_path = if base_path.is_absolute() {
         base_path.to_path_buf()
@@ -374,6 +554,29 @@ fn discovery_anchor(base_path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Loads, parses, and converts a context configuration TOML file at the given path into a `LoadedSepheraConfig`.
+///
+/// On success returns a fully validated `LoadedSepheraConfig` ready for merging with CLI options.
+/// Errors if the file cannot be read, the TOML cannot be parsed, or the parsed structure fails validation/conversion.
+///
+/// # Examples
+///
+/// ```
+/// use std::fs;
+/// use std::path::Path;
+/// use tempfile::tempdir;
+///
+/// // create a minimal config file for the example
+/// let dir = tempdir().unwrap();
+/// let cfg_path = dir.path().join(".sephera.toml");
+/// fs::write(&cfg_path, r#"
+/// [context]
+/// budget = "1000"
+/// "#).unwrap();
+///
+/// let loaded = sephera::context::load_context_config(&cfg_path).unwrap();
+/// assert!(loaded.context.is_some());
+/// ```
 fn load_context_config(config_path: &Path) -> Result<LoadedSepheraConfig> {
     let raw_config = fs::read_to_string(config_path).with_context(|| {
         format!("failed to read config file `{}`", config_path.display())
@@ -386,6 +589,26 @@ fn load_context_config(config_path: &Path) -> Result<LoadedSepheraConfig> {
     convert_context_config(config_path, parsed)
 }
 
+/// Converts a parsed `SepheraToml` and its filesystem path into a `LoadedSepheraConfig`.
+///
+/// The function treats `config_path.parent()` (or "." when absent) as the config directory,
+/// converts the top-level `[context]` section and each profile's `context` section into
+/// runtime `LoadedContextSection` values, and returns a `LoadedSepheraConfig` whose
+/// `source_path` is `config_path`.
+///
+/// Returns an error if any section conversion or validation fails (e.g., invalid budget,
+/// compression, format, or path resolution within a section).
+///
+/// # Examples
+///
+/// ```no_run
+/// # use std::path::Path;
+/// # use std::collections::BTreeMap;
+/// # // Assume `SepheraToml` and `convert_context_config` are available in scope.
+/// let parsed = /* parsed SepheraToml from TOML contents */ unimplemented!();
+/// let cfg = convert_context_config(Path::new("configs/.sephera.toml"), parsed).unwrap();
+/// assert_eq!(cfg.source_path, Path::new("configs/.sephera.toml"));
+/// ```
 fn convert_context_config(
     config_path: &Path,
     config: SepheraToml,
@@ -419,6 +642,54 @@ fn convert_context_config(
     })
 }
 
+/// Converts a parsed TOML `context` section into a validated runtime `LoadedContextSection`.
+///
+/// Parses and validates optional `budget`, `compress`, and `format` fields and resolves any
+/// relative paths (focus and output) against `config_directory`. Error messages are annotated
+/// with `field_prefix` and `config_path` when parsing or validation fails.
+///
+/// # Parameters
+///
+/// - `config_path`: Path to the TOML file used to produce contextualized error messages.
+/// - `config_directory`: Directory to resolve relative focus/output paths against.
+/// - `field_prefix`: Prefix used in error messages to identify the TOML field (e.g., `"context"` or `"profiles.dev.context"`).
+/// - `context`: The deserialized `ContextToml` section to convert.
+///
+/// # Returns
+///
+/// A `LoadedContextSection` with validated/converted fields (`ignore`, resolved `focus`, `diff`,
+/// parsed `budget`, validated `compress` and `format`, and resolved `output`).
+///
+/// # Errors
+///
+/// Returns an error if parsing or validation of `budget`, `compress`, or `format` fails; each
+/// error is annotated with the `field_prefix` and the `config_path` for clarity.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// // Construct a minimal ContextToml; field names mirror the expected struct in this crate.
+/// let ctx = ContextToml {
+///     budget: None,
+///     compress: None,
+///     format: None,
+///     ignore: Vec::new(),
+///     focus: Vec::new(),
+///     diff: None,
+///     output: None,
+/// };
+///
+/// let loaded = convert_context_section(
+///     Path::new("sephera.toml"),
+///     Path::new("."),
+///     "context",
+///     ctx,
+/// ).unwrap();
+///
+/// assert!(loaded.ignore.is_empty());
+/// ```
 fn convert_context_section(
     config_path: &Path,
     config_directory: &Path,
@@ -469,6 +740,21 @@ fn convert_context_section(
     })
 }
 
+/// Resolves a list of paths against a base directory, returning the resolved paths in the same order.
+///
+/// Relative input paths are interpreted relative to `base_directory`; absolute paths are preserved.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::{Path, PathBuf};
+///
+/// let base = Path::new("/home/project");
+/// let inputs = vec![PathBuf::from("src/lib.rs"), PathBuf::from("/etc/hosts")];
+/// let resolved = resolve_relative_paths(base, inputs);
+/// assert_eq!(resolved[0], PathBuf::from("/home/project/src/lib.rs"));
+/// assert_eq!(resolved[1], PathBuf::from("/etc/hosts"));
+/// ```
 fn resolve_relative_paths(
     base_directory: &Path,
     paths: Vec<PathBuf>,
@@ -479,6 +765,22 @@ fn resolve_relative_paths(
         .collect()
 }
 
+/// Resolve a path against a base directory.
+///
+/// If `path` is absolute it is returned unchanged; otherwise the path joined onto `base_directory` is returned.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::{Path, PathBuf};
+///
+/// let base = Path::new("/home/user/project");
+/// let p1 = resolve_relative_path(base, PathBuf::from("src/main.rs"));
+/// assert_eq!(p1, base.join("src/main.rs"));
+///
+/// let p2 = resolve_relative_path(base, PathBuf::from("/etc/hosts"));
+/// assert_eq!(p2, PathBuf::from("/etc/hosts"));
+/// ```
 fn resolve_relative_path(base_directory: &Path, path: PathBuf) -> PathBuf {
     if path.is_absolute() {
         path
@@ -487,6 +789,26 @@ fn resolve_relative_path(base_directory: &Path, path: PathBuf) -> PathBuf {
     }
 }
 
+/// Resolve a provided configuration file path into an absolute path.
+///
+/// If `config_path` is already absolute it is returned unchanged; otherwise the
+/// path is resolved relative to the current working directory.
+///
+/// # Errors
+///
+/// Returns an error if the current working directory cannot be determined.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let abs = resolve_explicit_config_path(Path::new("/etc/sephera.toml")).unwrap();
+/// assert_eq!(abs, Path::new("/etc/sephera.toml"));
+///
+/// // relative path is joined to current dir
+/// let rel = resolve_explicit_config_path(Path::new("configs/site.toml")).unwrap();
+/// assert!(rel.is_absolute());
+/// ```
 fn resolve_explicit_config_path(config_path: &Path) -> Result<PathBuf> {
     if config_path.is_absolute() {
         Ok(config_path.to_path_buf())
@@ -497,6 +819,20 @@ fn resolve_explicit_config_path(config_path: &Path) -> Result<PathBuf> {
     }
 }
 
+/// Formats a list of profile names into a human-readable, comma-separated message.
+///
+/// If the iterator yields no names, the returned string states that no profiles are defined;
+/// otherwise it lists the available profiles prefixed by "; available profiles:".
+///
+/// # Examples
+///
+/// ```
+/// let msg = comma_separated_profiles(vec!["dev".to_string(), "prod".to_string()]);
+/// assert_eq!(msg, "; available profiles: dev, prod");
+///
+/// let none = comma_separated_profiles(Vec::<String>::new());
+/// assert_eq!(none, "; no profiles are defined");
+/// ```
 fn comma_separated_profiles(
     profile_names: impl IntoIterator<Item = String>,
 ) -> String {
@@ -508,6 +844,21 @@ fn comma_separated_profiles(
     }
 }
 
+/// Parses a human-friendly token budget string into a `u64` token count.
+///
+/// Accepts a decimal integer optionally suffixed with `k`/`K` (×1_000) or `m`/`M` (×1_000_000).
+/// Errors if the input is empty, not a positive integer, equal to zero, or if the scaled value overflows.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(parse_token_budget("42").unwrap(), 42);
+/// assert_eq!(parse_token_budget("1k").unwrap(), 1_000);
+/// assert_eq!(parse_token_budget("2M").unwrap(), 2_000_000);
+/// assert!(parse_token_budget("").is_err());
+/// assert!(parse_token_budget("0").is_err());
+/// assert!(parse_token_budget("not-a-number").is_err());
+/// ```
 fn parse_token_budget(raw_budget: &str) -> Result<u64> {
     let trimmed_budget = raw_budget.trim();
     if trimmed_budget.is_empty() {
@@ -538,6 +889,22 @@ fn parse_token_budget(raw_budget: &str) -> Result<u64> {
     })
 }
 
+/// Validate that a compression mode string is one of the accepted values.
+///
+/// Accepts the values `none`, `signatures`, and `skeleton`. If valid, returns the original
+/// `raw_mode` string unchanged.
+///
+/// # Errors
+///
+/// Returns an error if `raw_mode` is not one of the accepted values; the error message
+/// will indicate the invalid value and the expected options.
+///
+/// # Examples
+///
+/// ```
+/// let ok = validate_compression_mode("none".to_string()).unwrap();
+/// assert_eq!(ok, "none");
+/// ```
 fn validate_compression_mode(raw_mode: String) -> Result<String> {
     match raw_mode.as_str() {
         "signatures" | "skeleton" | "none" => Ok(raw_mode),
@@ -547,6 +914,17 @@ fn validate_compression_mode(raw_mode: String) -> Result<String> {
     }
 }
 
+/// Validates that a context format string is one of the supported formats.
+///
+/// Returns `Ok(raw_format)` when the input is `"markdown"` or `"json"`, and an error otherwise.
+///
+/// # Examples
+///
+/// ```
+/// let ok = validate_context_format("markdown".into()).unwrap();
+/// assert_eq!(ok, "markdown");
+/// assert!(validate_context_format("xml".into()).is_err());
+/// ```
 fn validate_context_format(raw_format: String) -> Result<String> {
     match raw_format.as_str() {
         "markdown" | "json" => Ok(raw_format),
@@ -556,6 +934,28 @@ fn validate_context_format(raw_format: String) -> Result<String> {
     }
 }
 
+/// Remaps an output path for remote sources when the config was auto-discovered.
+///
+/// If the source is remote and auto-discovery was used and a config is provided, this
+/// returns a new output path by interpreting `output_path` as relative to the config's
+/// directory and resolving that relative path against the current working directory.
+/// Otherwise the original `output_path` is returned unchanged.
+///
+/// # Errors
+///
+/// Returns an error if the function fails to strip the config directory prefix from
+/// `output_path` or if the current working directory cannot be resolved.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::PathBuf;
+/// // `LoadedSepheraConfig` and `ResolvedSource` are assumed to be available in scope.
+/// let output = PathBuf::from("config/out/report.md");
+/// let config = LoadedSepheraConfig { source_path: PathBuf::from("config/.sephera.toml"), .. };
+/// let source = ResolvedSource::remote("file://example");
+/// let remapped = remap_remote_output_path(output, Some(&config), &source, true).unwrap();
+/// ```
 fn remap_remote_output_path(
     output_path: PathBuf,
     config: Option<&LoadedSepheraConfig>,
@@ -591,6 +991,32 @@ fn remap_remote_output_path(
         .join(relative_output))
 }
 
+/// Rewrite a config file path for display when the source provides a repository display root.
+///
+/// If `source.display_repo_root` is Some and `config_path` is inside `source.repo_root`, the
+/// returned path is the `display_repo_root` joined with the repo-relative path (with backslashes
+/// normalized to forward slashes). If the repo-relative path is empty, the returned path is exactly
+/// `display_repo_root`. Otherwise, returns `config_path` unchanged.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// // config_path is inside repo_root
+/// let config_path = Path::new("/repo/.sephera.toml");
+/// let source = ResolvedSource {
+///     repo_root: PathBuf::from("/repo"),
+///     display_repo_root: Some(String::from("file://repo-display")),
+///     ..Default::default()
+/// };
+/// let shown = display_config_path(config_path, &source);
+/// assert_eq!(shown.to_string_lossy(), "file://repo-display/.sephera.toml");
+///
+/// // config_path outside repo_root -> unchanged
+/// let other = Path::new("/other/.sephera.toml");
+/// let shown2 = display_config_path(other, &source);
+/// assert_eq!(shown2, other);
+/// ```
 fn display_config_path(config_path: &Path, source: &ResolvedSource) -> PathBuf {
     if let Some(display_repo_root) = &source.display_repo_root
         && let Ok(relative_path) = config_path.strip_prefix(&source.repo_root)
@@ -608,6 +1034,35 @@ fn display_config_path(config_path: &Path, source: &ResolvedSource) -> PathBuf {
     config_path.to_path_buf()
 }
 
+/// Resolves a diff specification against a repository and returns the selection of changed files that fall inside the given analysis base path.
+///
+/// Parses `spec`, canonicalizes the source analysis path, ensures the base path is inside the repository root, collects changed repository paths for the diff spec, filters them to the analysis scope, and records counts and skipped (deleted or missing) files.
+///
+/// # Errors
+///
+/// Returns an error if the diff spec is invalid, if canonicalizing the base path fails, if the git repository root cannot be discovered, if the base path is not inside the repository, or if any git/path operations fail during collection and filtering.
+///
+/// # Returns
+///
+/// A `ContextDiffSelection` containing:
+/// - `spec`: the trimmed original diff spec,
+/// - `repo_root`: the repository root path,
+/// - `changed_paths`: in-scope changed file paths relative to the analysis base,
+/// - `changed_files_detected`: total changed files detected in the repo for the spec,
+/// - `changed_files_in_scope`: number of those files that are inside the analysis scope,
+/// - `skipped_deleted_or_missing`: number of in-scope paths skipped because the file was deleted or missing.
+///
+/// # Examples
+///
+/// ```no_run
+/// use crate::context::{ResolvedSource, resolve_context_diff};
+///
+/// // Construct a ResolvedSource for a repository with analysis_path set to the desired base.
+/// // The concrete construction depends on your crate's ResolvedSource API.
+/// let source = ResolvedSource::local("/path/to/repo");
+/// let selection = resolve_context_diff(&source, "HEAD").unwrap();
+/// assert!(selection.changed_files_detected >= selection.changed_files_in_scope);
+/// ```
 fn resolve_context_diff(
     source: &ResolvedSource,
     spec: &str,
@@ -685,6 +1140,32 @@ enum DiffSpec<'a> {
 }
 
 impl<'a> DiffSpec<'a> {
+    /// Parses a diff specification string into a `DiffSpec`, validating remote-mode restrictions.
+    ///
+    /// This accepts the keywords `working-tree`, `staged`, and `unstaged` for local usage and treats any
+    /// other non-empty string as a base reference specifier. When `is_remote` is true, the three
+    /// working-tree keywords are rejected and a base ref (for example `main` or `HEAD~1`) must be used.
+    ///
+    /// # Returns
+    ///
+    /// `Ok(DiffSpec)` describing the requested diff selection; `Err` if the spec is empty or if a
+    /// forbidden working-tree keyword is provided while `is_remote` is `true`.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// # use anyhow::Result;
+    /// # fn run() -> Result<()> {
+    /// use crate::context::diff::DiffSpec;
+    ///
+    /// assert!(matches!(DiffSpec::parse("working-tree", false)?, DiffSpec::WorkingTree));
+    /// assert!(matches!(DiffSpec::parse("staged", false)?, DiffSpec::Staged));
+    /// assert!(matches!(DiffSpec::parse("unstaged", false)?, DiffSpec::Unstaged));
+    /// let base = DiffSpec::parse("main", true)?;
+    /// if let DiffSpec::BaseRef(s) = base { assert_eq!(s, "main"); } else { panic!() }
+    /// # Ok(()) }
+    /// # let _ = run();
+    /// ```
     fn parse(raw_spec: &'a str, is_remote: bool) -> Result<Self> {
         let spec = raw_spec.trim();
         if spec.is_empty() {
@@ -711,6 +1192,20 @@ impl<'a> DiffSpec<'a> {
     }
 }
 
+/// Locate the git repository root that contains the given path.
+///
+/// Returns the canonicalized repository top-level directory as reported by `git rev-parse --show-toplevel`.
+///
+/// # Errors
+/// Returns an error if the git command fails or if the reported repository path cannot be canonicalized.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let root = discover_repo_root(Path::new(".")).unwrap();
+/// assert!(root.is_absolute());
+/// ```
 fn discover_repo_root(base_path: &Path) -> Result<PathBuf> {
     let repo_root = super::git::git_stdout_string(
         base_path,
@@ -722,6 +1217,29 @@ fn discover_repo_root(base_path: &Path) -> Result<PathBuf> {
     })
 }
 
+/// Collects the set of repository-relative paths that have changed according to `spec`.
+///
+/// The returned paths are unique and sorted (deterministic) because a `BTreeSet` is used
+/// to deduplicate and order results collected from git. For `BaseRef(base_ref)` the
+/// function resolves the merge base between `base_ref` and `HEAD` and compares that
+/// commit range to `HEAD`.
+///
+/// # Returns
+///
+/// A `Vec<PathBuf>` containing repo-relative paths for changed files.
+///
+/// # Errors
+///
+/// Propagates errors from underlying git commands and from parsing git output.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// // `DiffSpec` must be in scope; e.g. `use crate::context::DiffSpec;`
+/// let changed = collect_changed_repo_paths(Path::new("."), DiffSpec::WorkingTree).unwrap();
+/// assert!(changed.iter().all(|p| p.as_path().is_relative()));
+/// ```
 fn collect_changed_repo_paths(
     repo_root: &Path,
     spec: DiffSpec<'_>,
@@ -776,6 +1294,24 @@ fn collect_changed_repo_paths(
     Ok(changed_paths.into_iter().map(PathBuf::from).collect())
 }
 
+/// Collects file paths reported by `git diff --name-status -z` (or similar name-status commands).
+///
+/// Executes the given git arguments in `repo_root`, parses NUL-delimited name-status output,
+/// and returns the list of changed file paths (new/target paths for renames/copies).
+///
+/// # Errors
+///
+/// Returns an error if the git command fails or if the name-status output cannot be parsed.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// // Collect paths using git arguments that produce name-status NUL-delimited output.
+/// let paths = collect_name_status_paths(Path::new("."), ["diff", "--name-status", "-z"])
+///     .expect("git command and parsing should succeed");
+/// for p in paths { println!("{}", p); }
+/// ```
 fn collect_name_status_paths<I, S>(
     repo_root: &Path,
     args: I,
@@ -792,6 +1328,43 @@ where
     parse_name_status_output(&output)
 }
 
+/// Collects untracked file paths in a git repository.
+///
+/// Returns the list of repository-relative paths for files that are not tracked
+/// by git (as reported by `git ls-files --others --exclude-standard -z`).
+/// Paths are returned as UTF-8 `String`s in the same form git reports them.
+///
+/// # Errors
+///
+/// Returns an error if the underlying git command fails or its output cannot
+/// be retrieved.
+///
+/// # Examples
+///
+/// ```
+/// # use std::path::Path;
+/// # fn try_example() -> Result<(), Box<dyn std::error::Error>> {
+/// use std::fs;
+/// use std::process::Command;
+///
+/// // Create a temporary repo directory
+/// let tmp = std::env::temp_dir().join("sephera_doc_example_repo");
+/// let _ = std::fs::remove_dir_all(&tmp);
+/// std::fs::create_dir_all(&tmp)?;
+///
+/// // Initialize an empty git repository
+/// Command::new("git").args(["init"]).current_dir(&tmp).output()?;
+///
+/// // Create an untracked file
+/// let file_path = tmp.join("untracked.txt");
+/// fs::write(&file_path, "hello")?;
+///
+/// // Collect untracked paths (function under test)
+/// let paths = crate::collect_untracked_paths(Path::new(&tmp))?;
+/// assert!(paths.iter().any(|p| p == "untracked.txt"));
+/// # Ok(()) }
+/// # try_example().unwrap();
+/// ```
 fn collect_untracked_paths(repo_root: &Path) -> Result<Vec<String>> {
     let output = git_stdout_bytes(
         repo_root,
@@ -806,6 +1379,21 @@ fn collect_untracked_paths(repo_root: &Path) -> Result<Vec<String>> {
         .collect())
 }
 
+/// Parses NUL-delimited output from `git diff --name-status -z --find-renames` into a list of changed file paths.
+///
+/// For records with a rename (`R`) or copy (`C`) status, the new path is returned. For other status codes the single reported path is returned.
+///
+/// # Errors
+///
+/// Returns an error if the output contains an empty status entry or if a status entry does not include the expected path fields.
+///
+/// # Examples
+///
+/// ```
+/// let output = b"R100\0old/name.txt\0new/name.txt\0A\0added.txt\0M\0modified.txt\0";
+/// let paths = parse_name_status_output(output).unwrap();
+/// assert_eq!(paths, vec![String::from("new/name.txt"), String::from("added.txt"), String::from("modified.txt")]);
+/// ```
 fn parse_name_status_output(output: &[u8]) -> Result<Vec<String>> {
     let mut fields = output
         .split(|byte| *byte == 0)
@@ -847,10 +1435,49 @@ fn parse_name_status_output(output: &[u8]) -> Result<Vec<String>> {
     Ok(changed_paths)
 }
 
+/// Determines whether a repository-relative path falls within a scope prefix.
+///
+/// Returns `true` if `scope_prefix` is empty or if `path` starts with `scope_prefix`, `false` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// assert!(is_in_scope(Path::new("src/lib/mod.rs"), Path::new("src")));
+/// assert!(is_in_scope(Path::new("file.txt"), Path::new("")));
+/// assert!(!is_in_scope(Path::new("docs/readme.md"), Path::new("src")));
+/// ```
 fn is_in_scope(path: &Path, scope_prefix: &Path) -> bool {
     scope_prefix.as_os_str().is_empty() || path.starts_with(scope_prefix)
 }
 
+/// Adjust a repository-relative path by stripping a scope prefix when present.
+///
+/// If `scope_prefix` is empty, the input path is returned unchanged. If `scope_prefix` is non-empty
+/// and is a prefix of `repo_relative_path`, the returned path is the remainder after removing the
+/// prefix; otherwise the original `repo_relative_path` is returned.
+///
+/// # Returns
+///
+/// `repo_relative_path` with `scope_prefix` removed if `scope_prefix` is non-empty and a prefix of
+/// `repo_relative_path`, otherwise the original `repo_relative_path`.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// let full = Path::new("src/lib/foo.rs");
+/// let scope = Path::new("src/lib");
+/// assert_eq!(super::path_relative_to_scope(full, scope), Path::new("foo.rs"));
+///
+/// let unrelated = Path::new("other/file.rs");
+/// assert_eq!(super::path_relative_to_scope(unrelated, scope), Path::new("other/file.rs"));
+///
+/// let empty_scope = Path::new("");
+/// assert_eq!(super::path_relative_to_scope(full, empty_scope), full);
+/// ```
 fn path_relative_to_scope(
     repo_relative_path: &Path,
     scope_prefix: &Path,
@@ -865,6 +1492,18 @@ fn path_relative_to_scope(
     }
 }
 
+/// Convert a platform-sized unsigned integer into a 64-bit unsigned integer, failing if the value does not fit.
+///
+/// # Returns
+///
+/// `Ok(u64)` containing the converted value, or an `Err` if the input is greater than `u64::MAX`.
+///
+/// # Examples
+///
+/// ```
+/// let v = usize_to_u64(42).unwrap();
+/// assert_eq!(v, 42u64);
+/// ```
 fn usize_to_u64(value: usize) -> Result<u64> {
     u64::try_from(value).context("value exceeded u64 range")
 }
@@ -877,6 +1516,22 @@ mod tests {
 
     use super::*;
 
+    /// Runs a `git` command in the given repository directory and panics if the command fails.
+    ///
+    /// This helper executes `git` with `args` from `repo_root`. It panics if the process cannot be
+    /// spawned or if the command exits with a non-zero status; the panic message includes captured
+    /// stdout and stderr to aid debugging.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    ///
+    /// // Run `git status` in the current directory (for example purposes).
+    /// // In real tests, point `repo_root` at a temporary repo.
+    ///
+    /// run_git(Path::new("."), &["status"]);
+    /// ```
     fn run_git(repo_root: &Path, args: &[&str]) {
         let output = Command::new("git")
             .current_dir(repo_root)
@@ -894,17 +1549,49 @@ mod tests {
         );
     }
 
+    /// Initializes a Git repository at the given path and configures a test user name and email.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// use tempfile::tempdir;
+    ///
+    /// let dir = tempdir().unwrap();
+    /// let repo_root = dir.path();
+    /// init_repo(repo_root);
+    /// assert!(repo_root.join(".git").exists());
+    /// ```
     fn init_repo(repo_root: &Path) {
         run_git(repo_root, &["init"]);
         run_git(repo_root, &["config", "user.name", "Sephera Tests"]);
         run_git(repo_root, &["config", "user.email", "tests@example.com"]);
     }
 
+    /// Stages all working-tree changes and creates a commit with the given message in the repository at `repo_root`.
+    ///
+    /// # Examples
+    ///
+    /// ```no_run
+    /// use std::path::Path;
+    /// let repo_root = Path::new(".");
+    /// commit_all(repo_root, "my commit message");
+    /// ```
     fn commit_all(repo_root: &Path, message: &str) {
         run_git(repo_root, &["add", "-A"]);
         run_git(repo_root, &["commit", "-m", message]);
     }
 
+    /// Writes `contents` to the file at `repo_root.join(relative_path)`, creating any missing parent directories.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// // This will create `example_repo/nested/file.txt` with the given contents.
+    /// write_file(Path::new("example_repo"), "nested/file.txt", "hello");
+    /// assert_eq!(std::fs::read_to_string("example_repo/nested/file.txt").unwrap(), "hello");
+    /// ```
     fn write_file(repo_root: &Path, relative_path: &str, contents: &str) {
         let absolute_path = repo_root.join(relative_path);
         if let Some(parent) = absolute_path.parent() {

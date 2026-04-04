@@ -1,5 +1,19 @@
 use crate::context_config::AvailableContextProfiles;
 
+/// Prints a human-readable listing of the available context profiles and the configuration source to standard output.
+///
+/// # Examples
+///
+/// ```
+/// use crate::context_config::AvailableContextProfiles;
+///
+/// let profiles = AvailableContextProfiles {
+///     source_path: Some("/repo/.sephera.toml".into()),
+///     profiles: vec!["debug".into(), "review".into()],
+/// };
+///
+/// print_available_profiles(&profiles);
+/// ```
 pub fn print_available_profiles(profiles: &AvailableContextProfiles) {
     println!("{}", render_available_profiles(profiles));
 }

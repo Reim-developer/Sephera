@@ -28,19 +28,26 @@ use super::{
 /// Maximum file size in bytes to analyze for imports.
 const MAX_IMPORT_FILE_BYTES: u64 = 512 * 1024;
 
-/// Builds a dependency graph for the given project.
+/// Builds a dependency graph for a project directory.
 ///
-/// # Arguments
-///
-/// * `base_path` — root directory of the project.
-/// * `ignore` — compiled ignore patterns.
-/// * `focus_paths` — optional sub-paths to restrict analysis to.
-/// * `depth` — maximum depth for transitive dependency resolution
-///   (0 = direct only, `None` = unlimited).
+/// Collects supported source files, extracts and resolves imports, applies optional
+/// focus paths, depth, and query-based selection, and returns a `GraphReport` containing
+/// the selected nodes, edges, and computed metrics.
 ///
 /// # Errors
 ///
-/// Returns an error when project traversal or import extraction fails.
+/// Returns an error when project traversal, query normalization, file reading, or import
+/// extraction fail.
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::path::Path;
+/// // Construct an appropriate IgnoreMatcher for your project (placeholder shown).
+/// // let ignore = IgnoreMatcher::empty();
+/// // let report = build_graph(Path::new("."), &ignore, &[], None, None).unwrap();
+/// // println!("Found {} nodes", report.nodes.len());
+/// ```
 pub fn build_graph(
     base_path: &Path,
     ignore: &IgnoreMatcher,
@@ -98,7 +105,23 @@ struct FileImportData {
     imports: Vec<(String, u64)>,
 }
 
-/// Extracts imports from all project files that have a supported language.
+/// Collects extracted import entries for every project file with a supported language.
+///
+/// Skips files that are empty, exceed `MAX_IMPORT_FILE_BYTES`, or lack a mappable
+/// supported language. For each remaining file, reads its contents (read errors
+/// are returned with context) and runs the language-specific import extractor;
+/// extraction failures are treated as producing no imports. The returned vector
+/// contains one `FileImportData` record per processed file with its normalized
+/// relative path, optional language name, Tree-sitter language, and the list of
+/// `(raw_import_path, line)` tuples.
+///
+/// # Examples
+///
+/// ```
+/// // Given `project_files` populated elsewhere:
+/// // let imports = extract_all_imports(&project_files).unwrap();
+/// // assert!(imports.iter().all(|f| !f.file_path.is_empty()));
+/// ```
 fn extract_all_imports(
     project_files: &[ProjectFile],
 ) -> Result<Vec<FileImportData>> {
@@ -145,7 +168,24 @@ fn extract_all_imports(
     Ok(results)
 }
 
-/// Builds the set of focused normalized paths for filtering.
+/// Builds a set of normalized, user-relative focus paths for filtering.
+///
+/// If a focus path is absolute and has `base_path` as a prefix, the `base_path`
+/// prefix is removed; otherwise the path is kept as-is. All path separators
+/// are normalized to `/`.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::{Path, PathBuf};
+/// use std::collections::BTreeSet;
+///
+/// let base = Path::new("/project");
+/// let focuses = vec![PathBuf::from("/project/src/lib.rs"), PathBuf::from("README.md")];
+/// let set: BTreeSet<String> = build_focus_set(base, &focuses);
+/// assert!(set.contains("src/lib.rs"));
+/// assert!(set.contains("README.md"));
+/// ```
 fn build_focus_set(
     base_path: &Path,
     focus_paths: &[PathBuf],
@@ -176,6 +216,25 @@ enum TraversalDirection {
     ImportedBy,
 }
 
+/// Normalize the query target path so it is expressed relative to the repository base.
+///
+/// This normalizes the path contained in `GraphQuery::DependsOn` using `base_path`
+/// rules (canonicalization and user-relative normalization) and returns a new
+/// `GraphQuery::DependsOn` with the normalized target. Errors if target normalization fails.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+///
+/// // Suppose we have a query pointing to a project-relative path.
+/// let base = Path::new("/my/project");
+/// let input = GraphQuery::DependsOn("src/lib.rs".into());
+/// let normalized = normalize_graph_query(base, input).unwrap();
+/// match normalized {
+///     GraphQuery::DependsOn(ref p) => assert_eq!(p, "src/lib.rs"),
+/// }
+/// ```
 fn normalize_graph_query(
     base_path: &Path,
     query: GraphQuery,
@@ -187,6 +246,35 @@ fn normalize_graph_query(
     }
 }
 
+/// Normalize a query target path into a project-relative, user-normalized path.
+///
+/// If `raw_path` is absolute, this function canonicalizes `base_path` and the
+/// target (falling back to the raw target if canonicalization fails), verifies
+/// the target lies inside `base_path`, and strips the `base_path` prefix. If
+/// `raw_path` is relative, it is treated as a path relative to the project
+/// root. The resulting path is then converted to a user-relative form where
+/// `..` segments are resolved and components are joined with `/`. An empty
+/// result is returned as `"."`.
+///
+/// # Errors
+///
+/// Returns an error if `base_path` cannot be canonicalized or if an absolute
+/// `raw_path` does not resolve inside `base_path`.
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// // relative input stays relative and is normalized
+/// let p = normalize_query_target(Path::new("/my/project"), "src/lib.rs").unwrap();
+/// assert_eq!(p, "src/lib.rs");
+///
+/// // absolute input must live inside base_path
+/// let base = Path::new("/my/project");
+/// let abs = format!("{}/src/lib.rs", base.display());
+/// let p2 = normalize_query_target(base, &abs).unwrap();
+/// assert_eq!(p2, "src/lib.rs");
+/// ```
 fn normalize_query_target(base_path: &Path, raw_path: &str) -> Result<String> {
     let raw_path = Path::new(raw_path);
     let relative_path = if raw_path.is_absolute() {
@@ -213,6 +301,29 @@ fn normalize_query_target(base_path: &Path, raw_path: &str) -> Result<String> {
     normalize_user_relative_path(&relative_path)
 }
 
+/// Convert a filesystem path into a normalized user-relative path string using `/` separators.
+///
+/// The returned string is `"."` when the normalized path is empty; otherwise the path components
+/// are joined with `/`. `.` and root/prefix components are ignored. `..` components pop the
+/// previous component; if a `..` would ascend above the start of the path, the function errors.
+///
+/// # Errors
+///
+/// Returns an error if the path contains more `..` components than preceding normal components,
+/// i.e., when the path would resolve outside the allowed base (attempts to ascend above the base).
+///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// let p = Path::new("src/lib/./mod/../util.rs");
+/// let normalized = crate::normalize_user_relative_path(p).unwrap();
+/// assert_eq!(normalized, "src/lib/util.rs");
+///
+/// let empty = Path::new("");
+/// let normalized_empty = crate::normalize_user_relative_path(empty).unwrap();
+/// assert_eq!(normalized_empty, ".");
+/// ```
 fn normalize_user_relative_path(path: &Path) -> Result<String> {
     let mut parts = Vec::new();
 
@@ -240,7 +351,22 @@ fn normalize_user_relative_path(path: &Path) -> Result<String> {
     })
 }
 
-/// Attempts to resolve an import path to a known file in the project.
+/// Resolves an import path to a known project file using language-specific rules.
+///
+/// Returns `Some(project_relative_path)` when the import can be resolved to a file in
+/// `known_files`, or `None` when the import cannot be resolved.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// // Example: TypeScript relative import resolution
+/// let mut known = BTreeSet::new();
+/// known.insert("src/bar.ts".to_string());
+/// let resolved = resolve_import("./bar", "src/foo.ts", SupportedLanguage::TypeScript, &known);
+/// assert_eq!(resolved.as_deref(), Some("src/bar.ts"));
+/// ```
 fn resolve_import(
     import_path: &str,
     source_file: &str,
@@ -267,9 +393,25 @@ fn resolve_import(
     }
 }
 
-/// Resolves a Rust `use` path to a local file.
+/// Resolve a Rust `use` import that refers to a local module within the same crate.
 ///
-/// Handles `crate::`, `super::`, and module paths.
+/// Only resolves imports that begin with `crate::`, `self::`, or `super::`. If the import
+/// corresponds to a file present in `known_files` (e.g., `mod.rs` or `foo.rs` candidates),
+/// returns that file's normalized relative path; otherwise returns `None`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let mut known = BTreeSet::new();
+/// known.insert("src/lib.rs".to_string());
+/// known.insert("src/foo.rs".to_string());
+///
+/// // from `src/lib.rs`, `crate::foo` resolves to `src/foo.rs`
+/// let resolved = resolve_rust_import("crate::foo", "src/lib.rs", &known);
+/// assert_eq!(resolved, Some("src/foo.rs".to_string()));
+/// ```
 fn resolve_rust_import(
     import_path: &str,
     source_file: &str,
@@ -302,6 +444,17 @@ fn resolve_rust_import(
     )
 }
 
+/// Get the parent module path for a Rust source file's module path.
+///
+/// Returns the module path up to (but not including) the final segment. If the module path has no
+/// parent (no `/` present), an empty string is returned.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(rust_module_parent("a/b/c.rs"), "a/b");
+/// assert_eq!(rust_module_parent("lib.rs"), "");
+/// ```
 fn rust_module_parent(source_file: &str) -> String {
     let module_path = rust_module_path(source_file);
     if let Some((parent, _)) = module_path.rsplit_once('/') {
@@ -311,6 +464,17 @@ fn rust_module_parent(source_file: &str) -> String {
     }
 }
 
+/// Converts a Rust source file path into its module path base by removing a trailing `/mod.rs` or `.rs`.
+///
+/// If the path does not end with either suffix, the original path is returned unchanged.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(rust_module_path("src/lib.rs"), "src/lib");
+/// assert_eq!(rust_module_path("src/foo/mod.rs"), "src/foo");
+/// assert_eq!(rust_module_path("main"), "main");
+/// ```
 fn rust_module_path(source_file: &str) -> String {
     source_file
         .strip_suffix("/mod.rs")
@@ -319,6 +483,17 @@ fn rust_module_path(source_file: &str) -> String {
         .to_owned()
 }
 
+/// Returns the path to the crate root directory for a Rust source file path — the path up to and including the last `src` segment.
+///
+/// If the input path contains no `src` component, an empty string is returned.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(rust_crate_root("mycrate/src/lib.rs"), "mycrate/src");
+/// assert_eq!(rust_crate_root("src/main.rs"), "src");
+/// assert_eq!(rust_crate_root("some/other/path/file.rs"), "");
+/// ```
 fn rust_crate_root(source_file: &str) -> String {
     let mut parts: Vec<&str> = source_file.split('/').collect();
     parts.pop();
@@ -329,6 +504,18 @@ fn rust_crate_root(source_file: &str) -> String {
         .map_or_else(String::new, |index| parts[..=index].join("/"))
 }
 
+/// Qualifies a Rust module path by converting `::` to `/` and prefixing it with a base path when provided.
+///
+/// # Returns
+///
+/// The `rest` string with `::` replaced by `/`. If `base` is non-empty, the result is `base/rest`; otherwise it's just the converted `rest`.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(qualify_rust_module_path("", "foo::bar"), "foo/bar");
+/// assert_eq!(qualify_rust_module_path("src/lib", "foo::bar"), "src/lib/foo/bar");
+/// ```
 fn qualify_rust_module_path(base: &str, rest: &str) -> String {
     let rest = rest.replace("::", "/");
     if base.is_empty() {
@@ -338,7 +525,28 @@ fn qualify_rust_module_path(base: &str, rest: &str) -> String {
     }
 }
 
-/// Tries multiple possible file paths for a Rust module path.
+/// Attempts to resolve a Rust module path to a known project file by testing common Rust module file layouts.
+///
+/// Tries these candidates (in order) for a module path like `core::graph::types`:
+/// 1. `core/graph/types.rs`
+/// 2. `core/graph/types/mod.rs`
+/// 3. `core/graph.rs` (one level up)
+///
+/// # Returns
+///
+/// `Some(String)` with the matched file path from `known_files` if any candidate exists, `None` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let mut known = BTreeSet::new();
+/// known.insert("core/graph/types/mod.rs".to_string());
+///
+/// let resolved = try_resolve_rust_module("core::graph::types", &known);
+/// assert_eq!(resolved.as_deref(), Some("core/graph/types/mod.rs"));
+/// ```
 fn try_resolve_rust_module(
     module_path: &str,
     known_files: &BTreeSet<String>,
@@ -369,7 +577,42 @@ fn try_resolve_rust_module(
     None
 }
 
-/// Resolves a Python import to a local file.
+/// Resolves a Python import string to a known project file path.
+///
+/// Leading dots in `import_path` denote a relative import: each `.` is one level
+/// up from the importing module's directory (a single leading `.` means the same
+/// package). If `import_path` has no leading dots it is treated as an absolute
+/// module path. Module separators (`.`) are converted to `/` and resolution
+/// checks both `module.py` and `module/__init__.py` candidates.
+///
+/// # Returns
+///
+/// `Some(<normalized/relative/path>)` with the resolved project file path if a
+/// matching known file is found, `None` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// // Known files in the project (normalized with `/`)
+/// let mut known = BTreeSet::new();
+/// known.insert("pkg/module.py".to_string());
+/// known.insert("pkg/sub/package/__init__.py".to_string());
+/// known.insert("pkg/sub/other.py".to_string());
+///
+/// // Absolute import resolution
+/// let abs = resolve_python_import("pkg.module", "pkg/sub/file.py", &known);
+/// assert_eq!(abs.as_deref(), Some("pkg/module.py"));
+///
+/// // Relative import: one leading dot refers to the same package
+/// let rel_same = resolve_python_import(".other", "pkg/sub/file.py", &known);
+/// assert_eq!(rel_same.as_deref(), Some("pkg/sub/other.py"));
+///
+/// // Relative import: two leading dots ascend one package level
+/// let rel_up = resolve_python_import("..module", "pkg/sub/file.py", &known);
+/// assert_eq!(rel_up.as_deref(), Some("pkg/module.py"));
+/// ```
 fn resolve_python_import(
     import_path: &str,
     source_file: &str,
@@ -402,6 +645,18 @@ fn resolve_python_import(
         .find(|candidate| known_files.contains(candidate.as_str()))
 }
 
+/// Ascends a Python module path by removing a number of trailing package segments.
+///
+/// Returns the resulting module base as a `/`-separated string; if `module_base` is
+/// empty or `levels` is greater than the number of segments, an empty string is returned.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(ascend_python_package("a/b/c", 1), "a/b");
+/// assert_eq!(ascend_python_package("a/b/c", 3), "");
+/// assert_eq!(ascend_python_package("", 2), "");
+/// ```
 fn ascend_python_package(module_base: &str, levels: usize) -> String {
     let mut parts: Vec<&str> = if module_base.is_empty() {
         Vec::new()
@@ -416,6 +671,17 @@ fn ascend_python_package(module_base: &str, levels: usize) -> String {
     parts.join("/")
 }
 
+/// Joins a Python module base path and a module path with a single `/` separator.
+///
+/// If `base` is empty, returns `module_path`. If `module_path` is empty, returns `base`.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(join_python_module_path("", "pkg/mod"), "pkg/mod");
+/// assert_eq!(join_python_module_path("pkg", "mod"), "pkg/mod");
+/// assert_eq!(join_python_module_path("pkg", ""), "pkg");
+/// ```
 fn join_python_module_path(base: &str, module_path: &str) -> String {
     if base.is_empty() {
         module_path.to_owned()
@@ -426,6 +692,18 @@ fn join_python_module_path(base: &str, module_path: &str) -> String {
     }
 }
 
+/// Generate filesystem candidate paths for a Python module name.
+///
+/// Produces the two common on-disk forms: a module file and a package __init__ file.
+/// The first element is `{module_path}.py`; the second is `{module_path}/__init__.py`.
+///
+/// # Examples
+///
+/// ```rust
+/// let candidates = python_module_candidates("pkg.submod");
+/// assert_eq!(candidates[0], "pkg.submod.py");
+/// assert_eq!(candidates[1], "pkg.submod/__init__.py");
+/// ```
 fn python_module_candidates(module_path: &str) -> [String; 2] {
     [
         format!("{module_path}.py"),
@@ -433,7 +711,34 @@ fn python_module_candidates(module_path: &str) -> [String; 2] {
     ]
 }
 
-/// Resolves a JS/TS import to a local file.
+/// Resolves a relative JavaScript/TypeScript import to a known project file path.
+///
+/// Only attempts resolution for imports that start with `.`; absolute or package-style imports are not resolved.
+///
+/// # Returns
+///
+/// `Some(String)` containing the normalized project-relative file path that matches the import, or `None` if no candidate in `known_files` matches.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let mut known = BTreeSet::new();
+/// known.insert("src/lib/util.ts".to_string());
+/// known.insert("src/lib/index.ts".to_string());
+///
+/// let src = "src/lib/main.ts";
+/// assert_eq!(
+///     resolve_js_ts_import("./util", src, &known),
+///     Some("src/lib/util.ts".to_string())
+/// );
+///
+/// assert_eq!(
+///     resolve_js_ts_import(".", src, &known),
+///     Some("src/lib/index.ts".to_string())
+/// );
+/// ```
 fn resolve_js_ts_import(
     import_path: &str,
     source_file: &str,
@@ -459,7 +764,31 @@ fn resolve_js_ts_import(
     None
 }
 
-/// Resolves a Go import to a local file.
+/// Resolves a Go-style import path to a matching local `.go` file by directory name.
+///
+/// Attempts to match the final path segment of `import_path` (the package directory name)
+/// against the last directory name of any `.go` file in `known_files`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let mut known = BTreeSet::new();
+/// known.insert("cmd/server/main.go".to_string());
+/// known.insert("pkg/foo/foo.go".to_string());
+/// known.insert("internal/bar/bar.go".to_string());
+///
+/// assert_eq!(
+///     resolve_go_import("module/pkg/foo", &known),
+///     Some("pkg/foo/foo.go".to_string())
+/// );
+///
+/// assert_eq!(
+///     resolve_go_import("some/unknown/pkg", &known),
+///     None
+/// );
+/// ```
 fn resolve_go_import(
     import_path: &str,
     known_files: &BTreeSet<String>,
@@ -486,7 +815,36 @@ fn resolve_go_import(
     None
 }
 
-/// Resolves a Java import to a local file.
+/// Resolves a Java-style import path to a matching project file path in `known_files`.
+///
+/// The function converts a dotted import like `com.example.Class` to `com/example/Class.java`,
+/// checks for an exact match, then looks for suffix matches where the candidate appears at the
+/// end of a known file path. If not found, it progressively strips leading package segments
+/// (e.g., `example/Class.java`, `Class.java`) and repeats the exact and suffix checks.
+///
+/// Returns `Some(String)` with the matched relative file path (for example `"com/example/Class.java"`)
+/// if a match is found in `known_files`, or `None` if no candidate matches.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let mut known = BTreeSet::new();
+/// known.insert("com/example/Helper.java".into());
+/// known.insert("utils/Helper.java".into());
+///
+/// assert_eq!(
+///     resolve_java_import("com.example.Helper", &known),
+///     Some("com/example/Helper.java".into())
+/// );
+///
+/// // If full package not present, a suffix or partial package match can succeed:
+/// assert_eq!(
+///     resolve_java_import("org.other.utils.Helper", &known),
+///     Some("utils/Helper.java".into())
+/// );
+/// ```
 fn resolve_java_import(
     import_path: &str,
     known_files: &BTreeSet<String>,
@@ -521,6 +879,25 @@ fn resolve_java_import(
     None
 }
 
+/// Finds a known file that matches `candidate` either exactly or as a suffix preceded by a `/`.
+///
+/// Searches `known_files` for an entry equal to `candidate` or for an entry that ends with `/{candidate}` and returns the first match found.
+///
+/// # Returns
+/// `Some(String)` containing the full known file path when a match is found, `None` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+/// let mut ks = BTreeSet::new();
+/// ks.insert("src/com/example/MyClass.java".into());
+/// assert_eq!(
+///     find_java_suffix_match("com/example/MyClass.java", &ks),
+///     Some("src/com/example/MyClass.java".into())
+/// );
+/// assert!(find_java_suffix_match("nonexistent.java", &ks).is_none());
+/// ```
 fn find_java_suffix_match(
     candidate: &str,
     known_files: &BTreeSet<String>,
@@ -536,7 +913,36 @@ fn find_java_suffix_match(
         .cloned()
 }
 
-/// Resolves a C/C++ `#include` to a local file.
+/// Resolve a local C/C++ `#include` directive to a known project file path.
+///
+/// This ignores system includes of the form `<...>`. For quoted includes (`"..."`)
+/// it first checks a candidate path relative to the importing file's directory,
+/// then checks the include path from the project root.
+///
+/// # Returns
+///
+/// `Some(String)` with the resolved project-relative file path if a matching known file is found, `None` otherwise.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let mut known = BTreeSet::new();
+/// known.insert("src/include.h".to_string());
+/// known.insert("include/common.h".to_string());
+///
+/// // Relative to source file's directory
+/// let resolved = resolve_c_cpp_import("include.h", "src/main.c", &known);
+/// assert_eq!(resolved.as_deref(), Some("src/include.h"));
+///
+/// // From project root
+/// let resolved_root = resolve_c_cpp_import("include/common.h", "src/main.c", &known);
+/// assert_eq!(resolved_root.as_deref(), Some("include/common.h"));
+///
+/// // System include is ignored
+/// assert!(resolve_c_cpp_import("<stdio.h>", "src/main.c", &known).is_none());
+/// ```
 fn resolve_c_cpp_import(
     import_path: &str,
     source_file: &str,
@@ -567,7 +973,18 @@ fn resolve_c_cpp_import(
     None
 }
 
-/// Simplifies a relative path like `../utils` resolved from a base directory.
+/// Resolves a relative path against a base path, simplifying `.` and `..` segments.
+///
+/// The `base` is treated as a path with `/` separators; an empty `base` is treated as the root.
+/// Extra leading `..` segments that would move above the root are ignored.
+///
+/// # Examples
+///
+/// ```
+/// assert_eq!(simplify_relative_path("a/b/c", "../d"), "a/b/d");
+/// assert_eq!(simplify_relative_path("src/lib", "./mod.rs"), "src/lib/mod.rs");
+/// assert_eq!(simplify_relative_path("", "../x"), "x");
+/// ```
 fn simplify_relative_path(base: &str, relative: &str) -> String {
     let mut parts: Vec<&str> = if base.is_empty() {
         Vec::new()
@@ -588,7 +1005,52 @@ fn simplify_relative_path(base: &str, relative: &str) -> String {
     parts.join("/")
 }
 
-/// Builds edges and populates the node map from extracted imports.
+/// Build graph edges and a node map from extracted per-file import data.
+///
+/// The returned edges list contains one `GraphEdge` per extracted import (with `resolved` set
+/// according to whether the import resolved to a known project file). The returned node map
+/// contains an entry for every file seen in `all_imports` and for any resolved targets; each
+/// node's `imports` and `imported_by` lists are populated to reflect resolved relationships.
+///
+/// # Returns
+///
+/// A tuple `(edges, node_map)` where:
+/// - `edges` is a `Vec<GraphEdge>` with one entry for every import encountered.
+/// - `node_map` is a `NodeMap` mapping file paths to node metadata including `language`,
+///   `imports`, and `imported_by`.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// // Construct a minimal FileImportData for demonstration.
+/// let file_a = FileImportData {
+///     file_path: "a.rs".to_string(),
+///     language: Some("rust".to_string()),
+///     ts_language: SupportedLanguage::Rust,
+///     imports: vec![("crate::b".to_string(), 1)],
+/// };
+/// let file_b = FileImportData {
+///     file_path: "b.rs".to_string(),
+///     language: Some("rust".to_string()),
+///     ts_language: SupportedLanguage::Rust,
+///     imports: vec![],
+/// };
+///
+/// let all_imports = vec![file_a, file_b];
+/// let mut known = BTreeSet::new();
+/// known.insert("a.rs".to_string());
+/// known.insert("b.rs".to_string());
+///
+/// let (edges, node_map) = build_edges_and_nodes(&all_imports, &known);
+///
+/// // One edge for the single import from a.rs -> b.rs (if resolved)
+/// assert!(edges.len() >= 1);
+/// // Node map contains entries for both files
+/// assert!(node_map.contains_key("a.rs"));
+/// assert!(node_map.contains_key("b.rs"));
+/// ```
 fn build_edges_and_nodes(
     all_imports: &[FileImportData],
     known_files: &BTreeSet<String>,
@@ -643,6 +1105,25 @@ fn build_edges_and_nodes(
     (edges, node_map)
 }
 
+/// Compute which nodes to include in the graph based on focus paths, depth, and an optional query.
+///
+/// If both `focus_set` is empty and `query` is `None`, every node in `node_map` is selected.
+/// Otherwise:
+/// - For non-empty `focus_set`, starts from focus roots and traverses outward following import edges (imports -> targets) up to `depth`.
+/// - For a provided `query`, computes query roots and traverses inward following imported-by edges (targets -> importers) up to `depth`.
+/// The final selection is the union of nodes discovered from focus traversal and query traversal.
+///
+/// # Examples
+///
+/// ```
+/// # use std::collections::BTreeSet;
+/// # use std::collections::BTreeMap;
+/// # // `NodeMap` and `GraphQuery` are assumed to be in scope where this function is used.
+/// let node_map: NodeMap = Default::default();
+/// let focus_set: BTreeSet<String> = BTreeSet::new();
+/// let selection = select_graph(&node_map, &focus_set, None, None).unwrap();
+/// assert!(selection.node_paths.is_empty());
+/// ```
 fn select_graph(
     node_map: &NodeMap,
     focus_set: &BTreeSet<String>,
@@ -686,6 +1167,30 @@ fn select_graph(
     })
 }
 
+/// Selects node paths from `node_map` that match any focus in `focus_set`.
+///
+/// A path matches a focus when it is exactly equal to the focus or when it has the
+/// focus as a directory prefix (i.e., `path` starts with `focus + '/'`).
+///
+/// # Examples
+///
+/// ```no_run
+/// use std::collections::BTreeSet;
+///
+/// // `NodeMap` is a map keyed by file path strings; here we show intended usage.
+/// let mut node_map = NodeMap::new();
+/// node_map.insert("src/lib.rs".into(), Default::default());
+/// node_map.insert("src/utils/mod.rs".into(), Default::default());
+/// node_map.insert("tests/test.rs".into(), Default::default());
+///
+/// let mut focus_set = BTreeSet::new();
+/// focus_set.insert("src".into());
+///
+/// let roots = collect_focus_roots(&node_map, &focus_set);
+/// assert!(roots.contains("src/lib.rs"));
+/// assert!(roots.contains("src/utils/mod.rs"));
+/// assert!(!roots.contains("tests/test.rs"));
+/// ```
 fn collect_focus_roots(
     node_map: &NodeMap,
     focus_set: &BTreeSet<String>,
@@ -701,6 +1206,19 @@ fn collect_focus_roots(
         .collect()
 }
 
+/// Determines whether `path` is either exactly `focus` or a descendant of it.
+///
+/// The function returns `true` when `path` is equal to `focus`, or when `path` starts with
+/// `focus` followed by a forward slash (`'/'`), indicating a nested/child path; otherwise returns `false`.
+///
+/// # Examples
+///
+/// ```
+/// assert!(path_matches_focus("src/lib.rs", "src"));
+/// assert!(path_matches_focus("src", "src"));
+/// assert!(!path_matches_focus("src_other/file.rs", "src"));
+/// assert!(!path_matches_focus("srcfile", "src"));
+/// ```
 fn path_matches_focus(path: &str, focus: &str) -> bool {
     path == focus
         || path
@@ -708,6 +1226,27 @@ fn path_matches_focus(path: &str, focus: &str) -> bool {
             .is_some_and(|rest| rest.starts_with('/'))
 }
 
+/// Produce the set of starting node paths required for a graph query.
+///
+/// For `GraphQuery::DependsOn(path)`, returns a single-element `BTreeSet` containing
+/// `path` if that path exists in `node_map`. If the target path is not present,
+/// an error is returned.
+///
+/// # Errors
+///
+/// Returns an error when the query target does not correspond to any analyzed node.
+///
+/// # Examples
+///
+/// ```
+/// // Prepare a node map containing the target path.
+/// let mut node_map = NodeMap::new();
+/// node_map.insert("src/lib.rs".to_string(), Default::default());
+///
+/// let query = GraphQuery::DependsOn("src/lib.rs".to_string());
+/// let roots = roots_for_query(&node_map, &query).unwrap();
+/// assert!(roots.contains("src/lib.rs"));
+/// ```
 fn roots_for_query(
     node_map: &NodeMap,
     query: &GraphQuery,
@@ -725,6 +1264,28 @@ fn roots_for_query(
     }
 }
 
+/// Traverse the dependency graph from the given root nodes and collect all reachable node paths.
+///
+/// The traversal performs a breadth-first search following either outgoing `imports` edges or
+/// incoming `imported_by` edges, and respects an optional `depth` limit (where `depth = 0` visits
+/// only the roots).
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// // `node_map` and `NodeMap` are expected to exist in this module; this example demonstrates
+/// // the call pattern. Populate `node_map` with nodes that have `imports`/`imported_by` lists,
+/// // then call `traverse_graph` with a set of root paths.
+/// let roots: BTreeSet<String> = ["src/lib.rs".into()].into_iter().collect();
+/// let reachable = traverse_graph(&node_map, &roots, Some(2), TraversalDirection::Imports);
+/// assert!(reachable.contains("src/lib.rs"));
+/// ```
+///
+/// # Returns
+///
+/// `BTreeSet<String>` containing all visited node paths (including the provided roots).
 fn traverse_graph(
     node_map: &NodeMap,
     roots: &BTreeSet<String>,
@@ -766,6 +1327,42 @@ fn traverse_graph(
     visited
 }
 
+/// Constructs a NodeMap containing only the entries whose paths are in `selected_paths`, and for each kept node
+/// restricts its `imports` and `imported_by` lists to neighbors that are also in `selected_paths`.
+///
+/// This preserves the original `language` field for each kept entry.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeMap;
+///
+/// let mut node_map: BTreeMap<String, super::types::NodeEntry> = BTreeMap::new();
+/// node_map.insert(
+///     "a".to_string(),
+///     super::types::NodeEntry {
+///         language: Some("rust".to_string()),
+///         imports: vec!["b".to_string()],
+///         imported_by: vec![],
+///     },
+/// );
+/// node_map.insert(
+///     "b".to_string(),
+///     super::types::NodeEntry {
+///         language: Some("rust".to_string()),
+///         imports: vec![],
+///         imported_by: vec!["a".to_string()],
+///     },
+/// );
+///
+/// let selected: std::collections::BTreeSet<String> = vec!["a".to_string()].into_iter().collect();
+/// let filtered = crate::filter_node_map(&node_map, &selected);
+///
+/// // Only "a" is retained, and its import to "b" is removed because "b" is not selected.
+/// assert!(filtered.contains_key("a"));
+/// assert!(!filtered.contains_key("b"));
+/// assert!(filtered.get("a").unwrap().imports.is_empty());
+/// ```
 fn filter_node_map(
     node_map: &NodeMap,
     selected_paths: &BTreeSet<String>,
@@ -801,6 +1398,39 @@ fn filter_node_map(
         .collect()
 }
 
+/// Filter graph edges to only those relevant to a selected set of node paths.
+///
+/// Keeps an edge when its `from` path is present in `selected_paths` and, if the
+/// edge is resolved, its `to` target is also present in `selected_paths`.
+///
+/// # Parameters
+///
+/// - `edges`: slice of graph edges to filter.
+/// - `selected_paths`: set of normalized node paths to retain.
+///
+/// # Returns
+///
+/// A `Vec<GraphEdge>` containing the filtered edges.
+///
+/// # Examples
+///
+/// ```
+/// use std::collections::BTreeSet;
+///
+/// let edges = vec![
+///     GraphEdge { from: "a".into(), to: Some("b".into()), import_path: "x".into(), resolved: true },
+///     GraphEdge { from: "a".into(), to: Some("c".into()), import_path: "y".into(), resolved: true },
+///     GraphEdge { from: "a".into(), to: None,                 import_path: "z".into(), resolved: false },
+///     GraphEdge { from: "d".into(), to: Some("a".into()), import_path: "w".into(), resolved: true },
+/// ];
+///
+/// let mut selected = BTreeSet::new();
+/// selected.insert("a".into());
+/// selected.insert("b".into());
+///
+/// let filtered = filter_edges(&edges, &selected);
+/// assert_eq!(filtered.len(), 2); // keeps (a->b) and unresolved (a->None)
+/// ```
 fn filter_edges(
     edges: &[GraphEdge],
     selected_paths: &BTreeSet<String>,
@@ -821,7 +1451,18 @@ fn filter_edges(
         .collect()
 }
 
-/// Builds the final node list from the node map.
+/// Builds a list of `GraphNode` values from the provided node map.
+///
+/// Each entry becomes a `GraphNode` with its `file_path`, retained `language`,
+/// and counts for `imports` and `imported_by`. Counts are converted to `u64` and
+/// will use `u64::MAX` if the conversion would overflow.
+///
+/// # Examples
+///
+/// ```
+/// let nodes = build_node_list(&Default::default());
+/// assert!(nodes.is_empty());
+/// ```
 fn build_node_list(node_map: &NodeMap) -> Vec<GraphNode> {
     node_map
         .iter()
@@ -836,7 +1477,29 @@ fn build_node_list(node_map: &NodeMap) -> Vec<GraphNode> {
         .collect()
 }
 
-/// Computes graph metrics including cycle detection.
+/// Aggregate metrics for the given graph and detected cycles.
+///
+/// Computes:
+/// - total number of files,
+/// - counts of internal (resolved) and external (unresolved) edges,
+/// - the number of circular dependency cycles,
+/// - the top importing files and the top imported files (up to 10 each),
+/// - the list of detected cycles (each cycle is a list of file paths).
+///
+/// # Examples
+///
+/// ```
+/// let node_map: NodeMap = Default::default();
+/// let edges: Vec<GraphEdge> = Vec::new();
+/// let metrics = compute_metrics(&node_map, &edges);
+/// assert_eq!(metrics.total_files, 0);
+/// assert_eq!(metrics.total_internal_edges, 0);
+/// assert_eq!(metrics.total_external_edges, 0);
+/// assert_eq!(metrics.circular_dependencies, 0);
+/// assert!(metrics.most_importing.is_empty());
+/// assert!(metrics.most_imported.is_empty());
+/// assert!(metrics.cycles.is_empty());
+/// ```
 fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
     let total_files = u64::try_from(node_map.len()).unwrap_or(u64::MAX);
     let total_internal_edges =
@@ -947,10 +1610,44 @@ mod tests {
     use std::fs;
     use tempfile::tempdir;
 
+    /// Constructs a sorted set of owned path strings from a slice of string slices.
+    ///
+    /// The resulting `BTreeSet<String>` contains each input path converted to an owned
+    /// `String` and ordered by the set's natural (lexicographic) ordering.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::collections::BTreeSet;
+    ///
+    /// let input: &[&str] = &["src/lib.rs", "Cargo.toml", "src/main.rs"];
+    /// let set: BTreeSet<String> = known_files(input);
+    ///
+    /// assert_eq!(set.len(), 3);
+    /// assert!(set.contains("Cargo.toml"));
+    /// assert!(set.contains("src/lib.rs"));
+    /// assert!(set.contains("src/main.rs"));
+    /// ```
     fn known_files(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
+    /// Write a UTF-8 string to a file located at `base_dir`/`relative_path`, creating any missing parent directories.
+    ///
+    /// # Panics
+    ///
+    /// Panics if creating parent directories or writing the file fails.
+    ///
+    /// # Examples
+    ///
+    /// ```
+    /// use std::path::Path;
+    /// let base = std::env::temp_dir().join("write_file_example");
+    /// let base_path = base.as_path();
+    /// write_file(base_path, "subdir/hello.txt", "hello");
+    /// let contents = std::fs::read_to_string(base.join("subdir/hello.txt")).unwrap();
+    /// assert_eq!(contents, "hello");
+    /// ```
     fn write_file(base_dir: &Path, relative_path: &str, contents: &str) {
         let absolute_path = base_dir.join(relative_path);
         if let Some(parent) = absolute_path.parent() {
