@@ -12,10 +12,16 @@ pub mod config;
 /// Deterministic context extraction and bundling tools.
 pub mod context;
 
+/// Dependency graph analysis via Tree-sitter import extraction.
+pub mod graph;
+
 mod ignore;
 
 /// Language definitions and metadata.
 pub mod language_data;
 
 mod line_slices;
-mod project_files;
+pub(crate) mod project_files;
+
+/// Shared runtime helpers for local and remote analysis sources.
+pub mod runtime;
