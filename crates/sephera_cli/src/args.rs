@@ -5,17 +5,17 @@ use serde::Deserialize;
 
 use crate::budget::parse_token_budget;
 
-const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts and builds LLM-ready context packs.\n\nUse `loc` to inspect language-level line metrics and `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows. The `context` command can also load defaults and named profiles from `.sephera.toml`, let explicit CLI flags override them, and build packs centered on Git changes via `--diff`.";
+const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts, builds LLM-ready context packs, and maps dependency graphs.\n\nUse `loc` to inspect language-level line metrics, `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows, and `graph` to analyze and visualize the dependency structure of your codebase. The `context` command can also load defaults and named profiles from `.sephera.toml`, let explicit CLI flags override them, and build packs centered on Git changes via `--diff`.";
 
-const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff working-tree\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json";
+const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json\n  sephera graph --path . --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format dot --output deps.dot";
 
-const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nIgnore patterns containing `*`, `?`, or `[` are treated as globs. All other ignore patterns are compiled as regular expressions and matched against normalized relative paths.";
+const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Ignore patterns containing `*`, `?`, or `[` are treated as globs. All other ignore patterns are compiled as regular expressions and matched against normalized relative paths.";
 
-const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"";
+const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera loc --url https://github.com/reim-developer/Sephera/tree/master/crates";
 
-const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode.";
+const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.";
 
-const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
+const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
 
 #[derive(Debug, Parser)]
 #[command(
@@ -44,9 +44,15 @@ pub enum Commands {
     Context(ContextArgs),
     /// Start an MCP (Model Context Protocol) server over stdio
     #[command(
-        long_about = "Start an MCP server that exposes Sephera tools (loc, context) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly."
+        long_about = "Start an MCP server that exposes Sephera tools (loc, context, graph) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories."
     )]
     Mcp,
+    /// Analyze dependency graph via Tree-sitter import extraction
+    #[command(
+        long_about = "Analyze the dependency graph of a project by extracting import statements using Tree-sitter AST parsing.\n\nSupported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C++, C.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. The graph command identifies internal file dependencies, detects circular dependencies, and computes metrics such as most-imported and most-importing files.",
+        after_long_help = "Examples:\n  sephera graph --path .\n  sephera graph --path . --format dot --output deps.dot\n  sephera graph --path . --focus crates/sephera_core --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format xml --output graph.xml\n  sephera graph --path . --what-depends-on src/core/context/builder.rs"
+    )]
+    Graph(GraphArgs),
 }
 
 #[derive(Debug, Args)]
@@ -54,12 +60,33 @@ pub struct LocArgs {
     /// Path to the project directory to analyze
     #[arg(
         long,
-        default_value = ".",
         value_name = "PATH",
+        conflicts_with = "url",
         help = "Path to the project directory to analyze.",
         long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
     )]
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
+
+    /// Git repository URL to analyze directly
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with = "path",
+        help = "Git repository URL to analyze directly.",
+        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
+    )]
+    pub url: Option<String>,
+
+    /// Git ref to check out before analysis
+    #[arg(
+        long = "ref",
+        value_name = "REF",
+        requires = "url",
+        conflicts_with = "path",
+        help = "Git ref to check out before analysis.",
+        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
+    )]
+    pub git_ref: Option<String>,
 
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
@@ -76,12 +103,33 @@ pub struct ContextArgs {
     /// Path to the project directory to analyze
     #[arg(
         long,
-        default_value = ".",
         value_name = "PATH",
+        conflicts_with = "url",
         help = "Path to the project directory to analyze.",
         long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
     )]
-    pub path: PathBuf,
+    pub path: Option<PathBuf>,
+
+    /// Git repository URL to analyze directly
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with = "path",
+        help = "Git repository URL to analyze directly.",
+        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
+    )]
+    pub url: Option<String>,
+
+    /// Git ref to check out before analysis
+    #[arg(
+        long = "ref",
+        value_name = "REF",
+        requires = "url",
+        conflicts_with = "path",
+        help = "Git ref to check out before analysis.",
+        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
+    )]
+    pub git_ref: Option<String>,
 
     /// Explicit Sephera config file. When provided, auto-discovery is skipped.
     #[arg(
@@ -142,7 +190,7 @@ pub struct ContextArgs {
         long,
         value_name = "PATH",
         help = "Focused file or directory inside the base path.",
-        long_help = "Focused file or directory inside the base path. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended. Focused paths must resolve inside `--path`."
+        long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended. Focused paths must resolve inside the local `--path` or the remote repo/tree scope selected by `--url`."
     )]
     pub focus: Vec<PathBuf>,
 
@@ -227,6 +275,122 @@ pub enum ContextFormat {
     Json,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
+pub enum GraphOutputFormat {
+    #[value(
+        name = "json",
+        help = "Render the dependency graph as structured JSON."
+    )]
+    #[serde(rename = "json")]
+    Json,
+    #[value(
+        name = "markdown",
+        help = "Render the dependency graph as Markdown with a Mermaid diagram."
+    )]
+    #[serde(rename = "markdown")]
+    Markdown,
+    #[value(
+        name = "xml",
+        help = "Render the dependency graph as structured XML."
+    )]
+    #[serde(rename = "xml")]
+    Xml,
+    #[value(
+        name = "dot",
+        help = "Render the dependency graph in Graphviz DOT format."
+    )]
+    #[serde(rename = "dot")]
+    Dot,
+}
+
+#[derive(Debug, Args)]
+pub struct GraphArgs {
+    /// Path to the project directory to analyze
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "url",
+        help = "Path to the project directory to analyze.",
+        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Git repository URL to analyze directly
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with = "path",
+        help = "Git repository URL to analyze directly.",
+        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
+    )]
+    pub url: Option<String>,
+
+    /// Git ref to check out before analysis
+    #[arg(
+        long = "ref",
+        value_name = "REF",
+        requires = "url",
+        conflicts_with = "path",
+        help = "Git ref to check out before analysis.",
+        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
+    )]
+    pub git_ref: Option<String>,
+
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories."
+    )]
+    pub ignore: Vec<String>,
+
+    /// Focus path inside the base path. Repeat to analyze only specific files or directories.
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Focused file or directory inside the base path.",
+        long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to limit the graph to specific files or directories."
+    )]
+    pub focus: Vec<PathBuf>,
+
+    /// Maximum depth for transitive dependency resolution
+    #[arg(
+        long,
+        value_name = "DEPTH",
+        help = "Maximum depth for transitive dependencies.",
+        long_help = "Maximum depth for transitive dependency resolution. 0 means direct dependencies only. Omit for unlimited depth."
+    )]
+    pub depth: Option<u32>,
+
+    /// Output format for the graph report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "json",
+        value_name = "FORMAT",
+        help = "Output format for the dependency graph report.",
+        long_help = "Output format for the dependency graph report. Supports json, markdown (with Mermaid diagram), xml, and dot (Graphviz)."
+    )]
+    pub format: GraphOutputFormat,
+
+    /// Show what depends on the specified file
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Show all files that depend on the specified file.",
+        long_help = "Show all files that import or depend on the specified file path. The path should be relative to the selected analysis base."
+    )]
+    pub what_depends_on: Option<String>,
+
+    /// Optional file path for exporting the rendered graph
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Optional file path for exporting the rendered graph."
+    )]
+    pub output: Option<PathBuf>,
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
@@ -243,7 +407,12 @@ mod tests {
 
         match cli.command {
             Commands::Loc(arguments) => {
-                assert_eq!(arguments.path, std::path::PathBuf::from("demo"));
+                assert_eq!(
+                    arguments.path,
+                    Some(std::path::PathBuf::from("demo"))
+                );
+                assert_eq!(arguments.url, None);
+                assert_eq!(arguments.git_ref, None);
                 assert_eq!(arguments.ignore, vec!["*.rs", "target"]);
             }
             _ => panic!("expected loc command"),
@@ -276,7 +445,12 @@ mod tests {
 
         match cli.command {
             Commands::Context(arguments) => {
-                assert_eq!(arguments.path, std::path::PathBuf::from("demo"));
+                assert_eq!(
+                    arguments.path,
+                    Some(std::path::PathBuf::from("demo"))
+                );
+                assert_eq!(arguments.url, None);
+                assert_eq!(arguments.git_ref, None);
                 assert_eq!(
                     arguments.config,
                     Some(std::path::PathBuf::from(".sephera.toml"))
@@ -307,7 +481,8 @@ mod tests {
         assert!(help.contains(".sephera.toml"));
         assert!(help.contains("reports/context.json"));
         assert!(help.contains("--list-profiles"));
-        assert!(help.contains("--diff working-tree"));
+        assert!(help.contains("--url"));
+        assert!(help.contains("--ref"));
     }
 
     #[test]
@@ -333,6 +508,8 @@ mod tests {
         assert!(context_help.contains("reports/context.json"));
         assert!(context_help.contains("origin/master"));
         assert!(context_help.contains("working-tree"));
+        assert!(context_help.contains("--url <URL>"));
+        assert!(context_help.contains("--ref <REF>"));
     }
 
     #[test]
@@ -367,5 +544,30 @@ mod tests {
         .unwrap_err();
 
         assert!(error.to_string().contains("--list-profiles"));
+    }
+
+    #[test]
+    fn rejects_path_and_url_together() {
+        let error = Cli::try_parse_from([
+            "sephera",
+            "loc",
+            "--path",
+            "demo",
+            "--url",
+            "https://github.com/reim-developer/Sephera",
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--url"));
+    }
+
+    #[test]
+    fn rejects_ref_without_url() {
+        let error = Cli::try_parse_from([
+            "sephera", "graph", "--path", "demo", "--ref", "main",
+        ])
+        .unwrap_err();
+
+        assert!(error.to_string().contains("--ref"));
     }
 }

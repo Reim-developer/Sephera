@@ -7,7 +7,7 @@ description: Configure repo-level defaults for the context command.
 
 Sephera currently supports repo-level configuration for the `context` command through a `.sephera.toml` file.
 
-This page reflects the `v0.4.x` configuration model.
+This page reflects the `v0.5.x` configuration model.
 
 ## Discovery rules
 
@@ -15,9 +15,11 @@ When you run `sephera context`, the CLI behaves like this:
 
 1. if `--config <FILE>` is provided, use only that file
 2. if `--no-config` is provided, skip config entirely
-3. otherwise, start from `--path` and walk upward through parent directories looking for `.sephera.toml`
+3. otherwise, start from the selected analysis base and walk upward through parent directories looking for `.sephera.toml`
 
 If no config file is found, Sephera falls back to built-in defaults.
+
+In URL mode, the selected analysis base is the temporary checkout created from `--url`. Auto-discovery still works there, but user-facing output keeps the logical URL instead of exposing the temp path.
 
 ## Precedence
 
@@ -32,7 +34,7 @@ Scalar values from CLI override config values. Repeated CLI lists are appended t
 
 ## Supported sections
 
-`v0.3.x` supports two configuration layers:
+`v0.5.x` supports two configuration layers:
 
 - `[context]`
 - `[profiles.<name>.context]`
@@ -100,7 +102,7 @@ ignore = ["target", "*.snap"]
 `focus` is a list of paths Sephera should prioritize when ranking files for the final context pack.
 
 - focus paths are resolved relative to the directory containing `.sephera.toml`
-- resolved focus paths must still remain inside the selected `--path`
+- resolved focus paths must still remain inside the selected analysis base
 - config focus entries are used first, then repeated CLI `--focus` flags are appended
 
 Example:
@@ -134,6 +136,8 @@ Example:
 [context]
 diff = "working-tree"
 ```
+
+In URL mode, only base refs are supported. If a config or profile sets `diff = "working-tree"`, `diff = "staged"`, or `diff = "unstaged"`, Sephera rejects that invocation for remote analysis.
 
 ### `budget`
 
@@ -182,11 +186,13 @@ If the CLI also specifies `--format`, the CLI wins.
 - parent directories are created as needed
 - a CLI `--output` value overrides the config value
 
+In URL mode, auto-discovered config still loads from the temporary checkout, but configured output paths are remapped so the rendered file is written locally instead of inside the temp clone.
+
 ## Relative path behavior
 
 - `focus` values in the config file are resolved relative to the directory containing `.sephera.toml`
 - `output` is also resolved relative to the config file directory
-- resolved `focus` paths must still stay inside `--path`
+- resolved `focus` paths must still stay inside the selected analysis base
 
 If a focus path resolves outside the selected base path, Sephera fails fast with a clear error.
 
@@ -246,9 +252,11 @@ sephera context --path . --profile review
 
 ## What is intentionally not configurable yet
 
-`v0.3.x` keeps the config surface narrow on purpose. The following are still CLI-only:
+`v0.5.x` keeps the config surface narrow on purpose. The following are still CLI-only:
 
 - `path`
+- `url`
+- `ref`
 - `config`
 - `no-config`
 

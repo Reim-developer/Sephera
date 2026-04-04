@@ -21,7 +21,7 @@ pub struct ProjectFile {
 ///
 /// Returns an error when the target path is invalid, traversal fails, or file metadata cannot be
 /// read.
-pub(super) fn collect_project_files(
+pub fn collect_project_files(
     base_path: &Path,
     ignore: &IgnoreMatcher,
 ) -> Result<Vec<ProjectFile>> {

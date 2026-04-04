@@ -7,7 +7,7 @@ license.workspace = true
 repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
-description = "MCP server for Sephera — exposes LOC analysis and context packs to AI agents over the Model Context Protocol."
+description = "MCP server for Sephera — exposes LOC analysis, context packs, and dependency graphs to AI agents over the Model Context Protocol."
 documentation = "https://docs.rs/sephera_mcp"
 keywords = ["mcp", "ai", "context", "llm", "tree-sitter"]
 categories = ["command-line-utilities", "development-tools"]
@@ -23,3 +23,6 @@ sephera_core.workspace = true
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 tokio = { version = "1", features = ["full"] }
+
+[dev-dependencies]
+tempfile = "3.23.0"

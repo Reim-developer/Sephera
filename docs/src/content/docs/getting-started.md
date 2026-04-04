@@ -5,7 +5,7 @@ description: Build Sephera locally, run the CLI, and preview the documentation s
 
 # Getting Started
 
-This guide targets the `v0.3.x` release line.
+This guide targets the `v0.5.x` release line.
 
 ## Requirements
 
@@ -37,10 +37,23 @@ Run a quick LOC scan:
 sephera loc --path .
 ```
 
+Run the same scan against a remote repository:
+
+```bash
+sephera loc --url https://github.com/Reim-developer/Sephera
+```
+
 Build a context pack:
 
 ```bash
 sephera context --path . --focus crates/sephera_core --budget 32k
+```
+
+Analyze the codebase dependency graph:
+
+```bash
+sephera graph --path . --format markdown
+sephera graph --path . --focus crates/sephera_core --output deps.md
 ```
 
 Build a review-oriented context pack from Git changes:
@@ -51,10 +64,18 @@ sephera context --path . --diff HEAD~1 --budget 32k
 
 `--diff` is a Git-only feature. Built-in modes are `working-tree`, `staged`, and `unstaged`. Any other value is treated as a base ref compared against `HEAD` through merge-base semantics.
 
+In URL mode, `context --diff` keeps the base-ref behavior but intentionally rejects `working-tree`, `staged`, and `unstaged` because the remote checkout is a clean temp clone.
+
 List configured profiles when the repository has a `.sephera.toml` file:
 
 ```bash
 sephera context --path . --list-profiles
+```
+
+Analyze a GitHub tree URL directly:
+
+```bash
+sephera graph --url https://github.com/Reim-developer/Sephera/tree/master/crates/sephera_core --format markdown
 ```
 
 ## Develop from source

@@ -5,13 +5,14 @@ description: Fast LOC analysis and deterministic context packs for review, debug
 
 # Sephera
 
-Sephera is a Rust workspace for codebase inspection. It currently focuses on three practical workflows:
+Sephera is a Rust workspace for codebase inspection. It currently focuses on four practical workflows:
 
 - `loc` for fast, language-aware line counting
 - `context` for deterministic Markdown or JSON context packs with AST compression
+- `graph` for multi-language dependency graph analysis
 - `mcp` for built-in MCP server agent integration
 
-The current docs reflect the `v0.4.x` release line.
+The current docs reflect the `v0.5.x` release line.
 
 The project is intentionally narrow in scope. It does not try to be an AI agent framework or a hosted service. The goal is to provide reliable local analysis primitives that fit naturally into review, debugging, and prompting workflows.
 
@@ -29,7 +30,9 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 - Fast `loc` analysis with per-language totals, table output, and elapsed-time reporting
 - Deterministic `context` packs with focus-path prioritization, Git diff awareness, and approximate token budgeting
 - Tree-sitter AST compression reducing token usage by 50-70% for 8 supported languages
+- Dependency `graph` generation with cycle detection and exports to Markdown, JSON, XML, and DOT
 - Built-in MCP server for direct integration with AI agents like Claude Desktop
+- URL mode for direct analysis of cloneable repo URLs and GitHub/GitLab tree URLs
 - Repo-level defaults and named profiles through `.sephera.toml`
 - Export to Markdown for human copy-paste workflows and JSON for automation
 - Generated language metadata sourced from `config/languages.yml`
@@ -44,6 +47,12 @@ Count lines of code in the current repository:
 
 ```bash
 sephera loc --path .
+```
+
+Analyze a remote repository directly:
+
+```bash
+sephera loc --url https://github.com/Reim-developer/Sephera
 ```
 
 Build a focused context pack and export it to JSON:
@@ -68,6 +77,12 @@ Build a review pack from recent Git changes:
 
 ```bash
 sephera context --path . --diff HEAD~1 --budget 32k
+```
+
+Run the same review flow on a remote checkout:
+
+```bash
+sephera context --url https://github.com/Reim-developer/Sephera --ref master --diff HEAD~1 --budget 32k
 ```
 
 List configured profiles for the current repository:
@@ -102,5 +117,6 @@ sephera context --path . --list-profiles
 - Start with [Getting Started](/getting-started/)
 - Learn the [loc command](/commands/loc/)
 - Learn the [context command](/commands/context/)
+- Learn the [graph command](/commands/graph/)
 - Learn the [mcp command](/commands/mcp/)
 - Configure repo-level defaults with [.sephera.toml](/configuration/sephera-toml/)
