@@ -12,6 +12,8 @@ The `context` command prepares a focused context pack from a repository or sub-t
 - onboarding into a codebase
 - LLM-assisted workflows that need bounded, explainable context
 
+Use `--path` for local analysis or `--url` for direct remote analysis through a temporary checkout.
+
 ## What the command includes
 
 A context pack currently contains:
@@ -30,10 +32,53 @@ Generate Markdown to standard output:
 sephera context --path .
 ```
 
+Build a JSON context pack from a remote repository:
+
+```bash
+sephera context --url https://github.com/Reim-developer/Sephera --format json
+```
+
+Analyze a GitHub tree URL directly:
+
+```bash
+sephera context --url https://github.com/Reim-developer/Sephera/tree/master/crates/sephera_core --format json
+```
+
 List the profiles available for the current repository config:
 
 ```bash
 sephera context --path . --list-profiles
+```
+
+## Sample Output
+
+```markdown
+# Sephera Context Pack                            
+
+## Metadata
+| Field | Value |
+| --- | --- |
+| Base path | `.` |
+| Focus paths | `crates/sephera_cli/src/run.rs` |
+| Budget tokens | 128000 |
+| Metadata budget tokens | 12800 |
+| Excerpt budget tokens | 115200 |
+| Estimated total tokens | 127860 |
+| Estimated metadata tokens | 12776 |
+| Estimated excerpt tokens | 115084 |
+| Files considered | 13225 |
+| Files selected | 519 |
+| Truncated files | 0 |
+
+## Dominant Languages
+| Language | Files | Size (bytes) |
+| --- | ---: | ---: |
+| JavaScript | 5630 | 60338422 |
+| TypeScript | 2744 | 16845759 |
+| JSON | 516 | 7798487 |
+| Markdown | 406 | 3496718 |
+| Rust | 86 | 370095 |
+...
 ```
 
 ## Demo
@@ -98,6 +143,20 @@ Important behavior:
 - deleted files are counted in diff metadata but skipped from excerpts because there is no workspace content left to read
 - renamed files use the new path in the final report
 
+In URL mode, only base-ref diffs are supported. These work:
+
+- `main`
+- `master`
+- `HEAD~1`
+- tags
+- commit SHAs
+
+These are intentionally rejected in URL mode because the checkout is always clean:
+
+- `working-tree`
+- `staged`
+- `unstaged`
+
 ## AST Compression
 
 The `--compress` flag tells Sephera to use Tree-sitter to drop implementations and compress source files into API-only excerpts, significantly reducing the prompt burden. It replaces complex blocks with `{ ... }`.
@@ -143,3 +202,10 @@ sephera context --path . --profile review --diff staged
 ```
 
 See the dedicated configuration page for details and examples.
+
+## URL mode notes
+
+- `--ref` applies to repo URLs only and cannot be combined with tree URLs
+- auto-discovered `.sephera.toml` files inside a remote checkout still apply
+- `--profile` and `--list-profiles` work against remote config discovery
+- explicit `--config <FILE>` always refers to a local file on the machine running Sephera
