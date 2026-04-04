@@ -4,21 +4,21 @@ use anyhow::Result;
 use clap::Parser;
 use sephera_core::core::{
     code_loc::{CodeLoc, IgnoreMatcher},
-    compression::CompressionMode,
-    context::ContextBuilder,
+    graph::{
+        resolver::build_graph,
+        types::{GraphFormat, GraphQuery},
+    },
+    runtime::{SourceRequest, build_context_report, resolve_source},
 };
 
 use crate::{
-    args::{
-        Cli, Commands, ContextArgs, ContextCompress, ContextFormat, LocArgs,
-    },
+    args::{Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs},
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
-    context_diff::resolve_context_diff,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
-        render_context_json, render_context_markdown,
+        render_context_json, render_context_markdown, render_graph,
     },
     progress::CliProgress,
 };
@@ -47,6 +47,7 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Loc(arguments) => run_loc(arguments),
         Commands::Context(arguments) => run_context(arguments),
         Commands::Mcp => run_mcp(),
+        Commands::Graph(arguments) => run_graph(&arguments),
     }
 }
 
@@ -58,7 +59,15 @@ fn run_mcp() -> Result<()> {
 fn run_loc(arguments: LocArgs) -> Result<()> {
     let progress = CliProgress::start("Analyzing line counts...");
     let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
-    let report = CodeLoc::new(arguments.path, ignore).analyze()?;
+    let source = resolve_source(&SourceRequest {
+        path: arguments.path,
+        url: arguments.url,
+        git_ref: arguments.git_ref,
+    })?;
+    let mut report = CodeLoc::new(&source.analysis_path, ignore).analyze()?;
+    if let Some(display_path) = source.display_path {
+        report.base_path = display_path.into();
+    }
     progress.finish();
     print_report(&report);
     Ok(())
@@ -66,7 +75,7 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
 
 fn run_context(arguments: ContextArgs) -> Result<()> {
     match resolve_context_options(arguments)? {
-        ResolvedContextCommand::Execute(resolved) => execute_context(resolved),
+        ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
         ResolvedContextCommand::ListProfiles(profiles) => {
             print_available_profiles(&profiles);
             Ok(())
@@ -74,54 +83,69 @@ fn run_context(arguments: ContextArgs) -> Result<()> {
     }
 }
 
-fn execute_context(arguments: ResolvedContextOptions) -> Result<()> {
-    let ResolvedContextOptions {
-        base_path,
-        ignore,
-        focus,
-        diff,
-        budget,
-        compress,
-        format,
-        output,
-    } = arguments;
-
-    let compression_mode = match compress {
-        Some(ContextCompress::Signatures) => CompressionMode::Signatures,
-        Some(ContextCompress::Skeleton) => CompressionMode::Skeleton,
-        None => CompressionMode::None,
-    };
-
+fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
     let progress = CliProgress::start("Preparing context inputs...");
-    let ignore = IgnoreMatcher::from_patterns(&ignore)?;
-    let diff_selection = diff
-        .as_deref()
-        .map(|spec| {
-            progress.set_message("Resolving Git diff...");
-            resolve_context_diff(&base_path, spec)
-        })
-        .transpose()?;
     progress.set_message("Building context pack...");
-    let builder = ContextBuilder::new(&base_path, ignore, focus, budget)
-        .with_compression(compression_mode);
-    let builder = match diff_selection {
-        Some(diff_selection) => builder.with_diff_selection(diff_selection),
-        None => builder,
-    };
-    let report = builder.build()?;
+    let report = build_context_report(arguments)?;
 
     progress.set_message("Rendering context pack...");
-    let rendered = match format {
-        ContextFormat::Markdown => render_context_markdown(&report),
-        ContextFormat::Json => render_context_json(&report),
+    let rendered = match arguments.format.as_str() {
+        "markdown" => render_context_markdown(&report),
+        "json" => render_context_json(&report),
+        other => unreachable!("unexpected resolved context format `{other}`"),
     };
 
-    let writes_to_stdout = output.is_none();
+    let writes_to_stdout = arguments.output.is_none();
     if !writes_to_stdout {
         progress.set_message("Writing output...");
     }
     if writes_to_stdout {
         progress.finish();
     }
-    emit_rendered_output(output.as_deref(), &rendered)
+    emit_rendered_output(arguments.output.as_deref(), &rendered)
+}
+
+fn run_graph(arguments: &GraphArgs) -> Result<()> {
+    let progress = CliProgress::start("Analyzing dependency graph...");
+    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
+    let source = resolve_source(&SourceRequest {
+        path: arguments.path.clone(),
+        url: arguments.url.clone(),
+        git_ref: arguments.git_ref.clone(),
+    })?;
+
+    progress.set_message("Extracting imports...");
+    let query = arguments
+        .what_depends_on
+        .as_ref()
+        .map(|path| GraphQuery::DependsOn(path.clone()));
+    let mut report = build_graph(
+        &source.analysis_path,
+        &ignore,
+        &arguments.focus,
+        arguments.depth,
+        query,
+    )?;
+    if let Some(display_path) = source.display_path {
+        report.base_path = display_path.into();
+    }
+
+    let graph_format = match arguments.format {
+        GraphOutputFormat::Json => GraphFormat::Json,
+        GraphOutputFormat::Markdown => GraphFormat::Markdown,
+        GraphOutputFormat::Xml => GraphFormat::Xml,
+        GraphOutputFormat::Dot => GraphFormat::Dot,
+    };
+
+    progress.set_message("Rendering graph...");
+    let rendered = render_graph(&report, graph_format);
+
+    let writes_to_stdout = arguments.output.is_none();
+    if !writes_to_stdout {
+        progress.set_message("Writing output...");
+    }
+    if writes_to_stdout {
+        progress.finish();
+    }
+    emit_rendered_output(arguments.output.as_deref(), &rendered)
 }
