@@ -1,0 +1,173 @@
+name: Bug report
+description: Report a reproducible defect in Sephera.
+title: "[Bug]: "
+labels:
+  - bug
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report a bug.
+
+        Please provide a minimal, reproducible report. Security vulnerabilities must not be filed here; use the private reporting process described in SECURITY.md instead.
+
+  - type: textarea
+    id: summary
+    attributes:
+      label: Summary
+      description: Describe the defect in one or two sentences.
+      placeholder: Running `sephera graph --what-depends-on ...` on a remote tree URL returns an incorrect path scope.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Affected command or area
+      description: Select the command or subsystem most directly affected.
+      options:
+        - loc
+        - context
+        - graph
+        - mcp
+        - release/install
+        - docs
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: version
+    attributes:
+      label: Sephera version
+      description: Use `sephera --version` or the release/tag you tested.
+      placeholder: v0.5.0
+    validations:
+      required: true
+
+  - type: dropdown
+    id: install_method
+    attributes:
+      label: Installation method
+      options:
+        - cargo install
+        - GitHub release binary
+        - source build
+        - other
+    validations:
+      required: true
+
+  - type: input
+    id: operating_system
+    attributes:
+      label: Operating system
+      placeholder: Ubuntu 24.04, macOS 15, Windows 11
+    validations:
+      required: true
+
+  - type: input
+    id: architecture
+    attributes:
+      label: Architecture
+      placeholder: x86_64, aarch64
+    validations:
+      required: true
+
+  - type: input
+    id: rust_version
+    attributes:
+      label: Rust version (if building from source)
+      description: Optional unless the issue only occurs in a source build.
+      placeholder: rustc 1.86.0
+    validations:
+      required: false
+
+  - type: input
+    id: command
+    attributes:
+      label: Exact command
+      description: Paste the exact command that reproduces the issue.
+      placeholder: sephera context --url https://github.com/example/repo --diff HEAD~1
+    validations:
+      required: true
+
+  - type: input
+    id: input_scope
+    attributes:
+      label: Repository path, URL, or sample input
+      description: Include the target repo path or URL if it is relevant and safe to share.
+      placeholder: https://github.com/example/repo
+    validations:
+      required: false
+
+  - type: textarea
+    id: reproduction_steps
+    attributes:
+      label: Steps to reproduce
+      description: List the smallest reproducible sequence.
+      placeholder: |
+        1. Run ...
+        2. Observe ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected_behavior
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual_behavior
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Relevant logs or output
+      description: Paste stderr, panic output, or a reduced sample of incorrect output.
+      render: shell
+    validations:
+      required: false
+
+  - type: dropdown
+    id: regression
+    attributes:
+      label: Regression status
+      description: Did this work in an earlier stable release?
+      options:
+        - "Yes"
+        - "No"
+        - Not sure
+    validations:
+      required: true
+
+  - type: dropdown
+    id: impact
+    attributes:
+      label: Severity or impact
+      options:
+        - Blocking
+        - Incorrect results
+        - Crash or panic
+        - UX or docs issue
+    validations:
+      required: true
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues before filing this report.
+          required: true
+        - label: I reproduced this on the latest stable Sephera release.
+          required: true
+        - label: I removed local modifications or custom patches if they were not required to reproduce the problem.
+          required: true
+        - label: This report is not a security vulnerability or other sensitive disclosure.
+          required: true

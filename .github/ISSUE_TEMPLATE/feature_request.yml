@@ -1,0 +1,101 @@
+name: Feature request
+description: Propose a capability or workflow improvement for Sephera.
+title: "[Feature]: "
+labels:
+  - enhancement
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for proposing an improvement.
+
+        Sephera is intentionally narrow in scope. The strongest requests explain the problem, the workflow that is blocked today, and why the proposed addition still fits the project's local-first design.
+
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem statement
+      description: What real problem are you trying to solve?
+      placeholder: I need to build a review pack for a specific subset of changed files without post-processing the JSON output by hand.
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed capability
+      description: Describe the feature or behavior you want Sephera to provide.
+    validations:
+      required: true
+
+  - type: textarea
+    id: gap
+    attributes:
+      label: Why existing behavior is insufficient
+      description: Explain what you tried today and where it falls short.
+    validations:
+      required: true
+
+  - type: dropdown
+    id: area
+    attributes:
+      label: Target command or subsystem
+      options:
+        - loc
+        - context
+        - graph
+        - mcp
+        - docs
+        - release/install
+        - other
+    validations:
+      required: true
+
+  - type: textarea
+    id: workflow
+    attributes:
+      label: Use case or workflow
+      description: Describe the concrete workflow that would benefit.
+      placeholder: |
+        1. Analyze a repository from a URL
+        2. Build a context pack for changed files
+        3. Hand the output to an AI review tool
+    validations:
+      required: true
+
+  - type: textarea
+    id: examples
+    attributes:
+      label: Desired CLI, output, or UX examples
+      description: Sketch commands, flags, output, or UI text if you have a preferred shape.
+      render: shell
+    validations:
+      required: false
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: Alternatives considered
+      description: Note any workarounds, competing tools, or other designs you evaluated.
+    validations:
+      required: false
+
+  - type: textarea
+    id: compatibility
+    attributes:
+      label: Compatibility or rollout notes
+      description: Mention any breaking-change risk, migration needs, or backward-compatibility constraints you see.
+    validations:
+      required: false
+
+  - type: checkboxes
+    id: confirmations
+    attributes:
+      label: Confirmations
+      options:
+        - label: I searched existing issues before filing this request.
+          required: true
+        - label: This request aligns with Sephera's local-first CLI scope rather than a hosted service or generic agent runtime.
+          required: true
+        - label: This is not a support question or troubleshooting request.
+          required: true
