@@ -4,11 +4,18 @@
 		"benchmarks/run.py",
 		"benchmarks/benchmark_harness.py",
 		"benchmarks/benchmark_model.py",
-		"benchmarks/benchmark_render.py"
+		"benchmarks/benchmark_render.py",
+		"scripts/make_graph_demo.py",
+		"scripts/probe_symbol_node_kinds.py",
+		"scripts/verify_mcp_graph_formats.py",
+		"scripts/verify_mcp_symbols.py"
 	],
 	"exclude": [
 		"benchmarks/generated_corpus",
 		"benchmarks/reports",
-		"benchmarks/__pycache__"
-	]
+		"benchmarks/__pycache__",
+		"scripts/__pycache__"
+	],
+	"reportMissingTypeStubs": false,
+	"pythonVersion": "3.11"
 }

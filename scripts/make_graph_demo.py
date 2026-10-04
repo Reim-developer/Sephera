@@ -208,7 +208,10 @@ def main() -> None:
     print(f"lines: {len(lines)}  frames: {len(frames)}  duration: {seconds:.1f}s")
 
     out = here.parent / "docs" / "public" / "demo" / "graph.gif"
-    paletted = [f.convert("P", palette=Image.ADAPTIVE, colors=128) for f, _ in frames]
+    paletted = [
+        f.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
+        for f, _ in frames
+    ]
     paletted[0].save(
         out,
         save_all=True,
