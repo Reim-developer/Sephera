@@ -854,7 +854,7 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
         })
         .filter(|m| m.count > 0)
         .collect();
-    most_importing.sort_by(|a, b| b.count.cmp(&a.count));
+    most_importing.sort_by_key(|m| std::cmp::Reverse(m.count));
     most_importing.truncate(10);
 
     let mut most_imported: Vec<FileMetric> = node_map
@@ -865,7 +865,7 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
         })
         .filter(|m| m.count > 0)
         .collect();
-    most_imported.sort_by(|a, b| b.count.cmp(&a.count));
+    most_imported.sort_by_key(|m| std::cmp::Reverse(m.count));
     most_imported.truncate(10);
 
     let cycles = detect_cycles(node_map);

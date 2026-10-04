@@ -28,6 +28,11 @@
 //! }
 //! ```
 
+#![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
+
+mod error;
+mod input;
+mod render;
 mod server;
 
 pub use server::{SepheraServer, run_mcp_server};
