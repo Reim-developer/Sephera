@@ -60,6 +60,26 @@ pub struct ContextInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `symbols` tool.
+///
+/// Unknown fields are rejected so that a mistyped argument fails loudly instead
+/// of being silently dropped.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SymbolsInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns (globs or regexes)
+    pub ignore: Option<Vec<String>>,
+    /// List every declaration with its file and line, not just per-language totals.
+    pub detail: Option<bool>,
+}
+
 /// Arguments accepted by the `graph` tool.
 ///
 /// Unknown fields are rejected so that a mistyped argument fails loudly instead

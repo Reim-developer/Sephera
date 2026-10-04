@@ -30,11 +30,12 @@ use sephera_core::core::{
         ContextCommandInput, ResolvedContextCommand, SourceRequest,
         build_context_report, resolve_context_command, resolve_source,
     },
+    symbols::{SymbolAnalyzer, SymbolDetail},
 };
 
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
-    input::{ContextInput, GraphInput, LocInput},
+    input::{ContextInput, GraphInput, LocInput, SymbolsInput},
     render::render_context_markdown,
 };
 
@@ -189,6 +190,47 @@ impl SepheraServer {
                 }
             }
         }
+    }
+
+    /// Count declarations per language.
+    ///
+    /// Returns functions, types, enums, and constants per language as JSON.
+    #[tool(
+        name = "symbols",
+        description = "Count declarations per language: functions, types, enums, and constants. Counts come from Tree-sitter parse trees, so keywords inside comments or strings are not counted and nested functions are attributed correctly. Accepts exactly one of path or url, plus an optional ref for repo URLs. Set detail=true to list every declaration with its file and line instead of only per-language totals."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    fn symbols(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SymbolsInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore = build_ignore_matcher(param.ignore)?;
+        let source = resolve_source(&SourceRequest {
+            path: param.path.map(std::path::PathBuf::from),
+            url: param.url,
+            git_ref: param.git_ref,
+        })
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
+        let mut detail = if param.detail.unwrap_or(false) {
+            analyzer
+                .analyze_detailed()
+                .map_err(map_internal_error("symbol analysis failed"))?
+        } else {
+            analyzer
+                .analyze()
+                .map(SymbolDetail::from)
+                .map_err(map_internal_error("symbol analysis failed"))?
+        };
+        if let Some(display_path) = source.display_path {
+            detail.report.base_path = display_path.into();
+        }
+
+        serialize_json(&detail)
     }
 
     /// Build a dependency graph report for a repository or focused sub-paths.

@@ -9,16 +9,21 @@ use sephera_core::core::{
         types::{GraphFormat, GraphQuery},
     },
     runtime::{SourceRequest, build_context_report, resolve_source},
+    symbols::{SymbolAnalyzer, SymbolDetail},
 };
 
 use crate::{
-    args::{Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs},
+    args::{
+        Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs,
+        SymbolOutputFormat, SymbolsArgs,
+    },
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
     output::{
         emit_rendered_output, print_available_profiles, print_report,
-        render_context_json, render_context_markdown, render_graph,
+        print_symbol_report, render_context_json, render_context_markdown,
+        render_graph, render_symbol_json, render_symbol_markdown,
     },
     progress::CliProgress,
 };
@@ -45,6 +50,7 @@ pub fn run() -> Result<()> {
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Loc(arguments) => run_loc(arguments),
+        Commands::Symbols(arguments) => run_symbols(arguments),
         Commands::Context(arguments) => run_context(arguments),
         Commands::Mcp => run_mcp(),
         Commands::Graph(arguments) => run_graph(&arguments),
@@ -71,6 +77,46 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
     progress.finish();
     print_report(&report);
     Ok(())
+}
+
+fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
+    let progress = CliProgress::start("Counting declarations...");
+    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
+    let source = resolve_source(&SourceRequest {
+        path: arguments.path,
+        url: arguments.url,
+        git_ref: arguments.git_ref,
+    })?;
+
+    let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
+
+    // The declaration list is only collected when a format can carry it.
+    // Parsing twice would double the work, so the summary path reads only the
+    // report and the detail path reads both.
+    let mut detail = if arguments.detail {
+        analyzer.analyze_detailed()?
+    } else {
+        SymbolDetail::from(analyzer.analyze()?)
+    };
+    if let Some(display_path) = source.display_path {
+        detail.report.base_path = display_path.into();
+    }
+    progress.finish();
+
+    let rendered = match arguments.format {
+        SymbolOutputFormat::Table => {
+            print_symbol_report(&detail.report);
+            None
+        }
+        SymbolOutputFormat::Json => Some(render_symbol_json(&detail)),
+        SymbolOutputFormat::Markdown => Some(render_symbol_markdown(&detail)),
+    };
+
+    if let Some(rendered) = rendered {
+        emit_rendered_output(arguments.output.as_deref(), &rendered)
+    } else {
+        Ok(())
+    }
 }
 
 fn run_context(arguments: ContextArgs) -> Result<()> {

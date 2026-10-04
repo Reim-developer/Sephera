@@ -15,6 +15,10 @@ const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera 
 
 const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.";
 
+const SYMBOLS_LONG_ABOUT: &str = "Count declarations per language: functions, types, enums, and constants.\n\nCounts come from Tree-sitter parse trees rather than text matching, so a keyword inside a comment or string is not counted and a function nested inside an impl block or class body is attributed correctly. Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.\n\nUnlike `loc`, which measures how much code exists, this reports what is declared in it. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs.";
+
+const SYMBOLS_AFTER_LONG_HELP: &str = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\"";
+
 const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
 
 #[derive(Debug, Parser)]
@@ -36,6 +40,12 @@ pub enum Commands {
     /// Count lines of code for supported languages in a directory tree
     #[command(long_about = LOC_LONG_ABOUT, after_long_help = LOC_AFTER_LONG_HELP)]
     Loc(LocArgs),
+    /// Count declarations per language
+    #[command(
+        long_about = SYMBOLS_LONG_ABOUT,
+        after_long_help = SYMBOLS_AFTER_LONG_HELP
+    )]
+    Symbols(SymbolsArgs),
     /// Build an LLM-ready context pack for a repository or focused sub-paths
     #[command(
         long_about = CONTEXT_LONG_ABOUT,
@@ -87,6 +97,94 @@ pub struct LocArgs {
         long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
     )]
     pub git_ref: Option<String>,
+
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+    )]
+    pub ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SymbolOutputFormat {
+    /// Human-readable terminal table.
+    #[value(
+        name = "table",
+        help = "Render a terminal table of declaration counts."
+    )]
+    Table,
+    /// Markdown summary with a table and, in detail mode, every declaration.
+    #[value(
+        name = "markdown",
+        help = "Render Markdown with a per-language table and listed declarations."
+    )]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render structured JSON.")]
+    Json,
+}
+
+#[derive(Debug, Args)]
+pub struct SymbolsArgs {
+    /// Path to the project directory to analyze
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "url",
+        help = "Path to the project directory to analyze.",
+        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Git repository URL to analyze directly
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with = "path",
+        help = "Git repository URL to analyze directly.",
+        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
+    )]
+    pub url: Option<String>,
+
+    /// Git ref to check out before analysis
+    #[arg(
+        long = "ref",
+        value_name = "REF",
+        requires = "url",
+        conflicts_with = "path",
+        help = "Git ref to check out before analysis.",
+        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
+    )]
+    pub git_ref: Option<String>,
+
+    /// Output format for the symbol report
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SymbolOutputFormat::Table,
+        value_name = "FORMAT",
+        help = "Output format for the symbol report. Supports table, markdown, and json."
+    )]
+    pub format: SymbolOutputFormat,
+
+    /// Write the report to a file instead of standard output
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write the report to a file instead of standard output."
+    )]
+    pub output: Option<PathBuf>,
+
+    /// List every declaration instead of only per-language totals
+    #[arg(
+        long,
+        help = "List every declaration found, with its file, line, and kind.",
+        long_help = "List every declaration found, with its file, line, and kind. This produces far more output than the per-language summary, so it is opt-in."
+    )]
+    pub detail: bool,
 
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(

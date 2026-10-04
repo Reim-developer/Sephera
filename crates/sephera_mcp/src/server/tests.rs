@@ -8,6 +8,133 @@ use std::{fs, path::Path, process::Command};
 
 use tempfile::tempdir;
 
+/// Wrap an input struct the way the `tool_router` macro does.
+fn param_for<T>(input: T) -> rmcp::handler::server::wrapper::Parameters<T> {
+    rmcp::handler::server::wrapper::Parameters(input)
+}
+
+#[test]
+fn symbols_tool_counts_declarations_per_language() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"fn a() {}\nstruct S;\n");
+    write_file(temp_dir.path(), "src/main.py", b"def b():\n    pass\n");
+
+    let result = server.symbols(param_for(SymbolsInput {
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        ignore: None,
+        detail: None,
+    }));
+
+    let output = result.expect("symbols tool should succeed for a temp dir");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("symbols output must be JSON");
+
+    let languages: Vec<&str> = parsed["report"]["by_language"]
+        .as_array()
+        .expect("by_language must be an array")
+        .iter()
+        .filter_map(|entry| entry["language"].as_str())
+        .collect();
+
+    assert_eq!(languages, vec!["Python", "Rust"], "both languages reported");
+    assert_eq!(parsed["report"]["totals"]["functions"], 2);
+    assert_eq!(parsed["report"]["totals"]["types"], 1);
+}
+
+#[test]
+fn symbols_tool_omits_the_symbol_list_without_detail() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"fn a() {}\n");
+
+    let summary = server
+        .symbols(param_for(SymbolsInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            detail: None,
+        }))
+        .expect("summary must succeed");
+    let summary: serde_json::Value =
+        serde_json::from_str(&summary).expect("JSON");
+
+    assert_eq!(
+        summary["symbols"].as_array().map(Vec::len),
+        Some(0),
+        "summary mode must not list declarations"
+    );
+
+    let detailed = server
+        .symbols(param_for(SymbolsInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            detail: Some(true),
+        }))
+        .expect("detail mode must succeed");
+    let detailed: serde_json::Value =
+        serde_json::from_str(&detailed).expect("JSON");
+
+    let listed = detailed["symbols"]
+        .as_array()
+        .expect("symbols must be an array");
+
+    assert_eq!(listed.len(), 1, "detail mode must list the declaration");
+    assert_eq!(listed[0]["name"], "a");
+    assert_eq!(listed[0]["kind"], "functions");
+}
+
+#[test]
+fn symbols_tool_rejects_invalid_ignore_pattern() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+
+    let result = server.symbols(param_for(SymbolsInput {
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        ignore: Some(vec!["(".to_owned()]),
+        detail: None,
+    }));
+
+    assert!(result.is_err(), "an invalid pattern must be rejected");
+}
+
+#[test]
+fn symbols_tool_rejects_path_and_url_together() {
+    let server = SepheraServer::new();
+
+    let result = server.symbols(param_for(SymbolsInput {
+        path: Some(".".to_owned()),
+        url: Some("https://github.com/o/r".to_owned()),
+        git_ref: None,
+        ignore: None,
+        detail: None,
+    }));
+
+    assert!(result.is_err(), "path and url are mutually exclusive");
+}
+
+#[test]
+fn symbols_tool_rejects_ref_without_url() {
+    let server = SepheraServer::new();
+
+    let result = server.symbols(param_for(SymbolsInput {
+        path: None,
+        url: None,
+        git_ref: Some("main".to_owned()),
+        ignore: None,
+        detail: None,
+    }));
+
+    assert!(result.is_err(), "ref requires url");
+}
+
 use super::*;
 use sephera_core::core::graph::types::GraphFormat as CoreGraphFormat;
 

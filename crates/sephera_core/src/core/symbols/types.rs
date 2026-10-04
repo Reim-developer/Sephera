@@ -124,6 +124,19 @@ pub struct SymbolDetail {
     pub symbols: Vec<SymbolEntry>,
 }
 
+impl From<SymbolReport> for SymbolDetail {
+    /// Promotes a summary report into a detail view with no declarations.
+    ///
+    /// Callers that did not request per-declaration output use this instead of
+    /// constructing the struct, so the two representations cannot drift.
+    fn from(report: SymbolReport) -> Self {
+        Self {
+            report,
+            symbols: Vec::new(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
