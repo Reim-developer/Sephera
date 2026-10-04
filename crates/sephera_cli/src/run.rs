@@ -15,7 +15,7 @@ use sephera_core::core::{
 use crate::{
     args::{
         Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs,
-        SymbolOutputFormat, SymbolsArgs,
+        SymbolOutputFormat, SymbolsArgs, WatchArgs, WatchTarget,
     },
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
@@ -26,6 +26,7 @@ use crate::{
         render_graph, render_symbol_json, render_symbol_markdown,
     },
     progress::CliProgress,
+    watch,
 };
 
 #[must_use]
@@ -54,6 +55,101 @@ fn dispatch(cli: Cli) -> Result<()> {
         Commands::Context(arguments) => run_context(arguments),
         Commands::Mcp => run_mcp(),
         Commands::Graph(arguments) => run_graph(&arguments),
+        Commands::Watch(arguments) => run_watch(&arguments),
+    }
+}
+
+/// Re-run a chosen analysis whenever the watched tree changes.
+///
+/// `--once` short-circuits to a single run, which keeps the watch argument
+/// parsing usable from scripts without needing a separate code path.
+fn run_watch(arguments: &WatchArgs) -> Result<()> {
+    let Some(target) = arguments.target else {
+        anyhow::bail!("`--target` is required unless `--once` is passed");
+    };
+
+    if target == WatchTarget::DependsOn && arguments.on.is_none() {
+        anyhow::bail!("`--on <file>` is required with `--target depends-on`");
+    }
+
+    let root = watch::resolve_root(arguments.path.as_deref());
+    let ignore = arguments.ignore.clone();
+
+    if arguments.once {
+        return run_watch_target(
+            target,
+            arguments.on.as_deref(),
+            &root,
+            &ignore,
+        );
+    }
+
+    println!(
+        "Watching {} for changes. Press Ctrl+C to stop.",
+        root.display()
+    );
+
+    watch::watch(&root, || {
+        run_watch_target(target, arguments.on.as_deref(), &root, &ignore)
+    })
+}
+
+/// Run one analysis pass for the watch target.
+fn run_watch_target(
+    target: WatchTarget,
+    on: Option<&str>,
+    root: &std::path::Path,
+    ignore: &[String],
+) -> Result<()> {
+    // Each arm builds its own argument struct from the same root, so a value is
+    // never shared across arms.
+    let path = || Some(root.to_path_buf());
+
+    match target {
+        WatchTarget::Loc => run_loc(LocArgs {
+            path: path(),
+            url: None,
+            git_ref: None,
+            ignore: ignore.to_vec(),
+        }),
+        WatchTarget::Symbols => run_symbols(SymbolsArgs {
+            path: path(),
+            url: None,
+            git_ref: None,
+            format: SymbolOutputFormat::Table,
+            output: None,
+            detail: false,
+            ignore: ignore.to_vec(),
+        }),
+        WatchTarget::Graph => run_graph(&GraphArgs {
+            path: path(),
+            url: None,
+            git_ref: None,
+            focus: Vec::new(),
+            ignore: ignore.to_vec(),
+            depth: None,
+            what_depends_on: None,
+            format: GraphOutputFormat::Markdown,
+            output: None,
+        }),
+        WatchTarget::DependsOn => {
+            let Some(target_path) = on else {
+                anyhow::bail!(
+                    "`--on <file>` is required with `--target depends-on`"
+                );
+            };
+            run_graph(&GraphArgs {
+                path: path(),
+                url: None,
+                git_ref: None,
+                focus: Vec::new(),
+                ignore: ignore.to_vec(),
+                depth: None,
+                what_depends_on: Some(target_path.to_owned()),
+                format: GraphOutputFormat::Markdown,
+                output: None,
+            })
+        }
     }
 }
 

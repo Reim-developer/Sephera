@@ -15,6 +15,10 @@ const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera 
 
 const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.";
 
+const WATCH_LONG_ABOUT: &str = "Re-run an analysis whenever the watched directory changes.\n\nChoose what to re-run with `--target`: `graph` for the dependency report, `symbols` for declaration counts, `loc` for line metrics, or `depends-on` to keep a reverse dependency query live. Writes are debounced, so a burst of editor or build activity produces a single run rather than one per file.\n\nBuild output and dependency trees such as `target`, `node_modules`, and `.git` are never watched. Press Ctrl+C to stop.";
+
+const WATCH_AFTER_LONG_HELP: &str = "Examples:\n  sephera watch --target graph --path .\n  sephera watch --target symbols\n  sephera watch --target depends-on --on src/core/graph.rs\n  sephera watch --target graph --path crates --ignore \"*.snap\"\n  sephera watch --target loc --once";
+
 const SYMBOLS_LONG_ABOUT: &str = "Count declarations per language: functions, types, enums, and constants.\n\nCounts come from Tree-sitter parse trees rather than text matching, so a keyword inside a comment or string is not counted and a function nested inside an impl block or class body is attributed correctly. Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.\n\nUnlike `loc`, which measures how much code exists, this reports what is declared in it. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs.";
 
 const SYMBOLS_AFTER_LONG_HELP: &str = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\"";
@@ -52,6 +56,12 @@ pub enum Commands {
         after_long_help = CONTEXT_AFTER_LONG_HELP
     )]
     Context(ContextArgs),
+    /// Re-run an analysis whenever the tree changes
+    #[command(
+        long_about = WATCH_LONG_ABOUT,
+        after_long_help = WATCH_AFTER_LONG_HELP
+    )]
+    Watch(WatchArgs),
     /// Start an MCP (Model Context Protocol) server over stdio
     #[command(
         long_about = "Start an MCP server that exposes Sephera tools (loc, context, graph) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories."
@@ -185,6 +195,78 @@ pub struct SymbolsArgs {
         long_help = "List every declaration found, with its file, line, and kind. This produces far more output than the per-language summary, so it is opt-in."
     )]
     pub detail: bool,
+
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+    )]
+    pub ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum WatchTarget {
+    /// Re-run the dependency graph report.
+    #[value(
+        name = "graph",
+        help = "Watch and re-run the dependency graph analysis."
+    )]
+    Graph,
+    /// Re-run the symbol counts.
+    #[value(name = "symbols", help = "Watch and re-run the symbol counts.")]
+    Symbols,
+    /// Re-run the line-count report.
+    #[value(name = "loc", help = "Watch and re-run the line-count analysis.")]
+    Loc,
+    /// Re-run a reverse dependency query, so the blast radius updates live.
+    #[value(
+        name = "depends-on",
+        help = "Watch and re-run a reverse dependency query."
+    )]
+    DependsOn,
+}
+
+#[derive(Debug, Args)]
+pub struct WatchArgs {
+    /// What to re-run on change
+    #[arg(
+        long,
+        value_enum,
+        value_name = "TARGET",
+        required_unless_present = "once",
+        help = "What to re-run when the tree changes.",
+        long_help = "What to re-run when the tree changes. Choose one of graph, symbols, loc, or depends-on. Required unless --once is passed."
+    )]
+    pub target: Option<WatchTarget>,
+
+    /// Path to the project directory to watch
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".",
+        help = "Path to the project directory to watch.",
+        long_help = "Path to the project directory to watch. Relative paths are resolved from the current working directory."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Target path for a depends-on query
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "File to trace reverse dependencies for, used with --target depends-on.",
+        long_help = "File to trace reverse dependencies for, used with --target depends-on. Runs the query after every change."
+    )]
+    pub on: Option<String>,
+
+    /// Exit after one run instead of continuing to watch
+    #[arg(
+        long,
+        help = "Run once and exit, which is what invoking the analysis command directly would do.",
+        long_help = "Run once and exit. Combined with --target this behaves exactly like invoking that analysis command, which is useful when a script wants to exercise the same argument parsing."
+    )]
+    pub once: bool,
 
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
