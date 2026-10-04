@@ -1,0 +1,185 @@
+//! Declaration counting by language.
+//!
+//! `loc` answers how much code there is. This module answers what is in it:
+//! how many functions, methods, and type declarations each language contributes.
+//!
+//! Counting is driven by Tree-sitter node kinds, so the totals reflect the
+//! grammar rather than a regular expression. That distinction matters most for
+//! declarations that merely look like code: a `def` inside a string literal, or
+//! `fn` in a comment, is not counted, and a nested `impl` block is attributed to
+//! its language rather than to a file type.
+
+use std::collections::BTreeMap;
+
+use serde::Serialize;
+
+/// The categories of declaration the counter distinguishes.
+///
+/// Kept deliberately coarse. The point is to compare languages and spot an
+/// outlier, so finer distinctions would add noise without changing any
+/// conclusion a reader would draw from the table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum SymbolKind {
+    /// A callable: function, method, or closure assigned to a name.
+    Functions,
+    /// A named type or type-like declaration: class, struct, interface, trait.
+    Types,
+    /// An enumerated set of values.
+    Enums,
+    /// A named constant.
+    Constants,
+}
+
+impl SymbolKind {
+    /// Human-readable label used in reports.
+    #[must_use]
+    pub const fn label(self) -> &'static str {
+        match self {
+            Self::Functions => "Functions",
+            Self::Types => "Types",
+            Self::Enums => "Enums",
+            Self::Constants => "Constants",
+        }
+    }
+
+    /// Every kind, in report order.
+    #[must_use]
+    pub const fn all() -> [Self; 4] {
+        [Self::Functions, Self::Types, Self::Enums, Self::Constants]
+    }
+}
+
+/// Declaration totals for one language.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct LanguageSymbols {
+    /// Language name as reported by the scanner.
+    pub language: &'static str,
+    /// Number of source files parsed.
+    pub files: u64,
+    /// Count per declaration kind.
+    pub counts: BTreeMap<SymbolKind, u64>,
+}
+
+impl LanguageSymbols {
+    /// Total declarations across every kind.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.counts.values().sum()
+    }
+
+    /// Count for one kind, or zero when the language has none.
+    #[must_use]
+    pub fn count(&self, kind: SymbolKind) -> u64 {
+        self.counts.get(&kind).copied().unwrap_or(0)
+    }
+}
+
+/// A single declaration, as listed by [`SymbolDetail`].
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SymbolEntry {
+    /// Normalised path of the file holding the declaration.
+    pub file_path: String,
+    /// Declared name, or an empty string when the grammar exposes none.
+    pub name: String,
+    /// Which category the declaration falls into.
+    pub kind: SymbolKind,
+    /// 1-based line of the declaration's name.
+    pub line: usize,
+}
+
+/// Aggregate symbol counts across a project.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SymbolReport {
+    /// Path the analysis ran against.
+    pub base_path: std::path::PathBuf,
+    /// Per-language totals, ordered by language name.
+    pub by_language: Vec<LanguageSymbols>,
+    /// Grand total per kind across every language.
+    pub totals: BTreeMap<SymbolKind, u64>,
+    /// Files successfully parsed.
+    pub files_scanned: u64,
+    /// Files skipped because they exceeded the size limit.
+    pub files_skipped: u64,
+    /// Languages with at least one recognised declaration.
+    pub languages_detected: usize,
+}
+
+impl SymbolReport {
+    /// Total declarations across every language and kind.
+    #[must_use]
+    pub fn total(&self) -> u64 {
+        self.totals.values().sum()
+    }
+}
+
+/// Per-declaration detail, produced on request rather than by default.
+///
+/// Listing every symbol is far more output than a summary, so it is opt-in.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct SymbolDetail {
+    /// Per-language totals.
+    pub report: SymbolReport,
+    /// Every declaration found, in file then line order.
+    pub symbols: Vec<SymbolEntry>,
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn language_with(counts: &[(SymbolKind, u64)]) -> LanguageSymbols {
+        LanguageSymbols {
+            language: "Rust",
+            files: 3,
+            counts: counts.iter().copied().collect(),
+        }
+    }
+
+    #[test]
+    fn total_sums_every_kind() {
+        let language = language_with(&[
+            (SymbolKind::Functions, 10),
+            (SymbolKind::Types, 4),
+        ]);
+
+        assert_eq!(language.total(), 14);
+    }
+
+    #[test]
+    fn missing_kind_reads_as_zero() {
+        let language = language_with(&[(SymbolKind::Functions, 7)]);
+
+        assert_eq!(language.count(SymbolKind::Functions), 7);
+        assert_eq!(language.count(SymbolKind::Enums), 0);
+    }
+
+    #[test]
+    fn every_kind_has_a_label() {
+        for kind in SymbolKind::all() {
+            assert!(!kind.label().is_empty(), "{kind:?} needs a label");
+        }
+    }
+
+    #[test]
+    fn report_totals_aggregate_across_languages() {
+        let report = SymbolReport {
+            base_path: std::path::PathBuf::from("."),
+            by_language: vec![
+                language_with(&[(SymbolKind::Functions, 5)]),
+                LanguageSymbols {
+                    language: "Python",
+                    files: 1,
+                    counts: (std::iter::once((SymbolKind::Functions, 3)))
+                        .collect(),
+                },
+            ],
+            totals: std::iter::once((SymbolKind::Functions, 8)).collect(),
+            files_scanned: 4,
+            files_skipped: 0,
+            languages_detected: 2,
+        };
+
+        assert_eq!(report.total(), 8);
+    }
+}

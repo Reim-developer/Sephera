@@ -57,7 +57,11 @@ impl SupportedLanguage {
             "Python" => Some(Self::Python),
             "TypeScript" | "TSX" => Some(Self::TypeScript),
             "JavaScript" | "JSX" => Some(Self::JavaScript),
-            "Go" => Some(Self::Go),
+            // `config/languages.yml` names this language `Golang`, while
+            // `SupportedLanguage::Go` is the enum spelling. Accepting both
+            // keeps the scanner's naming and the enum from drifting apart,
+            // which silently dropped every Go file from graph analysis.
+            "Go" | "Golang" => Some(Self::Go),
             "Java" => Some(Self::Java),
             "C++" => Some(Self::Cpp),
             "C" | "C Header" => Some(Self::C),
@@ -166,6 +170,13 @@ mod tests {
         );
         assert_eq!(
             SupportedLanguage::from_language_name("Go"),
+            Some(SupportedLanguage::Go)
+        );
+        // The scanner reports this language as `Golang`, so that spelling must
+        // resolve as well; it did not, which dropped every Go file from graph
+        // analysis while `loc` still counted its lines.
+        assert_eq!(
+            SupportedLanguage::from_language_name("Golang"),
             Some(SupportedLanguage::Go)
         );
         assert_eq!(

@@ -25,3 +25,4 @@ pub(crate) mod project_files;
 
 /// Shared runtime helpers for local and remote analysis sources.
 pub mod runtime;
+pub mod symbols;
