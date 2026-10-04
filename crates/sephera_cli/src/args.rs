@@ -196,6 +196,14 @@ pub struct SymbolsArgs {
     )]
     pub detail: bool,
 
+    /// Break the report down per file instead of per language
+    #[arg(
+        long,
+        help = "Break the symbol report down per file, heaviest first.",
+        long_help = "Break the symbol report down per file, heaviest first. This answers which files carry the most declarations, where the per-language summary cannot."
+    )]
+    pub by_file: bool,
+
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
         long,
@@ -561,6 +569,14 @@ pub struct GraphArgs {
         long_help = "Show all files that import or depend on the specified file path. The path should be relative to the selected analysis base."
     )]
     pub what_depends_on: Option<String>,
+
+    /// Drop imports that describe types rather than runtime dependencies
+    #[arg(
+        long,
+        help = "Exclude type aliases and wildcard imports from the graph.",
+        long_help = "Exclude type aliases and wildcard imports from the graph. A `type X = Y` alias or an `import ... .*` wildcard names a namespace rather than a runtime dependency, so the edges they create never fail at runtime."
+    )]
+    pub exclude_types: bool,
 
     /// Optional file path for exporting the rendered graph
     #[arg(

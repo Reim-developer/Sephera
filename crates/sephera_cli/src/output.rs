@@ -12,7 +12,8 @@ pub use context_markdown::render_context_markdown;
 pub use graph::render_graph;
 pub use profiles::print_available_profiles;
 pub use symbols::{
-    print_symbol_report, render_symbol_json, render_symbol_markdown,
+    print_symbol_report, print_symbols_by_file, render_symbol_json,
+    render_symbol_markdown,
 };
 pub use table::{print_report, render_report_table};
 pub use write::emit_rendered_output;

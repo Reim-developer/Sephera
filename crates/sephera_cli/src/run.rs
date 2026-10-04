@@ -5,7 +5,7 @@ use clap::Parser;
 use sephera_core::core::{
     code_loc::{CodeLoc, IgnoreMatcher},
     graph::{
-        resolver::build_graph,
+        resolver::{EdgeFilters, build_graph_with},
         types::{GraphFormat, GraphQuery},
     },
     runtime::{SourceRequest, build_context_report, resolve_source},
@@ -22,8 +22,9 @@ use crate::{
     },
     output::{
         emit_rendered_output, print_available_profiles, print_report,
-        print_symbol_report, render_context_json, render_context_markdown,
-        render_graph, render_symbol_json, render_symbol_markdown,
+        print_symbol_report, print_symbols_by_file, render_context_json,
+        render_context_markdown, render_graph, render_symbol_json,
+        render_symbol_markdown,
     },
     progress::CliProgress,
     watch,
@@ -119,6 +120,7 @@ fn run_watch_target(
             format: SymbolOutputFormat::Table,
             output: None,
             detail: false,
+            by_file: false,
             ignore: ignore.to_vec(),
         }),
         WatchTarget::Graph => run_graph(&GraphArgs {
@@ -129,6 +131,7 @@ fn run_watch_target(
             ignore: ignore.to_vec(),
             depth: None,
             what_depends_on: None,
+            exclude_types: false,
             format: GraphOutputFormat::Markdown,
             output: None,
         }),
@@ -146,6 +149,7 @@ fn run_watch_target(
                 ignore: ignore.to_vec(),
                 depth: None,
                 what_depends_on: Some(target_path.to_owned()),
+                exclude_types: false,
                 format: GraphOutputFormat::Markdown,
                 output: None,
             })
@@ -188,8 +192,11 @@ fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
 
     // The declaration list is only collected when a format can carry it.
     // Parsing twice would double the work, so the summary path reads only the
-    // report and the detail path reads both.
-    let mut detail = if arguments.detail {
+    // report and the paths that need per-file data read both.
+    let needs_symbols = arguments.detail
+        || arguments.by_file
+        || matches!(arguments.format, SymbolOutputFormat::Json);
+    let mut detail = if needs_symbols {
         analyzer.analyze_detailed()?
     } else {
         SymbolDetail::from(analyzer.analyze()?)
@@ -201,7 +208,11 @@ fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
 
     let rendered = match arguments.format {
         SymbolOutputFormat::Table => {
-            print_symbol_report(&detail.report);
+            if arguments.by_file {
+                print_symbols_by_file(&detail);
+            } else {
+                print_symbol_report(&detail.report);
+            }
             None
         }
         SymbolOutputFormat::Json => Some(render_symbol_json(&detail)),
@@ -261,12 +272,15 @@ fn run_graph(arguments: &GraphArgs) -> Result<()> {
         .what_depends_on
         .as_ref()
         .map(|path| GraphQuery::DependsOn(path.clone()));
-    let mut report = build_graph(
+    let mut report = build_graph_with(
         &source.analysis_path,
         &ignore,
         &arguments.focus,
         arguments.depth,
         query,
+        EdgeFilters {
+            exclude_type_aliases: arguments.exclude_types,
+        },
     )?;
     if let Some(display_path) = source.display_path {
         report.base_path = display_path.into();

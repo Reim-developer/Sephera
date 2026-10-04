@@ -39,6 +39,44 @@ const MAX_IMPORT_FILE_BYTES: u64 = 512 * 1024;
 ///
 /// # Errors
 ///
+/// Import forms to leave out of the graph.
+///
+/// Some imports describe a name rather than a runtime dependency. A Rust
+/// `use foo::Bar as Baz` alias or a wildcard import such as `use foo::*`
+/// introduces a local name; neither says which file must be recompiled when
+/// the target changes, so these edges add noise to a blast-radius answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EdgeFilters {
+    /// Drop aliasing and wildcard imports.
+    pub exclude_type_aliases: bool,
+}
+
+impl EdgeFilters {
+    /// Whether an import should be dropped.
+    ///
+    /// Only these forms are filtered, and only when explicitly enabled: a
+    /// plain `use path::to::thing` is a real dependency and is always kept.
+    #[must_use]
+    pub fn rejects(&self, import_path: &str) -> bool {
+        if !self.exclude_type_aliases {
+            return false;
+        }
+
+        // `use foo::Bar as Baz` renames rather than depends.
+        if import_path.contains(" as ") {
+            return true;
+        }
+
+        // `use foo::*` and `use foo::* as f` import a namespace.
+        // A named glob such as `use foo::*bar` is still a real import.
+        import_path.ends_with("::*") || import_path.ends_with("::* as _")
+    }
+}
+
+/// Builds a dependency graph for a project.
+///
+/// # Errors
+///
 /// Returns an error when project traversal or import extraction fails.
 pub fn build_graph(
     base_path: &Path,
@@ -47,6 +85,32 @@ pub fn build_graph(
     depth: Option<u32>,
     query: Option<GraphQuery>,
 ) -> Result<GraphReport> {
+    build_graph_with(
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        EdgeFilters::default(),
+    )
+}
+
+/// Build a graph, applying edge filters.
+///
+/// [`build_graph`] remains the plain entry point; this exists so callers can
+/// drop imports that describe types rather than runtime coupling.
+///
+/// # Errors
+///
+/// Returns an error when project traversal or import extraction fails.
+pub fn build_graph_with(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+    focus_paths: &[PathBuf],
+    depth: Option<u32>,
+    query: Option<GraphQuery>,
+    filters: EdgeFilters,
+) -> Result<GraphReport> {
     let project_files = collect_project_files(base_path, ignore)?;
     let focus_set = build_focus_set(base_path, focus_paths);
     let query = query
@@ -54,7 +118,12 @@ pub fn build_graph(
         .transpose()?;
 
     // Phase 1: Extract imports from all supported files.
-    let all_file_imports = extract_all_imports(&project_files)?;
+    let mut all_file_imports = extract_all_imports(&project_files)?;
+    if filters != EdgeFilters::default() {
+        for file in &mut all_file_imports {
+            file.imports.retain(|(path, _)| !filters.rejects(path));
+        }
+    }
 
     // Phase 2: Build a lookup set of all known file paths for resolution.
     let known_files: BTreeSet<String> = project_files
@@ -663,6 +732,100 @@ mod tests {
 
     fn known_files(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    #[test]
+    fn type_alias_imports_are_kept_by_default() {
+        // Dropping edges silently would be worse than showing them, so the
+        // filter is opt-in and the default graph is unchanged.
+        let filters = EdgeFilters::default();
+
+        assert!(!filters.rejects("crate::foo::Bar as Baz"));
+        assert!(!filters.rejects("crate::foo::*"));
+    }
+
+    #[test]
+    fn type_alias_imports_are_dropped_when_enabled() {
+        let filters = EdgeFilters {
+            exclude_type_aliases: true,
+        };
+
+        assert!(filters.rejects("crate::foo::Bar as Baz"));
+        assert!(filters.rejects("crate::foo::*"));
+        assert!(filters.rejects("crate::foo::* as f"));
+    }
+
+    #[test]
+    fn ordinary_imports_survive_the_filter() {
+        let filters = EdgeFilters {
+            exclude_type_aliases: true,
+        };
+
+        for import in [
+            "crate::core::graph",
+            "crate::foo::Bar",
+            "std::collections::HashMap",
+            "crate::a::b::*inner",
+        ] {
+            assert!(
+                !filters.rejects(import),
+                "{import} is a real dependency and must be kept"
+            );
+        }
+    }
+
+    #[test]
+    fn excluding_type_aliases_removes_only_that_edge() {
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in [
+            (
+                "src/main.rs",
+                "mod util;\nuse crate::alias::Thing as Other;\nuse crate::util::u;\n",
+            ),
+            ("src/util.rs", "pub fn u() {}\n"),
+            ("src/alias.rs", "pub struct Thing;\n"),
+        ] {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+
+        let baseline = build_graph(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+        )
+        .expect("baseline graph");
+
+        let filtered = build_graph_with(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+            EdgeFilters {
+                exclude_type_aliases: true,
+            },
+        )
+        .expect("filtered graph");
+
+        // Three edges in the baseline: the mod declaration plus two uses. The
+        // alias use is the only one dropped.
+        assert_eq!(baseline.metrics.total_internal_edges, 3);
+        assert_eq!(filtered.metrics.total_internal_edges, 2);
+
+        let kept: Vec<&str> = filtered
+            .edges
+            .iter()
+            .filter(|edge| edge.resolved)
+            .filter_map(|edge| edge.to.as_deref())
+            .collect();
+        assert!(
+            kept.contains(&"src/util.rs"),
+            "a real import must survive: {kept:?}"
+        );
     }
 
     /// Build a graph over an in-memory tree and return the report.

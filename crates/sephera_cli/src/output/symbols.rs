@@ -62,6 +62,68 @@ pub fn print_symbol_report(report: &SymbolReport) {
     }
 }
 
+/// Per-file declaration totals, used by `--by-file`.
+///
+/// Aggregated from the declaration list rather than produced by the analyzer,
+/// because only the opt-in path needs it and building a second index during a
+/// normal summary run would cost memory on large trees for no benefit.
+pub fn print_symbols_by_file(detail: &SymbolDetail) {
+    use std::collections::BTreeMap;
+
+    let mut per_file: BTreeMap<&str, BTreeMap<SymbolKind, u64>> =
+        BTreeMap::new();
+    for entry in &detail.symbols {
+        let counts = per_file.entry(entry.file_path.as_str()).or_default();
+        *counts.entry(entry.kind).or_default() += 1;
+    }
+
+    let mut table = Table::new();
+    table.load_preset(UTF8_FULL_CONDENSED);
+    table.apply_modifier(UTF8_ROUND_CORNERS);
+    table.set_header(vec![
+        Cell::new("File"),
+        Cell::new("Functions"),
+        Cell::new("Types"),
+        Cell::new("Enums"),
+        Cell::new("Constants"),
+        Cell::new("Total"),
+    ]);
+
+    let mut ranked: Vec<(&str, u64)> = per_file
+        .iter()
+        .map(|(path, counts)| {
+            let total: u64 = counts.values().sum();
+            (*path, total)
+        })
+        .collect();
+
+    // Heaviest first, so the top of the table answers "what should I look at".
+    ranked.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(b.0)));
+
+    for (path, _) in &ranked {
+        let counts = &per_file[path];
+        let count = |kind: SymbolKind| counts.get(&kind).copied().unwrap_or(0);
+        let total = counts.values().sum::<u64>();
+        table.add_row(vec![
+            Cell::new(*path),
+            Cell::new(count(SymbolKind::Functions)),
+            Cell::new(count(SymbolKind::Types)),
+            Cell::new(count(SymbolKind::Enums)),
+            Cell::new(count(SymbolKind::Constants)),
+            Cell::new(total),
+        ]);
+    }
+
+    println!("{table}");
+
+    let files = detail
+        .symbols
+        .iter()
+        .map(|entry| entry.file_path.as_str())
+        .collect::<std::collections::BTreeSet<_>>();
+    println!("Files with declarations: {}", files.len());
+}
+
 /// Render a symbol report as JSON.
 pub fn render_symbol_json(detail: &SymbolDetail) -> String {
     serde_json::to_string_pretty(detail).unwrap_or_else(|error| {
