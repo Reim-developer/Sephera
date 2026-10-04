@@ -165,6 +165,7 @@ impl SepheraServer {
                 .into_iter()
                 .map(std::path::PathBuf::from)
                 .collect(),
+            focus_symbol: param.focus_symbol.unwrap_or_default(),
             diff: param.diff,
             budget: param.budget,
             compress: param.compress,

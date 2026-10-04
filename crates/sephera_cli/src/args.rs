@@ -382,6 +382,15 @@ pub struct ContextArgs {
     )]
     pub focus: Vec<PathBuf>,
 
+    /// Focus the pack on a named declaration instead of a whole file
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Pack only the declaration with this name, rather than its whole file. Repeatable.",
+        long_help = "Pack only the declaration with this name, rather than its whole file. Repeat this flag to pack several declarations. The name is matched case-insensitively and partially, so `resolve` also finds `resolve_source`. A name matching several declarations is reported rather than guessed; a name matching none is reported while the rest of the pack still builds. Cannot be combined with `--diff`, which selects whole changed files."
+    )]
+    pub focus_symbol: Vec<String>,
+
     /// Git diff source used to prioritize changed files in the context pack.
     #[arg(
         long,

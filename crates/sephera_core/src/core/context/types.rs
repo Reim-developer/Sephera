@@ -4,6 +4,8 @@ use serde::Serialize;
 
 use crate::core::compression::CompressionMode;
 
+use super::line_range::LineRange;
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ContextReport {
     pub metadata: ContextMetadata,
@@ -88,6 +90,15 @@ pub struct ContextFile {
     pub group: ContextGroupKind,
     pub selection_class: SelectionClass,
     pub excerpt: ContextExcerpt,
+    /// The line ranges this entry was restricted to, when any were requested.
+    ///
+    /// Empty means the entry covers the whole file. Ranges are what
+    /// `--focus-symbol` uses to pack specific declarations rather than every
+    /// function in their file. More than one range appears when several
+    /// declarations in the same file were requested; they are sorted and
+    /// non-overlapping.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub line_ranges: Vec<LineRange>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

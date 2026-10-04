@@ -20,6 +20,7 @@ pub fn resolve_context_options(
         list_profiles: arguments.list_profiles,
         ignore: arguments.ignore,
         focus: arguments.focus,
+        focus_symbol: arguments.focus_symbol,
         diff: arguments.diff,
         budget: arguments.budget,
         compress: arguments.compress.map(context_compress_name),

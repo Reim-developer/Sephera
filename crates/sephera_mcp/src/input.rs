@@ -48,6 +48,11 @@ pub struct ContextInput {
     pub list_profiles: Option<bool>,
     /// Optional list of focus paths (relative to the analysis path)
     pub focus: Option<Vec<String>>,
+    /// Declaration names to pack instead of whole files. Matched
+    /// case-insensitively and partially, so `resolve` also finds
+    /// `resolve_source`. A name matching several declarations is reported
+    /// rather than guessed. Cannot be combined with `diff`.
+    pub focus_symbol: Option<Vec<String>>,
     /// Optional list of ignore patterns (globs or regexes)
     pub ignore: Option<Vec<String>>,
     /// Optional diff source or base ref. URL mode only supports base refs such as `main` or `HEAD~1`.

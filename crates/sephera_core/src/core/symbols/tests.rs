@@ -346,6 +346,78 @@ fn detailed_report_lists_names_and_lines() {
 }
 
 #[test]
+fn a_declaration_spans_from_its_start_to_its_end() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn short() {}\n\nfn longer() {\n    let x = 1;\n    let y = 2;\n}\n",
+    );
+
+    let detail = SymbolAnalyzer::new(dir.path(), IgnoreMatcher::empty())
+        .analyze_detailed()
+        .expect("analysis must succeed");
+
+    let longer = detail.find_unique("longer").expect("longer must be found");
+
+    assert_eq!(longer.line, 3);
+    assert!(
+        longer.end_line > longer.line,
+        "a multi-line body must span lines, got {}..{}",
+        longer.line,
+        longer.end_line
+    );
+
+    let short = detail.find_unique("short").expect("short must be found");
+    assert_eq!(short.line, 1);
+    assert_eq!(short.end_line, 1, "a single-line body spans one line");
+}
+
+#[test]
+fn find_matches_partial_names_case_insensitively() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn resolve_source() {}\nfn resolve_graph() {}\nfn other() {}\n",
+    );
+
+    let detail = SymbolAnalyzer::new(dir.path(), IgnoreMatcher::empty())
+        .analyze_detailed()
+        .expect("analysis must succeed");
+
+    assert_eq!(
+        detail.find("RESOLVE").len(),
+        2,
+        "partial match is case-insensitive"
+    );
+    assert_eq!(detail.find("nonexistent").len(), 0);
+}
+
+#[test]
+fn find_unique_refuses_an_ambiguous_name() {
+    let dir = tempdir().unwrap();
+    write(
+        dir.path(),
+        "src/lib.rs",
+        "fn resolve_source() {}\nfn resolve_graph() {}\nfn solo() {}\n",
+    );
+
+    let detail = SymbolAnalyzer::new(dir.path(), IgnoreMatcher::empty())
+        .analyze_detailed()
+        .expect("analysis must succeed");
+
+    assert!(
+        detail.find_unique("resolve").is_none(),
+        "an ambiguous name must not resolve to a guess"
+    );
+    assert!(
+        detail.find_unique("solo").is_some(),
+        "an unambiguous name must resolve"
+    );
+}
+
+#[test]
 fn empty_project_yields_an_empty_report() {
     let dir = tempdir().unwrap();
 

@@ -10,6 +10,7 @@ use crate::core::{
     code_loc::IgnoreMatcher,
     compression::CompressionMode,
     context::{ContextBuilder, ContextDiffSelection, ContextReport},
+    symbols::{self, SymbolAnalyzer},
 };
 
 use super::{
@@ -33,6 +34,11 @@ pub struct ContextCommandInput {
     pub compress: Option<String>,
     pub format: Option<String>,
     pub output: Option<PathBuf>,
+    /// Declaration names to pack instead of whole files.
+    ///
+    /// Each name is resolved to the file and line span that hold it. Repeating
+    /// the flag adds names rather than replacing them.
+    pub focus_symbol: Vec<String>,
 }
 
 #[derive(Debug)]
@@ -45,6 +51,16 @@ pub struct ResolvedContextOptions {
     pub compress: Option<String>,
     pub format: String,
     pub output: Option<PathBuf>,
+    /// Line ranges restricting individual focus files to part of their content.
+    ///
+    /// Populated by `--focus-symbol`, which resolves a declaration name to the
+    /// file and line span that hold it.
+    pub line_ranges: BTreeMap<String, Vec<crate::core::context::LineRange>>,
+    /// Names from `--focus-symbol` that did not resolve.
+    ///
+    /// Reported after the pack is built rather than aborting it, because one
+    /// unusable name should not discard the symbols that did resolve.
+    pub unresolved_symbols: Vec<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -140,6 +156,7 @@ pub fn resolve_context_command(
         .map(validate_compression_mode)
         .transpose()?;
     request.format = request.format.map(validate_context_format).transpose()?;
+    validate_symbol_selection(&request)?;
     let source = resolve_source(&request.source)?;
     let config = load_selected_config(&request, &source)?;
 
@@ -150,9 +167,62 @@ pub fn resolve_context_command(
         )));
     }
 
-    Ok(ResolvedContextCommand::Execute(Box::new(
-        merge_context_sources(request, source, config.as_ref())?,
-    )))
+    let mut options = merge_context_sources(&request, source, config.as_ref())?;
+    apply_focus_symbols(&mut options, &request.focus_symbol)?;
+
+    Ok(ResolvedContextCommand::Execute(Box::new(options)))
+}
+
+/// Reject combinations of `--focus-symbol` that cannot both apply.
+///
+/// `--diff` selects whole changed files and `--focus-symbol` selects part of a
+/// file, so honouring both would mean one silently overwriting the other.
+fn validate_symbol_selection(request: &ContextCommandInput) -> Result<()> {
+    if !request.focus_symbol.is_empty() && request.diff.is_some() {
+        bail!(
+            "`--focus-symbol` cannot be combined with `--diff`: one selects part of a file and the other selects whole changed files"
+        );
+    }
+    Ok(())
+}
+
+/// Resolve `--focus-symbol` names into focus paths and line ranges.
+///
+/// Analysis runs over the whole project even though only one declaration is
+/// wanted, because the name has to be located before anything can be selected.
+///
+/// # Errors
+///
+/// Returns an error when the project cannot be analysed. A name that resolves to
+/// nothing or to several declarations is not an error here: it is reported
+/// through [`ResolvedContextOptions::unresolved_symbols`] so the rest of the
+/// pack still builds.
+fn apply_focus_symbols(
+    options: &mut ResolvedContextOptions,
+    names: &[String],
+) -> Result<()> {
+    if names.is_empty() {
+        return Ok(());
+    }
+
+    let ignore = IgnoreMatcher::from_patterns(&options.ignore)?;
+    let detail = SymbolAnalyzer::new(&options.source.analysis_path, ignore)
+        .analyze_detailed()
+        .map_err(|error| {
+            anyhow::anyhow!("failed to resolve `--focus-symbol`: {error}")
+        })?;
+    let (symbol_focus, ranges, unresolved) =
+        symbols::collect_symbol_ranges(&detail, names);
+
+    for path in symbol_focus {
+        if !options.focus.contains(&path) {
+            options.focus.push(path);
+        }
+    }
+    options.line_ranges.extend(ranges);
+    options.unresolved_symbols = unresolved;
+
+    Ok(())
 }
 
 /// Builds the final context report from resolved context options.
@@ -182,13 +252,23 @@ pub fn build_context_report(
         .map(|spec| resolve_context_diff(&options.source, spec))
         .transpose()?;
 
-    let builder = ContextBuilder::new(
+    let mut builder = ContextBuilder::new(
         &options.source.analysis_path,
         ignore_matcher,
         options.focus.clone(),
         options.budget,
     )
     .with_compression(compression_mode);
+
+    for (relative_path, ranges) in &options.line_ranges {
+        builder = builder
+            .with_line_ranges(relative_path.clone(), ranges.iter().copied());
+    }
+    // `--focus-symbol` names declarations, not a project, so the rest of the
+    // project is left out rather than filling the leftover budget.
+    if !options.line_ranges.is_empty() {
+        builder = builder.only_ranged_files();
+    }
     let builder = match diff_selection {
         Some(selection) => builder.with_diff_selection(selection),
         None => builder,
@@ -226,11 +306,11 @@ fn load_selected_config(
 }
 
 fn merge_context_sources(
-    request: ContextCommandInput,
+    request: &ContextCommandInput,
     source: ResolvedSource,
     config: Option<&LoadedSepheraConfig>,
 ) -> Result<ResolvedContextOptions> {
-    let selected_profile = resolve_selected_profile(&request, config, &source)?;
+    let selected_profile = resolve_selected_profile(request, config, &source)?;
     let base_context = config.map(|config| &config.context);
 
     let mut ignore =
@@ -238,17 +318,18 @@ fn merge_context_sources(
     if let Some(profile) = selected_profile {
         ignore.extend(profile.ignore.clone());
     }
-    ignore.extend(request.ignore);
+    ignore.extend(request.ignore.iter().cloned());
 
     let mut focus =
         base_context.map_or_else(Vec::new, |context| context.focus.clone());
     if let Some(profile) = selected_profile {
         focus.extend(profile.focus.clone());
     }
-    focus.extend(request.focus);
+    focus.extend(request.focus.iter().cloned());
 
     let diff = request
         .diff
+        .clone()
         .or_else(|| selected_profile.and_then(|profile| profile.diff.clone()))
         .or_else(|| base_context.and_then(|context| context.diff.clone()));
 
@@ -260,6 +341,7 @@ fn merge_context_sources(
 
     let compress = request
         .compress
+        .clone()
         .or_else(|| {
             selected_profile.and_then(|profile| profile.compress.clone())
         })
@@ -267,12 +349,14 @@ fn merge_context_sources(
 
     let format = request
         .format
+        .clone()
         .or_else(|| selected_profile.and_then(|profile| profile.format.clone()))
         .or_else(|| base_context.and_then(|context| context.format.clone()))
         .unwrap_or_else(|| String::from("markdown"));
 
     let output = request
         .output
+        .clone()
         .or_else(|| selected_profile.and_then(|profile| profile.output.clone()))
         .or_else(|| base_context.and_then(|context| context.output.clone()))
         .map(|path| {
@@ -294,6 +378,8 @@ fn merge_context_sources(
         compress,
         format,
         output,
+        line_ranges: BTreeMap::new(),
+        unresolved_symbols: Vec::new(),
     })
 }
 
@@ -979,6 +1065,7 @@ mod tests {
             compress: None,
             format: Some(String::from("json")),
             output: None,
+            focus_symbol: Vec::new(),
         })
         .unwrap();
 

@@ -8,6 +8,7 @@ use crate::core::{
 use super::{
     budget::estimate_tokens_from_bytes,
     candidate::ContextCandidate,
+    line_range::LineRange,
     source::read_full_bytes,
     types::{ContextExcerpt, ContextFile, SelectionClass},
 };
@@ -25,12 +26,26 @@ pub(super) fn build_context_file(
     candidate: &ContextCandidate,
     allowed_tokens: u64,
     compression_mode: CompressionMode,
+    line_ranges: &[LineRange],
 ) -> Result<ContextFile> {
     let file_bytes = read_full_bytes(&candidate.absolute_path)?;
     let excerpt_bytes = strip_utf8_bom(&file_bytes);
     let exact_focus = candidate.selection_class == SelectionClass::FocusedFile;
     let excerpt_token_limit =
         excerpt_token_cap(exact_focus).min(allowed_tokens);
+
+    // A requested range short-circuits the whole-file and head-of-file paths:
+    // the caller already knows which lines matter, so neither the size heuristics
+    // nor the line caps apply.
+    if !line_ranges.is_empty() {
+        return Ok(build_ranged_file(
+            candidate,
+            excerpt_bytes,
+            line_ranges,
+            excerpt_token_limit,
+            compression_mode,
+        ));
+    }
 
     // Try compression when enabled and language is supported.
     if compression_mode.is_enabled() {
@@ -49,6 +64,7 @@ pub(super) fn build_context_file(
                 compressed: true,
                 group: candidate.selection_class.group_kind(),
                 selection_class: candidate.selection_class,
+                line_ranges: Vec::new(),
                 excerpt: ContextExcerpt {
                     line_start: 1,
                     line_end: u64::try_from(line_count).unwrap_or(u64::MAX),
@@ -86,6 +102,7 @@ pub(super) fn build_context_file(
         group: candidate.selection_class.group_kind(),
         selection_class: candidate.selection_class,
         excerpt,
+        line_ranges: Vec::new(),
     })
 }
 
@@ -158,6 +175,147 @@ fn build_full_excerpt(bytes: &[u8]) -> ContextExcerpt {
         line_end: u64::try_from(lines.len()).unwrap_or(u64::MAX),
         content,
     }
+}
+
+/// Build an entry restricted to `ranges`.
+///
+/// Ranges are clamped to the file and merged, then the excerpt is truncated at
+/// the token budget rather than at a line cap, because a caller that asked for
+/// specific lines wants as much of them as the budget allows. Compression is
+/// skipped: compressing a slice would reparse the whole file and re-emit every
+/// declaration in it, discarding the ranges.
+fn build_ranged_file(
+    candidate: &ContextCandidate,
+    bytes: &[u8],
+    ranges: &[LineRange],
+    token_limit: u64,
+    _compression_mode: CompressionMode,
+) -> ContextFile {
+    let total_lines = LineSlices::new(bytes).count();
+    let clamped = clamp_ranges(ranges, total_lines);
+
+    let (excerpt, estimated_tokens, truncated) =
+        build_ranged_excerpt(bytes, &clamped, token_limit);
+
+    ContextFile {
+        relative_path: candidate.normalized_relative_path.clone(),
+        language: candidate.language,
+        size_bytes: candidate.size_bytes,
+        estimated_tokens,
+        truncated,
+        compressed: false,
+        group: candidate.selection_class.group_kind(),
+        selection_class: candidate.selection_class,
+        excerpt,
+        line_ranges: clamped,
+    }
+}
+
+/// Clamp every range to a file of `total_lines` lines, then sort and merge them.
+///
+/// A range pointing past the end of the file is shortened rather than dropped,
+/// so `--focus-symbol` still returns something for a stale line number. Ranges
+/// that collapse onto the same line merge into one, so a caller asking for two
+/// declarations on one line is not told about a phantom gap.
+fn clamp_ranges(ranges: &[LineRange], total_lines: usize) -> Vec<LineRange> {
+    let clamped: Vec<LineRange> = ranges
+        .iter()
+        .map(|range| clamp_range(*range, total_lines))
+        .collect();
+    LineRange::normalized(&clamped)
+}
+
+/// Clamp one range to a file of `total_lines` lines.
+fn clamp_range(range: LineRange, total_lines: usize) -> LineRange {
+    if total_lines == 0 {
+        return LineRange::new(1, 1);
+    }
+
+    let start = range.start.min(total_lines).max(1);
+    let end = range.end.min(total_lines).max(start);
+    LineRange::new(start, end)
+}
+
+/// Extract the given ranges, stopping at the token budget.
+///
+/// Lines between ranges are left out entirely, so two declarations in one file
+/// do not drag the code separating them along. A blank line separates the
+/// ranges: a language-neutral marker, since a comment introducing a gap would
+/// have to pick a comment syntax.
+fn build_ranged_excerpt(
+    bytes: &[u8],
+    ranges: &[LineRange],
+    token_limit: u64,
+) -> (ContextExcerpt, u64, bool) {
+    let byte_limit =
+        usize::try_from(token_limit.saturating_mul(4)).unwrap_or(usize::MAX);
+
+    let first_line = ranges.first().map_or(1, |range| range.start);
+    let mut content = String::new();
+    let mut line_end = first_line;
+    let mut truncated = false;
+    let mut included = 0_usize;
+    let mut previous_line: Option<usize> = None;
+
+    for (index, line) in LineSlices::new(bytes).enumerate() {
+        let line_number = index + 1;
+        if line_number < first_line {
+            continue;
+        }
+        if !ranges.iter().any(|range| range.contains(line_number)) {
+            if previous_line.is_some()
+                && let Some(last) = ranges.last()
+                && last.end < line_number
+            {
+                break;
+            }
+            continue;
+        }
+
+        let decoded = String::from_utf8_lossy(line);
+        let gap =
+            previous_line.is_some_and(|previous| previous + 1 < line_number);
+        let separator_len = usize::from(!content.is_empty()) + usize::from(gap);
+        let projected = content.len() + separator_len + decoded.len();
+
+        if projected > byte_limit && !content.is_empty() {
+            truncated = true;
+            break;
+        }
+
+        if projected > byte_limit {
+            // Even the first line does not fit, so it is clipped rather than
+            // dropped; an empty excerpt would look like a missing file.
+            content.push_str(&clip_to_byte_limit(&decoded, byte_limit));
+        } else {
+            if gap {
+                content.push('\n');
+            }
+            if !content.is_empty() {
+                content.push('\n');
+            }
+            content.push_str(&decoded);
+        }
+
+        line_end = line_number.max(line_end);
+        previous_line = Some(line_number);
+        included += 1;
+    }
+
+    if included < LineRange::total_line_count(ranges) {
+        truncated = true;
+    }
+
+    let estimated_tokens = estimate_tokens_from_bytes(string_len_u64(&content));
+    (
+        ContextExcerpt {
+            line_start: u64::try_from(first_line).unwrap_or(1),
+            line_end: u64::try_from(line_end).unwrap_or(1),
+            content,
+        },
+        estimated_tokens,
+        truncated,
+    )
 }
 
 fn build_head_excerpt(

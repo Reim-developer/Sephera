@@ -269,6 +269,7 @@ mod tests {
                 name: "main".to_owned(),
                 kind: SymbolKind::Functions,
                 line: 4,
+                end_line: 6,
             }],
         }
     }

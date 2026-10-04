@@ -202,6 +202,9 @@ fn collect_entries(
                 .unwrap_or_default(),
             kind,
             line: node.start_position().row + 1,
+            // The node's own span, so a caller can slice out one declaration.
+            // A trailing newline is not part of the declaration itself.
+            end_line: node.end_position().row + 1,
         });
     });
 }

@@ -84,8 +84,75 @@ pub struct SymbolEntry {
     pub name: String,
     /// Which category the declaration falls into.
     pub kind: SymbolKind,
-    /// 1-based line of the declaration's name.
+    /// 1-based line where the declaration's name appears.
     pub line: usize,
+    /// 1-based line where the declaration ends.
+    ///
+    /// Equal to `line` for a declaration without a body, such as a Rust `use`
+    /// or a field declaration. Present so a caller can select exactly one
+    /// declaration out of a file rather than the whole file.
+    pub end_line: usize,
+}
+
+impl SymbolDetail {
+    /// Declarations matching `name`, case-insensitively.
+    ///
+    /// Partial names match too, so `resolve` finds `resolve_source` and
+    /// `resolve_graph_query`. Callers that need an exact hit can compare
+    /// [`SymbolEntry::name`] themselves.
+    #[must_use]
+    pub fn find(&self, name: &str) -> Vec<&SymbolEntry> {
+        let needle = name.to_lowercase();
+        self.symbols
+            .iter()
+            .filter(|entry| entry.name.to_lowercase().contains(&needle))
+            .collect()
+    }
+
+    /// The single declaration matching `name`, when there is exactly one.
+    ///
+    /// Returns `None` when nothing matches and when the name is ambiguous, since
+    /// silently picking one of several candidates would be a guess. Callers that
+    /// need to tell those two cases apart use [`SymbolDetail::match_name`]:
+    /// reporting "not found" for an ambiguous name sends the user looking for a
+    /// typo that does not exist.
+    #[must_use]
+    pub fn find_unique(&self, name: &str) -> Option<&SymbolEntry> {
+        match self.match_name(name) {
+            SymbolMatch::Unique(entry) => Some(entry),
+            SymbolMatch::Missing | SymbolMatch::Ambiguous { .. } => None,
+        }
+    }
+
+    /// Resolve a name to exactly one declaration, distinguishing the failure
+    /// modes.
+    ///
+    /// A partial name commonly matches several declarations, and a tool that
+    /// cannot say which one it meant is worse than one that refuses: it packs the
+    /// wrong code and reports success.
+    #[must_use]
+    pub fn match_name(&self, name: &str) -> SymbolMatch<'_> {
+        let matches = self.find(name);
+        match matches.len() {
+            0 => SymbolMatch::Missing,
+            1 => SymbolMatch::Unique(matches[0]),
+            _ => SymbolMatch::Ambiguous { matches },
+        }
+    }
+}
+
+/// The outcome of resolving a name against a [`SymbolDetail`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum SymbolMatch<'a> {
+    /// Exactly one declaration matched.
+    Unique(&'a SymbolEntry),
+    /// Nothing matched the name.
+    Missing,
+    /// Several declarations matched, so no choice was made.
+    Ambiguous {
+        /// Every candidate that matched, in file then line order.
+        matches: Vec<&'a SymbolEntry>,
+    },
 }
 
 /// Aggregate symbol counts across a project.

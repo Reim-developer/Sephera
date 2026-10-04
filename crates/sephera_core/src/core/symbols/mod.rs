@@ -5,6 +5,7 @@
 //! Tree-sitter grammars rather than pattern matching.
 
 mod analyzer;
+mod lookup;
 mod rules;
 mod types;
 
@@ -12,6 +13,10 @@ mod types;
 mod tests;
 
 pub use analyzer::SymbolAnalyzer;
+pub use lookup::{
+    ambiguity_message, collect_symbol_ranges, pick_unique, range_of,
+};
 pub use types::{
-    LanguageSymbols, SymbolDetail, SymbolEntry, SymbolKind, SymbolReport,
+    LanguageSymbols, SymbolDetail, SymbolEntry, SymbolKind, SymbolMatch,
+    SymbolReport,
 };

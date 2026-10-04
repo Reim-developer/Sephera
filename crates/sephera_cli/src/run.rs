@@ -255,7 +255,27 @@ fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
     if writes_to_stdout {
         progress.finish();
     }
+    report_unresolved_symbols(&arguments.unresolved_symbols);
     emit_rendered_output(arguments.output.as_deref(), &rendered)
+}
+
+/// Warn about `--focus-symbol` names that matched nothing or too much.
+///
+/// Reported on stderr rather than as an error so the pack still reaches the
+/// caller: a typo in one name should not discard the declarations that did
+/// resolve, but it must not pass unnoticed either.
+fn report_unresolved_symbols(names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+
+    let listed: Vec<String> =
+        names.iter().map(|name| format!("  `{name}`")).collect();
+    eprintln!(
+        "warning: {} `--focus-symbol` name(s) matched no single declaration and were left out of the pack:\n{}",
+        names.len(),
+        listed.join("\n")
+    );
 }
 
 fn run_graph(arguments: &GraphArgs) -> Result<()> {

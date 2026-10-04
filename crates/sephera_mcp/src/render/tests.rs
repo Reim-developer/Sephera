@@ -43,6 +43,7 @@ fn file(name: &str, content: &str) -> ContextFile {
         compressed: false,
         group: ContextGroupKind::Focus,
         selection_class: SelectionClass::FocusedFile,
+        line_ranges: Vec::new(),
         excerpt: ContextExcerpt {
             line_start: 1,
             line_end: content.lines().count() as u64,

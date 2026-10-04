@@ -24,6 +24,7 @@ use super::{
     },
     focus::{display_focus_paths, resolve_focus_paths},
     grouping::summarize_groups,
+    line_range::LineRange,
     ranker::rank_candidates,
     types::{
         ContextDiffMetadata, ContextDiffSelection, ContextFile,
@@ -39,6 +40,20 @@ pub struct ContextBuilder {
     pub diff_selection: Option<ContextDiffSelection>,
     pub budget_tokens: u64,
     pub compression_mode: CompressionMode,
+    /// Line ranges restricting specific focus paths to part of a file.
+    ///
+    /// Keyed by the same normalised path used for `focus_paths`. A focus path
+    /// absent from this map keeps its whole file, so an existing caller that
+    /// only sets focus paths behaves exactly as before. A file may hold several
+    /// ranges when several declarations in it were requested.
+    pub line_ranges: BTreeMap<String, Vec<LineRange>>,
+    /// Whether to pack only the files that carry a line range.
+    ///
+    /// Set by `--focus-symbol`, which asks for specific declarations rather than
+    /// a whole project. Without it, the rest of the project still fills the
+    /// remaining budget as general files, which would bury the declaration the
+    /// user named.
+    pub only_ranged_files: bool,
 }
 
 impl ContextBuilder {
@@ -56,7 +71,57 @@ impl ContextBuilder {
             diff_selection: None,
             budget_tokens,
             compression_mode: CompressionMode::None,
+            line_ranges: BTreeMap::new(),
+            only_ranged_files: false,
         }
+    }
+
+    /// Restrict one focus path to a line range.
+    ///
+    /// The path must also appear in `focus_paths`; a range on its own would
+    /// otherwise never be consulted, since traversal is driven by focus paths.
+    /// Calling this twice for one file adds a second range rather than replacing
+    /// the first, so two declarations in one file are both kept.
+    #[must_use]
+    pub fn with_line_range(
+        mut self,
+        relative_path: impl Into<String>,
+        range: LineRange,
+    ) -> Self {
+        self.line_ranges
+            .entry(relative_path.into())
+            .or_default()
+            .push(range);
+        self
+    }
+
+    /// Restrict one focus path to several line ranges at once.
+    #[must_use]
+    pub fn with_line_ranges<I>(
+        mut self,
+        relative_path: impl Into<String>,
+        ranges: I,
+    ) -> Self
+    where
+        I: IntoIterator<Item = LineRange>,
+    {
+        self.line_ranges
+            .entry(relative_path.into())
+            .or_default()
+            .extend(ranges);
+        self
+    }
+
+    /// Pack only the files that carry a line range.
+    ///
+    /// Every other file in the project is dropped, including ones that would
+    /// otherwise fill the remaining budget. This is what makes `--focus-symbol`
+    /// mean "this declaration" rather than "this declaration, plus everything
+    /// else that fits".
+    #[must_use]
+    pub const fn only_ranged_files(mut self) -> Self {
+        self.only_ranged_files = true;
+        self
     }
 
     #[must_use]
@@ -103,10 +168,20 @@ impl ContextBuilder {
             &diff_paths,
         )?;
         rank_candidates(&mut candidates);
+        if self.only_ranged_files {
+            candidates.retain(|candidate| {
+                self.line_ranges
+                    .contains_key(&candidate.normalized_relative_path)
+            });
+        }
 
         let budget = ContextBudget::new(self.budget_tokens);
-        let files =
-            select_context_files(&candidates, budget, self.compression_mode)?;
+        let files = select_context_files(
+            &candidates,
+            budget,
+            self.compression_mode,
+            &self.line_ranges,
+        )?;
         let estimated_excerpt_tokens =
             files.iter().map(|file| file.estimated_tokens).sum::<u64>();
         let estimated_metadata_tokens = estimate_metadata_tokens(
@@ -199,6 +274,7 @@ fn select_context_files(
     candidates: &[ContextCandidate],
     budget: ContextBudget,
     compression_mode: CompressionMode,
+    line_ranges: &BTreeMap<String, Vec<LineRange>>,
 ) -> Result<Vec<ContextFile>> {
     let mut files = Vec::new();
     let mut used_tokens = 0_u64;
@@ -226,8 +302,14 @@ fn select_context_files(
 
         let is_partial_budget =
             remaining_tokens < excerpt_token_cap(exact_focus);
-        let context_file =
-            build_context_file(candidate, remaining_tokens, compression_mode)?;
+        let file_ranges = line_ranges.get(&candidate.normalized_relative_path);
+        let file_ranges = file_ranges.map_or(&[][..], Vec::as_slice);
+        let context_file = build_context_file(
+            candidate,
+            remaining_tokens,
+            compression_mode,
+            file_ranges,
+        )?;
         used_tokens = used_tokens.saturating_add(context_file.estimated_tokens);
 
         if context_file.truncated && is_partial_budget {
