@@ -17,6 +17,8 @@ use crate::core::{
     project_files::{ProjectFile, collect_project_files},
 };
 
+use super::plugins;
+
 use super::{
     imports::extract_imports,
     types::{
@@ -239,353 +241,38 @@ fn normalize_user_relative_path(path: &Path) -> Result<String> {
         parts.join("/")
     })
 }
-
 /// Attempts to resolve an import path to a known file in the project.
+///
+/// Resolution is delegated to the language's [`ResolverPlugin`]. An import that
+/// leaves the project, or a language with no bundled plugin, yields `None`; both
+/// are recorded as external edges rather than errors, because a graph of
+/// first-party dependencies is useful on its own.
 fn resolve_import(
     import_path: &str,
     source_file: &str,
-    ts_language: SupportedLanguage,
-    known_files: &BTreeSet<String>,
+    language: SupportedLanguage,
+    known_files: &plugins::KnownFiles,
 ) -> Option<String> {
-    match ts_language {
-        SupportedLanguage::Rust => {
-            resolve_rust_import(import_path, source_file, known_files)
-        }
-        SupportedLanguage::Python => {
-            resolve_python_import(import_path, source_file, known_files)
-        }
-        SupportedLanguage::TypeScript | SupportedLanguage::JavaScript => {
-            resolve_js_ts_import(import_path, source_file, known_files)
-        }
-        SupportedLanguage::Go => resolve_go_import(import_path, known_files),
-        SupportedLanguage::Java => {
-            resolve_java_import(import_path, known_files)
-        }
-        SupportedLanguage::C | SupportedLanguage::Cpp => {
-            resolve_c_cpp_import(import_path, source_file, known_files)
-        }
-    }
-}
+    let plugin = plugins::builtin_resolver_plugin(language)?;
 
-/// Resolves a Rust `use` path to a local file.
-///
-/// Handles `crate::`, `super::`, and module paths.
-fn resolve_rust_import(
-    import_path: &str,
-    source_file: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Only resolve crate-local imports
-    if let Some(rest) = import_path.strip_prefix("super::") {
-        let parent_module = rust_module_parent(source_file);
-        return try_resolve_rust_module(
-            &qualify_rust_module_path(&parent_module, rest),
+    plugin.resolve(
+        import_path,
+        plugins::ResolveContext {
+            source_file,
             known_files,
-        );
-    }
-
-    if let Some(rest) = import_path.strip_prefix("self::") {
-        return try_resolve_rust_module(
-            &qualify_rust_module_path(&rust_module_path(source_file), rest),
-            known_files,
-        );
-    }
-
-    let Some(module_path) = import_path.strip_prefix("crate::") else {
-        // External crate import — not resolvable locally
-        return None;
-    };
-
-    try_resolve_rust_module(
-        &qualify_rust_module_path(&rust_crate_root(source_file), module_path),
-        known_files,
+        },
     )
 }
 
-fn rust_module_parent(source_file: &str) -> String {
-    let module_path = rust_module_path(source_file);
-    if let Some((parent, _)) = module_path.rsplit_once('/') {
-        parent.to_owned()
-    } else {
-        String::new()
-    }
-}
-
-fn rust_module_path(source_file: &str) -> String {
-    source_file
-        .strip_suffix("/mod.rs")
-        .or_else(|| source_file.strip_suffix(".rs"))
-        .unwrap_or(source_file)
-        .to_owned()
-}
-
-fn rust_crate_root(source_file: &str) -> String {
-    let mut parts: Vec<&str> = source_file.split('/').collect();
-    parts.pop();
-
-    parts
-        .iter()
-        .rposition(|part| *part == "src")
-        .map_or_else(String::new, |index| parts[..=index].join("/"))
-}
-
-fn qualify_rust_module_path(base: &str, rest: &str) -> String {
-    let rest = rest.replace("::", "/");
-    if base.is_empty() {
-        rest
-    } else {
-        format!("{base}/{rest}")
-    }
-}
-
-/// Tries multiple possible file paths for a Rust module path.
-fn try_resolve_rust_module(
-    module_path: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Convert `core::graph::types` → `core/graph/types`
-    let file_path = module_path.replace("::", "/");
-
-    // Try: `core/graph/types.rs`
-    let candidate = format!("{file_path}.rs");
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // Try: `core/graph/types/mod.rs`
-    let candidate = format!("{file_path}/mod.rs");
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // Try one level up (e.g., `core/graph.rs` for `core::graph::types`)
-    if let Some((parent, _)) = file_path.rsplit_once('/') {
-        let candidate = format!("{parent}.rs");
-        if known_files.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-/// Resolves a Python import to a local file.
-fn resolve_python_import(
+/// Test shim naming the language first, so the assertions read left to right.
+#[cfg(test)]
+fn resolve_import_lang(
+    language: SupportedLanguage,
     import_path: &str,
     source_file: &str,
-    known_files: &BTreeSet<String>,
+    known_files: &plugins::KnownFiles,
 ) -> Option<String> {
-    let relative_levels =
-        import_path.bytes().take_while(|byte| *byte == b'.').count();
-    let module_path = &import_path[relative_levels..];
-    let file_path = module_path.replace('.', "/");
-
-    if relative_levels > 0 {
-        let module_base = source_file.rsplit_once('/').map_or("", |(p, _)| p);
-        let relative_base = ascend_python_package(
-            module_base,
-            relative_levels.saturating_sub(1),
-        );
-        let relative_module =
-            join_python_module_path(&relative_base, &file_path);
-
-        for candidate in python_module_candidates(&relative_module) {
-            if known_files.contains(candidate.as_str()) {
-                return Some(candidate);
-            }
-        }
-    }
-
-    // Absolute import
-    python_module_candidates(&file_path)
-        .into_iter()
-        .find(|candidate| known_files.contains(candidate.as_str()))
-}
-
-fn ascend_python_package(module_base: &str, levels: usize) -> String {
-    let mut parts: Vec<&str> = if module_base.is_empty() {
-        Vec::new()
-    } else {
-        module_base.split('/').collect()
-    };
-
-    for _ in 0..levels {
-        parts.pop();
-    }
-
-    parts.join("/")
-}
-
-fn join_python_module_path(base: &str, module_path: &str) -> String {
-    if base.is_empty() {
-        module_path.to_owned()
-    } else if module_path.is_empty() {
-        base.to_owned()
-    } else {
-        format!("{base}/{module_path}")
-    }
-}
-
-fn python_module_candidates(module_path: &str) -> [String; 2] {
-    [
-        format!("{module_path}.py"),
-        format!("{module_path}/__init__.py"),
-    ]
-}
-
-/// Resolves a JS/TS import to a local file.
-fn resolve_js_ts_import(
-    import_path: &str,
-    source_file: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Only resolve relative imports
-    if !import_path.starts_with('.') {
-        return None;
-    }
-
-    let parent = source_file.rsplit_once('/').map_or("", |(p, _)| p);
-    let resolved = simplify_relative_path(parent, import_path);
-
-    let extensions =
-        ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
-    for ext in &extensions {
-        let candidate = format!("{resolved}{ext}");
-        if known_files.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-/// Resolves a Go import to a local file.
-fn resolve_go_import(
-    import_path: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Only resolve imports that look like relative paths within the project
-    // Go module imports are typically `module/path/package`
-    let dir_path = import_path.rsplit_once('/').map_or(import_path, |(_, p)| p);
-
-    // Try to find any .go file in a matching directory
-    for file in known_files {
-        if std::path::Path::new(file)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("go"))
-        {
-            let file_dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            let dir_name =
-                file_dir.rsplit_once('/').map_or(file_dir, |(_, n)| n);
-            if dir_name == dir_path {
-                return Some(file.clone());
-            }
-        }
-    }
-
-    None
-}
-
-/// Resolves a Java import to a local file.
-fn resolve_java_import(
-    import_path: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // `java.util.List` → `java/util/List.java`
-    let file_path = import_path.replace('.', "/");
-    let candidate = format!("{file_path}.java");
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    if let Some(candidate) = find_java_suffix_match(&candidate, known_files) {
-        return Some(candidate);
-    }
-
-    // Try without the full package prefix (common in local projects)
-    // e.g., `com.example.utils.Helper` → look for `utils/Helper.java`
-    let parts: Vec<&str> = file_path.split('/').collect();
-    for start in 0..parts.len() {
-        let partial = parts[start..].join("/");
-        let candidate = format!("{partial}.java");
-        if known_files.contains(&candidate) {
-            return Some(candidate);
-        }
-
-        if let Some(candidate) = find_java_suffix_match(&candidate, known_files)
-        {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-fn find_java_suffix_match(
-    candidate: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    known_files
-        .iter()
-        .find(|known_file| {
-            *known_file == candidate
-                || known_file
-                    .strip_suffix(candidate)
-                    .is_some_and(|prefix| prefix.ends_with('/'))
-        })
-        .cloned()
-}
-
-/// Resolves a C/C++ `#include` to a local file.
-fn resolve_c_cpp_import(
-    import_path: &str,
-    source_file: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // System includes (`<...>`) are not resolved locally
-    if import_path.starts_with('<') {
-        return None;
-    }
-
-    let parent = source_file.rsplit_once('/').map_or("", |(p, _)| p);
-
-    // Try relative to source file
-    let candidate = if parent.is_empty() {
-        import_path.to_owned()
-    } else {
-        format!("{parent}/{import_path}")
-    };
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // Try from project root
-    if known_files.contains(import_path) {
-        return Some(import_path.to_owned());
-    }
-
-    None
-}
-
-/// Simplifies a relative path like `../utils` resolved from a base directory.
-fn simplify_relative_path(base: &str, relative: &str) -> String {
-    let mut parts: Vec<&str> = if base.is_empty() {
-        Vec::new()
-    } else {
-        base.split('/').collect()
-    };
-
-    for segment in relative.split('/') {
-        match segment {
-            ".." => {
-                parts.pop();
-            }
-            "." | "" => {}
-            s => parts.push(s),
-        }
-    }
-
-    parts.join("/")
+    resolve_import(import_path, source_file, language, known_files)
 }
 
 /// Builds edges and populates the node map from extracted imports.
@@ -1105,15 +792,26 @@ mod tests {
         ]);
 
         assert_eq!(
-            resolve_rust_import("crate::core::graph", "src/main.rs", &files),
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "crate::core::graph",
+                "src/main.rs",
+                &files
+            ),
             Some("src/core/graph.rs".to_owned())
         );
         assert_eq!(
-            resolve_rust_import("self::types", "src/core/graph/mod.rs", &files),
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "self::types",
+                "src/core/graph/mod.rs",
+                &files
+            ),
             Some("src/core/graph/types.rs".to_owned())
         );
         assert_eq!(
-            resolve_rust_import(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
                 "super::types",
                 "src/core/graph/parser.rs",
                 &files
@@ -1132,19 +830,39 @@ mod tests {
         ]);
 
         assert_eq!(
-            resolve_python_import("pkg.local", "pkg/sub/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                "pkg.local",
+                "pkg/sub/module.py",
+                &files
+            ),
             Some("pkg/local.py".to_owned())
         );
         assert_eq!(
-            resolve_python_import(".local", "pkg/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                ".local",
+                "pkg/module.py",
+                &files
+            ),
             Some("pkg/local.py".to_owned())
         );
         assert_eq!(
-            resolve_python_import("..shared.util", "pkg/sub/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                "..shared.util",
+                "pkg/sub/module.py",
+                &files
+            ),
             Some("pkg/shared/util.py".to_owned())
         );
         assert_eq!(
-            resolve_python_import("requests", "pkg/sub/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                "requests",
+                "pkg/sub/module.py",
+                &files
+            ),
             None
         );
     }
@@ -1159,14 +877,32 @@ mod tests {
         ]);
 
         assert_eq!(
-            resolve_js_ts_import("./utils", "src/main.ts", &files),
+            resolve_import_lang(
+                SupportedLanguage::TypeScript,
+                "./utils",
+                "src/main.ts",
+                &files
+            ),
             Some("src/utils.ts".to_owned())
         );
         assert_eq!(
-            resolve_js_ts_import("../lib", "src/features/item.ts", &files),
+            resolve_import_lang(
+                SupportedLanguage::TypeScript,
+                "../lib",
+                "src/features/item.ts",
+                &files
+            ),
             Some("src/lib/index.ts".to_owned())
         );
-        assert_eq!(resolve_js_ts_import("react", "src/main.ts", &files), None);
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::TypeScript,
+                "react",
+                "src/main.ts",
+                &files
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1174,31 +910,64 @@ mod tests {
         let go_files =
             known_files(&["internal/app/main.go", "internal/pkg/service.go"]);
         assert_eq!(
-            resolve_go_import("github.com/demo/pkg", &go_files),
+            resolve_import_lang(
+                SupportedLanguage::Go,
+                "github.com/demo/pkg",
+                "internal/app/main.go",
+                &go_files
+            ),
             Some("internal/pkg/service.go".to_owned())
         );
-        assert_eq!(resolve_go_import("fmt", &go_files), None);
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Go,
+                "fmt",
+                "internal/app/main.go",
+                &go_files
+            ),
+            None
+        );
 
         let java_files = known_files(&[
             "src/com/example/utils/Helper.java",
             "utils/Helper.java",
         ]);
         assert_eq!(
-            resolve_java_import("com.example.utils.Helper", &java_files),
+            resolve_import_lang(
+                SupportedLanguage::Java,
+                "com.example.utils.Helper",
+                "src/com/example/Main.java",
+                &java_files
+            ),
             Some("src/com/example/utils/Helper.java".to_owned())
         );
         assert_eq!(
-            resolve_java_import("utils.Helper", &java_files),
+            resolve_import_lang(
+                SupportedLanguage::Java,
+                "utils.Helper",
+                "src/com/example/Main.java",
+                &java_files
+            ),
             Some("utils/Helper.java".to_owned())
         );
 
         let c_files = known_files(&["src/main.c", "include/util.h", "util.h"]);
         assert_eq!(
-            resolve_c_cpp_import("util.h", "src/main.c", &c_files),
+            resolve_import_lang(
+                SupportedLanguage::C,
+                "util.h",
+                "src/main.c",
+                &c_files
+            ),
             Some("util.h".to_owned())
         );
         assert_eq!(
-            resolve_c_cpp_import("<stdio.h>", "src/main.c", &c_files),
+            resolve_import_lang(
+                SupportedLanguage::C,
+                "<stdio.h>",
+                "src/main.c",
+                &c_files
+            ),
             None
         );
     }
@@ -1386,9 +1155,15 @@ mod tests {
 
     #[test]
     fn simplify_relative_path_works() {
-        assert_eq!(simplify_relative_path("src/core", "../utils"), "src/utils");
-        assert_eq!(simplify_relative_path("src", "./helpers"), "src/helpers");
-        assert_eq!(simplify_relative_path("", "./foo"), "foo");
+        assert_eq!(
+            plugins::paths::resolve_relative("src/core", "../utils"),
+            "src/utils"
+        );
+        assert_eq!(
+            plugins::paths::resolve_relative("src", "./helpers"),
+            "src/helpers"
+        );
+        assert_eq!(plugins::paths::resolve_relative("", "./foo"), "foo");
     }
 
     #[test]
