@@ -24,8 +24,12 @@ cargo install sephera
 You want to refactor `code_loc.rs`. Run Sephera on Sephera:
 
 ```bash
-sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --format markdown
+sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs
 ```
+
+![Sephera reverse dependency query showing that nine files import code_loc.rs](docs/public/demo/graph.gif)
+
+The same query with `--format markdown`:
 
 ````markdown
 # Dependency Graph Report

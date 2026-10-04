@@ -13,6 +13,8 @@ sephera graph [OPTIONS]
 
 ## Basic Usage
 
+<img src="/demo/graph.gif" alt="Terminal demo of sephera graph resolving a reverse dependency query and reporting how many files import the target." width="900" />
+
 Run dependency analysis on the current directory and output to terminal as JSON (the default format):
 
 ```bash

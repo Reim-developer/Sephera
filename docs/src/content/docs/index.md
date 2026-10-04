@@ -108,6 +108,13 @@ sephera context --path . --list-profiles
     </header>
     <img src="/demo/context.png" alt="Terminal demo of sephera context building a structured context pack." loading="lazy" />
   </figure>
+  <figure class="demo-card">
+    <header>
+      <strong><code>sephera graph</code></strong>
+      <span>reverse dependency queries — what breaks if you change this file</span>
+    </header>
+    <img src="/demo/graph.gif" alt="Terminal demo of sephera graph answering a reverse dependency query." loading="lazy" />
+  </figure>
 </div>
 
 <p class="demo-note">The demos above are illustrative captures of the CLI workflows described throughout the docs.</p>
