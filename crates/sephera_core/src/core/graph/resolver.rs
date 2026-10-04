@@ -19,12 +19,9 @@ use crate::core::{
 
 use super::plugins;
 
-use super::{
-    imports::extract_imports,
-    types::{
-        FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery,
-        GraphReport, NodeMap,
-    },
+use super::types::{
+    FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
+    NodeMap,
 };
 
 /// Maximum file size in bytes to analyze for imports.
@@ -131,7 +128,12 @@ fn extract_all_imports(
                 )
             })?;
 
-        let imports = extract_imports(&source, ts_language).unwrap_or_default();
+        // Extraction goes through the language's plugin so that dispatch is uniform:
+        // adding a language means adding one plugin file, not editing the
+        // extractor and the resolver separately.
+        let imports = plugins::builtin_import_plugin(ts_language)
+            .and_then(|plugin| plugin.extract(&source))
+            .unwrap_or_default();
 
         results.push(FileImportData {
             file_path: project_file.normalized_relative_path.clone(),
@@ -139,7 +141,7 @@ fn extract_all_imports(
             ts_language,
             imports: imports
                 .into_iter()
-                .map(|imp| (imp.raw_path, imp.line))
+                .map(|imp| (imp.raw_path, u64::try_from(imp.line).unwrap_or(1)))
                 .collect(),
         });
     }

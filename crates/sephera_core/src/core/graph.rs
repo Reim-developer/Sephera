@@ -1,5 +1,5 @@
 /// Dependency graph analysis via Tree-sitter import extraction.
-pub mod imports;
+pub(crate) mod imports;
 pub mod path_utils;
 pub mod plugins;
 pub mod render;

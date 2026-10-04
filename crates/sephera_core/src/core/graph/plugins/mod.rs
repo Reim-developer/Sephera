@@ -15,7 +15,7 @@ use std::collections::BTreeSet;
 
 use crate::core::compression::SupportedLanguage;
 
-mod c_cpp_plugin;
+pub(crate) mod c_cpp_plugin;
 mod go_plugin;
 mod java_plugin;
 mod javascript_plugin;
@@ -27,6 +27,22 @@ pub use super::path_utils as paths;
 
 /// Every file in an analysis, as normalised relative paths.
 pub type KnownFiles = BTreeSet<String>;
+
+/// Convert the Tree-sitter walker's output into the plugin-facing type.
+///
+/// Lives here so the six `extract` implementations differ only in which
+/// grammar they pass, rather than repeating the same conversion.
+pub(super) fn to_extracted(
+    statements: Vec<super::types::ImportStatement>,
+) -> Vec<ExtractedImport> {
+    statements
+        .into_iter()
+        .map(|statement| ExtractedImport {
+            raw_path: statement.raw_path,
+            line: usize::try_from(statement.line).unwrap_or(1),
+        })
+        .collect()
+}
 
 /// An import statement as it appears in source text.
 ///

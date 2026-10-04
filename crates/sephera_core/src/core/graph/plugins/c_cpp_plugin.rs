@@ -22,8 +22,11 @@ impl ImportPlugin for CCppPlugin {
         self.language
     }
 
-    fn extract(&self, _source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        None
+    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
+        // The grammar differs between C and C++; resolution does not.
+        super::super::imports::walk_imports(source, self.language)
+            .ok()
+            .map(super::to_extracted)
     }
 }
 

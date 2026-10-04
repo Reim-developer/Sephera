@@ -18,8 +18,10 @@ impl ImportPlugin for GoPlugin {
         SupportedLanguage::Go
     }
 
-    fn extract(&self, _source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        None
+    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
+        super::super::imports::walk_imports(source, SupportedLanguage::Go)
+            .ok()
+            .map(super::to_extracted)
     }
 }
 

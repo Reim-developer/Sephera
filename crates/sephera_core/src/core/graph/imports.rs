@@ -36,6 +36,17 @@ pub fn extract_imports(
     Ok(imports)
 }
 
+/// Run the Tree-sitter walk for a language.
+///
+/// Each language plugin calls this from its own `extract`, so the grammar work
+/// has exactly one home while dispatch still flows through the trait.
+pub(super) fn walk_imports(
+    source: &[u8],
+    language: SupportedLanguage,
+) -> Result<Vec<ImportStatement>> {
+    extract_imports(source, language)
+}
+
 /// Recursively walks the AST to find import nodes at any nesting depth.
 fn collect_imports_recursive(
     source: &[u8],

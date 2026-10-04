@@ -15,10 +15,12 @@ impl ImportPlugin for RustPlugin {
         SupportedLanguage::Rust
     }
 
-    fn extract(&self, _source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        // Extraction is delegated to the shared Tree-sitter walker in
-        // `super::imports`; this plugin owns resolution.
-        None
+    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
+        // The Tree-sitter walk is shared across languages; this plugin owns
+        // which grammar and import syntax apply.
+        super::super::imports::walk_imports(source, SupportedLanguage::Rust)
+            .ok()
+            .map(super::to_extracted)
     }
 }
 

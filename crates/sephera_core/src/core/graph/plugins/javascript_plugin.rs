@@ -26,8 +26,12 @@ impl ImportPlugin for JavaScriptPlugin {
         self.language
     }
 
-    fn extract(&self, _source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        None
+    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
+        // The grammar differs between JS and TS; resolution does not, which is
+        // why one plugin serves both.
+        super::super::imports::walk_imports(source, self.language)
+            .ok()
+            .map(super::to_extracted)
     }
 }
 
