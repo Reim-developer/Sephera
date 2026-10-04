@@ -231,7 +231,7 @@ mod tests {
 
     #[test]
     fn normalizing_an_empty_list_yields_nothing() {
-        assert!(LineRange::normalized(&[]).is_empty());
+        assert_eq!(LineRange::normalized(&[]), Vec::<LineRange>::new());
     }
 
     #[test]

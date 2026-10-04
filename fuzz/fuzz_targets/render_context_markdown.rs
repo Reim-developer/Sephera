@@ -5,9 +5,12 @@ use std::path::PathBuf;
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use sephera::render_context_markdown;
-use sephera_core::core::context::{
-    ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary,
-    ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
+use sephera_core::core::{
+    compression::CompressionMode,
+    context::{
+        ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary,
+        ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
+    },
 };
 
 #[derive(Debug, Arbitrary)]
@@ -60,6 +63,7 @@ fuzz_target!(|data: &[u8]| {
                 size_bytes: u64::from(file.size_bytes),
                 estimated_tokens: u64::from(file.estimated_tokens.max(1)),
                 truncated: file.truncated,
+                compressed: false,
                 group: selection_class(file.selection_selector).group_kind(),
                 selection_class: selection_class(file.selection_selector),
                 excerpt: ContextExcerpt {
@@ -67,6 +71,7 @@ fuzz_target!(|data: &[u8]| {
                     line_end,
                     content: file.excerpt.chars().take(2_048).collect(),
                 },
+                line_ranges: Vec::new(),
             }
         })
         .collect::<Vec<_>>();
@@ -94,6 +99,15 @@ fuzz_target!(|data: &[u8]| {
                 .take(4)
                 .map(|focus_path| sanitize_relative_path(&focus_path))
                 .collect(),
+            // A diff selection needs a real repository, so the fuzzer leaves it
+            // unset and varies the compression mode instead: both feed the same
+            // rendering paths without needing a checkout.
+            diff: None,
+            compression_mode: match fixture.budget_tokens % 3 {
+                0 => CompressionMode::None,
+                1 => CompressionMode::Signatures,
+                _ => CompressionMode::Skeleton,
+            },
             budget_tokens: u64::from(fixture.budget_tokens.max(1)),
             metadata_budget_tokens: 512,
             excerpt_budget_tokens: 8_192,

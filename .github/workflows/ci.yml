@@ -48,6 +48,12 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # `fuzz/` is excluded from the workspace, so the step above never compiles
+      # the fuzz targets. Without this, a target that stopped compiling is only
+      # found by the fuzz job, which used to report success regardless.
+      - name: Run clippy on fuzz targets
+        run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
   test:
     name: Rust Test
     runs-on: ubuntu-latest
@@ -188,11 +194,20 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Create fuzz log directory
-        run: mkdir -p fuzz/logs
+      - name: Create fuzz log and corpus directories
+        # libFuzzer exits with "The required directory ... does not exist" rather
+        # than creating its corpus directory. `fuzz/seeds/` is gitignored, so a
+        # fresh checkout has to make it before the run starts.
+        run: mkdir -p fuzz/logs "${{ matrix.seed_dir }}"
 
       - name: Run fuzz smoke target
+        # `pipefail` is required: without it the pipeline reports `tee`'s exit
+        # status, so a build failure or a crash in the fuzz target leaves the
+        # step green. This job was reporting success while `render_context_markdown`
+        # did not compile.
+        shell: bash
         run: |
+          set -o pipefail
           cargo +nightly fuzz run "${{ matrix.target }}" "${{ matrix.seed_dir }}" -- -max_total_time=60 \
             | tee "fuzz/logs/${{ matrix.target }}.log"
 

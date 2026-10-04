@@ -1055,7 +1055,7 @@ mod tests {
             ("c.rs", &[]),
         ]);
 
-        assert!(detect_cycles(&map).is_empty());
+        assert_eq!(detect_cycles(&map), Vec::<Vec<String>>::new());
     }
 
     #[test]
@@ -1282,7 +1282,11 @@ mod tests {
             build_graph(temp_dir.path(), &ignore, &[], None, None).unwrap();
 
         assert!(report.nodes.len() >= 2);
-        assert!(!report.edges.is_empty());
+        assert_ne!(
+            report.edges,
+            Vec::<GraphEdge>::new(),
+            "expected at least one edge"
+        );
     }
 
     #[test]
@@ -1464,7 +1468,7 @@ mod tests {
         let report =
             build_graph(temp_dir.path(), &ignore, &[], None, None).unwrap();
 
-        assert!(report.nodes.is_empty());
-        assert!(report.edges.is_empty());
+        assert_eq!(report.nodes, Vec::<GraphNode>::new());
+        assert_eq!(report.edges, Vec::<GraphEdge>::new());
     }
 }

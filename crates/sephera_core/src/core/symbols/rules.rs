@@ -243,8 +243,8 @@ mod tests {
     fn python_has_no_enum_or_constant_category() {
         let rules = symbol_rules(SupportedLanguage::Python);
 
-        assert!(rules.enums.is_empty());
-        assert!(rules.constants.is_empty());
+        assert_eq!(rules.enums, Vec::<String>::new());
+        assert_eq!(rules.constants, Vec::<String>::new());
         assert!(rules.types.contains(&"class_definition"));
         assert!(rules.functions.contains(&"function_definition"));
     }
