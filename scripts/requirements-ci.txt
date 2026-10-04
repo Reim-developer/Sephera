@@ -1,0 +1,18 @@
+# Python packages the pyright job needs so third-party imports in
+# `scripts/` resolve. Without them, pyright reports `reportMissingImports` and
+# then every type derived from those imports as unknown, which turns one missing
+# package into a hundred errors.
+#
+# Exact pins: an unpinned grammar release can change a node kind and make the
+# probe's output differ from what the rules table documents.
+#
+# All of these publish `abi3` manylinux wheels, so they install on any runner
+# Python from 3.10 up.
+pillow==12.3.0
+tree-sitter==0.26.0
+tree-sitter-c==0.24.2
+tree-sitter-go==0.25.0
+tree-sitter-java==0.23.5
+tree-sitter-python==0.25.0
+tree-sitter-rust==0.24.2
+tree-sitter-typescript==0.23.2

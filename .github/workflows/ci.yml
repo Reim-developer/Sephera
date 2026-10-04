@@ -114,6 +114,19 @@ jobs:
       - name: Install Node dependencies
         run: npm ci
 
+      # `scripts/make_graph_demo.py` imports Pillow and
+      # `scripts/probe_symbol_node_kinds.py` imports tree-sitter plus six
+      # grammars. Pyright still reports on a file whose imports do not resolve,
+      # but every type derived from them becomes unknown, so an unresolvable
+      # import turns one missing package into a hundred errors.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages for type checking
+        run: pip install -r scripts/requirements-ci.txt
+
       - name: Run Pyright
         run: npm run pyright
 
