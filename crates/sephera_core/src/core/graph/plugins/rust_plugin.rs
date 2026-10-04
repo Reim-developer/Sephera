@@ -59,10 +59,13 @@ impl ResolverPlugin for RustPlugin {
             return first_existing(context, &qualify(&base, rest));
         }
 
+        // `self::` is relative to the module's own directory, which is not the same
+        // as the module path for a crate root: `self::util` in `src/main.rs`
+        // means `src/util.rs`, not `src/main/util.rs`.
         if let Some(rest) = import_path.strip_prefix("self::") {
             return first_existing(
                 context,
-                &qualify(&module_path(context.source_file), rest),
+                &qualify(&module_children_dir(context.source_file), rest),
             );
         }
 
@@ -98,6 +101,26 @@ pub fn module_path(source_file: &str) -> String {
 #[must_use]
 pub fn crate_root(source_file: &str) -> String {
     paths::through_last_segment(source_file, "src")
+}
+
+/// The directory that holds this module's own submodules.
+///
+/// Rust gives a crate root special treatment: submodules of `main.rs` or
+/// `lib.rs` sit directly beside it, so `self::util` in `src/main.rs` means
+/// `src/util.rs`. For every other file the submodules live in a directory named
+/// after the file, so `self::types` in `src/core/graph.rs` means
+/// `src/core/graph/types.rs`.
+#[must_use]
+pub fn module_children_dir(source_file: &str) -> String {
+    let stem = paths::file_stem(source_file);
+    let is_crate_root = matches!(stem, "main" | "lib" | "mod")
+        && paths::parent(source_file) == crate_root(source_file);
+
+    if is_crate_root {
+        paths::parent(source_file)
+    } else {
+        module_path(source_file)
+    }
 }
 
 /// Append a `::`-separated remainder to a module base.

@@ -663,6 +663,132 @@ mod tests {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
+    /// Build a graph over an in-memory tree and return the report.
+    fn graph_for(files: &[(&str, &str)]) -> GraphReport {
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in files {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+
+        build_graph(temp_dir.path(), &IgnoreMatcher::empty(), &[], None, None)
+            .expect("graph build must succeed")
+    }
+
+    /// Paths that a file imports, according to the resolved edge list.
+    fn imports_of(report: &GraphReport, source: &str) -> Vec<String> {
+        report
+            .edges
+            .iter()
+            .filter(|edge| edge.from == source && edge.resolved)
+            .filter_map(|edge| edge.to.clone())
+            .collect()
+    }
+
+    #[test]
+    fn mod_declarations_create_internal_edges() {
+        // `mod util;` is a compile-time dependency: editing util.rs forces a
+        // rebuild of the module that declares it, so it must appear as an edge.
+        // It previously produced none, which made a `mod`-only crate look
+        // completely disconnected.
+        let report = graph_for(&[
+            ("src/main.rs", "mod util;\nfn main() {}\n"),
+            ("src/util.rs", "pub fn helper() {}\n"),
+        ]);
+
+        let imports = imports_of(&report, "src/main.rs");
+
+        assert_eq!(
+            imports,
+            vec!["src/util.rs".to_owned()],
+            "a mod declaration must resolve to its file"
+        );
+    }
+
+    #[test]
+    fn a_mod_only_crate_is_fully_connected() {
+        let report = graph_for(&[
+            ("src/main.rs", "mod a;\nmod b;\nfn main() {}\n"),
+            ("src/a.rs", "pub fn a() {}\n"),
+            ("src/b.rs", "pub fn b() {}\n"),
+        ]);
+
+        assert_eq!(report.metrics.total_internal_edges, 2);
+        assert_eq!(report.metrics.circular_dependencies, 0);
+    }
+
+    #[test]
+    fn inline_modules_are_not_edges() {
+        // An inline module declares no file, so there is nothing to point at.
+        let report = graph_for(&[(
+            "src/main.rs",
+            "mod inner {\n    pub fn f() {}\n}\nfn main() {}\n",
+        )]);
+
+        assert_eq!(
+            report.metrics.total_internal_edges, 0,
+            "an inline module has no file to import"
+        );
+    }
+
+    #[test]
+    fn a_path_attribute_module_is_skipped() {
+        // With `#[path = "..."]` the declared name no longer matches the file,
+        // so reporting `crate::util` would invent an edge that cannot resolve.
+        let report = graph_for(&[
+            (
+                "src/main.rs",
+                "#[path = \"other/renamed.rs\"]\nmod util;\nfn main() {}\n",
+            ),
+            ("src/other/renamed.rs", "pub fn r() {}\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.total_internal_edges, 0,
+            "a renamed module must not resolve against the declared name"
+        );
+    }
+
+    #[test]
+    fn mod_and_use_together_both_resolve() {
+        let report = graph_for(&[
+            (
+                "src/main.rs",
+                "mod util;\nuse crate::helper::h;\nfn main() {}\n",
+            ),
+            ("src/util.rs", "pub fn u() {}\n"),
+            ("src/helper.rs", "pub fn h() {}\n"),
+        ]);
+
+        let mut imports = imports_of(&report, "src/main.rs");
+        imports.sort();
+
+        assert_eq!(
+            imports,
+            vec!["src/helper.rs".to_owned(), "src/util.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn mod_resolves_through_mod_rs() {
+        let report = graph_for(&[
+            ("src/lib.rs", "mod graph;\n"),
+            ("src/graph/mod.rs", "pub mod types;\n"),
+            ("src/graph/types.rs", "pub struct T;\n"),
+        ]);
+
+        assert_eq!(
+            imports_of(&report, "src/lib.rs"),
+            vec!["src/graph/mod.rs".to_owned()]
+        );
+        assert_eq!(
+            imports_of(&report, "src/graph/mod.rs"),
+            vec!["src/graph/types.rs".to_owned()],
+            "a nested mod must also resolve"
+        );
+    }
+
     fn write_file(base_dir: &Path, relative_path: &str, contents: &str) {
         let absolute_path = base_dir.join(relative_path);
         if let Some(parent) = absolute_path.parent() {

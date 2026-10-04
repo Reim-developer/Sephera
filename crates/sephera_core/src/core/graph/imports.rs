@@ -77,15 +77,67 @@ fn try_extract_import(
 
 /// Extracts `use` declarations from Rust source.
 ///
+/// Extract a `mod` declaration as a `self::` dependency.
+///
+/// `mod util;` pulls `util.rs` into the crate, so editing that file forces a
+/// rebuild of the declaring module. It is a real dependency for impact analysis
+/// even though it produces no runtime edge, so it is reported alongside `use`
+/// statements.
+///
+/// The path is emitted as `self::` rather than `crate::` because that is what
+/// Rust actually means: a `mod` declaration is always relative to its containing
+/// module, never to the crate root. Emitting `crate::` made `pub mod types;`
+/// inside `src/graph/mod.rs` look for `src/types.rs` instead of
+/// `src/graph/types.rs`, so it never resolved.
+///
+/// Inline modules (`mod util { ... }`) declare no file and are skipped, as are
+/// `#[path = "..."]` attributes, where the declared name no longer matches the
+/// file on disk.
+fn extract_rust_mod(
+    source: &[u8],
+    node: &Node<'_>,
+) -> Option<Vec<ImportStatement>> {
+    // An inline module has a body; only a declaration refers to a file.
+    if node.child_by_field_name("body").is_some() {
+        return None;
+    }
+
+    // A `#[path]` attribute renames the file, so the declared name would
+    // resolve to something that does not exist.
+    if node.child_by_field_name("attribute").is_some() {
+        return None;
+    }
+
+    let name = node.child_by_field_name("name")?;
+    let module_name = node_text(source, &name);
+
+    if module_name.is_empty() {
+        return None;
+    }
+
+    // Emitted as a `self::` path so the resolver anchors it to the containing
+    // module. For a file `src/graph/mod.rs` that means `self::types` resolves
+    // to `src/graph/types.rs`, which is what Rust means by `pub mod types;`.
+    Some(vec![ImportStatement {
+        raw_path: format!("self::{module_name}"),
+        line: u64::try_from(node.start_position().row + 1).unwrap_or(1),
+    }])
+}
+
 /// Handles:
 /// - `use std::io;`
 /// - `use crate::core::graph;`
 /// - `use super::types::*;`
 /// - `use std::collections::{HashMap, BTreeMap};`
+/// - `mod util;` — a module declaration is a compile-time dependency
 fn extract_rust_import(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
+    if node.kind() == "mod_item" {
+        return extract_rust_mod(source, node);
+    }
+
     if node.kind() != "use_declaration" {
         return None;
     }
