@@ -8,7 +8,7 @@ use anyhow::{Context, Result};
 use crate::core::{
     compression::CompressionMode,
     ignore::IgnoreMatcher,
-    project_files::{ProjectFile, collect_project_files},
+    project_files::{ProjectFile, collect_project_files_with},
 };
 
 use super::{
@@ -83,7 +83,7 @@ impl ContextBuilder {
     /// Panics when file counts exceed the `u64` reporting limit.
     pub fn build(&self) -> Result<ContextReport> {
         let project_files =
-            collect_project_files(&self.base_path, &self.ignore)?;
+            collect_project_files_with(&self.base_path, &self.ignore, false)?;
         let resolved_focuses =
             resolve_focus_paths(&self.base_path, &self.focus_paths)?;
         let diff_paths = normalize_diff_paths(

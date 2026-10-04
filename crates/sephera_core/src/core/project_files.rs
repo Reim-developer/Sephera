@@ -25,6 +25,27 @@ pub fn collect_project_files(
     base_path: &Path,
     ignore: &IgnoreMatcher,
 ) -> Result<Vec<ProjectFile>> {
+    collect_project_files_with(base_path, ignore, true)
+}
+
+/// Collect project files, optionally skipping nested checkout directories.
+///
+/// # Errors
+///
+/// Returns an error when the target path is invalid, traversal fails, or file
+/// metadata cannot be read.
+///
+/// # Parameters
+///
+/// * `skip_nested_checkouts` — when true, directories that hold parallel
+///   checkouts of the same repository (agent worktrees, `.git`) are pruned.
+///   Callers that build a context pack set this to false, because a pack may
+///   legitimately be focused inside such a tree.
+pub fn collect_project_files_with(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+    skip_nested_checkouts: bool,
+) -> Result<Vec<ProjectFile>> {
     if !base_path.exists() {
         bail!("path `{}` does not exist", base_path.display());
     }
@@ -35,7 +56,9 @@ pub fn collect_project_files(
     let walker = WalkDir::new(base_path)
         .follow_links(false)
         .into_iter()
-        .filter_entry(|entry| should_visit(base_path, ignore, entry));
+        .filter_entry(|entry| {
+            should_visit(base_path, ignore, entry, skip_nested_checkouts)
+        });
 
     let mut files = Vec::new();
 
@@ -84,13 +107,70 @@ pub fn collect_project_files(
     Ok(files)
 }
 
+/// Directories that are never part of a project's own source.
+///
+/// Directories that are never part of a project's own source.
+///
+/// These are skipped regardless of `.gitignore` so that build output and
+/// vendored trees are not analysed as first-party source.
+const ALWAYS_SKIPPED_DIRECTORIES: &[&str] = &[
+    "target",
+    "node_modules",
+    "__pycache__",
+    "vendor",
+    "dist",
+    "build",
+    "site-packages",
+    "Pods",
+];
+
+/// Whether a directory entry is an always-skipped generated or vendored tree.
+///
+/// The analysis root itself is never skipped, so pointing Sephera directly at a
+/// directory called `target` still works.
+fn is_always_skipped_directory(entry: &DirEntry) -> bool {
+    if !entry.file_type().is_dir() {
+        return false;
+    }
+
+    entry
+        .file_name()
+        .to_str()
+        .is_some_and(|name| ALWAYS_SKIPPED_DIRECTORIES.contains(&name))
+}
+
+/// Whether a directory entry is a nested checkout or agent worktree copy.
+///
+/// Tooling keeps parallel checkouts under dot-directories (`.kilo/worktrees`,
+/// `.git/worktrees`, `.claude`). Analysing one alongside the real tree
+/// duplicates every count and reports cycles that exist only in the copy, so
+/// these are skipped. Dot-directories that hold real content — `.github`,
+/// `.venv` when explicitly focused — are left to the caller, which is why this
+/// is opt-in per caller rather than a blanket traversal rule.
+fn is_nested_checkout_directory(entry: &DirEntry) -> bool {
+    entry.file_type().is_dir()
+        && entry
+            .file_name()
+            .to_str()
+            .is_some_and(|name| name.ends_with("worktrees") || name == ".git")
+}
+
 fn should_visit(
     base_path: &Path,
     ignore: &IgnoreMatcher,
     entry: &DirEntry,
+    skip_nested_checkouts: bool,
 ) -> bool {
     if entry.depth() == 0 {
         return true;
+    }
+
+    if is_always_skipped_directory(entry) {
+        return false;
+    }
+
+    if skip_nested_checkouts && is_nested_checkout_directory(entry) {
+        return false;
     }
 
     let relative_path = entry
@@ -106,6 +186,137 @@ mod tests {
     use super::*;
     use std::fs;
     use tempfile::tempdir;
+
+    #[test]
+    fn skips_generated_directories_without_gitignore() {
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::create_dir_all(root.join("target")).unwrap();
+        fs::create_dir_all(root.join("node_modules/pkg")).unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+        fs::write(root.join("target/built.rs"), "fn built() {}\n").unwrap();
+        fs::write(
+            root.join("node_modules/pkg/index.js"),
+            "module.exports = {};\n",
+        )
+        .unwrap();
+
+        let files =
+            collect_project_files(root, &IgnoreMatcher::empty()).unwrap();
+        let names: Vec<String> = files
+            .iter()
+            .map(|f| f.normalized_relative_path.clone())
+            .collect();
+
+        assert!(
+            names.iter().any(|n| n.ends_with("main.rs")),
+            "real source must be collected, got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("target")),
+            "target/ must be skipped even unlisted, got {names:?}"
+        );
+        assert!(
+            !names.iter().any(|n| n.contains("node_modules")),
+            "node_modules/ must be skipped even unlisted, got {names:?}"
+        );
+    }
+
+    #[test]
+    fn skips_agent_worktree_directories_by_default() {
+        // A nested checkout under a dot-directory that is not gitignored was
+        // previously analysed as first-party source, duplicating counts and
+        // reporting cycles that only exist in the copy.
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join("crates/core")).unwrap();
+        fs::create_dir_all(root.join(".kilo/worktrees/arrow/crates/core"))
+            .unwrap();
+        fs::write(root.join("crates/core/a.rs"), "use crate::b;\n").unwrap();
+        fs::write(root.join("crates/core/b.rs"), "pub fn b() {}\n").unwrap();
+        fs::write(
+            root.join(".kilo/worktrees/arrow/crates/core/a.rs"),
+            "use crate::b;\n",
+        )
+        .unwrap();
+
+        let files =
+            collect_project_files(root, &IgnoreMatcher::empty()).unwrap();
+        let nested = files
+            .iter()
+            .filter(|f| f.normalized_relative_path.contains(".kilo"))
+            .count();
+
+        assert_eq!(
+            nested, 0,
+            "worktree copies must not be counted as project source"
+        );
+    }
+
+    #[test]
+    fn worktrees_can_be_included_when_caller_opts_in() {
+        // Context packs may legitimately focus inside a worktree, so that
+        // caller must still be able to reach those files.
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join(".kilo/worktrees/arrow/src")).unwrap();
+        fs::write(root.join(".kilo/worktrees/arrow/src/a.rs"), "fn a() {}\n")
+            .unwrap();
+
+        let files =
+            collect_project_files_with(root, &IgnoreMatcher::empty(), false)
+                .unwrap();
+
+        assert!(
+            files
+                .iter()
+                .any(|f| f.normalized_relative_path.contains(".kilo")),
+            "opting in must reach worktree contents"
+        );
+    }
+
+    #[test]
+    fn dot_directories_that_hold_content_are_kept() {
+        // `.github` and friends are real project content and must survive.
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join(".github/workflows")).unwrap();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(root.join(".github/workflows/ci.yml"), "name: CI\n").unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let files =
+            collect_project_files(root, &IgnoreMatcher::empty()).unwrap();
+        let paths: Vec<&str> = files
+            .iter()
+            .map(|f| f.normalized_relative_path.as_str())
+            .collect();
+
+        assert!(
+            paths.iter().any(|p| p.contains(".github")),
+            "dot-directories with real content must be kept, got {paths:?}"
+        );
+    }
+
+    #[test]
+    fn root_analysis_target_is_never_skipped() {
+        // The always-skipped list is matched on entry names, so pointing the
+        // tool straight at a directory called `target` must still work.
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path().join("target");
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("main.rs"), "fn main() {}\n").unwrap();
+
+        let files =
+            collect_project_files(&root, &IgnoreMatcher::empty()).unwrap();
+
+        assert_eq!(
+            files.len(),
+            1,
+            "the analysis root itself must be traversed"
+        );
+    }
 
     #[test]
     fn collects_files_from_empty_directory() {

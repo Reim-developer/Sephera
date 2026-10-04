@@ -21,7 +21,11 @@ use rmcp::{
 
 use sephera_core::core::{
     code_loc::CodeLoc,
-    graph::{resolver::build_graph, types::GraphQuery},
+    graph::{
+        render::render_graph,
+        resolver::build_graph,
+        types::{GraphFormat, GraphQuery},
+    },
     runtime::{
         ContextCommandInput, ResolvedContextCommand, SourceRequest,
         build_context_report, resolve_context_command, resolve_source,
@@ -193,7 +197,7 @@ impl SepheraServer {
     /// filtering via `depends_on`.
     #[tool(
         name = "graph",
-        description = "Build a dependency graph for a repository or focused sub-paths. Accepts exactly one of path or url, plus an optional ref for repo URLs. Supports traversal depth and reverse dependency queries through depends_on. Returns structured JSON."
+        description = "Build a dependency graph for a repository or focused sub-paths. Accepts exactly one of path or url, plus an optional ref for repo URLs. Supports traversal depth, reverse dependency queries through depends_on, and cycle detection. Use format=markdown for a compact summary, the default json for programmatic node and edge access, xml for structured agent input, or dot for Graphviz."
     )]
     #[allow(
         clippy::unused_self,
@@ -230,7 +234,11 @@ impl SepheraServer {
             report.base_path = display_path.into();
         }
 
-        serialize_json(&report)
+        let format = parse_graph_format(param.format.as_deref())?;
+        match format {
+            GraphFormat::Json => serialize_json(&report),
+            other => Ok(render_graph(&report, other)),
+        }
     }
 }
 
@@ -250,6 +258,29 @@ impl ServerHandler for SepheraServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
+    }
+}
+
+/// Map a requested graph output format onto [`GraphFormat`].
+///
+/// An absent value keeps JSON, which is the historical behaviour of this tool.
+/// An unrecognised value is rejected rather than silently falling back, so a
+/// mistyped format surfaces immediately instead of returning JSON that the
+/// caller did not ask for.
+fn parse_graph_format(
+    requested: Option<&str>,
+) -> Result<GraphFormat, rmcp::ErrorData> {
+    match requested {
+        None | Some("json") => Ok(GraphFormat::Json),
+        Some("markdown") => Ok(GraphFormat::Markdown),
+        Some("xml") => Ok(GraphFormat::Xml),
+        Some("dot") => Ok(GraphFormat::Dot),
+        Some(other) => Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "unsupported graph format `{other}`; expected json, markdown, xml, or dot"
+            ),
+            None,
+        )),
     }
 }
 

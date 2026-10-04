@@ -882,9 +882,38 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
     }
 }
 
-/// Detects cycles in the dependency graph using iterative DFS.
+/// Canonical identity of a cycle, used to collapse duplicates.
+///
+/// A cycle is reported once per edge by the traversal, so the same ring can be
+/// discovered from several of its members and in either direction. Keying on
+/// the rotation-normalised ring makes those discoveries compare equal, which is
+/// what keeps the reported cycle count an actual count of distinct rings rather
+/// than a count of traversal artefacts.
+fn cycle_key(cycle: &[String]) -> String {
+    // `cycle` repeats its entry node at the end, so the repeat is dropped
+    // before keying: otherwise a self-import and a two-node ring would not
+    // compare equal to themselves across representations.
+    let mut ring: Vec<String> = cycle
+        .iter()
+        .take(cycle.len().saturating_sub(1))
+        .cloned()
+        .collect();
+    ring.sort();
+    ring.join("|")
+}
+
+/// Detect cycles in the dependency graph using iterative DFS.
+///
+/// Each distinct ring is reported once. Cycles are returned in a deterministic
+/// order so that repeated runs over an unchanged tree produce identical output.
 fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
     let mut cycles: Vec<Vec<String>> = Vec::new();
+
+    // These three sets deliberately live outside the start-node loop. Marking a
+    // node visited once, globally, is what confines each connected component to
+    // a single traversal: a ring is therefore discovered from one of its members
+    // and every later member is skipped, rather than the ring being rediscovered
+    // once per member.
     let mut visited: BTreeSet<String> = BTreeSet::new();
     let mut in_stack: BTreeSet<String> = BTreeSet::new();
     let mut seen_cycle_keys: BTreeSet<String> = BTreeSet::new();
@@ -924,11 +953,7 @@ fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
                     .collect();
                 cycle.push(child.clone());
 
-                // Normalize cycle for deduplication
-                let mut sorted_cycle = cycle.clone();
-                sorted_cycle.sort();
-                let key = sorted_cycle.join("|");
-                if seen_cycle_keys.insert(key) {
+                if seen_cycle_keys.insert(cycle_key(&cycle)) {
                     cycles.push(cycle);
                 }
             } else if !visited.contains(&child) {
@@ -957,6 +982,116 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(absolute_path, contents).unwrap();
+    }
+
+    fn node_map_from_edges(edges: &[(&str, &[&str])]) -> NodeMap {
+        let mut map: NodeMap = BTreeMap::new();
+        for (node, imports) in edges {
+            let entry = map.entry((*node).to_owned()).or_default();
+            for import in *imports {
+                entry.imports.push((*import).to_owned());
+            }
+        }
+        map
+    }
+
+    #[test]
+    fn cycle_key_ignores_rotation_and_direction() {
+        let a = vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            "c".to_owned(),
+            "a".to_owned(),
+        ];
+        let rotated = vec![
+            "b".to_owned(),
+            "c".to_owned(),
+            "a".to_owned(),
+            "b".to_owned(),
+        ];
+
+        assert_eq!(cycle_key(&a), cycle_key(&rotated));
+    }
+
+    #[test]
+    fn cycle_key_distinguishes_different_node_sets() {
+        let a = vec!["a".to_owned(), "b".to_owned(), "a".to_owned()];
+        let b = vec!["a".to_owned(), "c".to_owned(), "a".to_owned()];
+
+        assert_ne!(cycle_key(&a), cycle_key(&b));
+    }
+
+    #[test]
+    fn detects_a_two_node_cycle() {
+        let map =
+            node_map_from_edges(&[("a.rs", &["b.rs"]), ("b.rs", &["a.rs"])]);
+
+        let cycles = detect_cycles(&map);
+
+        assert_eq!(cycles.len(), 1, "got {cycles:?}");
+    }
+
+    #[test]
+    fn a_ring_is_reported_once_not_once_per_member() {
+        // Three files in a ring. Every member can start the traversal and reach
+        // the same ring, which previously produced duplicate entries.
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs"]),
+            ("b.rs", &["c.rs"]),
+            ("c.rs", &["a.rs"]),
+        ]);
+
+        let cycles = detect_cycles(&map);
+
+        assert_eq!(
+            cycles.len(),
+            1,
+            "a 3-node ring must report once: {cycles:?}"
+        );
+    }
+
+    #[test]
+    fn a_self_importing_file_is_one_cycle() {
+        let map = node_map_from_edges(&[("a.rs", &["a.rs"])]);
+
+        assert_eq!(detect_cycles(&map).len(), 1);
+    }
+
+    #[test]
+    fn distinct_rings_are_reported_separately() {
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs"]),
+            ("b.rs", &["a.rs"]),
+            ("x.rs", &["y.rs"]),
+            ("y.rs", &["x.rs"]),
+        ]);
+
+        assert_eq!(detect_cycles(&map).len(), 2);
+    }
+
+    #[test]
+    fn acyclic_graph_reports_no_cycles() {
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs"]),
+            ("b.rs", &["c.rs"]),
+            ("c.rs", &[]),
+        ]);
+
+        assert!(detect_cycles(&map).is_empty());
+    }
+
+    #[test]
+    fn detection_is_deterministic_across_repeated_runs() {
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs", "c.rs"]),
+            ("b.rs", &["c.rs", "a.rs"]),
+            ("c.rs", &["a.rs", "b.rs"]),
+        ]);
+
+        let first = detect_cycles(&map);
+        let second = detect_cycles(&map);
+
+        assert_eq!(first, second);
     }
 
     #[test]

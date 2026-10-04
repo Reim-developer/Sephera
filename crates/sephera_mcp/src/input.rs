@@ -82,6 +82,11 @@ pub struct GraphInput {
     pub depth: Option<u32>,
     /// Optional reverse dependency target path
     pub depends_on: Option<String>,
+    /// Output format: 'json' (default), 'markdown', 'xml', or 'dot'.
+    /// Prefer 'markdown' for a compact summary that fits an agent's context;
+    /// use 'json' when node and edge arrays need programmatic querying, and
+    /// 'dot' to render with Graphviz.
+    pub format: Option<String>,
 }
 
 #[cfg(test)]
@@ -121,6 +126,23 @@ mod tests {
         assert_eq!(input.budget, Some(32_000));
         assert_eq!(input.format.as_deref(), Some("markdown"));
         assert_eq!(input.focus.as_deref(), Some(["src".to_owned()].as_slice()));
+    }
+
+    #[test]
+    fn graph_input_parses_format() {
+        let input: GraphInput =
+            serde_json::from_str(r#"{"path":".","format":"markdown"}"#)
+                .expect("graph input must deserialize");
+
+        assert_eq!(input.format.as_deref(), Some("markdown"));
+    }
+
+    #[test]
+    fn graph_format_defaults_to_absent() {
+        let input: GraphInput = serde_json::from_str(r#"{"path":"."}"#)
+            .expect("graph input must deserialize");
+
+        assert!(input.format.is_none(), "format must stay optional");
     }
 
     #[test]

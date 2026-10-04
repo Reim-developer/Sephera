@@ -9,6 +9,46 @@ use std::{fs, path::Path, process::Command};
 use tempfile::tempdir;
 
 use super::*;
+use sephera_core::core::graph::types::GraphFormat as CoreGraphFormat;
+
+#[test]
+fn graph_format_defaults_to_json() {
+    assert!(matches!(
+        parse_graph_format(None),
+        Ok(CoreGraphFormat::Json)
+    ));
+    assert!(matches!(
+        parse_graph_format(Some("json")),
+        Ok(CoreGraphFormat::Json)
+    ));
+}
+
+#[test]
+fn graph_format_accepts_every_supported_value() {
+    for (input, expected) in [
+        ("markdown", CoreGraphFormat::Markdown),
+        ("xml", CoreGraphFormat::Xml),
+        ("dot", CoreGraphFormat::Dot),
+    ] {
+        assert!(
+            matches!(parse_graph_format(Some(input)), Ok(f) if f == expected),
+            "{input} should map to {expected:?}"
+        );
+    }
+}
+
+#[test]
+fn graph_format_rejects_unknown_value_instead_of_defaulting() {
+    let error = parse_graph_format(Some("yaml")).expect_err(
+        "an unsupported format must not silently fall back to JSON",
+    );
+
+    assert!(
+        error.message.contains("unsupported graph format"),
+        "message should name the problem, got: {}",
+        error.message
+    );
+}
 
 fn write_file(
     base_dir: &std::path::Path,
@@ -137,6 +177,7 @@ fn graph_tool_valid_directory() {
         ignore: None,
         depth: Some(0),
         depends_on: None,
+        format: None,
     });
 
     let result = server.graph(param);
@@ -163,6 +204,7 @@ fn graph_tool_depends_on_query_is_serialized() {
         ignore: None,
         depth: Some(1),
         depends_on: Some("src/util.rs".to_owned()),
+        format: None,
     });
 
     let result = server.graph(param);
@@ -184,6 +226,7 @@ fn graph_tool_invalid_ignore_pattern_fails() {
         ignore: Some(vec!["(".to_owned()]),
         depth: None,
         depends_on: None,
+        format: None,
     });
 
     let result = server.graph(param);
@@ -204,6 +247,7 @@ fn graph_tool_missing_depends_on_target_fails() {
         ignore: None,
         depth: None,
         depends_on: Some("src/missing.rs".to_owned()),
+        format: None,
     });
 
     let result = server.graph(param);
@@ -249,6 +293,7 @@ fn graph_tool_supports_url_mode() {
         ignore: None,
         depth: Some(0),
         depends_on: None,
+        format: None,
     });
 
     let result = server.graph(param);
@@ -383,6 +428,7 @@ fn tools_reject_ref_without_url_and_blob_urls() {
             ignore: None,
             depth: None,
             depends_on: None,
+            format: None,
         }));
     assert!(ref_error.is_err(), "ref without url should fail");
 
