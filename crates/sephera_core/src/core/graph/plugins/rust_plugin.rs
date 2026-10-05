@@ -112,17 +112,45 @@ pub fn crate_root(source_file: &str) -> String {
 /// `src/util.rs`. For every other file the submodules live in a directory named
 /// after the file, so `self::types` in `src/core/graph.rs` means
 /// `src/core/graph/types.rs`.
+///
+/// Cargo also compiles every `tests/*.rs`, `benches/*.rs`, `examples/*.rs` and
+/// `src/bin/*.rs` as a crate root of its own, so `mod support;` in
+/// `tests/comment_style_matrix.rs` means `tests/support.rs` rather than
+/// `tests/comment_style_matrix/support.rs`.
 #[must_use]
 pub fn module_children_dir(source_file: &str) -> String {
-    let stem = paths::file_stem(source_file);
-    let is_crate_root = matches!(stem, "main" | "lib" | "mod")
-        && paths::parent(source_file) == crate_root(source_file);
-
-    if is_crate_root {
+    if is_target_crate_root(source_file) {
         paths::parent(source_file)
     } else {
         module_path(source_file)
     }
+}
+
+/// Whether cargo compiles this file as the root of its own crate.
+///
+/// A crate root keeps its submodules beside the file instead of in a directory
+/// named after it, which changes what `self::` means.
+///
+/// The check is on the containing directory rather than against `crate_root`,
+/// because `crate_root` looks for a `src` segment and is empty for a file under
+/// `tests/` or `examples/`.
+#[must_use]
+pub fn is_target_crate_root(source_file: &str) -> bool {
+    let stem = paths::file_stem(source_file);
+    let parent = paths::parent(source_file);
+    let directory = paths::file_name(&parent);
+
+    // The conventional roots sit directly in `src/`. A `mod.rs` deeper in the
+    // tree owns a submodule directory, not a crate.
+    if matches!(stem, "main" | "lib" | "mod") && directory == "src" {
+        return true;
+    }
+
+    // Cargo compiles each file under these directories as its own target.
+    matches!(
+        directory,
+        "tests" | "benches" | "examples" | "src/bin" | "bin"
+    )
 }
 
 /// Append a `::`-separated remainder to a module base.
@@ -226,6 +254,51 @@ mod tests {
             resolve("self::types", "src/core/graph.rs", &files),
             Some("src/core/graph/types.rs".to_owned())
         );
+    }
+
+    #[test]
+    fn an_integration_test_file_is_its_own_crate_root() {
+        // Cargo compiles `tests/*.rs` as a separate target, so `mod support;`
+        // there means `tests/support.rs`, not `tests/<name>/support.rs`. This
+        // repository has exactly that layout, and the module was left unresolved.
+        let files = ["tests/support/mod.rs", "tests/case.rs"];
+
+        assert_eq!(
+            resolve("self::support", "tests/case.rs", &files),
+            Some("tests/support/mod.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_example_file_is_its_own_crate_root() {
+        let files = ["examples/demo.rs", "examples/helper/mod.rs"];
+
+        assert_eq!(
+            resolve("self::helper", "examples/demo.rs", &files),
+            Some("examples/helper/mod.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_mod_file_owns_its_own_directory() {
+        // `src/core/graph/mod.rs` is the module `src/core/graph`, so `self::x` is
+        // `src/core/graph/x.rs`. Treating it as a crate root would look in
+        // `src/core/` instead.
+        let files = ["src/core/graph/mod.rs", "src/core/graph/parser.rs"];
+
+        assert_eq!(
+            resolve("self::parser", "src/core/graph/mod.rs", &files),
+            Some("src/core/graph/parser.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_unresolvable_module_does_not_fall_back_to_the_declaring_file() {
+        // `first_existing` used to try `<parent>.rs`, which is the declaring file
+        // whenever nothing matches, reporting a resolved edge pointing at itself.
+        let files = ["src/main.rs"];
+
+        assert_eq!(resolve("self::missing", "src/main.rs", &files), None);
     }
 
     #[test]
