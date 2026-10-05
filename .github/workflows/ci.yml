@@ -70,6 +70,18 @@ jobs:
       - name: Install cargo-insta
         run: cargo install cargo-insta --locked
 
+      # The graph corpus tests skip when the corpus is absent, which is right for
+      # an offline developer and wrong for CI: a green run has to mean the
+      # accuracy checks actually ran. So the fetch is a step of its own and its
+      # failure fails the job.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Fetch graph corpus
+        run: python scripts/fetch_corpus.py
+
       - name: Run tests
         run: cargo test --workspace
 

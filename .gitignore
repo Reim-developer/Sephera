@@ -10,6 +10,9 @@
 /fuzz/corpus/
 /fuzz/target/
 /fuzz/seeds
+# Third-party repositories the graph corpus tests run against. Fetched by
+# scripts/fetch_corpus.py, never vendored.
+/tests/corpus/
 **/*.snap
 !crates/sephera_cli/tests/snapshots/*.snap
 .astro
