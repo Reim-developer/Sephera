@@ -27,6 +27,12 @@ use super::types::{
 /// Maximum file size in bytes to analyze for imports.
 const MAX_IMPORT_FILE_BYTES: u64 = 512 * 1024;
 
+/// How many unresolved local paths to list in the report.
+///
+/// Enough to see a pattern; few enough that a badly misparsed file cannot
+/// flood the output.
+const MAX_UNRESOLVED_LOCAL_SAMPLES: usize = 20;
+
 /// Builds a dependency graph for the given project.
 ///
 /// # Arguments
@@ -611,9 +617,22 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
     let total_internal_edges =
         u64::try_from(edges.iter().filter(|e| e.resolved).count())
             .unwrap_or(u64::MAX);
+
+    let unresolved_local: Vec<&GraphEdge> = edges
+        .iter()
+        .filter(|edge| !edge.resolved && looks_local(edge.import_path.as_str()))
+        .collect();
+    let external_count = edges.iter().filter(|e| !e.resolved).count();
     let total_external_edges =
-        u64::try_from(edges.iter().filter(|e| !e.resolved).count())
+        u64::try_from(external_count - unresolved_local.len())
             .unwrap_or(u64::MAX);
+    let unresolved_local_edges =
+        u64::try_from(unresolved_local.len()).unwrap_or(u64::MAX);
+    let unresolved_local_samples = unresolved_local
+        .iter()
+        .take(MAX_UNRESOLVED_LOCAL_SAMPLES)
+        .map(|edge| format!("{}: {}", edge.from, edge.import_path))
+        .collect();
 
     let mut most_importing: Vec<FileMetric> = node_map
         .iter()
@@ -644,11 +663,26 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
         total_files,
         total_internal_edges,
         total_external_edges,
+        unresolved_local_edges,
+        unresolved_local_samples,
         circular_dependencies,
         most_importing,
         most_imported,
         cycles,
     }
+}
+
+/// Whether an import path was meant to name a file in this project.
+///
+/// A path that starts with a local qualifier and did not resolve is a resolver
+/// gap, not a dependency on something outside the repository. Counting the two
+/// together made `total_external_edges` unreadable.
+fn looks_local(import_path: &str) -> bool {
+    const LOCAL_QUALIFIERS: [&str; 4] = ["crate::", "self::", "super::", "."];
+
+    LOCAL_QUALIFIERS
+        .iter()
+        .any(|qualifier| import_path.starts_with(qualifier))
 }
 
 /// Canonical identity of a cycle, used to collapse duplicates.
@@ -874,6 +908,74 @@ mod tests {
         assert!(
             kept.contains(&"src/util.rs"),
             "a real import must survive: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn an_unresolved_local_path_is_not_counted_as_external() {
+        // `std::io` and a `crate::` path the resolver failed to place were both
+        // counted in `total_external_edges`, so the number could not be read: it
+        // did not say which crates the project uses and which of its own files
+        // are missing from the analysis.
+        let report = graph_for(&[
+            (
+                "src/main.rs",
+                "use std::io;\nuse crate::nowhere::Thing;\nfn main() {}\n",
+            ),
+            ("src/lib.rs", "pub fn f() {}\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.total_external_edges, 1,
+            "only std::io leaves the project"
+        );
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
+        assert_eq!(
+            report.metrics.unresolved_local_samples,
+            vec!["src/main.rs: crate::nowhere::Thing".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_resolvable_project_reports_no_unresolved_local_paths() {
+        let report = graph_for(&[("src/main.rs", "fn main() {}\n")]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 0);
+        assert!(
+            report.metrics.unresolved_local_samples.is_empty(),
+            "nothing should be listed when nothing is unresolved"
+        );
+    }
+
+    #[test]
+    fn unresolved_local_samples_are_capped() {
+        // One badly misparsed file must not flood the report, so the sample list
+        // is bounded while the count stays exact.
+        let files: Vec<(String, String)> = (0..MAX_UNRESOLVED_LOCAL_SAMPLES
+            + 5)
+            .map(|index| {
+                (
+                    format!("src/f{index}.rs"),
+                    format!("use crate::absent{index}::Thing;\n"),
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str()))
+            .collect();
+
+        let report = graph_for(&borrowed);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges,
+            u64::try_from(MAX_UNRESOLVED_LOCAL_SAMPLES + 5).unwrap_or(u64::MAX),
+            "the count must stay exact even when the list is capped"
+        );
+        assert_eq!(
+            report.metrics.unresolved_local_samples.len(),
+            MAX_UNRESOLVED_LOCAL_SAMPLES,
+            "the sample list must be capped"
         );
     }
 

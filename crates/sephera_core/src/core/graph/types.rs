@@ -130,8 +130,28 @@ pub struct GraphMetrics {
     /// Total number of resolved internal edges.
     pub total_internal_edges: u64,
 
-    /// Total number of unresolved (external) edges.
+    /// Total number of edges that leave the project, such as `std::io` or
+    /// `anyhow::Result`.
+    ///
+    /// This does not include [`Self::unresolved_local_edges`]. The two were
+    /// counted together once, which made the number unreadable: a reader could
+    /// not tell "this repository depends on 602 crates" from "the resolver
+    /// failed to place 12 of its own files".
     pub total_external_edges: u64,
+
+    /// Unresolved edges whose path looks local rather than third-party.
+    ///
+    /// Anything starting with `crate::`, `self::`, `super::` or `.` was meant
+    /// to name a file in this project and was not found. A non-zero value is a
+    /// resolver gap, not a dependency, and each one is a file missing from the
+    /// blast radius.
+    pub unresolved_local_edges: u64,
+
+    /// Local-looking paths that did not resolve, for inspection.
+    ///
+    /// Capped so a badly misparsed file cannot flood the report. Empty when
+    /// [`Self::unresolved_local_edges`] is zero.
+    pub unresolved_local_samples: Vec<String>,
 
     /// Number of circular dependency chains detected.
     pub circular_dependencies: u64,

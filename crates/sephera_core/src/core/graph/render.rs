@@ -77,6 +77,15 @@ fn render_markdown_summary(output: &mut String, report: &GraphReport) {
         "| External edges | {} |",
         report.metrics.total_external_edges
     );
+    // Only shown when non-zero: a resolver gap, not a property of the project,
+    // and a permanently empty row would train readers to ignore it.
+    if report.metrics.unresolved_local_edges > 0 {
+        let _ = writeln!(
+            output,
+            "| Unresolved local paths | {} |",
+            report.metrics.unresolved_local_edges
+        );
+    }
     let _ = write!(
         output,
         "| Circular dependencies | {} |\n\n",
@@ -246,6 +255,19 @@ fn render_xml_metrics(output: &mut String, report: &GraphReport) {
         "    <external-edges>{}</external-edges>",
         report.metrics.total_external_edges
     );
+    if report.metrics.unresolved_local_edges > 0 {
+        let _ = writeln!(
+            output,
+            "    <unresolved-local-edges>{}</unresolved-local-edges>",
+            report.metrics.unresolved_local_edges
+        );
+        for sample in &report.metrics.unresolved_local_samples {
+            let _ = writeln!(
+                output,
+                "    <unresolved-local>{sample}</unresolved-local>"
+            );
+        }
+    }
     let _ = writeln!(
         output,
         "    <circular-dependencies>{}</circular-dependencies>",
@@ -436,6 +458,8 @@ mod tests {
                 total_files: 2,
                 total_internal_edges: 1,
                 total_external_edges: 0,
+                unresolved_local_edges: 0,
+                unresolved_local_samples: Vec::new(),
                 circular_dependencies: 0,
                 most_importing: vec![],
                 most_imported: vec![],
