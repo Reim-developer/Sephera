@@ -1,6 +1,6 @@
 //! Rust import extraction and resolution.
 
-use crate::core::compression::SupportedLanguage;
+use crate::core::{compression::SupportedLanguage, graph::ImportKind};
 
 use super::{
     ExtractedImport, ImportPlugin, ResolveContext, ResolverPlugin, paths,
@@ -48,6 +48,14 @@ impl ResolverPlugin for RustPlugin {
             let rest = import_path
                 .trim_start_matches("super::")
                 .trim_start_matches(':');
+
+            // A reference inside `mod tests { ... }` already sits one level below
+            // the file's own module, so each `super::` climbs one level and lands
+            // back on the file rather than on the file's parent directory.
+            // Without this subtraction, `use super::{Cli, Commands};` inside a
+            // test module looks for `src/Cli.rs` instead of `src/args.rs`.
+            let levels =
+                levels.saturating_sub(usize::from(context.module_depth));
 
             let mut base = module_path(context.source_file);
             for _ in 0..levels {
@@ -184,38 +192,48 @@ fn first_existing(
 
     let parent = paths::parent(&module_path);
     if !parent.is_empty() {
-        // A file never depends on itself. Reaching this branch with a candidate
-        // equal to the source means nothing matched the declared name, so
-        // reporting it as resolved would invent an edge rather than admit the
-        // module was not found.
         for candidate in [format!("{parent}.rs"), format!("{parent}/mod.rs")] {
-            if candidate != context.source_file && context.contains(&candidate)
-            {
-                return Some(candidate);
+            if !context.contains(&candidate) {
+                continue;
             }
+            // For a declaration the parent fallback landing on the declaring
+            // file means nothing matched: `mod missing;` would otherwise be
+            // reported as a resolved edge. For an import it is the answer,
+            // because `use super::Cli` inside a test module names an item in
+            // that very file.
+            if candidate == context.source_file
+                && context.kind == ImportKind::ModuleDeclaration
+            {
+                continue;
+            }
+            return Some(candidate);
         }
     }
 
     None
 }
 
+/// Test shim naming the arguments in the order a reader expects.
+#[cfg(test)]
+fn resolve(
+    import_path: &str,
+    source_file: &str,
+    files: &[&str],
+) -> Option<String> {
+    let known: super::KnownFiles =
+        files.iter().map(|f| (*f).to_owned()).collect();
+    let context = ResolveContext {
+        source_file,
+        known_files: &known,
+        module_depth: 0,
+        kind: ImportKind::Dependency,
+    };
+    RustPlugin.resolve(import_path, context)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn resolve(
-        import_path: &str,
-        source_file: &str,
-        files: &[&str],
-    ) -> Option<String> {
-        let known: super::super::KnownFiles =
-            files.iter().map(|f| (*f).to_owned()).collect();
-        let context = ResolveContext {
-            source_file,
-            known_files: &known,
-        };
-        RustPlugin.resolve(import_path, context)
-    }
 
     #[test]
     fn module_path_drops_both_file_spellings() {

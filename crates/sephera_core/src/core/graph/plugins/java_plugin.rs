@@ -81,6 +81,7 @@ fn first_existing(context: ResolveContext<'_>, path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::graph::ImportKind;
     use std::collections::BTreeSet;
 
     fn resolve(import_path: &str, files: &[&str]) -> Option<String> {
@@ -89,6 +90,8 @@ mod tests {
         let context = ResolveContext {
             source_file: "src/Main.java",
             known_files: &known,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
         };
         JavaPlugin.resolve(import_path, context)
     }

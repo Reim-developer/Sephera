@@ -65,6 +65,16 @@ pub struct ImportStatement {
     /// What this reference says about the file it names.
     #[serde(default)]
     pub kind: ImportKind,
+
+    /// How many inline `mod name { ... }` blocks this reference sits inside.
+    ///
+    /// A reference inside `mod tests` starts one level below the file's own
+    /// module, so `super::` there climbs one level and lands back on the file
+    /// rather than on the file's parent directory. Resolving without this
+    /// attribute makes `use super::{Cli, Commands};` in a test module look for a
+    /// sibling file that does not exist.
+    #[serde(default)]
+    pub module_depth: u8,
 }
 
 /// Imports extracted from a single source file.

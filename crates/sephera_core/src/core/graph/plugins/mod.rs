@@ -41,6 +41,7 @@ pub(super) fn to_extracted(
             raw_path: statement.raw_path,
             line: usize::try_from(statement.line).unwrap_or(1),
             kind: statement.kind,
+            module_depth: statement.module_depth,
         })
         .collect()
 }
@@ -60,6 +61,8 @@ pub struct ExtractedImport {
     /// declarations out of cycle detection and to apply the edge filters. See
     /// [`ImportKind`](crate::core::graph::ImportKind).
     pub kind: ImportKind,
+    /// How many inline mod name { ... } blocks the reference sits inside.
+    pub module_depth: u8,
 }
 
 /// Everything a resolver needs to look at besides the import itself.
@@ -69,6 +72,18 @@ pub struct ResolveContext<'a> {
     pub source_file: &'a str,
     /// Every file in the analysis, as normalised relative paths.
     pub known_files: &'a BTreeSet<String>,
+    /// How many inline `mod name { ... }` blocks the reference sits inside.
+    ///
+    /// Only the Rust resolver reads this; the qualifier forms in other languages
+    /// have no inline-module equivalent.
+    pub module_depth: u8,
+    /// What this reference says about the file it names.
+    ///
+    /// A declaration and an import resolve differently when the only remaining
+    /// candidate is the source file itself: `use super::Cli` inside a test
+    /// module legitimately names an item in that file, while `mod missing;`
+    /// that resolves to the declaring file would be an invented edge.
+    pub kind: ImportKind,
 }
 
 impl ResolveContext<'_> {
@@ -283,6 +298,8 @@ mod tests {
         let context = ResolveContext {
             source_file: "src/b.rs",
             known_files: &files,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
         };
 
         assert!(context.contains("src/a.rs"));
@@ -296,6 +313,8 @@ mod tests {
         let context = ResolveContext {
             source_file: "src/a.rs",
             known_files: &files,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
         };
 
         assert_eq!(

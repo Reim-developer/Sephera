@@ -31,7 +31,7 @@ pub fn extract_imports(
     let root = tree.root_node();
     let mut imports = Vec::new();
 
-    collect_imports_recursive(source, &root, language, &mut imports);
+    collect_imports_recursive(source, &root, language, 0, &mut imports);
 
     Ok(imports)
 }
@@ -52,16 +52,44 @@ fn collect_imports_recursive(
     source: &[u8],
     node: &Node<'_>,
     language: SupportedLanguage,
+    module_depth: u8,
     imports: &mut Vec<ImportStatement>,
 ) {
-    if let Some(extracted) = try_extract_import(source, node, language) {
+    if let Some(mut extracted) = try_extract_import(source, node, language) {
+        for statement in &mut extracted {
+            statement.module_depth = module_depth;
+        }
         imports.extend(extracted);
     }
 
+    // An inline `mod tests { ... }` creates a module the walk descends into.
+    // A reference inside it starts one level deeper than the file's own module,
+    // which is what decides how far `super::` climbs.
+    let child_depth = if is_inline_module(node) {
+        module_depth.saturating_add(1)
+    } else {
+        module_depth
+    };
+
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        collect_imports_recursive(source, &child, language, imports);
+        collect_imports_recursive(
+            source,
+            &child,
+            language,
+            child_depth,
+            imports,
+        );
     }
+}
+
+/// Whether this node is a `mod name { ... }` with a body rather than a
+/// declaration pointing at a file.
+///
+/// Other languages have no equivalent of Rust's inline module, so the check is
+/// keyed on the grammar's own node kind.
+fn is_inline_module(node: &Node<'_>) -> bool {
+    node.kind() == "mod_item" && node.child_by_field_name("body").is_some()
 }
 
 /// Attempts to extract import information from a single AST node.
@@ -135,6 +163,7 @@ fn extract_rust_mod(
         raw_path: format!("self::{module_name}"),
         line: u64::try_from(node.start_position().row + 1).unwrap_or(1),
         kind: ImportKind::ModuleDeclaration,
+        module_depth: 0,
     }])
 }
 
@@ -194,6 +223,7 @@ fn extract_rust_import(
                 raw_path: use_path.path,
                 line,
                 kind: use_path.kind,
+                module_depth: 0,
             })
             .collect(),
     )
@@ -324,6 +354,7 @@ fn extract_python_import(
                         raw_path: p.trim().to_owned(),
                         line,
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                     })
                     .collect(),
             )
@@ -340,6 +371,7 @@ fn extract_python_import(
                 raw_path: module.to_owned(),
                 line,
                 kind: ImportKind::Dependency,
+                module_depth: 0,
             }])
         }
         _ => None,
@@ -373,6 +405,7 @@ fn extract_js_ts_import(
                         raw_path: path.to_owned(),
                         line,
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                     }]);
                 }
             }
@@ -389,6 +422,7 @@ fn extract_js_ts_import(
                         raw_path: path.to_owned(),
                         line,
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                     }]);
                 }
             }
@@ -408,6 +442,7 @@ fn extract_js_ts_import(
                         raw_path: path.to_owned(),
                         line,
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                     }]);
                 }
             }
@@ -442,6 +477,7 @@ fn extract_go_import(
                             .unwrap_or(line);
                     imports.push(ImportStatement {
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                         raw_path: path,
                         line: spec_line,
                     });
@@ -459,6 +495,7 @@ fn extract_go_import(
                                     .unwrap_or(line);
                             imports.push(ImportStatement {
                                 kind: ImportKind::Dependency,
+                                module_depth: 0,
                                 raw_path: path,
                                 line: spec_line,
                             });
@@ -473,6 +510,7 @@ fn extract_go_import(
                 if !path.is_empty() {
                     imports.push(ImportStatement {
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                         raw_path: path.to_owned(),
                         line,
                     });
@@ -527,6 +565,7 @@ fn extract_java_import(
 
     Some(vec![ImportStatement {
         kind: ImportKind::Dependency,
+        module_depth: 0,
         raw_path: path.to_owned(),
         line,
     }])
@@ -555,6 +594,7 @@ fn extract_c_cpp_import(
                 if !path.is_empty() {
                     return Some(vec![ImportStatement {
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                         raw_path: path.to_owned(),
                         line,
                     }]);
@@ -566,6 +606,7 @@ fn extract_c_cpp_import(
                 if !path.is_empty() {
                     return Some(vec![ImportStatement {
                         kind: ImportKind::Dependency,
+                        module_depth: 0,
                         raw_path: format!("<{path}>"),
                         line,
                     }]);
@@ -611,6 +652,59 @@ mod tests {
         let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
         assert_eq!(imports.len(), 1);
         assert_eq!(imports[0].raw_path, "crate::core::graph");
+    }
+
+    #[test]
+    fn super_inside_an_inline_module_lands_back_on_the_file() {
+        // `mod tests { use super::Cli; }` refers to an item in the same file, not
+        // to a sibling named `Cli.rs`. Ten such references in this repository
+        // were counted as unresolved local paths because the extractor dropped
+        // the inline-module depth.
+        let source =
+            b"pub struct Cli;\n\nmod tests {\n    use super::Cli;\n}\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports.len(), 1, "{imports:?}");
+        assert_eq!(
+            imports[0].raw_path, "super::Cli",
+            "the path is kept as written; the depth is what the resolver reads"
+        );
+        assert_eq!(
+            imports[0].module_depth, 1,
+            "a reference inside one inline module sits one level down"
+        );
+    }
+
+    #[test]
+    fn module_depth_accumulates_through_nested_inline_modules() {
+        let source =
+            b"pub struct Cli;\n\nmod tests {\n    mod nested {\n        use super::Cli;\n    }\n}\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports.len(), 1, "{imports:?}");
+        assert_eq!(imports[0].module_depth, 2);
+    }
+
+    #[test]
+    fn a_declaration_outside_an_inline_module_has_no_depth() {
+        let source = b"mod types;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports[0].module_depth, 0);
+    }
+
+    #[test]
+    fn an_inline_module_itself_produces_no_declaration() {
+        // `mod tests { ... }` has a body and names no file.
+        let source = b"mod tests {\n    use super::Cli;\n}\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert!(
+            imports
+                .iter()
+                .all(|s| s.kind != ImportKind::ModuleDeclaration),
+            "an inline module must not emit a declaration: {imports:?}"
+        );
     }
 
     #[test]

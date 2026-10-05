@@ -68,6 +68,7 @@ impl ResolverPlugin for JavaScriptPlugin {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::graph::ImportKind;
     use std::collections::BTreeSet;
 
     fn resolve(
@@ -80,6 +81,8 @@ mod tests {
         let context = ResolveContext {
             source_file,
             known_files: &known,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
         };
         JavaScriptPlugin {
             language: SupportedLanguage::TypeScript,

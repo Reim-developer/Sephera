@@ -21,7 +21,7 @@ use super::plugins;
 
 use super::types::{
     FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
-    ImportStatement, NodeMap,
+    ImportKind, ImportStatement, NodeMap,
 };
 
 /// Maximum file size in bytes to analyze for imports.
@@ -219,6 +219,7 @@ fn extract_all_imports(
                     raw_path: extracted.raw_path,
                     line: u64::try_from(extracted.line).unwrap_or(1),
                     kind: extracted.kind,
+                    module_depth: extracted.module_depth,
                 })
                 .collect(),
         });
@@ -330,6 +331,8 @@ fn normalize_user_relative_path(path: &Path) -> Result<String> {
 fn resolve_import(
     import_path: &str,
     source_file: &str,
+    module_depth: u8,
+    kind: ImportKind,
     language: SupportedLanguage,
     known_files: &plugins::KnownFiles,
 ) -> Option<String> {
@@ -340,6 +343,8 @@ fn resolve_import(
         plugins::ResolveContext {
             source_file,
             known_files,
+            module_depth,
+            kind,
         },
     )
 }
@@ -352,7 +357,14 @@ fn resolve_import_lang(
     source_file: &str,
     known_files: &plugins::KnownFiles,
 ) -> Option<String> {
-    resolve_import(import_path, source_file, language, known_files)
+    resolve_import(
+        import_path,
+        source_file,
+        0,
+        ImportKind::Dependency,
+        language,
+        known_files,
+    )
 }
 
 /// Builds edges and populates the node map from extracted imports.
@@ -376,6 +388,8 @@ fn build_edges_and_nodes(
             let resolved = resolve_import(
                 &statement.raw_path,
                 &file_data.file_path,
+                statement.module_depth,
+                statement.kind,
                 file_data.ts_language,
                 known_files,
             );
@@ -786,6 +800,7 @@ mod tests {
             raw_path: raw_path.to_owned(),
             line: 1,
             kind,
+            module_depth: 0,
         }
     }
 
