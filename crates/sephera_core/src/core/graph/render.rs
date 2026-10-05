@@ -400,7 +400,7 @@ mod tests {
     use std::path::PathBuf;
 
     use crate::core::graph::types::{
-        GraphEdge, GraphMetrics, GraphNode, GraphReport,
+        GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
     };
 
     use super::*;
@@ -430,6 +430,7 @@ mod tests {
                 to: Some("src/lib.rs".to_owned()),
                 import_path: "crate::lib".to_owned(),
                 resolved: true,
+                kind: ImportKind::Dependency,
             }],
             metrics: GraphMetrics {
                 total_files: 2,

@@ -7,3 +7,4 @@ pub mod resolver;
 pub mod types;
 
 pub use render::render_graph;
+pub use types::ImportKind;

@@ -13,7 +13,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::core::compression::SupportedLanguage;
+use crate::core::{compression::SupportedLanguage, graph::ImportKind};
 
 pub(crate) mod c_cpp_plugin;
 mod go_plugin;
@@ -40,6 +40,7 @@ pub(super) fn to_extracted(
         .map(|statement| ExtractedImport {
             raw_path: statement.raw_path,
             line: usize::try_from(statement.line).unwrap_or(1),
+            kind: statement.kind,
         })
         .collect()
 }
@@ -53,6 +54,12 @@ pub struct ExtractedImport {
     pub raw_path: String,
     /// 1-based line number where the import appears.
     pub line: usize,
+    /// What this reference says about the file it names.
+    ///
+    /// Carried through the plugin boundary because the resolver needs it to keep
+    /// declarations out of cycle detection and to apply the edge filters. See
+    /// [`ImportKind`](crate::core::graph::ImportKind).
+    pub kind: ImportKind,
 }
 
 /// Everything a resolver needs to look at besides the import itself.

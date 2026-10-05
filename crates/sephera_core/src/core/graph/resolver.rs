@@ -21,7 +21,7 @@ use super::plugins;
 
 use super::types::{
     FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
-    NodeMap,
+    ImportStatement, NodeMap,
 };
 
 /// Maximum file size in bytes to analyze for imports.
@@ -56,20 +56,19 @@ impl EdgeFilters {
     ///
     /// Only these forms are filtered, and only when explicitly enabled: a
     /// plain `use path::to::thing` is a real dependency and is always kept.
+    ///
+    /// The alias and glob forms are recognised from the parse rather than by
+    /// searching the path text, because the path no longer carries the `as`
+    /// clause and a substring test would miss it.
     #[must_use]
-    pub fn rejects(&self, import_path: &str) -> bool {
+    pub const fn rejects(&self, statement: &ImportStatement) -> bool {
         if !self.exclude_type_aliases {
             return false;
         }
 
-        // `use foo::Bar as Baz` renames rather than depends.
-        if import_path.contains(" as ") {
-            return true;
-        }
-
-        // `use foo::*` and `use foo::* as f` import a namespace.
-        // A named glob such as `use foo::*bar` is still a real import.
-        import_path.ends_with("::*") || import_path.ends_with("::* as _")
+        // `use foo::Bar as Baz`, `use foo::*` and `use foo::* as f` introduce a
+        // local name without saying which file must be recompiled.
+        statement.kind.is_renaming()
     }
 }
 
@@ -121,7 +120,7 @@ pub fn build_graph_with(
     let mut all_file_imports = extract_all_imports(&project_files)?;
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
-            file.imports.retain(|(path, _)| !filters.rejects(path));
+            file.imports.retain(|statement| !filters.rejects(statement));
         }
     }
 
@@ -163,7 +162,7 @@ struct FileImportData {
     file_path: String,
     language: Option<&'static str>,
     ts_language: SupportedLanguage,
-    imports: Vec<(String, u64)>,
+    imports: Vec<ImportStatement>,
 }
 
 /// Extracts imports from all project files that have a supported language.
@@ -210,7 +209,11 @@ fn extract_all_imports(
             ts_language,
             imports: imports
                 .into_iter()
-                .map(|imp| (imp.raw_path, u64::try_from(imp.line).unwrap_or(1)))
+                .map(|extracted| ImportStatement {
+                    raw_path: extracted.raw_path,
+                    line: u64::try_from(extracted.line).unwrap_or(1),
+                    kind: extracted.kind,
+                })
                 .collect(),
         });
     }
@@ -363,9 +366,9 @@ fn build_edges_and_nodes(
     }
 
     for file_data in all_imports {
-        for (import_path, _line) in &file_data.imports {
+        for statement in &file_data.imports {
             let resolved = resolve_import(
-                import_path,
+                &statement.raw_path,
                 &file_data.file_path,
                 file_data.ts_language,
                 known_files,
@@ -373,7 +376,14 @@ fn build_edges_and_nodes(
 
             let is_resolved = resolved.is_some();
 
-            if let Some(ref target) = resolved {
+            // A module declaration says a module lives in a file; it is not a
+            // dependency, and treating it as one makes every child module that
+            // refers to its parent with `super::` look circular. So the edge is
+            // reported but not fed into the adjacency cycle detection walks.
+            if let Some(ref target) = resolved
+                && statement.kind.is_dependency()
+                && *target != file_data.file_path
+            {
                 // Update imported_by for the target
                 node_map
                     .entry(target.clone())
@@ -392,8 +402,9 @@ fn build_edges_and_nodes(
             edges.push(GraphEdge {
                 from: file_data.file_path.clone(),
                 to: resolved,
-                import_path: import_path.clone(),
+                import_path: statement.raw_path.clone(),
                 resolved: is_resolved,
+                kind: statement.kind,
             });
         }
     }
@@ -727,11 +738,21 @@ fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::graph::ImportKind;
     use std::fs;
     use tempfile::tempdir;
 
     fn known_files(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    /// Build a statement of the given kind for filter tests.
+    fn statement(raw_path: &str, kind: ImportKind) -> ImportStatement {
+        ImportStatement {
+            raw_path: raw_path.to_owned(),
+            line: 1,
+            kind,
+        }
     }
 
     #[test]
@@ -740,8 +761,13 @@ mod tests {
         // filter is opt-in and the default graph is unchanged.
         let filters = EdgeFilters::default();
 
-        assert!(!filters.rejects("crate::foo::Bar as Baz"));
-        assert!(!filters.rejects("crate::foo::*"));
+        assert!(
+            !filters
+                .rejects(&statement("crate::foo::Bar", ImportKind::TypeAlias))
+        );
+        assert!(
+            !filters.rejects(&statement("crate::foo", ImportKind::Namespace))
+        );
     }
 
     #[test]
@@ -750,9 +776,30 @@ mod tests {
             exclude_type_aliases: true,
         };
 
-        assert!(filters.rejects("crate::foo::Bar as Baz"));
-        assert!(filters.rejects("crate::foo::*"));
-        assert!(filters.rejects("crate::foo::* as f"));
+        assert!(
+            filters
+                .rejects(&statement("crate::foo::Bar", ImportKind::TypeAlias))
+        );
+        assert!(
+            filters.rejects(&statement("crate::foo", ImportKind::Namespace))
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_survives_the_filter() {
+        // `--exclude-types` is about import forms, not about declarations. A
+        // declaration is kept in the edge list either way; cycle detection is
+        // what ignores it.
+        let filters = EdgeFilters {
+            exclude_type_aliases: true,
+        };
+
+        assert!(
+            !filters.rejects(&statement(
+                "self::types",
+                ImportKind::ModuleDeclaration
+            ))
+        );
     }
 
     #[test]
@@ -765,10 +812,12 @@ mod tests {
             "crate::core::graph",
             "crate::foo::Bar",
             "std::collections::HashMap",
+            // A name that merely starts with `*` is an ordinary item, not a
+            // namespace import.
             "crate::a::b::*inner",
         ] {
             assert!(
-                !filters.rejects(import),
+                !filters.rejects(&statement(import, ImportKind::Dependency)),
                 "{import} is a real dependency and must be kept"
             );
         }
@@ -825,6 +874,88 @@ mod tests {
         assert!(
             kept.contains(&"src/util.rs"),
             "a real import must survive: {kept:?}"
+        );
+    }
+
+    /// A parent module that declares a child, and a child that refers back to
+    /// its parent with `super::`. This is ordinary Rust, not a dependency loop.
+    fn nested_module_tree() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("src/main.rs", "mod util;\nfn main() {}\n"),
+            ("src/util.rs", "mod helper;\npub fn u() {}\n"),
+            ("src/util/helper.rs", "use super::u;\npub fn h() {}\n"),
+        ]
+    }
+
+    #[test]
+    fn a_parent_and_child_module_are_not_reported_as_a_cycle() {
+        // Every nested Rust module with a `super::` reference produced a
+        // phantom cycle, because the `mod` declaration closed the loop. Sephera's
+        // own repository reported 38 cycles for this reason and 0 real ones.
+        let report = graph_for(&nested_module_tree());
+
+        assert_eq!(
+            report.metrics.circular_dependencies, 0,
+            "module structure is not a dependency cycle: {:?}",
+            report.metrics.cycles
+        );
+    }
+
+    #[test]
+    fn a_real_import_cycle_is_still_reported() {
+        // The point of excluding declarations is precision, not silence: a cycle
+        // between two `use` statements must still be found.
+        let report = graph_for(&[
+            ("src/main.rs", "mod a;\nmod b;\nfn main() {}\n"),
+            ("src/a.rs", "use crate::b::Thing;\npub struct A;\n"),
+            ("src/b.rs", "use crate::a::A;\npub struct Thing;\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.circular_dependencies, 1,
+            "a genuine import cycle must be reported: {:?}",
+            report.metrics.cycles
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_is_still_reported_as_an_edge() {
+        // Excluding declarations from cycle detection must not remove them from
+        // the graph: they are the structure a reader wants to see.
+        let report = graph_for(&nested_module_tree());
+
+        assert!(
+            report
+                .edges
+                .iter()
+                .any(|edge| edge.kind == ImportKind::ModuleDeclaration
+                    && edge.to.as_deref() == Some("src/util.rs")),
+            "the `mod util;` edge must still be present: {:?}",
+            report.edges
+        );
+    }
+
+    #[test]
+    fn no_edge_points_at_its_own_file() {
+        // A resolver fallback used to answer an unresolved module with the
+        // declaring file, which reported a resolved self-edge.
+        let report = graph_for(&[
+            ("src/main.rs", "mod missing;\nfn main() {}\n"),
+            ("src/lib.rs", "pub fn f() {}\n"),
+        ]);
+
+        let self_loops: Vec<&str> = report
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.from == *edge.to.as_ref().unwrap_or(&String::new())
+            })
+            .map(|edge| edge.import_path.as_str())
+            .collect();
+        assert_eq!(
+            self_loops,
+            Vec::<&str>::new(),
+            "a file never depends on itself"
         );
     }
 

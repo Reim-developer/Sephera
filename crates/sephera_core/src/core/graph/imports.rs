@@ -10,7 +10,7 @@ use tree_sitter::Node;
 
 use crate::core::compression::{SupportedLanguage, new_parser};
 
-use super::types::ImportStatement;
+use super::types::{ImportKind, ImportStatement};
 
 /// Extracts all import statements from a source file using Tree-sitter.
 ///
@@ -114,8 +114,10 @@ fn extract_rust_mod(
     }
 
     // A `#[path]` attribute renames the file, so the declared name would
-    // resolve to something that does not exist.
-    if node.child_by_field_name("attribute").is_some() {
+    // resolve to something that does not exist. The grammar attaches the
+    // attribute as the preceding sibling rather than as a child of `mod_item`,
+    // so this has to look back rather than at a field.
+    if has_path_attribute(source, node) {
         return None;
     }
 
@@ -132,7 +134,33 @@ fn extract_rust_mod(
     Some(vec![ImportStatement {
         raw_path: format!("self::{module_name}"),
         line: u64::try_from(node.start_position().row + 1).unwrap_or(1),
+        kind: ImportKind::ModuleDeclaration,
     }])
+}
+
+/// Whether a `mod` declaration carries a `#[path = "..."]` attribute.
+///
+/// The attribute is a sibling of `mod_item`, so the check walks back over it. A
+/// `#[cfg]` attribute is skipped rather than treated as a rename: it gates
+/// whether the declaration exists at all, which does not move the file.
+fn has_path_attribute(source: &[u8], node: &Node<'_>) -> bool {
+    let mut current = node.prev_sibling();
+
+    while let Some(sibling) = current {
+        match sibling.kind() {
+            "attribute_item" => {
+                let text = node_text(source, &sibling);
+                if text.contains("path") && text.contains('=') {
+                    return true;
+                }
+            }
+            // Only attributes bind to the declaration; anything else ends the run.
+            _ => return false,
+        }
+        current = sibling.prev_sibling();
+    }
+
+    false
 }
 
 /// Handles:
@@ -140,7 +168,8 @@ fn extract_rust_mod(
 /// - `use crate::core::graph;`
 /// - `use super::types::*;`
 /// - `use std::collections::{HashMap, BTreeMap};`
-/// - `mod util;` — a module declaration is a compile-time dependency
+/// - `use self::{datasets::{A, B}, writer::f};`
+/// - `mod util;` - a declaration, which is structural rather than a dependency
 fn extract_rust_import(
     source: &[u8],
     node: &Node<'_>,
@@ -153,54 +182,124 @@ fn extract_rust_import(
         return None;
     }
 
-    let text = node_text(source, node);
     let line = u64::try_from(node.start_position().row + 1).unwrap_or(1);
+    let argument = node.child_by_field_name("argument")?;
+    let mut paths = Vec::new();
+    collect_use_paths(source, &argument, None, &mut paths);
 
-    // Strip `use ` prefix and `;` suffix, extract the path portion.
-    let path = text
-        .strip_prefix("use ")
-        .unwrap_or(&text)
-        .trim_end_matches(';')
-        .trim();
-
-    // Handle grouped imports: `use std::collections::{HashMap, BTreeMap};`
-    path.find('{').map_or_else(
-        || {
-            Some(vec![ImportStatement {
-                raw_path: path.to_owned(),
+    Some(
+        paths
+            .into_iter()
+            .map(|use_path| ImportStatement {
+                raw_path: use_path.path,
                 line,
-            }])
-        },
-        |brace_start| {
-            let base = path[..brace_start].trim_end_matches(':');
-            let group_content = path[brace_start..]
-                .trim_start_matches('{')
-                .trim_end_matches('}');
-
-            let results: Vec<ImportStatement> = group_content
-                .split(',')
-                .filter_map(|item| {
-                    let trimmed = item.trim();
-                    if trimmed.is_empty() {
-                        return None;
-                    }
-                    Some(ImportStatement {
-                        raw_path: format!("{base}::{trimmed}"),
-                        line,
-                    })
-                })
-                .collect();
-
-            if results.is_empty() {
-                Some(vec![ImportStatement {
-                    raw_path: path.to_owned(),
-                    line,
-                }])
-            } else {
-                Some(results)
-            }
-        },
+                kind: use_path.kind,
+            })
+            .collect(),
     )
+}
+
+/// One path named by a `use` tree.
+struct UsePath {
+    path: String,
+    kind: ImportKind,
+}
+
+/// Flatten a `use` tree into the full paths it names.
+///
+/// The tree is walked rather than split on commas, because commas separate
+/// items at every nesting level: `use self::{datasets::{A, B}, writer::f};` has
+/// commas inside the inner group too, and splitting on them produced paths such
+/// as `self::B` and even `self::}`, which then resolved to the declaring file
+/// and appeared in the graph as self-loops.
+///
+/// `prefix` is the path accumulated from enclosing groups, or `None` at the
+/// top level.
+fn collect_use_paths(
+    source: &[u8],
+    node: &Node<'_>,
+    prefix: Option<&str>,
+    out: &mut Vec<UsePath>,
+) {
+    match node.kind() {
+        "use_list" => {
+            for child in node.named_children(&mut node.walk()) {
+                collect_use_paths(source, &child, prefix, out);
+            }
+        }
+        "scoped_use_list" => {
+            let Some(path) = node.child_by_field_name("path") else {
+                return;
+            };
+            let Some(list) = node.child_by_field_name("list") else {
+                return;
+            };
+            let base = join_use_path(prefix, &node_text(source, &path));
+            collect_use_paths(source, &list, Some(&base), out);
+        }
+        "use_as_clause" => {
+            // `use foo::bar as baz;` names `foo::bar`; the alias is a local
+            // binding, and the kind records that so it can be filtered.
+            if let Some(path) = node.child_by_field_name("path") {
+                push_use_path(
+                    source,
+                    &path,
+                    prefix,
+                    ImportKind::TypeAlias,
+                    out,
+                );
+            }
+        }
+        "use_wildcard" => {
+            // `use foo::*;` names `foo`. The grammar gives this node no `path`
+            // field: the path is its first named child and the star is an
+            // unnamed token after it.
+            if let Some(path) = node.named_child(0) {
+                push_use_path(
+                    source,
+                    &path,
+                    prefix,
+                    ImportKind::Namespace,
+                    out,
+                );
+            }
+        }
+        "use_declaration" => {
+            if let Some(argument) = node.child_by_field_name("argument") {
+                collect_use_paths(source, &argument, prefix, out);
+            }
+        }
+        _ => {
+            // `scoped_identifier`, `identifier`, `crate`, `self`, `super`.
+            push_use_path(source, node, prefix, ImportKind::Dependency, out);
+        }
+    }
+}
+
+/// Add one leaf path, qualified by any enclosing group.
+fn push_use_path(
+    source: &[u8],
+    node: &Node<'_>,
+    prefix: Option<&str>,
+    kind: ImportKind,
+    out: &mut Vec<UsePath>,
+) {
+    let text = node_text(source, node);
+    if text.is_empty() {
+        return;
+    }
+    out.push(UsePath {
+        path: join_use_path(prefix, &text),
+        kind,
+    });
+}
+
+/// Join a group prefix and a leaf into one path.
+fn join_use_path(prefix: Option<&str>, leaf: &str) -> String {
+    match prefix {
+        Some(base) if !base.is_empty() => format!("{base}::{leaf}"),
+        _ => leaf.to_owned(),
+    }
 }
 
 // ---- Python ----
@@ -224,6 +323,7 @@ fn extract_python_import(
                     .map(|p| ImportStatement {
                         raw_path: p.trim().to_owned(),
                         line,
+                        kind: ImportKind::Dependency,
                     })
                     .collect(),
             )
@@ -239,6 +339,7 @@ fn extract_python_import(
             Some(vec![ImportStatement {
                 raw_path: module.to_owned(),
                 line,
+                kind: ImportKind::Dependency,
             }])
         }
         _ => None,
@@ -271,6 +372,7 @@ fn extract_js_ts_import(
                     return Some(vec![ImportStatement {
                         raw_path: path.to_owned(),
                         line,
+                        kind: ImportKind::Dependency,
                     }]);
                 }
             }
@@ -286,6 +388,7 @@ fn extract_js_ts_import(
                     return Some(vec![ImportStatement {
                         raw_path: path.to_owned(),
                         line,
+                        kind: ImportKind::Dependency,
                     }]);
                 }
             }
@@ -304,6 +407,7 @@ fn extract_js_ts_import(
                     return Some(vec![ImportStatement {
                         raw_path: path.to_owned(),
                         line,
+                        kind: ImportKind::Dependency,
                     }]);
                 }
             }
@@ -337,6 +441,7 @@ fn extract_go_import(
                         u64::try_from(child.start_position().row + 1)
                             .unwrap_or(line);
                     imports.push(ImportStatement {
+                        kind: ImportKind::Dependency,
                         raw_path: path,
                         line: spec_line,
                     });
@@ -353,6 +458,7 @@ fn extract_go_import(
                                 u64::try_from(spec.start_position().row + 1)
                                     .unwrap_or(line);
                             imports.push(ImportStatement {
+                                kind: ImportKind::Dependency,
                                 raw_path: path,
                                 line: spec_line,
                             });
@@ -366,6 +472,7 @@ fn extract_go_import(
                 let path = raw.trim_matches('"');
                 if !path.is_empty() {
                     imports.push(ImportStatement {
+                        kind: ImportKind::Dependency,
                         raw_path: path.to_owned(),
                         line,
                     });
@@ -419,6 +526,7 @@ fn extract_java_import(
         .trim();
 
     Some(vec![ImportStatement {
+        kind: ImportKind::Dependency,
         raw_path: path.to_owned(),
         line,
     }])
@@ -446,6 +554,7 @@ fn extract_c_cpp_import(
                 let path = raw.trim_matches('"');
                 if !path.is_empty() {
                     return Some(vec![ImportStatement {
+                        kind: ImportKind::Dependency,
                         raw_path: path.to_owned(),
                         line,
                     }]);
@@ -456,6 +565,7 @@ fn extract_c_cpp_import(
                 let path = raw.trim_start_matches('<').trim_end_matches('>');
                 if !path.is_empty() {
                     return Some(vec![ImportStatement {
+                        kind: ImportKind::Dependency,
                         raw_path: format!("<{path}>"),
                         line,
                     }]);
@@ -510,6 +620,103 @@ mod tests {
         assert_eq!(imports.len(), 2);
         assert_eq!(imports[0].raw_path, "std::collections::HashMap");
         assert_eq!(imports[1].raw_path, "std::collections::BTreeMap");
+    }
+
+    #[test]
+    fn a_nested_use_group_yields_full_paths_not_bare_identifiers() {
+        // Commas separate items at every nesting level, so splitting the text on
+        // commas produced `self::AVAILABLE_DATASET_NAMES` and even `self::}`,
+        // which then resolved to the declaring file and appeared as self-loops.
+        let source = b"use self::{\n    datasets::{AVAILABLE, resolve_specs},\n    writer::generate,\n};\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        let paths: Vec<&str> = imports
+            .iter()
+            .map(|statement| statement.raw_path.as_str())
+            .collect();
+        assert_eq!(
+            paths,
+            vec![
+                "self::datasets::AVAILABLE",
+                "self::datasets::resolve_specs",
+                "self::writer::generate",
+            ],
+            "every path must carry its group prefixes"
+        );
+        assert!(
+            !paths.iter().any(|path| path.contains('{')
+                || path.contains('}')
+                || path.contains(',')),
+            "no brace or comma may survive into a path: {paths:?}"
+        );
+    }
+
+    #[test]
+    fn a_use_alias_is_recorded_and_its_path_drops_the_alias() {
+        let source = b"use crate::alias::Thing as Other;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].raw_path, "crate::alias::Thing");
+        assert_eq!(imports[0].kind, ImportKind::TypeAlias);
+    }
+
+    #[test]
+    fn a_namespace_import_is_recorded() {
+        let source = b"use crate::foo::*;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports[0].raw_path, "crate::foo");
+        assert_eq!(imports[0].kind, ImportKind::Namespace);
+    }
+
+    #[test]
+    fn an_ordinary_use_is_a_plain_dependency() {
+        let source = b"use crate::core::graph;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports[0].kind, ImportKind::Dependency);
+        assert!(imports[0].kind.is_dependency());
+    }
+
+    #[test]
+    fn a_mod_declaration_is_marked_as_structural() {
+        let source = b"mod types;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports[0].raw_path, "self::types");
+        assert_eq!(imports[0].kind, ImportKind::ModuleDeclaration);
+        assert!(
+            !imports[0].kind.is_dependency(),
+            "a declaration is structural, not a dependency"
+        );
+    }
+
+    #[test]
+    fn a_path_attribute_module_is_skipped_because_the_name_no_longer_holds() {
+        // The grammar attaches the attribute as the preceding sibling of
+        // `mod_item`, not as its child, so the declared name would resolve to
+        // the wrong file.
+        let source =
+            b"#[path = \"generated_language_data.rs\"]\nmod generated_language_data;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(
+            imports,
+            Vec::new(),
+            "`#[path]` renames the file, so the declared name is not a path"
+        );
+    }
+
+    #[test]
+    fn a_cfg_attribute_does_not_hide_a_module_declaration() {
+        // `#[cfg]` gates whether the module exists; it does not move the file, so
+        // the declaration still resolves when the gate passes.
+        let source = b"#[cfg(test)]\nmod gated;\n";
+        let imports = extract_imports(source, SupportedLanguage::Rust).unwrap();
+
+        assert_eq!(imports.len(), 1);
+        assert_eq!(imports[0].kind, ImportKind::ModuleDeclaration);
     }
 
     #[test]

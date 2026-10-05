@@ -153,7 +153,11 @@ fn first_existing(
     let parent = paths::parent(&module_path);
     if !parent.is_empty() {
         let candidate = format!("{parent}.rs");
-        if context.contains(&candidate) {
+        // A file never depends on itself. Reaching this branch with
+        // `candidate` equal to the source means nothing matched the declared
+        // name, so reporting it as resolved would invent an edge rather than
+        // admit the module was not found.
+        if candidate != context.source_file && context.contains(&candidate) {
             return Some(candidate);
         }
     }

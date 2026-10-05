@@ -4,6 +4,54 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Serialize;
 
+/// What a reference in source code actually says about the file it names.
+///
+/// These are mutually exclusive: each comes from a distinct grammar production,
+/// so one enum describes them all and no combination of flags has to be
+/// reasoned about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportKind {
+    /// An ordinary `use` or `import`. A real dependency.
+    #[default]
+    Dependency,
+
+    /// A module declaration such as `mod types;`.
+    ///
+    /// A declaration says a module lives in a file; it does not say the file
+    /// depends on it. Any child module that refers to its parent with `super::`
+    /// would otherwise close a cycle with its own declaration, so cycle
+    /// detection skips these edges.
+    ModuleDeclaration,
+
+    /// A renaming import such as `use foo::Bar as Baz`.
+    ///
+    /// Recorded from the parse rather than left to be found by searching the
+    /// path, since the resolved path does not carry the `as` clause.
+    TypeAlias,
+
+    /// A namespace import such as `use foo::*`.
+    Namespace,
+}
+
+impl ImportKind {
+    /// Whether this reference creates a dependency worth walking.
+    ///
+    /// False for a declaration, which is structural. The remaining kinds are all
+    /// real references; whether they are *useful* is [`EdgeFilters`](crate::core::graph::resolver::EdgeFilters)'s
+    /// decision, not the graph's.
+    #[must_use]
+    pub const fn is_dependency(self) -> bool {
+        !matches!(self, Self::ModuleDeclaration)
+    }
+
+    /// Whether this reference only renames or namespaces what it imports.
+    #[must_use]
+    pub const fn is_renaming(self) -> bool {
+        matches!(self, Self::TypeAlias | Self::Namespace)
+    }
+}
+
 /// A single import statement extracted from a source file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct ImportStatement {
@@ -13,6 +61,10 @@ pub struct ImportStatement {
 
     /// The line number where this import appears (1-indexed).
     pub line: u64,
+
+    /// What this reference says about the file it names.
+    #[serde(default)]
+    pub kind: ImportKind,
 }
 
 /// Imports extracted from a single source file.
@@ -43,6 +95,14 @@ pub struct GraphEdge {
 
     /// Whether this edge was resolved to a local file.
     pub resolved: bool,
+
+    /// What this reference says about the file it names.
+    ///
+    /// Carried on the edge so a consumer can tell a structural edge from a
+    /// dependency without re-parsing `import_path`. Cycle detection walks only
+    /// [`ImportKind::is_dependency`] edges.
+    #[serde(default)]
+    pub kind: ImportKind,
 }
 
 /// A node in the dependency graph with aggregated metrics.
