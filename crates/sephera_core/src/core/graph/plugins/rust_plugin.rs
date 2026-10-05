@@ -72,22 +72,23 @@ impl ResolverPlugin for RustPlugin {
         // `self::` is relative to the module's own directory, which is not the same
         // as the module path for a crate root: `self::util` in `src/main.rs`
         // means `src/util.rs`, not `src/main/util.rs`.
+        let children = module_children_dir(context.source_file);
         if let Some(rest) = import_path.strip_prefix("self::") {
+            return first_existing(context, &qualify(&children, rest));
+        }
+
+        if let Some(module_path) = import_path.strip_prefix("crate::") {
             return first_existing(
                 context,
-                &qualify(&module_children_dir(context.source_file), rest),
+                &qualify(&crate_root(context.source_file), module_path),
             );
         }
 
-        let Some(module_path) = import_path.strip_prefix("crate::") else {
-            // External crate: nothing local to resolve.
-            return None;
-        };
-
-        first_existing(
-            context,
-            &qualify(&crate_root(context.source_file), module_path),
-        )
+        // No qualifier. Rust 2018 uniform paths allow this: `pub use types::{A};`
+        // in `code_loc.rs` names `code_loc/types.rs`, not a crate called `types`.
+        // Trying the local directory first is what the compiler does too, and
+        // without it every such import was reported as an external dependency.
+        first_existing(context, &qualify(&children, import_path))
     }
 }
 

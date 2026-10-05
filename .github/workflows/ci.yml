@@ -79,7 +79,13 @@ jobs:
         with:
           python-version: "3.12"
 
+      # `SEPHERA_CORPUS_DIR` rather than the default cache location, because the
+      # fetcher and the test would otherwise each pick a directory by their own
+      # rules. If those two ever disagree the test skips and the job still goes
+      # green, which is the one outcome worth preventing here.
       - name: Fetch graph corpus
+        env:
+          SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/fetch_corpus.py
 
       - name: Run tests

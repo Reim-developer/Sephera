@@ -6,8 +6,9 @@ behaviour, not correctness. A fixture written to match current output would have
 the same problem, so the inputs have to be code nobody here wrote.
 
 Repositories are cloned at a pinned commit and left in place between runs.
-Everything lands under `tests/corpus/`, which is gitignored: these are other
-people's repositories, not ours to vendor.
+Everything lands in a cache directory outside the repository, since `graph`
+reads only the ignore patterns it is given and would otherwise analyse test data
+as project code. `SEPHERA_CORPUS_DIR` overrides the location.
 
 Offline developers are not blocked. The tests skip when the corpus is absent and
 say so; CI fetches it first and fails the step if the clone does not land, so a
@@ -17,6 +18,7 @@ green CI run always means the corpus actually ran.
 from __future__ import annotations
 
 import argparse
+import os
 import subprocess
 import sys
 from pathlib import Path
@@ -32,7 +34,36 @@ REPOSITORIES: dict[str, tuple[str, str]] = {
     "express": ("https://github.com/expressjs/express", "7ef98448f8b38099ab1ded55e458538ad47a51e7"),
 }
 
-CORPUS_DIR = Path(__file__).resolve().parent.parent / "tests" / "corpus"
+def corpus_dir() -> Path:
+    """Where the repositories live.
+
+    Deliberately outside the repository. `graph` reads only the ignore patterns
+    it is given, so a corpus sitting in the working tree would be analysed as
+    part of the project: on this repository that inflated a self-scan from 129
+    files to over a thousand and reported `axum` and `flask` as dependencies.
+    Test data that would be mistaken for project code does not belong in the
+    project.
+
+    `SEPHERA_CORPUS_DIR` overrides the location for CI or a second checkout.
+    """
+    override = os.environ.get("SEPHERA_CORPUS_DIR")
+    if override:
+        return Path(override).expanduser().resolve()
+
+    if sys.platform == "win32":
+        base = os.environ.get("LOCALAPPDATA")
+        if base:
+            return Path(base) / "sephera" / "corpus"
+    else:
+        base = os.environ.get("XDG_CACHE_HOME")
+        if base:
+            return Path(base) / "sephera" / "corpus"
+        return Path.home() / ".cache" / "sephera" / "corpus"
+
+    return Path.home() / ".sephera-corpus"
+
+
+CORPUS_DIR = corpus_dir()
 
 
 def head_sha(path: Path) -> str:
@@ -162,6 +193,7 @@ def main() -> int:
         return 1
 
     print(f"\ncorpus ready at {CORPUS_DIR}")
+    print("set SEPHERA_CORPUS_DIR to that path if the tests cannot find it")
     return 0
 
 

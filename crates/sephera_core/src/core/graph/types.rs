@@ -4,6 +4,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Serialize;
 
+use super::manifests;
+
 /// What a reference in source code actually says about the file it names.
 ///
 /// These are mutually exclusive: each comes from a distinct grammar production,
@@ -137,8 +139,16 @@ pub struct GraphMetrics {
     /// Total number of files analyzed.
     pub total_files: u64,
 
-    /// Total number of resolved internal edges.
+    /// Total number of resolved edges between two different files.
+    ///
+    /// Self-references are counted separately in [`Self::self_references`]: a
+    /// `use super::*;` inside a test module resolves to the file it is written
+    /// in, which is a real reference but says nothing about how files depend on
+    /// each other.
     pub total_internal_edges: u64,
+
+    /// Resolved edges whose source and target are the same file.
+    pub self_references: u64,
 
     /// Total number of edges that leave the project, such as `std::io` or
     /// `anyhow::Result`.
@@ -162,6 +172,24 @@ pub struct GraphMetrics {
     /// Capped so a badly misparsed file cannot flood the report. Empty when
     /// [`Self::unresolved_local_edges`] is zero.
     pub unresolved_local_samples: Vec<String>,
+
+    /// Every package an unresolved edge refers to, most used first.
+    ///
+    /// This is the answer to "which dependency do I need to bump": a name, a
+    /// version where a manifest records one, and how many import paths reach it.
+    /// A crate in this workspace appears here too, under
+    /// [`DependencyKind::Local`](crate::core::graph::manifests::DependencyKind::Local),
+    /// because it is reached by name rather than by path.
+    pub dependencies: Vec<manifests::Dependency>,
+
+    /// How many unresolved edges name a package declared in a manifest.
+    pub declared_dependency_edges: u64,
+
+    /// How many unresolved edges name a workspace member of this project.
+    pub local_crate_edges: u64,
+
+    /// How many unresolved edges name something the language provides.
+    pub builtin_edges: u64,
 
     /// Number of circular dependency chains detected.
     pub circular_dependencies: u64,

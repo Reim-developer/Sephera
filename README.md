@@ -27,7 +27,7 @@ You want to refactor `code_loc.rs`. Run Sephera on Sephera:
 sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs
 ```
 
-![Sephera reverse dependency query showing that nine files import code_loc.rs](docs/public/demo/graph.gif)
+![Sephera reverse dependency query showing which files import code_loc.rs](docs/public/demo/graph.gif)
 
 The same query with `--format markdown`:
 
@@ -42,34 +42,46 @@ The same query with `--format markdown`:
 
 | Metric                | Value |
 |-----------------------|-------|
-| Files analyzed        | 5     |
-| Internal edges        | 12    |
-| External edges        | 8     |
+| Files analyzed        | 4     |
+| Internal edges        | 7     |
+| External edges        | 19    |
+| Declared dependencies | 8     |
+| Local crate edges     | 0     |
+| Standard library edges| 11    |
 | Circular dependencies | 0     |
 
 ## Most Imported Files
 
 | File                                      | Imported by |
 |-------------------------------------------|-------------|
-| `crates/sephera_core/src/core/code_loc.rs`| 9           |
-| `crates/sephera_core/src/core/code_loc/reader.rs` | 1    |
+| `crates/sephera_core/src/core/code_loc.rs`| 6           |
+
+## Most Importing Files
+
+| File                                                | Imports |
+|-----------------------------------------------------|---------|
+| `crates/sephera_core/src/core/code_loc/tests.rs`    | 4       |
+| `crates/sephera_core/src/core/runtime/context.rs`  | 1       |
+| `crates/sephera_core/src/core/symbols/lookup.rs`    | 1       |
 
 ## Dependency Diagram
 
 ```mermaid
 graph LR
     n0["code_loc.rs"]
-    n1["analyzer.rs"]
-    n2["reader.rs"]
-    n3["tests.rs"]
-    n4["runtime/context.rs"]
+    n1["tests.rs"]
+    n2["context.rs"]
+    n3["lookup.rs"]
+    n0 --> n1
     n1 --> n0
     n2 --> n0
-    n0 --> n4
+    n3 --> n0
 ```
 ````
 
-**Nine files import `code_loc.rs`.** You now know your blast radius before opening the file — not after CI turns red.
+**Six references reach `code_loc.rs`, from three files.** You now know your blast radius before opening the file — not after CI turns red.
+
+The query filters to the blast radius, which is why the report above shows four files rather than the whole repository.
 
 ---
 
@@ -86,25 +98,41 @@ Real output:
 ````markdown
 # Dependency Graph Report
 
+**Base path:** `.`
+
 ## Summary
 
 | Metric                | Value |
 |-----------------------|-------|
-| Files analyzed        | 107   |
-| Internal edges        | 193   |
-| External edges        | 500   |
-| Circular dependencies | 2     |
+| Files analyzed        | 132   |
+| Internal edges        | 478   |
+| External edges        | 514   |
+| Unresolved local paths| 2     |
+| Declared dependencies | 177   |
+| Local crate edges     | 114   |
+| Standard library edges| 179   |
+| Circular dependencies | 0     |
 
-## Circular Dependencies
+## Dependencies
 
-1. `crates/sephera_tools/src/benchmark_corpus.rs` → `crates/sephera_tools/src/benchmark_corpus.rs`
-2. `crates/sephera_tools/src/benchmark_corpus.rs` → `crates/sephera_tools/src/benchmark_corpus/writer.rs` → `crates/sephera_tools/src/benchmark_corpus.rs`
+| Package            | Kind     | Version   | Import paths |
+|--------------------|----------|-----------|--------------|
+| `std`              | stdlib   | unknown   | 169 |
+| `sepheracore`      | workspace| unknown   | 107 |
+| `anyhow`           | declared | 1.0.102   | 65  |
+| `tempfile`         | declared | 3.27.0    | 30  |
+| `comfytable`       | declared | 7.2.2     | 11  |
+| `clap`             | declared | 4.6.0     | 10  |
 ````
 
-Sephera found two circular dependencies **in its own source tree** — including a file importing itself. These are real, still-present, and not theoretical.
+The three numbers that used to be one are now three: 114 edges reach a crate in this workspace and 179 reach the standard library, so the 514 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
 
 Cycles are found by iterative DFS over the resolved import graph, with back-edge
-detection and deduplication so each cycle is reported once.
+detection and deduplication so each cycle is reported once. This repository
+reports 0, and it took real fixes to get there: the cycles it used to report were
+module-tree artifacts — a parent declaring a child and the child naming its parent
+with `super::` — not dependencies you could act on. An early version of this tool
+advertised two "found in its own source tree" cycles for exactly that reason.
 
 ---
 

@@ -36,24 +36,47 @@ struct CorpusExpectation {
     unresolved_local: u64,
     files: u64,
     internal_edges: u64,
+    self_references: u64,
     cycles: u64,
     structural_cycles: u64,
 }
 
-/// Locating the repository root from the crate manifest directory.
+/// Where `scripts/fetch_corpus.py` puts the repositories.
 ///
-/// `CARGO_MANIFEST_DIR` is `crates/sephera_core`, and the corpus lives at the
-/// workspace root two levels up.
-fn workspace_root() -> PathBuf {
+/// Deliberately outside the repository. `graph` reads only the ignore patterns it
+/// is given, so a corpus inside the working tree would be analysed as project
+/// code: on this repository that inflated a self-scan from 129 files to over a
+/// thousand and reported `axum` and `flask` as its own dependencies.
+fn corpus_root() -> Option<PathBuf> {
+    if let Some(dir) = std::env::var_os("SEPHERA_CORPUS_DIR") {
+        return Some(PathBuf::from(dir));
+    }
+
+    #[cfg(windows)]
+    let base = std::env::var_os("LOCALAPPDATA").map(PathBuf::from);
+    #[cfg(not(windows))]
+    let base = std::env::var_os("XDG_CACHE_HOME")
+        .map(PathBuf::from)
+        .or_else(|| {
+            std::env::var_os("HOME")
+                .map(|home| PathBuf::from(home).join(".cache"))
+        });
+
+    base.map(|base| base.join("sephera").join("corpus"))
+}
+
+/// The pinned expectations file, which does live in the repository.
+fn expectations_path() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .ancestors()
         .nth(2)
         .expect("the crate always sits two levels below the workspace root")
-        .to_path_buf()
+        .join("tests")
+        .join("corpus.toml")
 }
 
 fn load_expectations() -> Vec<CorpusExpectation> {
-    let path = workspace_root().join("tests").join("corpus.toml");
+    let path = expectations_path();
     let text = std::fs::read_to_string(&path).unwrap_or_else(|error| {
         panic!("cannot read {}: {error}", path.display())
     });
@@ -124,12 +147,16 @@ fn graph_metrics_match_the_pinned_corpus() {
         "tests/corpus.toml lists no repositories"
     );
 
-    let corpus_root = workspace_root().join("tests").join("corpus");
+    let corpus_root = corpus_root();
     let mut checked = 0_usize;
     let mut skipped = Vec::new();
     let mut failures = Vec::new();
 
     for expected in &expectations {
+        let Some(corpus_root) = corpus_root.as_ref() else {
+            skipped.push(expected.name.clone());
+            continue;
+        };
         let path = corpus_root.join(&expected.name);
         if !path.is_dir() {
             skipped.push(expected.name.clone());
@@ -146,12 +173,17 @@ fn graph_metrics_match_the_pinned_corpus() {
 
         let metrics = &report.metrics;
         let structural = count_structural_cycles(&report);
-        let cases: [(&str, u64, u64); 4] = [
+        let cases: [(&str, u64, u64); 5] = [
             ("files", metrics.total_files, expected.files),
             (
                 "internal_edges",
                 metrics.total_internal_edges,
                 expected.internal_edges,
+            ),
+            (
+                "self_references",
+                metrics.self_references,
+                expected.self_references,
             ),
             (
                 "unresolved_local",

@@ -14,10 +14,16 @@
 # things. A structural cycle closes through module navigation alone -- a parent
 # declaring a child, and the child naming something the parent re-exports -- so
 # editing either file cannot break it and it is noise in a blast radius. Only
-# `cycles - structural_cycles` are worth acting on.
+# `cycles - structural_cycles` are worth acting on. It is zero everywhere now:
+# a parent referring to its own child is excluded whatever way it is spelled.
+#
+# `self_references` is edges from a file to itself, which a `use super::*;`
+# inside a test module produces. They are real references but carry no
+# information about how files depend on each other, so they are excluded from
+# `internal_edges` and counted here instead.
 #
 # To refresh after an intended change: run scripts/fetch_corpus.py, then
-# `cargo run -- graph --path tests/corpus/<name> --format json` and update the
+# `cargo run -- graph --path <corpus>/<name> --format json` and update the
 # numbers here, with the reason in the commit message.
 
 [[corpus]]
@@ -28,9 +34,10 @@ language = "Rust"
 # expected here.
 unresolved_local = 66
 files = 307
-internal_edges = 594
-cycles = 54
-structural_cycles = 14
+internal_edges = 589
+self_references = 64
+cycles = 21
+structural_cycles = 0
 
 [[corpus]]
 name = "flask"
@@ -39,7 +46,8 @@ language = "Python"
 # not a target to raise.
 unresolved_local = 0
 files = 80
-internal_edges = 176
+internal_edges = 171
+self_references = 5
 cycles = 39
 # Flask's `__init__.py` is the public API and its modules import back through it,
 # so every cycle here involves a real dependency.
@@ -53,5 +61,6 @@ language = "JavaScript"
 unresolved_local = 97
 files = 141
 internal_edges = 63
+self_references = 0
 cycles = 0
 structural_cycles = 0

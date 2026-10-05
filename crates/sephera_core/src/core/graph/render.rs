@@ -2,7 +2,10 @@
 
 use std::fmt::Write;
 
-use crate::core::graph::types::{GraphFormat, GraphQuery, GraphReport};
+use crate::core::graph::{
+    manifests::DependencyKind,
+    types::{GraphFormat, GraphQuery, GraphReport},
+};
 
 /// Renders the graph report in the requested format.
 #[must_use]
@@ -86,6 +89,21 @@ fn render_markdown_summary(output: &mut String, report: &GraphReport) {
             report.metrics.unresolved_local_edges
         );
     }
+    let _ = writeln!(
+        output,
+        "| Declared dependencies | {} |",
+        report.metrics.declared_dependency_edges
+    );
+    let _ = writeln!(
+        output,
+        "| Local crate edges | {} |",
+        report.metrics.local_crate_edges
+    );
+    let _ = writeln!(
+        output,
+        "| Standard library edges | {} |",
+        report.metrics.builtin_edges
+    );
     let _ = write!(
         output,
         "| Circular dependencies | {} |\n\n",
@@ -94,6 +112,26 @@ fn render_markdown_summary(output: &mut String, report: &GraphReport) {
 }
 
 fn render_markdown_lists(output: &mut String, report: &GraphReport) {
+    // What the unresolved edges actually refer to. This is the section that
+    // answers "which dependency do I need to bump", so it comes before the file
+    // rankings.
+    if !report.metrics.dependencies.is_empty() {
+        output.push_str("## Dependencies\n\n");
+        output.push_str("| Package | Kind | Version | Import paths |\n");
+        output.push_str("|---------|------|---------|--------------|\n");
+        for dependency in &report.metrics.dependencies {
+            let _ = writeln!(
+                output,
+                "| `{}` | {} | {} | {} |",
+                dependency.name,
+                dependency_kind_label(dependency.kind),
+                dependency.version.as_deref().unwrap_or("unknown"),
+                dependency.edge_count
+            );
+        }
+        output.push('\n');
+    }
+
     // Most imported files
     if !report.metrics.most_imported.is_empty() {
         output.push_str("## Most Imported Files\n\n");
@@ -133,11 +171,62 @@ fn render_markdown_lists(output: &mut String, report: &GraphReport) {
     }
 }
 
-fn render_markdown_mermaid(output: &mut String, report: &GraphReport) {
-    let internal_edges: Vec<_> =
-        report.edges.iter().filter(|e| e.resolved).collect();
+/// A short human label for what kind of reference a package name came from.
+const fn dependency_kind_label(kind: DependencyKind) -> &'static str {
+    match kind {
+        DependencyKind::Local => "workspace",
+        DependencyKind::Builtin => "stdlib",
+        DependencyKind::Declared => "declared",
+        DependencyKind::Undeclared => "undeclared",
+    }
+}
 
-    if internal_edges.is_empty() {
+/// How many arrows the diagram draws before it collapses into a summary.
+///
+/// Past this the graph is denser than anyone can read, and the point of the
+/// diagram is the shape rather than the inventory.
+const MAX_DRAWN_EDGES: usize = 50;
+
+/// Edges worth drawing: resolved, between two different files, and deduplicated.
+///
+/// A file that names another in six separate `use` statements would otherwise
+/// draw six identical arrows, and a `use super::*;` would draw an arrow from a
+/// node to itself. Neither says anything about the shape of the graph.
+fn diagram_edges(report: &GraphReport) -> Vec<(usize, usize)> {
+    let node_ids: std::collections::BTreeMap<&str, usize> = report
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.file_path.as_str(), index))
+        .collect();
+
+    let mut seen = std::collections::BTreeSet::new();
+    let mut drawn = Vec::new();
+    for edge in &report.edges {
+        if !edge.resolved {
+            continue;
+        }
+        let Some(to) = edge.to.as_deref() else {
+            continue;
+        };
+        if to == edge.from {
+            continue;
+        }
+        let (Some(from_id), Some(to_id)) =
+            (node_ids.get(edge.from.as_str()), node_ids.get(to))
+        else {
+            continue;
+        };
+        if seen.insert((*from_id, *to_id)) {
+            drawn.push((*from_id, *to_id));
+        }
+    }
+    drawn
+}
+
+fn render_markdown_mermaid(output: &mut String, report: &GraphReport) {
+    let drawn = diagram_edges(report);
+    if drawn.is_empty() {
         return;
     }
 
@@ -161,21 +250,15 @@ fn render_markdown_mermaid(output: &mut String, report: &GraphReport) {
         }
     }
 
-    for edge in internal_edges.iter().take(50) {
-        if let Some(ref to) = edge.to {
-            if let (Some(from_id), Some(to_id)) =
-                (node_ids.get(edge.from.as_str()), node_ids.get(to.as_str()))
-            {
-                let _ = writeln!(output, "    {from_id} --> {to_id}");
-            }
-        }
+    for (from_id, to_id) in drawn.iter().take(MAX_DRAWN_EDGES) {
+        let _ = writeln!(output, "    n{from_id} --> n{to_id}");
     }
 
-    if internal_edges.len() > 50 {
+    if drawn.len() > MAX_DRAWN_EDGES {
         let _ = writeln!(
             output,
             "    %% ... and {} more edges",
-            internal_edges.len() - 50
+            drawn.len() - MAX_DRAWN_EDGES
         );
     }
 
@@ -407,8 +490,7 @@ fn dot_escape(text: &str) -> String {
 
 /// Converts a file path to a valid DOT node ID.
 fn dot_node_id(path: &str) -> String {
-    let cleaned = path.replace(['/', '.', '-'], "_");
-    format!("\"{cleaned}\"")
+    path.replace(['/', '.', '-'], "_")
 }
 
 fn format_query(query: &GraphQuery) -> String {
@@ -457,9 +539,14 @@ mod tests {
             metrics: GraphMetrics {
                 total_files: 2,
                 total_internal_edges: 1,
+                self_references: 0,
                 total_external_edges: 0,
                 unresolved_local_edges: 0,
                 unresolved_local_samples: Vec::new(),
+                dependencies: Vec::new(),
+                declared_dependency_edges: 0,
+                local_crate_edges: 0,
+                builtin_edges: 0,
                 circular_dependencies: 0,
                 most_importing: vec![],
                 most_imported: vec![],
@@ -487,6 +574,84 @@ mod tests {
         assert!(md.contains("**Query:** `depends_on:src/lib.rs`"));
         assert!(md.contains("```mermaid"));
         assert!(md.contains("graph LR"));
+    }
+
+    #[test]
+    fn the_diagram_draws_one_arrow_per_pair_of_files() {
+        let edge = |from: &str, to: Option<&str>| GraphEdge {
+            from: from.to_owned(),
+            to: to.map(ToOwned::to_owned),
+            import_path: "x".to_owned(),
+            resolved: to.is_some(),
+            kind: ImportKind::Dependency,
+        };
+        let report = GraphReport {
+            base_path: PathBuf::from("/tmp/test"),
+            focus_paths: vec![],
+            depth: Some(0),
+            query: None,
+            nodes: vec![
+                GraphNode {
+                    file_path: "a.rs".to_owned(),
+                    language: Some("Rust"),
+                    imports_count: 3,
+                    imported_by_count: 1,
+                },
+                GraphNode {
+                    file_path: "b.rs".to_owned(),
+                    language: Some("Rust"),
+                    imports_count: 1,
+                    imported_by_count: 3,
+                },
+            ],
+            edges: vec![
+                // Two files naming each other in several places: one arrow.
+                edge("a.rs", Some("b.rs")),
+                edge("a.rs", Some("b.rs")),
+                // A glob import resolves to the file it is written in.
+                edge("a.rs", Some("a.rs")),
+                // Never resolved, so it has no arrow at all.
+                edge("a.rs", None),
+            ],
+            metrics: sample_report().metrics,
+        };
+
+        let arrows = diagram_edges(&report);
+        assert_eq!(
+            arrows,
+            vec![(0, 1)],
+            "duplicate arrows and self-references say nothing about the shape"
+        );
+    }
+
+    #[test]
+    fn a_file_that_only_imports_itself_draws_no_diagram() {
+        let report = GraphReport {
+            base_path: PathBuf::from("/tmp/test"),
+            focus_paths: vec![],
+            depth: Some(0),
+            query: None,
+            nodes: vec![GraphNode {
+                file_path: "a.rs".to_owned(),
+                language: Some("Rust"),
+                imports_count: 1,
+                imported_by_count: 0,
+            }],
+            edges: vec![GraphEdge {
+                from: "a.rs".to_owned(),
+                to: Some("a.rs".to_owned()),
+                import_path: "super".to_owned(),
+                resolved: true,
+                kind: ImportKind::Dependency,
+            }],
+            metrics: sample_report().metrics,
+        };
+
+        let md = render_graph(&report, GraphFormat::Markdown);
+        assert!(
+            !md.contains("graph LR"),
+            "an empty diagram is noise: there is no shape to show"
+        );
     }
 
     #[test]

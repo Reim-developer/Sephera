@@ -17,7 +17,7 @@ use crate::core::{
     project_files::{ProjectFile, collect_project_files},
 };
 
-use super::plugins;
+use super::{manifests, plugins};
 
 use super::types::{
     FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
@@ -144,7 +144,8 @@ pub fn build_graph_with(
     let filtered_edges = filter_edges(&edges, &selection.node_paths);
 
     // Phase 4: Compute metrics.
-    let metrics = compute_metrics(&filtered_node_map, &filtered_edges);
+    let metrics =
+        compute_metrics(base_path, &filtered_node_map, &filtered_edges);
 
     // Phase 5: Build final nodes list.
     let nodes = build_node_list(&filtered_node_map);
@@ -400,9 +401,16 @@ fn build_edges_and_nodes(
             // dependency, and treating it as one makes every child module that
             // refers to its parent with `super::` look circular. So the edge is
             // reported but not fed into the adjacency cycle detection walks.
+            //
+            // The same holds for a plain `use` of a direct child module. A
+            // parent that re-exports its own child says the same thing twice,
+            // and counting the second form brought four cycles back on this
+            // repository: `runtime.rs` declares `mod context;` and also does
+            // `pub use context::{...}`.
             if let Some(ref target) = resolved
                 && statement.kind.is_dependency()
                 && *target != file_data.file_path
+                && !is_own_child_module(&file_data.file_path, target)
             {
                 // Update imported_by for the target
                 node_map
@@ -626,11 +634,29 @@ fn build_node_list(node_map: &NodeMap) -> Vec<GraphNode> {
 }
 
 /// Computes graph metrics including cycle detection.
-fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
+fn compute_metrics(
+    base_path: &Path,
+    node_map: &NodeMap,
+    edges: &[GraphEdge],
+) -> GraphMetrics {
     let total_files = u64::try_from(node_map.len()).unwrap_or(u64::MAX);
-    let total_internal_edges =
-        u64::try_from(edges.iter().filter(|e| e.resolved).count())
-            .unwrap_or(u64::MAX);
+    // A `use super::*;` inside a test module resolves to the file it is written
+    // in. That is a real reference but says nothing about how files depend on
+    // each other, so it is counted apart from the internal edges.
+    let self_references = u64::try_from(
+        edges
+            .iter()
+            .filter(|edge| edge.resolved && is_self_edge(edge))
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let total_internal_edges = u64::try_from(
+        edges
+            .iter()
+            .filter(|edge| edge.resolved && !is_self_edge(edge))
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
 
     let unresolved_local: Vec<&GraphEdge> = edges
         .iter()
@@ -647,6 +673,27 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
         .take(MAX_UNRESOLVED_LOCAL_SAMPLES)
         .map(|edge| format!("{}: {}", edge.from, edge.import_path))
         .collect();
+
+    // Attribute what is left to actual packages, so the report can answer which
+    // dependency an edge refers to rather than only how many there are.
+    let index = manifests::ManifestIndex::discover(base_path);
+    let dependencies = index.summarise(
+        edges
+            .iter()
+            .filter(|edge| !edge.resolved)
+            .map(|edge| edge.import_path.as_str()),
+    );
+    let edges_of_kind = |kind: manifests::DependencyKind| {
+        dependencies
+            .iter()
+            .filter(|dependency| dependency.kind == kind)
+            .map(|dependency| dependency.edge_count)
+            .sum::<u64>()
+    };
+    let declared_dependency_edges =
+        edges_of_kind(manifests::DependencyKind::Declared);
+    let local_crate_edges = edges_of_kind(manifests::DependencyKind::Local);
+    let builtin_edges = edges_of_kind(manifests::DependencyKind::Builtin);
 
     let mut most_importing: Vec<FileMetric> = node_map
         .iter()
@@ -676,9 +723,14 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
     GraphMetrics {
         total_files,
         total_internal_edges,
+        self_references,
         total_external_edges,
         unresolved_local_edges,
         unresolved_local_samples,
+        dependencies,
+        declared_dependency_edges,
+        local_crate_edges,
+        builtin_edges,
         circular_dependencies,
         most_importing,
         most_imported,
@@ -691,6 +743,38 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
 /// A path that starts with a local qualifier and did not resolve is a resolver
 /// gap, not a dependency on something outside the repository. Counting the two
 /// together made `total_external_edges` unreadable.
+/// Whether `target` is a direct child module of the file named by `source`.
+///
+/// Rust compiles a child module as part of its parent, so an edge from a parent
+/// to its child is structural whichever way it is written: `mod child;`,
+/// `use child::Thing`, or `pub use child::Thing`. Only the declaration form was
+/// recognised, so a re-export counted as a dependency and closed a loop with the
+/// child's own `super::` reference back. That is how `runtime.rs`, which both
+/// declares `mod context;` and does `pub use context::{...}`, reported a cycle.
+fn is_own_child_module(source: &str, target: &str) -> bool {
+    // `plugins/mod.rs` owns the files beside it, so it is its own directory for
+    // this purpose rather than a module nested inside `plugins`.
+    let parent_module = if let Some(directory) = source.strip_suffix("/mod.rs")
+    {
+        directory.to_owned()
+    } else {
+        match source.strip_suffix(".rs") {
+            Some(stem) => stem.to_owned(),
+            None => return false,
+        }
+    };
+
+    match target.rsplit_once('/') {
+        Some((directory, _)) => directory == parent_module,
+        None => false,
+    }
+}
+
+/// Whether an edge points from a file back to itself.
+fn is_self_edge(edge: &GraphEdge) -> bool {
+    edge.to.as_deref() == Some(edge.from.as_str())
+}
+
 fn looks_local(import_path: &str) -> bool {
     const LOCAL_QUALIFIERS: [&str; 4] = ["crate::", "self::", "super::", "."];
 
@@ -1356,6 +1440,90 @@ mod tests {
                 &files
             ),
             Some("src/core/graph/types.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_unqualified_rust_path_resolves_to_the_local_module() {
+        // Rust 2018 uniform paths: `pub use types::{A};` inside `code_loc.rs`
+        // names `code_loc/types.rs`, not a crate called `types`. Treating it as
+        // external was worth 105 wrong edges on this repository and put junk like
+        // `types` at the top of the dependency table.
+        let files = known_files(&[
+            "src/main.rs",
+            "src/core/code_loc.rs",
+            "src/core/code_loc/analyzer.rs",
+            "src/core/code_loc/types.rs",
+            "src/types.rs",
+        ]);
+
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "types::CodeLocReport",
+                "src/core/code_loc.rs",
+                &files,
+            ),
+            Some("src/core/code_loc/types.rs".to_owned()),
+            "the module beside the importing file wins over the crate root"
+        );
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "analyzer::CodeLoc",
+                "src/core/code_loc.rs",
+                &files,
+            ),
+            Some("src/core/code_loc/analyzer.rs".to_owned())
+        );
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "serde::Serialize",
+                "src/core/code_loc.rs",
+                &files,
+            ),
+            None,
+            "with no local module of that name the path is an external crate"
+        );
+    }
+
+    #[test]
+    fn a_parent_referring_to_its_own_child_is_not_a_cycle() {
+        // Rust compiles a child module as part of its parent, so `mod context;`
+        // and `pub use context::{...}` say the same thing. Counting only the
+        // first form left the second looking like a dependency, which closed a
+        // loop with the child's own `super::` reference.
+        assert!(
+            is_own_child_module(
+                "src/core/runtime.rs",
+                "src/core/runtime/context.rs"
+            ),
+            "a parent to its declared child is structural"
+        );
+        assert!(
+            is_own_child_module(
+                "src/core/code_loc.rs",
+                "src/core/code_loc/analyzer.rs"
+            ),
+            "however the child is named"
+        );
+        assert!(
+            !is_own_child_module("src/core/graph.rs", "src/core/types.rs"),
+            "a sibling module is a real dependency"
+        );
+        assert!(
+            !is_own_child_module("src/core/context.rs", "src/core.rs"),
+            "a child naming its parent is a real reference, which is why the \\
+             declaration edge is the one excluded"
+        );
+        assert!(
+            is_own_child_module("src/core.rs", "src/core/context.rs"),
+            "a module file owns the directory beside it"
+        );
+        assert!(
+            is_own_child_module("src/core/mod.rs", "src/core/graph.rs"),
+            "and so does mod.rs"
         );
     }
 
