@@ -161,7 +161,11 @@ fn qualify(base: &str, rest: &str) -> String {
 /// Try the file spellings a Rust module path can take.
 ///
 /// A module may be `foo.rs`, `foo/mod.rs`, or — when a sibling file carries the
-/// module's contents — a bare `foo.rs` one level up from `foo/bar.rs`.
+/// module's contents — a bare `foo.rs` or `foo/mod.rs` one level up from
+/// `foo/bar.rs`. That last pair is what makes an *item* inside a directory
+/// module resolve: `crate::core::compression::CompressionMode` names an item of
+/// the `compression` module, so no `CompressionMode.rs` exists and the answer is
+/// the module's own `mod.rs`.
 fn first_existing(
     context: ResolveContext<'_>,
     module_path: &str,
@@ -180,13 +184,15 @@ fn first_existing(
 
     let parent = paths::parent(&module_path);
     if !parent.is_empty() {
-        let candidate = format!("{parent}.rs");
-        // A file never depends on itself. Reaching this branch with
-        // `candidate` equal to the source means nothing matched the declared
-        // name, so reporting it as resolved would invent an edge rather than
-        // admit the module was not found.
-        if candidate != context.source_file && context.contains(&candidate) {
-            return Some(candidate);
+        // A file never depends on itself. Reaching this branch with a candidate
+        // equal to the source means nothing matched the declared name, so
+        // reporting it as resolved would invent an edge rather than admit the
+        // module was not found.
+        for candidate in [format!("{parent}.rs"), format!("{parent}/mod.rs")] {
+            if candidate != context.source_file && context.contains(&candidate)
+            {
+                return Some(candidate);
+            }
         }
     }
 
@@ -289,6 +295,41 @@ mod tests {
         assert_eq!(
             resolve("self::parser", "src/core/graph/mod.rs", &files),
             Some("src/core/graph/parser.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_item_inside_a_directory_module_resolves_to_that_module() {
+        // `crate::core::compression::CompressionMode` names an item of the
+        // `compression` module, so no `CompressionMode.rs` exists. The answer is
+        // the module's own `mod.rs`, and without that candidate 19 of this
+        // repository's edges were counted as external.
+        let files = ["crates/sephera_core/src/core/compression/mod.rs"];
+
+        assert_eq!(
+            resolve(
+                "crate::core::compression::CompressionMode",
+                "crates/sephera_core/src/core/context/builder.rs",
+                &files,
+            ),
+            Some("crates/sephera_core/src/core/compression/mod.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_sibling_item_of_a_directory_module_resolves_too() {
+        let files = [
+            "crates/sephera_core/src/core/symbols/mod.rs",
+            "crates/sephera_core/src/core/symbols/types.rs",
+        ];
+
+        assert_eq!(
+            resolve(
+                "crate::core::symbols::SymbolEntry",
+                "crates/sephera_core/src/core/runtime/context.rs",
+                &files,
+            ),
+            Some("crates/sephera_core/src/core/symbols/mod.rs".to_owned())
         );
     }
 
