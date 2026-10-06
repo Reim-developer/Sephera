@@ -112,6 +112,7 @@ fn run_watch_target(
             url: None,
             git_ref: None,
             ignore: ignore.to_vec(),
+            no_gitignore: false,
         }),
         WatchTarget::Symbols => run_symbols(SymbolsArgs {
             path: path(),
@@ -122,6 +123,7 @@ fn run_watch_target(
             detail: false,
             by_file: false,
             ignore: ignore.to_vec(),
+            no_gitignore: false,
         }),
         WatchTarget::Graph => run_graph(&GraphArgs {
             path: path(),
@@ -129,6 +131,7 @@ fn run_watch_target(
             git_ref: None,
             focus: Vec::new(),
             ignore: ignore.to_vec(),
+            no_gitignore: false,
             depth: None,
             what_depends_on: None,
             exclude_types: false,
@@ -147,6 +150,7 @@ fn run_watch_target(
                 git_ref: None,
                 focus: Vec::new(),
                 ignore: ignore.to_vec(),
+                no_gitignore: false,
                 depth: None,
                 what_depends_on: Some(target_path.to_owned()),
                 exclude_types: false,
@@ -162,9 +166,26 @@ fn run_mcp() -> Result<()> {
     runtime.block_on(sephera_mcp::run_mcp_server())
 }
 
+/// Build the exclusion policy for one invocation.
+///
+/// The repository's own ignore files are honoured unless the user asked
+/// otherwise. Routing every command through one function means `--no-gitignore`
+/// cannot mean one thing for `graph` and another for `context`.
+fn build_ignore_matcher(
+    patterns: &[String],
+    no_gitignore: bool,
+) -> Result<IgnoreMatcher> {
+    if no_gitignore {
+        IgnoreMatcher::from_patterns_without_ignore_files(patterns)
+    } else {
+        IgnoreMatcher::from_patterns(patterns)
+    }
+}
+
 fn run_loc(arguments: LocArgs) -> Result<()> {
     let progress = CliProgress::start("Analyzing line counts...");
-    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
+    let ignore =
+        build_ignore_matcher(&arguments.ignore, arguments.no_gitignore)?;
     let source = resolve_source(&SourceRequest {
         path: arguments.path,
         url: arguments.url,
@@ -181,7 +202,8 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
 
 fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
     let progress = CliProgress::start("Counting declarations...");
-    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
+    let ignore =
+        build_ignore_matcher(&arguments.ignore, arguments.no_gitignore)?;
     let source = resolve_source(&SourceRequest {
         path: arguments.path,
         url: arguments.url,
@@ -280,7 +302,8 @@ fn report_unresolved_symbols(names: &[String]) {
 
 fn run_graph(arguments: &GraphArgs) -> Result<()> {
     let progress = CliProgress::start("Analyzing dependency graph...");
-    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
+    let ignore =
+        build_ignore_matcher(&arguments.ignore, arguments.no_gitignore)?;
     let source = resolve_source(&SourceRequest {
         path: arguments.path.clone(),
         url: arguments.url.clone(),

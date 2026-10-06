@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -88,10 +89,22 @@ def parse_toml(text: str) -> list[Expectation]:
 
 
 def corpus_root() -> Path | None:
-    """Where `scripts/fetch_corpus.py` puts the repositories."""
-    override = Path.home() / "AppData" / "Local" / "sephera" / "corpus"
-    if override.is_dir():
-        return override
+    """Where `scripts/fetch_corpus.py` puts the repositories.
+
+    `SEPHERA_CORPUS_DIR` first, because that is how CI points the fetcher and
+    the verifier at the same place. It used to be read only by the fetcher,
+    which meant CI cloned into `${{ github.workspace }}/.corpus` while this
+    script looked in two home-directory locations, found neither, and skipped
+    every repository. The check was green because it had run nothing.
+    """
+    override = os.environ.get("SEPHERA_CORPUS_DIR")
+    if override:
+        candidate = Path(override)
+        if candidate.is_dir():
+            return candidate
+    fallback = Path.home() / "AppData" / "Local" / "sephera" / "corpus"
+    if fallback.is_dir():
+        return fallback
     xdg = Path.home() / ".cache" / "sephera" / "corpus"
     if xdg.is_dir():
         return xdg
@@ -151,21 +164,27 @@ def verify(expectations: list[Expectation]) -> int:
     """Re-measure and report every field that disagrees with the pin."""
     root = corpus_root()
     if root is None:
+        # A failure, not a skip. `--verify` exists to be run in CI, where a
+        # missing corpus means the accuracy figures this repository publishes
+        # were never checked. Reporting success there is the one outcome worth
+        # preventing: it looks like a passing gate.
         print(
-            "corpus not found. Run scripts/fetch_corpus.py first, "
-            "or omit --verify to print the pinned values only."
+            "corpus not found. Run scripts/fetch_corpus.py first, or point "
+            "SEPHERA_CORPUS_DIR at where it put them.\n"
+            "--verify will not report success without measuring something."
         )
-        return 0
+        return 1
     binary = executable()
     if binary is None:
         print("no built binary. Run `cargo build --release` first.")
         return 1
 
     mismatches: list[str] = []
+    missing: list[str] = []
     for expectation in expectations:
         repository = root / expectation.name
         if not repository.is_dir():
-            print(f"{expectation.name}: not fetched, skipped")
+            missing.append(expectation.name)
             continue
         actual = measure(binary, repository)
         for metric in METRICS:
@@ -177,6 +196,14 @@ def verify(expectations: list[Expectation]) -> int:
                 mismatches.append(
                     f"{expectation.name}: {metric.label} is {found}, pinned {pinned}"
                 )
+
+    # Same reasoning: a repository that was not fetched is a repository whose
+    # pinned figures nothing has confirmed.
+    if missing:
+        mismatches.append(
+            "not fetched, so their pinned figures are unverified: "
+            + ", ".join(missing)
+        )
 
     if mismatches:
         print("\nmismatched against tests/corpus.toml:")

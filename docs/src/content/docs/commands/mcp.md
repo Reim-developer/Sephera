@@ -34,7 +34,12 @@ Because MCP runs over strict JSON-RPC over `stdio`, there is no human-readable o
 
 ## Available Tools
 
-The server exposes `loc`, `context`, and `graph` as tools.
+The server exposes `loc`, `symbols`, `context`, and `graph` as tools.
+
+Every tool accepts `ignore` and `no_gitignore`, and resolves them exactly as the CLI does: the same arguments produce the same file set, because an agent and a shell user asking the same question should not get two answers.
+
+- **`ignore`** (optional): List of patterns. Anything containing `*`, `?`, or `[` is a glob matched against both the file name and the path relative to the analysis root, so `dist/**` and `**/node_modules/**` each exclude a whole tree. Any other pattern is a regex matched against that path.
+- **`no_gitignore`** (optional): Skip the repository's own `.gitignore` and `.sepheraignore`. Explicit `ignore` patterns and the always-skipped generated trees still apply.
 
 ### `loc`
 Counts lines of code, comment lines, and empty lines across supported languages in a directory tree.
@@ -43,6 +48,19 @@ Counts lines of code, comment lines, and empty lines across supported languages 
 - **`url`** (optional): Cloneable repository URL or supported GitHub/GitLab tree URL.
 - **`ref`** (optional): Git ref to check out before analysis. Only valid with repo URLs.
 - **`ignore`** (optional): List of ignore patterns (globs or regexes).
+- **`no_gitignore`** (optional): Skip the repository's own ignore files.
+
+Exactly one of `path` or `url` must be provided.
+
+### `symbols`
+Counts declarations per language: functions, types, enums, and constants. Counts come from Tree-sitter parse trees, so a keyword inside a comment or string is not counted.
+
+- **`path`** (optional): Absolute or relative path to the repository root.
+- **`url`** (optional): Cloneable repository URL or supported GitHub/GitLab tree URL.
+- **`ref`** (optional): Git ref to check out before analysis. Only valid with repo URLs.
+- **`ignore`** (optional): List of ignore patterns (globs or regexes).
+- **`no_gitignore`** (optional): Skip the repository's own ignore files.
+- **`detail`** (optional): List every declaration with its file and line instead of only per-language totals.
 
 Exactly one of `path` or `url` must be provided.
 
@@ -57,7 +75,9 @@ Builds an LLM-ready context pack for a repository or focused sub-paths.
 - **`profile`** (optional): Named profile under `[profiles.<name>.context]`.
 - **`list_profiles`** (optional): Return available profiles as JSON and skip context generation.
 - **`focus`** (optional): List of focus paths.
+- **`focus_symbol`** (optional): Declaration names to pack instead of whole files.
 - **`ignore`** (optional): List of ignore patterns.
+- **`no_gitignore`** (optional): Skip the repository's own ignore files.
 - **`diff`** (optional): Git diff spec used to prioritize changed files.
 - **`budget`** (optional): Approximate token budget (default `128000`).
 - **`compress`** (optional): AST compression mode (`none`, `signatures`, or `skeleton`).
@@ -75,10 +95,14 @@ Builds a dependency graph report for a repository or focused sub-paths.
 - **`ref`** (optional): Git ref to check out before analysis. Only valid with repo URLs.
 - **`focus`** (optional): List of focus paths used as traversal roots.
 - **`ignore`** (optional): List of ignore patterns.
+- **`no_gitignore`** (optional): Skip the repository's own ignore files.
 - **`depth`** (optional): Traversal depth applied when focus paths or reverse queries are present.
 - **`depends_on`** (optional): Relative path for reverse dependency analysis.
+- **`format`** (optional): `json` (default), `markdown`, `xml`, or `dot`.
 
 Exactly one of `path` or `url` must be provided.
+
+With `format` set to `markdown` and `depends_on` given, the report opens with a **Blast radius** section naming each file that imports the target and which names it takes from it. `depth` bounds the walk, and the section says so rather than presenting a truncated list as complete.
 
 Example `graph` tool call:
 

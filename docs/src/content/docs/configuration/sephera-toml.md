@@ -45,7 +45,8 @@ Scalar values from CLI override config values. Repeated CLI lists are appended t
 
 ```toml
 [context]
-# Ignore low-signal paths. Globs match basenames, other patterns are regexes.
+# Ignore low-signal paths. Globs match the file name and the relative path,
+# so "dist/**" excludes a tree; other patterns are regexes over the path.
 ignore = ["target", "*.snap"]
 
 # Prioritize these paths when building the context pack.
@@ -86,9 +87,10 @@ output = "reports/debug.json"
 
 `ignore` is a list of patterns that should be excluded before context candidates are selected.
 
-- patterns containing `*`, `?`, or `[` are treated as globs
-- other values are compiled as regexes
+- patterns containing `*`, `?`, or `[` are treated as globs, matched against both the file name and the path relative to the analysis base
+- other values are compiled as regexes, matched against that relative path, so an unanchored pattern such as `target` matches anywhere in it
 - config-provided values are used first, then repeated CLI `--ignore` flags are appended
+- the repository's own `.gitignore` and `.sepheraignore` are applied in addition, each to the directory holding it; `--no-gitignore` skips them
 
 Example:
 

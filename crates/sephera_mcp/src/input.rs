@@ -20,8 +20,15 @@ pub struct LocInput {
     /// Optional git ref to check out before analysis. Only valid with repo URLs.
     #[serde(rename = "ref")]
     pub git_ref: Option<String>,
-    /// Optional list of ignore patterns (globs or regexes)
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a
+    /// whole tree. Any other pattern is a regex matched against that path.
     pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    /// Explicit `ignore` patterns and the always-skipped generated trees still
+    /// apply, so this widens the analysis rather than disabling exclusion.
+    pub no_gitignore: Option<bool>,
 }
 
 /// Arguments accepted by the `context` tool.
@@ -53,8 +60,13 @@ pub struct ContextInput {
     /// `resolve_source`. A name matching several declarations is reported
     /// rather than guessed. Cannot be combined with `diff`.
     pub focus_symbol: Option<Vec<String>>,
-    /// Optional list of ignore patterns (globs or regexes)
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
     pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
     /// Optional diff source or base ref. URL mode only supports base refs such as `main` or `HEAD~1`.
     pub diff: Option<String>,
     /// Approximate token budget (default: 128000)
@@ -79,8 +91,13 @@ pub struct SymbolsInput {
     /// Optional git ref to check out before analysis. Only valid with repo URLs.
     #[serde(rename = "ref")]
     pub git_ref: Option<String>,
-    /// Optional list of ignore patterns (globs or regexes)
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
     pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
     /// List every declaration with its file and line, not just per-language totals.
     pub detail: Option<bool>,
 }
@@ -101,8 +118,13 @@ pub struct GraphInput {
     pub git_ref: Option<String>,
     /// Optional list of focus paths (relative to the analysis path)
     pub focus: Option<Vec<String>>,
-    /// Optional list of ignore patterns (globs or regexes)
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
     pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
     /// Optional traversal depth (0 = roots and direct neighbors)
     pub depth: Option<u32>,
     /// Optional reverse dependency target path

@@ -185,7 +185,7 @@ Write the generated report to the specified file path instead of standard output
 
 ### `--ignore <PATTERNS...>`
 
-Additional glob patterns to ignore during traversal, appended to patterns found in `.gitignore` and `.sepheraignore`.
+Additional patterns to exclude during traversal, applied after the patterns found in `.gitignore` and `.sepheraignore`. Globs match both the file name and the path relative to the base, so `dist/**` and `**/node_modules/**` each exclude a whole tree. Pass `--no-gitignore` to analyse the tree as it is on disk, which counts everything the repository excludes.
 
 ## URL Mode Notes
 

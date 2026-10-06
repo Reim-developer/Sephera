@@ -9,7 +9,7 @@ const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts, bui
 
 const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json\n  sephera graph --path . --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format dot --output deps.dot";
 
-const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Ignore patterns containing `*`, `?`, or `[` are treated as globs. All other ignore patterns are compiled as regular expressions and matched against normalized relative paths.";
+const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Ignore patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base. All other ignore patterns are compiled as regular expressions and matched against that same relative path.";
 
 const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera loc --url https://github.com/reim-developer/Sephera/tree/master/crates";
 
@@ -113,9 +113,17 @@ pub struct LocArgs {
         long,
         value_name = "PATTERN",
         help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
     )]
     pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -209,9 +217,17 @@ pub struct SymbolsArgs {
         long,
         value_name = "PATTERN",
         help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
     )]
     pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -281,9 +297,17 @@ pub struct WatchArgs {
         long,
         value_name = "PATTERN",
         help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
     )]
     pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
 }
 
 #[derive(Debug, Args)]
@@ -369,9 +393,17 @@ pub struct ContextArgs {
         long,
         value_name = "PATTERN",
         help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended."
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended."
     )]
     pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
 
     /// Focus path inside the base path. Repeat to prioritize multiple files or directories.
     #[arg(
@@ -537,9 +569,18 @@ pub struct GraphArgs {
     #[arg(
         long,
         value_name = "PATTERN",
-        help = "Ignore pattern for files or directories."
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
     )]
     pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
 
     /// Focus path inside the base path. Repeat to analyze only specific files or directories.
     #[arg(

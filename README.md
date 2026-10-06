@@ -101,6 +101,18 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 | Standard library edges| 12    |
 | Circular dependencies | 0     |
 
+## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
+
+**3 files import it directly.**
+
+| File | Imports from it |
+|------|------------------|
+| `crates/sephera_core/src/core/code_loc/tests.rs` | `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content` |
+| `crates/sephera_core/src/core/runtime/context.rs` | `crate::core::code_loc::IgnoreMatcher` |
+| `crates/sephera_core/src/core/symbols/lookup.rs` | `crate::core::code_loc::IgnoreMatcher` |
+
+**3 further files reach them indirectly**, through the files above.
+
 ## Dependencies
 
 | Package | Kind | Version | Import paths |
@@ -310,22 +322,30 @@ Packs are **deterministic** — same inputs, same bytes out — which makes them
 
 ### `loc` — per-language line counts
 
+Run against [axum](https://github.com/tokio-rs/axum) at a pinned commit, so these
+numbers describe a repository that does not change underneath the claim. Fetch
+it with `python scripts/fetch_corpus.py`, then pass that path to `--path`:
+
 ```text
 ╭────────────┬───────┬─────────┬───────┬──────────────╮
 │ Language   ┆  Code ┆ Comment ┆ Empty ┆ Size (bytes) │
 ╞════════════╪═══════╪═════════╪═══════╪══════════════╡
-│ Rust       ┆ 13348 ┆     701 ┆  1778 ┆       502447 │
-│ JSON       ┆  6584 ┆       0 ┆     0 ┆       436964 │
-│ D          ┆  3236 ┆       0 ┆   625 ┆      1096762 │
-│ Markdown   ┆  1530 ┆       0 ┆   693 ┆        72631 │
-│ Totals     ┆ 26883 ┆     705 ┆  3511 ┆      2175095 │
+│ Rust       ┆ 31912 ┆    9841 ┆  5830 ┆      1470372 │
+│ Markdown   ┆  5659 ┆       0 ┆  1730 ┆       267393 │
+│ TOML       ┆  1270 ┆      45 ┆   128 ┆        42144 │
+│ YAML       ┆   286 ┆       8 ┆    17 ┆         9863 │
+│ HTML       ┆    57 ┆       0 ┆     9 ┆         2464 │
+│ JavaScript ┆    35 ┆       0 ┆     8 ┆         1276 │
+│ JSON       ┆    21 ┆       0 ┆     0 ┆          397 │
+│ SQL        ┆    12 ┆       4 ┆     0 ┆          396 │
+│ Totals     ┆ 39252 ┆    9898 ┆  7722 ┆      1794305 │
 ╰────────────┴───────┴─────────┴───────┴──────────────╯
-Files scanned: 630
-Languages detected: 11
-Elapsed: 109.148 ms (0.109148 s)
+Files scanned: 429
+Languages detected: 8
+Elapsed: 29.892 ms (0.029892 s)
 ```
 
-**630 files in 109 ms.** If you only need raw counts, `cloc` and `tokei` are fine — use Sephera when you want the next step.
+**429 files in 30 ms**, reading axum's own `.gitignore` as it goes. If you only need raw counts, `cloc` and `tokei` are fine — use Sephera when you want the next step.
 
 ### `mcp` — expose it all to your AI agent
 

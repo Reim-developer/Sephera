@@ -7,17 +7,28 @@
 use sephera_core::core::code_loc::IgnoreMatcher;
 
 /// Build an [`IgnoreMatcher`] from optional glob or regex patterns.
+///
+/// `no_gitignore` is threaded through rather than left implicit so that the MCP
+/// tools and the CLI agree: an agent asking for the same analysis as a shell
+/// user must get the same file set, or the two report different answers to the
+/// same question.
 pub fn build_ignore_matcher(
     ignore_patterns: Option<Vec<String>>,
+    no_gitignore: Option<bool>,
 ) -> Result<IgnoreMatcher, rmcp::ErrorData> {
-    IgnoreMatcher::from_patterns(&ignore_patterns.unwrap_or_default()).map_err(
-        |error| {
-            rmcp::ErrorData::internal_error(
-                format!("invalid ignore pattern: {error}"),
-                None,
-            )
-        },
-    )
+    let patterns = ignore_patterns.unwrap_or_default();
+    let built = if no_gitignore.unwrap_or(false) {
+        IgnoreMatcher::from_patterns_without_ignore_files(&patterns)
+    } else {
+        IgnoreMatcher::from_patterns(&patterns)
+    };
+
+    built.map_err(|error| {
+        rmcp::ErrorData::internal_error(
+            format!("invalid ignore pattern: {error}"),
+            None,
+        )
+    })
 }
 
 /// Wrap an [`anyhow::Error`] into an MCP internal error with a fixed prefix.
@@ -50,13 +61,27 @@ mod tests {
 
     #[test]
     fn no_patterns_yields_empty_matcher() {
-        assert!(build_ignore_matcher(None).is_ok());
-        assert!(build_ignore_matcher(Some(Vec::new())).is_ok());
+        assert!(build_ignore_matcher(None, None).is_ok());
+        assert!(build_ignore_matcher(Some(Vec::new()), None).is_ok());
+    }
+
+    #[test]
+    fn the_repository_ignore_files_are_honoured_by_default() {
+        assert!(
+            build_ignore_matcher(None, None)
+                .expect("a matcher must build")
+                .reads_ignore_files()
+        );
+        assert!(
+            !build_ignore_matcher(None, Some(true))
+                .expect("a matcher must build")
+                .reads_ignore_files()
+        );
     }
 
     #[test]
     fn invalid_pattern_is_rejected_with_context() {
-        let error = build_ignore_matcher(Some(vec!["[".to_owned()]))
+        let error = build_ignore_matcher(Some(vec!["[".to_owned()]), None)
             .expect_err("unterminated character class must be rejected");
 
         assert!(

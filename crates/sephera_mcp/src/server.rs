@@ -65,6 +65,27 @@ impl Default for SepheraServer {
     }
 }
 
+#[cfg(test)]
+impl SepheraServer {
+    /// The names of every registered tool, sorted.
+    ///
+    /// Exposed so the crate doc table can be checked against what the router
+    /// actually serves. That table claimed two tools when four were
+    /// registered, and the omission was of `graph` — the one thing here an
+    /// agent cannot discover by reading `loc`'s output.
+    #[must_use]
+    pub fn registered_tool_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
 /// Tool implementations exposed through the Model Context Protocol.
 #[tool_router]
 impl SepheraServer {
@@ -86,7 +107,8 @@ impl SepheraServer {
     ) -> Result<String, rmcp::ErrorData> {
         use std::fmt::Write as _;
 
-        let ignore_matcher = build_ignore_matcher(param.ignore)?;
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
         let source = resolve_source(&SourceRequest {
             path: param.path.map(std::path::PathBuf::from),
             url: param.url,
@@ -159,6 +181,7 @@ impl SepheraServer {
             profile: param.profile,
             list_profiles: param.list_profiles.unwrap_or(false),
             ignore: param.ignore.unwrap_or_default(),
+            no_gitignore: param.no_gitignore.unwrap_or(false),
             focus: param
                 .focus
                 .unwrap_or_default()
@@ -208,7 +231,7 @@ impl SepheraServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SymbolsInput>,
     ) -> Result<String, rmcp::ErrorData> {
-        let ignore = build_ignore_matcher(param.ignore)?;
+        let ignore = build_ignore_matcher(param.ignore, param.no_gitignore)?;
         let source = resolve_source(&SourceRequest {
             path: param.path.map(std::path::PathBuf::from),
             url: param.url,
@@ -250,7 +273,8 @@ impl SepheraServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<GraphInput>,
     ) -> Result<String, rmcp::ErrorData> {
-        let ignore_matcher = build_ignore_matcher(param.ignore)?;
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
         let source = resolve_source(&SourceRequest {
             path: param.path.map(std::path::PathBuf::from),
             url: param.url,

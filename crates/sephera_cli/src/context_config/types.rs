@@ -32,6 +32,10 @@ pub struct LoadedContextSection {
 pub struct ResolvedContextOptions {
     pub base_path: PathBuf,
     pub ignore: Vec<String>,
+    /// Whether `.gitignore` and `.sepheraignore` apply. Set by `--no-gitignore`
+    ///; the config file cannot turn exclusion off, because a pack built from a
+    /// repository's own exclusions should not be able to skip them.
+    pub read_ignore_files: bool,
     pub focus: Vec<PathBuf>,
     pub diff: Option<String>,
     pub budget: u64,

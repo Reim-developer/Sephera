@@ -71,7 +71,9 @@ Repeat `--ignore` to combine multiple patterns:
 sephera loc --path . --ignore target --ignore "*.snap"
 ```
 
-Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. Other patterns are compiled as regexes and matched against normalized relative paths.
+Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `dist/**` and `**/node_modules/**` each exclude a whole tree. Other patterns are compiled as regexes and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it.
+
+Every analysis also reads the repository's own `.gitignore` and `.sepheraignore`, applying each one to the directory that holds it. Pass `--no-gitignore` to analyse the tree as it is on disk instead. Explicit `--ignore` patterns outrank the repository's rules, so a pattern you typed is never undone by a `!` line in `.gitignore`.
 
 ## Remote refs
 

@@ -8,11 +8,12 @@ use std::collections::BTreeMap;
 use std::time::Instant;
 
 use anyhow::{Context, Result};
+use rayon::prelude::*;
 use tree_sitter::Node;
 
 use crate::core::compression::{SupportedLanguage, new_parser};
 use crate::core::ignore::IgnoreMatcher;
-use crate::core::project_files::collect_project_files;
+use crate::core::project_files::{ProjectFile, collect_project_files};
 
 use super::rules::symbol_rules;
 use super::types::{
@@ -28,6 +29,26 @@ const MAX_SYMBOL_FILE_BYTES: u64 = 2 * 1024 * 1024;
 pub struct SymbolAnalyzer {
     base_path: std::path::PathBuf,
     ignore: IgnoreMatcher,
+}
+
+/// One file's contribution, gathered off-thread so the totals can be folded
+/// One file's contribution, gathered off-thread so the totals can be folded
+/// afterwards in a fixed order.
+/// One file's contribution, gathered off-thread so the totals can be folded
+/// afterwards in a fixed order.
+struct FileSymbols {
+    language: &'static str,
+    counts: Vec<(SymbolKind, u64)>,
+    entries: Vec<SymbolEntry>,
+}
+
+/// What one file contributed to the totals.
+enum FileOutcome {
+    Counted(FileSymbols),
+    /// Empty or larger than the size limit, so not read at all.
+    Skipped,
+    /// A recognised language with nothing parseable in it.
+    NoDeclarations,
 }
 
 impl SymbolAnalyzer {
@@ -63,6 +84,15 @@ impl SymbolAnalyzer {
         let project_files =
             collect_project_files(&self.base_path, &self.ignore)?;
 
+        // Across a thread pool: the cost is one parse per file and the files are
+        // independent. The fold below runs in file order, so the report is
+        // identical to the sequential loop this replaced regardless of which
+        // worker finished first.
+        let outcomes = project_files
+            .par_iter()
+            .map(|file| count_project_file(file, include_symbols))
+            .collect::<Result<Vec<_>>>()?;
+
         let mut per_language: BTreeMap<
             &'static str,
             BTreeMap<SymbolKind, u64>,
@@ -73,49 +103,23 @@ impl SymbolAnalyzer {
         let mut files_scanned: u64 = 0;
         let mut files_skipped: u64 = 0;
 
-        for file in &project_files {
-            let Some((_, language)) = file.language_match else {
-                continue;
-            };
-            let Some(ts_language) =
-                SupportedLanguage::from_language_name(language.name)
-            else {
-                continue;
-            };
-
-            if file.size_bytes == 0 || file.size_bytes > MAX_SYMBOL_FILE_BYTES {
-                files_skipped += 1;
-                continue;
-            }
-
-            let source =
-                std::fs::read(&file.absolute_path).with_context(|| {
-                    format!(
-                        "failed to read `{}` for symbol counting",
-                        file.absolute_path.display()
-                    )
-                })?;
-
-            let Some(counts) = count_file(&source, ts_language) else {
+        for outcome in outcomes {
+            let FileOutcome::Counted(file) = outcome else {
+                if matches!(outcome, FileOutcome::Skipped) {
+                    files_skipped += 1;
+                }
                 continue;
             };
 
             files_scanned += 1;
-            *files_per_language.entry(language.name).or_default() += 1;
+            *files_per_language.entry(file.language).or_default() += 1;
 
-            let totals = per_language.entry(language.name).or_default();
-            for (kind, count) in counts {
+            let totals = per_language.entry(file.language).or_default();
+            for (kind, count) in file.counts {
                 *totals.entry(kind).or_default() += count;
             }
 
-            if include_symbols {
-                collect_entries(
-                    &source,
-                    ts_language,
-                    &file.normalized_relative_path,
-                    &mut symbols,
-                );
-            }
+            symbols.extend(file.entries);
         }
 
         symbols.sort_by(|a, b| {
@@ -235,4 +239,56 @@ fn text(source: &[u8], node: Node<'_>) -> String {
         .unwrap_or_default()
         .trim()
         .to_owned()
+}
+
+/// Counts one file's declarations, or says why there are none.
+///
+/// # Errors
+///
+/// Returns an error when the file cannot be read, which is different from
+/// finding nothing in it: an unreadable file is a file silently dropped from
+/// the totals.
+fn count_project_file(
+    file: &ProjectFile,
+    include_symbols: bool,
+) -> Result<FileOutcome> {
+    let Some((_, language)) = file.language_match else {
+        return Ok(FileOutcome::NoDeclarations);
+    };
+    let Some(ts_language) =
+        SupportedLanguage::from_language_name(language.name)
+    else {
+        return Ok(FileOutcome::NoDeclarations);
+    };
+
+    if file.size_bytes == 0 || file.size_bytes > MAX_SYMBOL_FILE_BYTES {
+        return Ok(FileOutcome::Skipped);
+    }
+
+    let source = std::fs::read(&file.absolute_path).with_context(|| {
+        format!(
+            "failed to read `{}` for symbol counting",
+            file.absolute_path.display()
+        )
+    })?;
+
+    let Some(counts) = count_file(&source, ts_language) else {
+        return Ok(FileOutcome::NoDeclarations);
+    };
+
+    let mut entries = Vec::new();
+    if include_symbols {
+        collect_entries(
+            &source,
+            ts_language,
+            &file.normalized_relative_path,
+            &mut entries,
+        );
+    }
+
+    Ok(FileOutcome::Counted(FileSymbols {
+        language: language.name,
+        counts,
+        entries,
+    }))
 }
