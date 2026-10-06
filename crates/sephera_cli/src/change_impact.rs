@@ -96,7 +96,7 @@ fn match_path(
 pub fn render_markdown(
     changes: &[ChangeImpact],
     spec: &str,
-    skipped_deleted: &[String],
+    skipped: &[String],
 ) -> String {
     let mut output = String::new();
 
@@ -104,12 +104,17 @@ pub fn render_markdown(
         .expect("writing to a String must succeed");
 
     if changes.is_empty() {
-        output.push_str(
-            "No changed file in this repository reaches another file through \
-             an import.\n",
-        );
-        if !skipped_deleted.is_empty() {
-            write_skipped(&mut output, skipped_deleted);
+        if skipped.is_empty() {
+            output.push_str(
+                "No changed file in this repository reaches another file \
+                 through an import.\n",
+            );
+        } else {
+            output.push_str(
+                "No changed file in the dependency graph reaches another file \
+                 through an import.\n",
+            );
+            write_skipped(&mut output, skipped);
         }
         return output;
     }
@@ -158,20 +163,27 @@ pub fn render_markdown(
         output.push('\n');
     }
 
-    write_skipped(&mut output, skipped_deleted);
+    write_skipped(&mut output, skipped);
     output
 }
 
-fn write_skipped(output: &mut String, skipped_deleted: &[String]) {
-    if skipped_deleted.is_empty() {
+fn write_skipped(output: &mut String, skipped: &[String]) {
+    if skipped.is_empty() {
         return;
     }
+    // Deliberately hedged. A changed path reaches this list for several reasons and
+    // only one of them is deletion: a deleted file, a path excluded by an ignore
+    // rule, a file in a language the graph does not parse, or a path outside the
+    // analysis base. Which one it was is not knowable from here, so the message
+    // states the part that is certain -- these paths are not in the graph -- and
+    // lists the possibilities rather than asserting one.
     let _ = writeln!(
         output,
-        "> {} changed file(s) were deleted or no longer exist, so they have no \
-         blast radius: {}",
-        skipped_deleted.len(),
-        skipped_deleted.join(", ")
+        "> {} changed path(s) are not in the dependency graph, so they have no \
+         blast radius here. They may have been deleted, ignored, be in a \
+         language the graph does not parse, or sit outside the analysed base: {}",
+        skipped.len(),
+        skipped.join(", ")
     );
 }
 
@@ -180,7 +192,7 @@ fn write_skipped(output: &mut String, skipped_deleted: &[String]) {
 pub fn render_json(
     changes: &[ChangeImpact],
     spec: &str,
-    skipped_deleted: &[String],
+    skipped: &[String],
 ) -> String {
     let entries: Vec<serde_json::Value> = changes
         .iter()
@@ -207,7 +219,7 @@ pub fn render_json(
     let payload = serde_json::json!({
         "spec": spec,
         "changed_files": entries.len(),
-        "skipped_deleted_or_missing": skipped_deleted,
+        "skipped_not_in_graph": skipped,
         "changes": entries,
     });
 
@@ -396,11 +408,39 @@ mod tests {
     }
 
     #[test]
-    fn markdown_states_that_a_deleted_file_was_skipped() {
-        let markdown = render_markdown(&[], "HEAD~1", &["gone.rs".to_owned()]);
+    fn markdown_does_not_call_every_skipped_path_deleted() {
+        // A changed path lands in the skipped list for several reasons, and only
+        // one of them is deletion. Naming just that one would be false for a
+        // Markdown file, an ignored path, or anything outside the analysis base.
+        let markdown =
+            render_markdown(&[], "HEAD~1", &["README.md".to_owned()]);
 
-        assert!(markdown.contains("No changed file"), "{markdown}");
-        assert!(markdown.contains("gone.rs"), "{markdown}");
+        assert!(
+            markdown.contains("are not in the dependency graph"),
+            "{markdown}"
+        );
+        assert!(
+            !markdown.contains("They were deleted"),
+            "the report must not assert a reason it cannot know: {markdown}"
+        );
+        assert!(markdown.contains("README.md"), "{markdown}");
+    }
+
+    #[test]
+    fn markdown_says_why_a_path_might_be_absent() {
+        let markdown = render_markdown(
+            &[],
+            "HEAD~1",
+            &["gone.rs".to_owned(), "docs/x.md".to_owned()],
+        );
+
+        assert!(
+            markdown.contains(
+                "may have been deleted, ignored, be in a language the graph \
+                 does not parse"
+            ),
+            "{markdown}"
+        );
     }
 
     #[test]
