@@ -82,6 +82,20 @@ fn render_markdown_summary(output: &mut String, report: &GraphReport) {
         "| External edges | {} |",
         report.metrics.total_external_edges
     );
+    // Shown when non-zero, and placed directly under the internal-edge count
+    // because the two are the same measurement read two ways: `Internal edges`
+    // deliberately excludes self-references, so a reader comparing it against a
+    // file count had no way to know 60 references had been set aside. Sephera
+    // itself finds 60, almost all `use super::*;` inside test modules -- real
+    // references that say nothing about how files depend on each other, and
+    // invisible in every human-readable format until this row existed.
+    if report.metrics.self_references > 0 {
+        let _ = writeln!(
+            output,
+            "| Self-references (excluded above) | {} |",
+            report.metrics.self_references
+        );
+    }
     // Only shown when non-zero: a resolver gap, not a property of the project,
     // and a permanently empty row would train readers to ignore it.
     if report.metrics.unresolved_local_edges > 0 {
@@ -142,14 +156,29 @@ fn render_markdown_blast_radius(output: &mut String, report: &GraphReport) {
 
     // `target` is the normalized query path, which is the same form edge targets
     // take, so this is an exact comparison rather than a path-shape guess.
+    //
+    // Two exclusions, both of which the count was previously missing:
+    //
+    // * self-edges. A `use super::*;` resolves to the file it is written in, so
+    //   the target was being listed as one of the files that imports it. On
+    //   Sephera itself that made the section claim 9 direct and 9 indirect
+    //   dependents, 18 in total, for a blast radius of 17 -- a sum larger than
+    //   the number of files that exist.
+    // * unresolved edges. An edge the resolver could not place is a path it
+    //   failed to find, not a coupling, and listing it as a dependency claims
+    //   exactly the connection the report is supposed to be honest about.
     let mut direct: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
     for edge in &report.edges {
-        if edge.to.as_deref() == Some(target.as_str()) {
-            direct
-                .entry(edge.from.as_str())
-                .or_default()
-                .insert(edge.import_path.as_str());
+        if edge.to.as_deref() != Some(target.as_str()) || !edge.resolved {
+            continue;
         }
+        if edge.from == *target {
+            continue;
+        }
+        direct
+            .entry(edge.from.as_str())
+            .or_default()
+            .insert(edge.import_path.as_str());
     }
 
     let _ = writeln!(output, "## Blast radius for `{target}`\n");
@@ -445,6 +474,13 @@ fn render_xml_metrics(output: &mut String, report: &GraphReport) {
         "    <external-edges>{}</external-edges>",
         report.metrics.total_external_edges
     );
+    if report.metrics.self_references > 0 {
+        let _ = writeln!(
+            output,
+            "    <self-references>{}</self-references>",
+            report.metrics.self_references
+        );
+    }
     if report.metrics.unresolved_local_edges > 0 {
         let _ = writeln!(
             output,
@@ -663,6 +699,123 @@ mod tests {
                 cycles: vec![],
             },
         }
+    }
+
+    #[test]
+    fn markdown_shows_self_references_when_present() {
+        // `total_internal_edges` excludes self-references, so a report that
+        // showed only that number left a reader with no way to know how many
+        // references had been set aside. Sephera itself has 60, all `use
+        // super::*;` inside test modules.
+        let mut report = sample_report();
+        report.metrics.self_references = 60;
+
+        let markdown = render_graph(&report, GraphFormat::Markdown);
+        assert!(
+            markdown.contains("| Self-references (excluded above) | 60 |"),
+            "self-references must be visible in Markdown: {markdown}"
+        );
+    }
+
+    #[test]
+    fn markdown_omits_self_references_when_there_are_none() {
+        // A permanently zero row would train readers to ignore it, the same
+        // reason unresolved-local-edges is conditional.
+        let markdown = render_graph(&sample_report(), GraphFormat::Markdown);
+
+        assert!(
+            !markdown.contains("Self-references"),
+            "a zero row is noise: {markdown}"
+        );
+    }
+
+    #[test]
+    fn xml_reports_self_references_too() {
+        let mut report = sample_report();
+        report.metrics.self_references = 60;
+
+        let xml = render_graph(&report, GraphFormat::Xml);
+        assert!(
+            xml.contains("<self-references>60</self-references>"),
+            "{xml}"
+        );
+    }
+
+    #[test]
+    fn blast_radius_does_not_count_the_target_as_its_own_dependent() {
+        // A `use super::*;` resolves to the file it is written in, so the target
+        // used to be listed among the files that import it. On Sephera itself
+        // that made the section claim 9 direct plus 9 indirect dependents for a
+        // blast radius of 17 -- a sum larger than the number of files involved.
+        let mut report = sample_report();
+        report.query = Some(GraphQuery::DependsOn("src/lib.rs".to_owned()));
+        report.nodes.push(GraphNode {
+            file_path: "src/lib.rs".to_owned(),
+            language: Some("Rust"),
+            imports_count: 0,
+            imported_by_count: 2,
+        });
+        // Remove the duplicate node the push above introduced.
+        let mut seen = std::collections::BTreeSet::new();
+        report
+            .nodes
+            .retain(|node| seen.insert(node.file_path.clone()));
+        report.edges = vec![
+            GraphEdge {
+                from: "src/lib.rs".to_owned(),
+                to: Some("src/lib.rs".to_owned()),
+                import_path: "crate::lib".to_owned(),
+                resolved: true,
+                kind: ImportKind::Dependency,
+                local_gap: false,
+                cfg_gated: false,
+            },
+            GraphEdge {
+                from: "src/main.rs".to_owned(),
+                to: Some("src/lib.rs".to_owned()),
+                import_path: "crate::lib".to_owned(),
+                resolved: true,
+                kind: ImportKind::Dependency,
+                local_gap: false,
+                cfg_gated: false,
+            },
+        ];
+
+        let markdown = render_graph(&report, GraphFormat::Markdown);
+
+        assert!(
+            markdown.contains("**1 file imports it directly.**"),
+            "only `src/main.rs` imports the target: {markdown}"
+        );
+        assert!(
+            !markdown.contains("further file"),
+            "there is nobody left over to reach indirectly: {markdown}"
+        );
+    }
+
+    #[test]
+    fn blast_radius_ignores_an_unresolved_edge_to_the_target() {
+        // An edge the resolver could not place is a path it failed to find, not
+        // a coupling. Listing it claims the connection the report exists to be
+        // honest about.
+        let mut report = sample_report();
+        report.query = Some(GraphQuery::DependsOn("src/lib.rs".to_owned()));
+        report.edges = vec![GraphEdge {
+            from: "src/main.rs".to_owned(),
+            to: Some("src/lib.rs".to_owned()),
+            import_path: "crate::lib".to_owned(),
+            resolved: false,
+            kind: ImportKind::Dependency,
+            local_gap: true,
+            cfg_gated: false,
+        }];
+
+        let markdown = render_graph(&report, GraphFormat::Markdown);
+        assert!(
+            markdown
+                .contains("No file in the analysed scope imports this one."),
+            "an unresolved edge is not a dependency: {markdown}"
+        );
     }
 
     #[test]

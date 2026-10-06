@@ -12,9 +12,32 @@ The `loc` command scans a directory tree, detects built-in languages, and report
 - empty lines
 - size in bytes
 
-The current terminal output is a table with per-language rows, totals, and elapsed time.
+The default output is a terminal table with per-language rows, totals, and elapsed time.
 
 Use `--path` for local analysis or `--url` to clone and analyze a remote repository directly.
+
+## Output formats
+
+`--format` selects the rendering, and `--output` writes it to a file instead of
+standard output:
+
+```bash
+sephera loc --path . --format json --output reports/loc.json
+sephera loc --path . --format csv
+sephera loc --path . --format markdown
+```
+
+| format | for |
+|---|---|
+| `table` | a terminal; the default |
+| `json` | a dashboard or a script, with elapsed time included |
+| `csv` | a spreadsheet |
+| `markdown` | pasting into a pull request |
+
+CSV quotes every language label unconditionally. No built-in language name
+contains a comma today, but a label chosen outside the tool that silently
+produces a wrong column count the first time it changes is worse than one that
+is always right.
 
 ## Basic usage
 

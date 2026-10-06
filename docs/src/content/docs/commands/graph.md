@@ -45,6 +45,55 @@ Export a Graphviz DOT file for interactive plotting:
 sephera graph --path . --format dot --output deps.dot
 ```
 
+Report what a change reaches, widest blast radius first:
+
+```bash
+sephera graph --path . --diff origin/master --format markdown
+```
+
+## What a change reaches
+
+`--diff` answers the pull-review question: instead of describing the whole
+repository, it reports the blast radius of *every* file the change touched,
+sorted so the file whose change would break the most is first.
+
+```bash
+sephera graph --path . --diff HEAD~1 --format json
+```
+
+It accepts a ref (`HEAD~1`, `origin/master`) or the keywords `working-tree` and
+`staged`, with the same meanings `context --diff` gives them.
+
+The graph is built **once** and each changed file is measured against it, so the
+cost does not grow with the size of the diff. Deleted files are skipped and
+listed separately, because a file that no longer exists has no blast radius and
+reporting it as "0 dependents" would put a line in a review that reads like a
+finding.
+
+For a single file rather than a change, [`impact`](/commands/impact/) is the
+direct route.
+
+## Failing a build
+
+Two thresholds turn the report into a gate. Both print the report as usual and
+change only the exit code.
+
+```bash
+# Exit 2 at the first import cycle
+sephera graph --path . --fail-on-cycles 1
+
+# Exit 2 when the resolver cannot place the project's own import paths
+sephera graph --path . --fail-on-unresolved 1
+```
+
+An unresolved local path was meant to name a file in this project and was not
+found. That is a resolver gap, not a dependency, and a blast radius that counts
+one silently omits a file.
+
+Exit code **2** means a threshold was crossed; **1** means the analysis could not
+run. Keeping them distinct means a broken install does not look like a violated
+rule in a log.
+
 ## Sample Output
 
 ```markdown
@@ -159,6 +208,34 @@ sephera graph --path . --what-depends-on src/utils.ts
 ```
 
 The path must resolve to an analyzed file inside the selected analysis base. When this flag is set, Sephera traverses the graph in reverse from the target node instead of following normal imports outward.
+
+The direct and indirect lists are disjoint: a file that imports the target
+directly is not also counted among those that reach it indirectly, and the
+target itself is never listed as importing it. Both were once counted twice,
+which made the section report a total larger than the number of files involved.
+
+For the same answer as a standalone command, see [`impact`](/commands/impact/).
+
+### `--diff <SPEC>`
+
+Report the blast radius of every file changed against a Git base.
+
+```bash
+sephera graph --path . --diff origin/master --format markdown
+```
+
+Mutually exclusive with `--what-depends-on`, which answers about one named file
+rather than about a change.
+
+### `--fail-on-cycles <COUNT>` / `--fail-on-unresolved <COUNT>`
+
+Exit **2** at or above the given count. The limit is the first *failing* value,
+so `--fail-on-cycles 1` fails on a single cycle. Zero is rejected by the parser,
+because a limit of zero would fail every run including the clean ones.
+
+```bash
+sephera graph --path . --fail-on-cycles 1 --fail-on-unresolved 1
+```
 
 ### `--depth <DEPTH>`
 

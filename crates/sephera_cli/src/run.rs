@@ -8,23 +8,30 @@ use sephera_core::core::{
         resolver::{EdgeFilters, build_graph_with},
         types::{GraphFormat, GraphQuery},
     },
-    runtime::{SourceRequest, build_context_report, resolve_source},
+    runtime::{
+        ResolvedSource, SourceRequest, build_context_report,
+        load_project_settings, resolve_changed_files, resolve_source,
+    },
     symbols::{SymbolAnalyzer, SymbolDetail},
 };
 
 use crate::{
     args::{
-        Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs,
+        Cli, Commands, ConfigArgs, ContextArgs, GraphArgs, GraphOutputFormat,
+        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
         SymbolOutputFormat, SymbolsArgs, WatchArgs, WatchTarget,
     },
+    change_impact,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
+    gate::{self, Gate},
+    impact,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
         print_symbol_report, print_symbols_by_file, render_context_json,
-        render_context_markdown, render_graph, render_symbol_json,
-        render_symbol_markdown,
+        render_context_markdown, render_graph, render_loc_csv, render_loc_json,
+        render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::CliProgress,
     watch,
@@ -33,7 +40,7 @@ use crate::{
 #[must_use]
 pub fn main_exit_code() -> ExitCode {
     match run() {
-        Ok(()) => ExitCode::SUCCESS,
+        Ok(exit) => exit,
         Err(error) => {
             eprintln!("error: {error:#}");
             ExitCode::FAILURE
@@ -44,19 +51,46 @@ pub fn main_exit_code() -> ExitCode {
 /// # Errors
 ///
 /// Returns an error when argument parsing or command execution fails.
-pub fn run() -> Result<()> {
+///
+/// The `Ok` case carries an exit code rather than nothing, because a run can
+/// succeed at its job and still have found something the caller asked to fail
+/// on. See [`crate::gate`].
+pub fn run() -> Result<ExitCode> {
     let cli = Cli::parse();
     dispatch(cli)
 }
 
-fn dispatch(cli: Cli) -> Result<()> {
-    match cli.command {
-        Commands::Loc(arguments) => run_loc(arguments),
-        Commands::Symbols(arguments) => run_symbols(arguments),
+fn dispatch(cli: Cli) -> Result<ExitCode> {
+    let gate = match cli.command {
+        Commands::Loc(arguments) => run_loc(&arguments),
+        Commands::Symbols(arguments) => run_symbols(&arguments),
         Commands::Context(arguments) => run_context(arguments),
         Commands::Mcp => run_mcp(),
         Commands::Graph(arguments) => run_graph(&arguments),
         Commands::Watch(arguments) => run_watch(&arguments),
+        Commands::Impact(arguments) => run_impact(&arguments),
+    }?;
+    Ok(gate::evaluate(&gate))
+}
+
+/// Commands that analyse a tree collect thresholds as they go and hand them
+/// back, so `--fail-on-*` cannot mean one thing for `graph` and another for
+/// `impact`. Commands with nothing to enforce return an empty slice.
+const fn no_gates() -> Vec<Gate> {
+    Vec::new()
+}
+
+/// Config flags for a command the user never named on the command line.
+///
+/// watch builds argument structs for the command it wraps, so it has to
+/// supply the fields it does not expose. Discovery is skipped rather than
+/// re-reading .sephera.toml on every keystroke-triggered pass; a user who
+/// wants the project's shared patterns applied under watch passes them
+/// through watch --ignore, or restarts the watch after editing the file.
+const fn no_config_args() -> ConfigArgs {
+    ConfigArgs {
+        config: None,
+        no_config: true,
     }
 }
 
@@ -64,7 +98,7 @@ fn dispatch(cli: Cli) -> Result<()> {
 ///
 /// `--once` short-circuits to a single run, which keeps the watch argument
 /// parsing usable from scripts without needing a separate code path.
-fn run_watch(arguments: &WatchArgs) -> Result<()> {
+fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
     let Some(target) = arguments.target else {
         anyhow::bail!("`--target` is required unless `--once` is passed");
     };
@@ -90,9 +124,30 @@ fn run_watch(arguments: &WatchArgs) -> Result<()> {
         root.display()
     );
 
+    // A watch loop has no single moment to evaluate a threshold against, so the
+    // per-run gates are reported as they happen and the final exit code is
+    // success. `watch --once` is the form to use in a pipeline that needs a
+    // threshold.
     watch::watch(&root, || {
-        run_watch_target(target, arguments.on.as_deref(), &root, &ignore)
-    })
+        let gates =
+            run_watch_target(target, arguments.on.as_deref(), &root, &ignore)?;
+        report_gates(&gates);
+        Ok(())
+    })?;
+
+    Ok(no_gates())
+}
+
+/// Print any crossed gate to stderr.
+///
+/// Used where an exit code cannot carry the verdict, which today is only the
+/// watch loop: it runs until interrupted, so there is no final exit code to set.
+fn report_gates(gates: &[Gate]) {
+    let crossed: Vec<&Gate> =
+        gates.iter().filter(|gate| gate.crossed()).collect();
+    for gate in crossed {
+        eprintln!("error: {}", gate.failure_line());
+    }
 }
 
 /// Run one analysis pass for the watch target.
@@ -101,20 +156,23 @@ fn run_watch_target(
     on: Option<&str>,
     root: &std::path::Path,
     ignore: &[String],
-) -> Result<()> {
+) -> Result<Vec<Gate>> {
     // Each arm builds its own argument struct from the same root, so a value is
     // never shared across arms.
     let path = || Some(root.to_path_buf());
 
     match target {
-        WatchTarget::Loc => run_loc(LocArgs {
+        WatchTarget::Loc => run_loc(&LocArgs {
             path: path(),
             url: None,
             git_ref: None,
             ignore: ignore.to_vec(),
             no_gitignore: false,
+            format: LocOutputFormat::Table,
+            output: None,
+            config_args: no_config_args(),
         }),
-        WatchTarget::Symbols => run_symbols(SymbolsArgs {
+        WatchTarget::Symbols => run_symbols(&SymbolsArgs {
             path: path(),
             url: None,
             git_ref: None,
@@ -124,6 +182,7 @@ fn run_watch_target(
             by_file: false,
             ignore: ignore.to_vec(),
             no_gitignore: false,
+            config_args: no_config_args(),
         }),
         WatchTarget::Graph => run_graph(&GraphArgs {
             path: path(),
@@ -135,8 +194,12 @@ fn run_watch_target(
             depth: None,
             what_depends_on: None,
             exclude_types: false,
+            fail_on_cycles: None,
+            fail_on_unresolved: None,
+            diff: None,
             format: GraphOutputFormat::Markdown,
             output: None,
+            config_args: no_config_args(),
         }),
         WatchTarget::DependsOn => {
             let Some(target_path) = on else {
@@ -154,16 +217,21 @@ fn run_watch_target(
                 depth: None,
                 what_depends_on: Some(target_path.to_owned()),
                 exclude_types: false,
+                fail_on_cycles: None,
+                fail_on_unresolved: None,
+                diff: None,
                 format: GraphOutputFormat::Markdown,
                 output: None,
+                config_args: no_config_args(),
             })
         }
     }
 }
 
-fn run_mcp() -> Result<()> {
+fn run_mcp() -> Result<Vec<Gate>> {
     let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(sephera_mcp::run_mcp_server())
+    runtime.block_on(sephera_mcp::run_mcp_server())?;
+    Ok(no_gates())
 }
 
 /// Build the exclusion policy for one invocation.
@@ -171,44 +239,84 @@ fn run_mcp() -> Result<()> {
 /// The repository's own ignore files are honoured unless the user asked
 /// otherwise. Routing every command through one function means `--no-gitignore`
 /// cannot mean one thing for `graph` and another for `context`.
+///
+/// `[project]` patterns from `.sephera.toml` are merged in ahead of the flags,
+/// so a repository states its exclusions once instead of on every command line.
 fn build_ignore_matcher(
+    base_path: &std::path::Path,
+    config: &ConfigArgs,
     patterns: &[String],
     no_gitignore: bool,
 ) -> Result<IgnoreMatcher> {
+    let settings = load_project_settings(
+        base_path,
+        config.config.as_deref(),
+        config.no_config,
+    )?;
+    let merged = settings.merged_ignore(patterns);
+
     if no_gitignore {
-        IgnoreMatcher::from_patterns_without_ignore_files(patterns)
+        IgnoreMatcher::from_patterns_without_ignore_files(&merged)
     } else {
-        IgnoreMatcher::from_patterns(patterns)
+        IgnoreMatcher::from_patterns(&merged)
     }
 }
 
-fn run_loc(arguments: LocArgs) -> Result<()> {
+fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
     let progress = CliProgress::start("Analyzing line counts...");
-    let ignore =
-        build_ignore_matcher(&arguments.ignore, arguments.no_gitignore)?;
     let source = resolve_source(&SourceRequest {
-        path: arguments.path,
-        url: arguments.url,
-        git_ref: arguments.git_ref,
+        path: arguments.path.clone(),
+        url: arguments.url.clone(),
+        git_ref: arguments.git_ref.clone(),
     })?;
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.config_args,
+        &arguments.ignore,
+        arguments.no_gitignore,
+    )?;
     let mut report = CodeLoc::new(&source.analysis_path, ignore).analyze()?;
     if let Some(display_path) = source.display_path {
         report.base_path = display_path.into();
     }
+
+    // Only the table is meant for a terminal. The other three are text meant
+    // for a pipe or a file, so the spinner has to be gone before they are
+    // emitted or it interleaves with the payload.
+    let rendered = match arguments.format {
+        LocOutputFormat::Table => {
+            progress.finish();
+            print_report(&report);
+            return Ok(no_gates());
+        }
+        LocOutputFormat::Json => render_loc_json(&report),
+        LocOutputFormat::Markdown => render_loc_markdown(&report),
+        LocOutputFormat::Csv => render_loc_csv(&report),
+    };
+
+    // Same rule as `graph`: a report going to a file keeps the spinner alive
+    // to say so, and a report going to a terminal stops it first.
+    if arguments.output.is_some() {
+        progress.set_message("Writing output...");
+    }
     progress.finish();
-    print_report(&report);
-    Ok(())
+    emit_rendered_output(arguments.output.as_deref(), &rendered)?;
+    Ok(no_gates())
 }
 
-fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
+fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
     let progress = CliProgress::start("Counting declarations...");
-    let ignore =
-        build_ignore_matcher(&arguments.ignore, arguments.no_gitignore)?;
     let source = resolve_source(&SourceRequest {
-        path: arguments.path,
-        url: arguments.url,
-        git_ref: arguments.git_ref,
+        path: arguments.path.clone(),
+        url: arguments.url.clone(),
+        git_ref: arguments.git_ref.clone(),
     })?;
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.config_args,
+        &arguments.ignore,
+        arguments.no_gitignore,
+    )?;
 
     let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
 
@@ -242,23 +350,22 @@ fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
     };
 
     if let Some(rendered) = rendered {
-        emit_rendered_output(arguments.output.as_deref(), &rendered)
-    } else {
-        Ok(())
+        emit_rendered_output(arguments.output.as_deref(), &rendered)?;
     }
+    Ok(no_gates())
 }
 
-fn run_context(arguments: ContextArgs) -> Result<()> {
+fn run_context(arguments: ContextArgs) -> Result<Vec<Gate>> {
     match resolve_context_options(arguments)? {
         ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
         ResolvedContextCommand::ListProfiles(profiles) => {
             print_available_profiles(&profiles);
-            Ok(())
+            Ok(no_gates())
         }
     }
 }
 
-fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
+fn execute_context(arguments: &ResolvedContextOptions) -> Result<Vec<Gate>> {
     let progress = CliProgress::start("Preparing context inputs...");
     progress.set_message("Building context pack...");
     let report = build_context_report(arguments)?;
@@ -278,7 +385,8 @@ fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
         progress.finish();
     }
     report_unresolved_symbols(&arguments.unresolved_symbols);
-    emit_rendered_output(arguments.output.as_deref(), &rendered)
+    emit_rendered_output(arguments.output.as_deref(), &rendered)?;
+    Ok(no_gates())
 }
 
 /// Warn about `--focus-symbol` names that matched nothing or too much.
@@ -300,15 +408,164 @@ fn report_unresolved_symbols(names: &[String]) {
     );
 }
 
-fn run_graph(arguments: &GraphArgs) -> Result<()> {
-    let progress = CliProgress::start("Analyzing dependency graph...");
-    let ignore =
-        build_ignore_matcher(&arguments.ignore, arguments.no_gitignore)?;
+/// Report the blast radius of one file.
+///
+/// The analysis is the one `graph --what-depends-on` already ran, not a second
+/// implementation of it: both ask the resolver for the same
+/// [`GraphQuery::DependsOn`] report. Keeping them separate would guarantee they
+/// drift, and the blast radius is the number someone puts in a CI gate.
+fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
+    let progress = CliProgress::start("Computing blast radius...");
     let source = resolve_source(&SourceRequest {
         path: arguments.path.clone(),
         url: arguments.url.clone(),
         git_ref: arguments.git_ref.clone(),
     })?;
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.config_args,
+        &arguments.ignore,
+        arguments.no_gitignore,
+    )?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        arguments.depth,
+        Some(GraphQuery::DependsOn(arguments.file.clone())),
+        EdgeFilters {
+            exclude_type_aliases: arguments.exclude_types,
+        },
+    )?;
+
+    let radius = impact::measure(&report, &arguments.file);
+    let count = impact::dependent_count(&radius);
+
+    let rendered = match arguments.format {
+        ImpactOutputFormat::Markdown => impact::render_markdown(&radius),
+        ImpactOutputFormat::Json => impact::render_json(&radius),
+    };
+
+    let gates = arguments
+        .fail_on
+        .map(|limit| {
+            vec![Gate::new("files depending on the target", count, limit)]
+        })
+        .unwrap_or_default();
+
+    if arguments.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output.as_deref(), &rendered)?;
+    Ok(gates)
+}
+
+/// Report what a change reaches, rather than what the repository depends on.
+///
+/// Builds the graph once and measures every changed file against it. Building
+/// one blast radius per file would re-parse the repository once per changed
+/// file, which turns the cheapest useful CI check into the most expensive one.
+fn run_graph_diff(
+    source: &ResolvedSource,
+    ignore: &IgnoreMatcher,
+    arguments: &GraphArgs,
+    spec: &str,
+) -> Result<Vec<Gate>> {
+    let progress = CliProgress::start("Measuring change impact...");
+    let selection = resolve_changed_files(source, spec)?;
+    let requested: Vec<String> = selection
+        .changed_paths
+        .iter()
+        .map(|path| path.to_string_lossy().into_owned())
+        .collect();
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with(
+        &source.analysis_path,
+        ignore,
+        &[],
+        arguments.depth,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: arguments.exclude_types,
+        },
+    )?;
+
+    let base_prefix = source
+        .analysis_path
+        .strip_prefix(&selection.repo_root)
+        .unwrap_or_else(|_| std::path::Path::new(""))
+        .to_string_lossy()
+        .into_owned();
+
+    let changes =
+        change_impact::measure_changes(&report, &requested, &base_prefix);
+
+    // A changed path that matched no graph node is either deleted or outside the
+    // analysis base. Reporting those separately is the difference between "this
+    // change reaches nothing" and "this change touched files I could not see",
+    // which are very different sentences in a pull request.
+    let matched: std::collections::BTreeSet<&str> =
+        changes.iter().map(|change| change.file.as_str()).collect();
+    let skipped: Vec<String> = requested
+        .iter()
+        .filter(|path| {
+            !matched.contains(path.as_str())
+                && !changes.iter().any(|change| {
+                    change
+                        .file
+                        .ends_with(&format!("/{}", path.replace('\\', "/")))
+                })
+        })
+        .cloned()
+        .collect();
+
+    let rendered = match arguments.format {
+        GraphOutputFormat::Json => {
+            change_impact::render_json(&changes, spec, &skipped)
+        }
+        _ => change_impact::render_markdown(&changes, spec, &skipped),
+    };
+
+    let gates = arguments
+        .fail_on_unresolved
+        .map(|limit| {
+            vec![Gate::new(
+                "unresolved local paths",
+                report.metrics.unresolved_local_edges,
+                limit,
+            )]
+        })
+        .unwrap_or_default();
+
+    if arguments.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output.as_deref(), &rendered)?;
+    Ok(gates)
+}
+
+fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
+    let progress = CliProgress::start("Analyzing dependency graph...");
+    let source = resolve_source(&SourceRequest {
+        path: arguments.path.clone(),
+        url: arguments.url.clone(),
+        git_ref: arguments.git_ref.clone(),
+    })?;
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.config_args,
+        &arguments.ignore,
+        arguments.no_gitignore,
+    )?;
+
+    if let Some(spec) = arguments.diff.as_deref() {
+        return run_graph_diff(&source, &ignore, arguments, spec);
+    }
 
     progress.set_message("Extracting imports...");
     let query = arguments
@@ -339,6 +596,24 @@ fn run_graph(arguments: &GraphArgs) -> Result<()> {
     progress.set_message("Rendering graph...");
     let rendered = render_graph(&report, graph_format);
 
+    // Thresholds are read off the report that was just built, before it is
+    // rendered, so a gate and the number printed next to it cannot disagree.
+    let mut gates = Vec::new();
+    if let Some(limit) = arguments.fail_on_cycles {
+        gates.push(Gate::new(
+            "circular dependencies",
+            report.metrics.circular_dependencies,
+            limit,
+        ));
+    }
+    if let Some(limit) = arguments.fail_on_unresolved {
+        gates.push(Gate::new(
+            "unresolved local paths",
+            report.metrics.unresolved_local_edges,
+            limit,
+        ));
+    }
+
     let writes_to_stdout = arguments.output.is_none();
     if !writes_to_stdout {
         progress.set_message("Writing output...");
@@ -346,5 +621,6 @@ fn run_graph(arguments: &GraphArgs) -> Result<()> {
     if writes_to_stdout {
         progress.finish();
     }
-    emit_rendered_output(arguments.output.as_deref(), &rendered)
+    emit_rendered_output(arguments.output.as_deref(), &rendered)?;
+    Ok(gates)
 }

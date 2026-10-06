@@ -5,8 +5,9 @@ mod git;
 mod source;
 
 pub use context::{
-    AvailableContextProfiles, ContextCommandInput, ResolvedContextCommand,
-    ResolvedContextOptions, build_context_report, resolve_context_command,
+    AvailableContextProfiles, ContextCommandInput, ProjectSettings,
+    ResolvedContextCommand, ResolvedContextOptions, build_context_report,
+    load_project_settings, resolve_changed_files, resolve_context_command,
 };
 pub use source::{
     ResolvedSource, SourceRequest, TreeHostingStyle, resolve_source,

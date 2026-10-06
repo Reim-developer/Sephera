@@ -23,6 +23,7 @@ export default defineConfig({
 						{ slug: 'commands/loc' },
 						{ slug: 'commands/context' },
 						{ slug: 'commands/graph' },
+						{ slug: 'commands/impact' },
 						{ slug: 'commands/mcp' },
 					],
 				},
