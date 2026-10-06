@@ -1,28 +1,55 @@
-//! Rust import extraction and resolution.
+//! Rust import extraction and module-path resolution.
+//!
+//! Extraction is in [`extract`]; this file holds the plugin, the resolution
+//! rules, and the tests. Rust is the only language with three behaviours the
+//! shared walk has no opinion about, and all three are asked for through
+//! [`ImportPlugin`] rather than special-cased inside the walk:
+//!
+//! - `mod name;` names a file, so it is a declaration rather than an import.
+//! - `mod name { }` opens a scope, so references inside it sit one level down.
+//! - `#[cfg(feature = "...")]` gates a reference on a feature flag.
 
-use crate::core::{compression::SupportedLanguage, graph::ImportKind};
+mod extract;
+
+use tree_sitter::Node;
+
+use crate::core::{
+    compression::SupportedLanguage,
+    graph::{ImportKind, types::ImportStatement},
+};
 
 use super::{
     ExtractedImport, ImportPlugin, ResolveContext, ResolverPlugin, paths,
+    walk::walk_imports,
 };
-
-/// Rust import extraction and module-path resolution.
-#[derive(Debug, Clone, Copy, Default)]
-pub struct RustPlugin;
 
 impl ImportPlugin for RustPlugin {
     fn language(&self) -> SupportedLanguage {
         SupportedLanguage::Rust
     }
 
+    fn extract_from_node(
+        &self,
+        source: &[u8],
+        node: &Node<'_>,
+    ) -> Option<Vec<ImportStatement>> {
+        extract::extract_from_node(source, node)
+    }
+
     fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        // The Tree-sitter walk is shared across languages; this plugin owns
-        // which grammar and import syntax apply.
-        super::super::imports::walk_imports(source, SupportedLanguage::Rust)
+        walk_imports(source, ImportPlugin::language(self), self)
             .ok()
             .map(super::to_extracted)
     }
 
+    /// What this file declares, so a path naming a declaration rather than a
+    /// module can be resolved.
+    ///
+    /// This is the whole reason Rust needs the hook. `use crate::Router;` names
+    /// a type the crate root re-exported, and no file is called `Router`, so a
+    /// module-only lookup reports the project's own type as an external
+    /// dependency. Leaving this out of the plugin is not a simplification: on
+    /// axum it turned 49 resolved references back into resolver gaps.
     fn declared_names(
         &self,
         source: &[u8],
@@ -35,8 +62,19 @@ impl ImportPlugin for RustPlugin {
             source, &tree,
         ))
     }
+
+    fn child_depth_step(&self, node: &Node<'_>) -> u8 {
+        u8::from(extract::opens_inline_module(node))
+    }
+
+    fn is_cfg_gated(&self, source: &[u8], node: &Node<'_>) -> bool {
+        extract::is_cfg_gated(source, node)
+    }
 }
 
+/// Rust import extraction and module-path resolution.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct RustPlugin;
 impl ResolverPlugin for RustPlugin {
     fn language(&self) -> SupportedLanguage {
         SupportedLanguage::Rust
@@ -377,7 +415,6 @@ fn resolve(
         crate::core::graph::plugins::test_context(source_file, &known);
     RustPlugin.resolve(import_path, context)
 }
-
 #[cfg(test)]
 mod tests {
     use super::*;

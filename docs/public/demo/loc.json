@@ -1,0 +1,15 @@
+{
+  "commit": "853067671a38632ceab12cc6227c046152db779c",
+  "files_examined": 505,
+  "files_with_crlf": 0,
+  "line_endings": "lf",
+  "note": "Byte counts assume LF: a CRLF checkout inflates every size. This image also states whether the checkout left symlinks as symlinks. git on Windows without core.symlinks writes axum's README.md as a fourteen-byte text file holding the link target, which is then counted as one more file and one more Markdown line. That is the checkout, not the tool.",
+  "repository": "axum",
+  "symlinks_materialised": [
+    "README.md",
+    "axum-core/LICENSE",
+    "axum-extra/LICENSE",
+    "axum-macros/LICENSE",
+    "axum/LICENSE"
+  ]
+}

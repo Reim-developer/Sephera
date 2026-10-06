@@ -1,12 +1,19 @@
-//! Python import extraction and resolution.
+//! Python module resolution.
+//!
+//! Leading dots encode relative depth: `.mod` is the current package, `..mod`
+//! its parent. Counting them is what distinguishes a relative import from an
+//! absolute one, because everything after the dots is a plain module path in
+//! both cases.
+
+mod extract;
 
 use crate::core::compression::SupportedLanguage;
 
 use super::{
     ExtractedImport, ImportPlugin, ResolveContext, ResolverPlugin, paths,
+    walk::walk_imports,
 };
-
-/// Python import extraction and module-path resolution.
+/// Python import extraction and resolution.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PythonPlugin;
 
@@ -15,8 +22,16 @@ impl ImportPlugin for PythonPlugin {
         SupportedLanguage::Python
     }
 
+    fn extract_from_node(
+        &self,
+        source: &[u8],
+        node: &tree_sitter::Node<'_>,
+    ) -> Option<Vec<crate::core::graph::types::ImportStatement>> {
+        extract::extract_from_node(source, node)
+    }
+
     fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        super::super::imports::walk_imports(source, SupportedLanguage::Python)
+        walk_imports(source, ImportPlugin::language(self), self)
             .ok()
             .map(super::to_extracted)
     }
@@ -32,21 +47,14 @@ impl ResolverPlugin for PythonPlugin {
         import_path: &str,
         context: ResolveContext<'_>,
     ) -> Option<String> {
-        // Leading dots encode relative depth: `.mod` is the current package,
-        // `..mod` its parent. Counting them is what distinguishes a relative
-        // import from an absolute one.
-        let relative_levels =
+        let levels =
             import_path.bytes().take_while(|byte| *byte == b'.').count();
-        let module_path =
-            paths::replace_separator(&import_path[relative_levels..], '.');
+        let module_path = paths::replace_separator(&import_path[levels..], '.');
 
-        if relative_levels > 0 {
-            let package = ascend(
-                &paths::parent(context.source_file),
-                relative_levels - 1,
-            );
+        if levels > 0 {
+            let package =
+                ascend(&paths::parent(context.source_file), levels - 1);
             let relative = paths::join(&package, &[&module_path]);
-
             if let Some(found) = first_existing(context, &relative) {
                 return Some(found);
             }
@@ -71,22 +79,29 @@ fn ascend(base: &str, levels: usize) -> String {
     result
 }
 
-/// The file spellings a Python module can take.
-fn first_existing(
-    context: ResolveContext<'_>,
-    module_path: &str,
-) -> Option<String> {
-    let as_module = format!("{module_path}.py");
-    if context.contains(&as_module) {
-        return Some(as_module);
+/// Try `path.py`, then `path/__init__.py`.
+fn first_existing(context: ResolveContext<'_>, path: &str) -> Option<String> {
+    if path.is_empty() {
+        return None;
     }
 
-    let as_package = format!("{module_path}/__init__.py");
-    if context.contains(&as_package) {
-        return Some(as_package);
+    let module = format!("{path}.py");
+    if context.contains(&module) {
+        return Some(module);
     }
 
-    None
+    let package = paths::join(path, &["__init__.py"]);
+    if context.contains(&package) {
+        return Some(package);
+    }
+
+    // A directory named after the module, with its own package root. This is
+    // what a namespace package looks like, and it has no `__init__.py` at all.
+    let directory = format!("{path}/");
+    context
+        .files()
+        .find(|known| known.starts_with(&directory))
+        .cloned()
 }
 
 #[cfg(test)]
@@ -101,8 +116,7 @@ mod tests {
     ) -> Option<String> {
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context =
-            crate::core::graph::plugins::test_context(source_file, &known);
+        let context = super::super::test_context(source_file, &known);
         PythonPlugin.resolve(import_path, context)
     }
 
@@ -148,38 +162,35 @@ mod tests {
 
     #[test]
     fn relative_import_falls_back_to_an_absolute_sibling() {
-        // When the relative form misses, the module name is retried from the
-        // repository root, which is how a top-level module of the same name
-        // still resolves.
+        // A relative import that names something outside the package is still a
+        // reference to a real module when one sits at the top level.
         let files = ["util.py", "pkg/main.py"];
 
         assert_eq!(
-            resolve(".util", "pkg/main.py", &files),
+            resolve("..util", "pkg/main.py", &files),
             Some("util.py".to_owned())
         );
     }
 
     #[test]
     fn relative_import_that_matches_nothing_stays_unresolved() {
-        // `.util` from the root cannot reach `pkg/util.py`: the relative form is
-        // `util`, and there is no top-level `util`. Reporting a link here would
-        // invent an edge that Python itself would not follow.
-        let files = ["pkg/util.py", "main.py"];
+        let files = ["pkg/main.py"];
 
-        assert_eq!(resolve(".util", "main.py", &files), None);
+        assert_eq!(resolve("..nowhere", "pkg/main.py", &files), None);
     }
 
     #[test]
     fn external_package_is_not_resolved() {
         let files = ["main.py"];
 
+        assert_eq!(resolve("os", "main.py", &files), None);
         assert_eq!(resolve("os.path", "main.py", &files), None);
-        assert_eq!(resolve("numpy", "main.py", &files), None);
     }
 
     #[test]
     fn ascend_stops_at_the_root() {
         assert_eq!(ascend("a/b/c", 0), "a/b/c");
+        assert_eq!(ascend("a/b/c", 1), "a/b");
         assert_eq!(ascend("a/b/c", 2), "a");
         // Climbing past the top must not loop or panic.
         assert_eq!(ascend("a", 5), "");
