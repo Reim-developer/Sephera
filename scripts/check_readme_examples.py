@@ -62,14 +62,28 @@ def is_example_of_interest(command: str) -> bool:
     return not any(command.startswith(banned) for banned in SKIP_COMMANDS)
 
 
+def invocation() -> str:
+    """How to reach the CLI.
+
+    A built binary is used when one exists, and `cargo run` otherwise. Depending
+    on a binary already being on disk is not a property of this check: it is a
+    property of whatever ran before it. On CI the job had run `cargo test` and
+    the check still found nothing built, so it failed for a reason unrelated to
+    the README.
+    """
+    if EXECUTABLE.is_file():
+        return f'"{EXECUTABLE}" '
+    return "cargo run --quiet --package sephera -- "
+
+
 def run(command: str) -> tuple[bool, str]:
     """Run one command line and report whether it succeeded.
 
-    The built binary is substituted for the bare `sephera` in the README: the
-    command a reader types depends on their PATH, and what is being checked here
-    is that the flags are valid.
+    The invocation is substituted for the bare `sephera` in the README: the
+    command a reader types depends on their PATH, and what is checked here is
+    that the flags are valid.
     """
-    parts = command.replace("sephera ", f'"{EXECUTABLE}" ', 1)
+    parts = command.replace("sephera ", invocation(), 1)
     completed = subprocess.run(
         parts,
         shell=True,
@@ -85,10 +99,6 @@ def run(command: str) -> tuple[bool, str]:
 
 def main() -> int:
     """Check every runnable example, printing the ones that fail."""
-    if not EXECUTABLE.is_file():
-        print("no release binary. Run `cargo build --release` first.")
-        return 1
-
     failures: list[str] = []
     checked = 0
     for path in readme_paths():

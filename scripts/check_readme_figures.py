@@ -36,11 +36,20 @@ def binary() -> Path | None:
     return None
 
 
-def run_graph(cli: Path) -> str:
-    """Run the command the README documents, and return its markdown."""
+def run_graph(cli: Path | None) -> str:
+    """Run the documented command, building it if it is not already built.
+
+    Whether a binary exists depends on what ran before, not on what this check
+    is about. CI had run `cargo test` and still had nothing on disk, so the check
+    failed for a reason unrelated to the README.
+    """
+    if cli is not None:
+        argv = [str(cli)]
+    else:
+        argv = ["cargo", "run", "--quiet", "--package", "sephera", "--"]
     result = subprocess.run(
         [
-            str(cli),
+            *argv,
             "graph",
             "--path",
             ".",
@@ -136,10 +145,6 @@ def readme_mermaid() -> set[str]:
 def main() -> int:
     """Compare every quoted figure against a fresh run."""
     cli = binary()
-    if cli is None:
-        print("no built binary. Run `cargo build --release` first.")
-        return 1
-
     actual = run_graph(cli)
     actual_summary = summary_table(actual)
     actual_nodes = mermaid_nodes(actual)
