@@ -143,6 +143,7 @@ pub fn build_graph_with(
     // module path, and the metrics attribute each edge to a package.
     let manifests = manifests::ManifestIndex::discover(base_path);
     let project = ResolutionInputs {
+        base_path: base_path.to_path_buf(),
         known_files,
         declarations,
         manifests,
@@ -378,6 +379,7 @@ fn resolve_import_with(
         kind,
         declarations: Some(&project.declarations),
         manifests: Some(&project.manifests),
+        base_path: &project.base_path,
     };
 
     match plugin.resolve(import_path, context) {
@@ -474,6 +476,7 @@ fn resolve_plain(
         ImportKind::Dependency,
         language,
         &ResolutionInputs {
+            base_path: std::path::PathBuf::new(),
             known_files: known_files.clone(),
             declarations: declarations::DeclarationIndex::default(),
             manifests: manifests::ManifestIndex::default(),
@@ -487,6 +490,7 @@ fn resolve_plain(
 /// parameter was a second index, and a caller that passed them in the wrong
 /// order would compile and resolve against the wrong table.
 struct ResolutionInputs {
+    base_path: PathBuf,
     known_files: plugins::KnownFiles,
     declarations: declarations::DeclarationIndex,
     manifests: manifests::ManifestIndex,
@@ -1870,6 +1874,7 @@ mod tests {
             ImportKind::Dependency,
             SupportedLanguage::Rust,
             &ResolutionInputs {
+                base_path: std::path::PathBuf::new(),
                 known_files: files.clone(),
                 declarations: index.clone(),
                 manifests: manifests::ManifestIndex::default(),

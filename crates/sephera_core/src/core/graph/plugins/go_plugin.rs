@@ -154,6 +154,7 @@ mod tests {
             kind: ImportKind::Dependency,
             declarations: None,
             manifests: Some(&manifests),
+            base_path: std::path::Path::new("."),
         };
 
         let resolved = GoPlugin.resolve("example.com/app", context);
@@ -180,6 +181,7 @@ mod tests {
             kind: ImportKind::Dependency,
             declarations: None,
             manifests: Some(&manifests),
+            base_path: std::path::Path::new("."),
         };
 
         assert_eq!(GoPlugin.resolve("example.com/other", context), None);

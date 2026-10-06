@@ -65,11 +65,12 @@ structural_cycles = 0
 [[corpus]]
 name = "express"
 language = "JavaScript"
-# `require('../..')` names the package root, which needs package.json's `main`
-# field to resolve. That accounts for most of the gap.
-unresolved_local = 96
+# Relative imports resolve fully, including the package root that
+# `require('../..')` names from every example. Up from 63 edges when the
+# root-relative path produced `/index.js` instead of `index.js`.
+unresolved_local = 0
 files = 141
-internal_edges = 63
+internal_edges = 159
 self_references = 0
 cfg_gated_edges = 0
 cycles = 0

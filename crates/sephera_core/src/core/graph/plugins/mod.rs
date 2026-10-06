@@ -102,6 +102,15 @@ pub struct ResolveContext<'a> {
     /// it, because the files sit at the top level rather than in a directory
     /// named after the module.
     pub manifests: Option<&'a super::manifests::ManifestIndex>,
+
+    /// Directory the analysis was rooted at.
+    ///
+    /// Resolvers work in project-relative paths, so reading a file one of them
+    /// names -- a `package.json` for its `main` field -- needs the root to turn
+    /// it into something on disk. Without it the only guess is the process
+    /// working directory, which is a different directory whenever `--path` was
+    /// given.
+    pub base_path: &'a std::path::Path,
 }
 
 /// A context for a resolver test, with no lookup tables attached.
@@ -110,7 +119,7 @@ pub struct ResolveContext<'a> {
 /// populated them would be testing the fixture as much as the resolver. Tests
 /// that do exercise a lookup build the index and pass it explicitly.
 #[cfg(test)]
-pub(crate) const fn test_context<'a>(
+pub(crate) fn test_context<'a>(
     source_file: &'a str,
     known_files: &'a KnownFiles,
 ) -> ResolveContext<'a> {
@@ -121,6 +130,7 @@ pub(crate) const fn test_context<'a>(
         kind: crate::core::graph::ImportKind::Dependency,
         declarations: None,
         manifests: None,
+        base_path: std::path::Path::new(""),
     }
 }
 
