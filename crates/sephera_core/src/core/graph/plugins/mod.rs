@@ -159,7 +159,12 @@ impl ResolveContext<'_> {
 }
 
 /// Extracts import statements from source text for one language.
-pub trait ImportPlugin {
+///
+/// `Sync` because extraction runs across a thread pool: parsing is the
+/// dominant cost of a graph run and the work is independent per file. The
+/// built-in plugins are stateless, so this costs nothing and buys the
+/// parallelism. A plugin holding mutable state would need interior locking.
+pub trait ImportPlugin: Sync {
     /// The language this plugin handles.
     fn language(&self) -> SupportedLanguage;
 
@@ -238,81 +243,96 @@ pub fn builtin_languages() -> Vec<SupportedLanguage> {
     ]
 }
 
+/// Every bundled extraction plugin, as a static.
+///
+/// A plugin holds no state beyond which language it handles, so there is nothing
+/// to build per call. Handing back a shared reference instead of a
+/// `Box` removes one heap allocation per file per lookup — `extract_one_file`
+/// asks twice, once for imports and once for declared names — and it is what
+/// lets extraction run across a thread pool without a lock.
+static RUST_IMPORT: self::rust_plugin::RustPlugin =
+    self::rust_plugin::RustPlugin;
+static PYTHON_IMPORT: self::python_plugin::PythonPlugin =
+    self::python_plugin::PythonPlugin;
+static TYPESCRIPT_IMPORT: self::javascript_plugin::JavaScriptPlugin =
+    self::javascript_plugin::JavaScriptPlugin {
+        language: SupportedLanguage::TypeScript,
+    };
+static JAVASCRIPT_IMPORT: self::javascript_plugin::JavaScriptPlugin =
+    self::javascript_plugin::JavaScriptPlugin {
+        language: SupportedLanguage::JavaScript,
+    };
+static GO_IMPORT: self::go_plugin::GoPlugin = self::go_plugin::GoPlugin;
+static JAVA_IMPORT: self::java_plugin::JavaPlugin =
+    self::java_plugin::JavaPlugin;
+static C_IMPORT: self::c_cpp_plugin::CCppPlugin =
+    self::c_cpp_plugin::CCppPlugin {
+        language: SupportedLanguage::C,
+    };
+static CPP_IMPORT: self::c_cpp_plugin::CCppPlugin =
+    self::c_cpp_plugin::CCppPlugin {
+        language: SupportedLanguage::Cpp,
+    };
+
 /// The extraction plugin for a language, if one is bundled.
 #[must_use]
 pub fn builtin_import_plugin(
     language: SupportedLanguage,
-) -> Option<Box<dyn ImportPlugin>> {
+) -> Option<&'static dyn ImportPlugin> {
     match language {
-        SupportedLanguage::Rust => {
-            Some(Box::new(self::rust_plugin::RustPlugin))
-        }
-        SupportedLanguage::Python => {
-            Some(Box::new(self::python_plugin::PythonPlugin))
-        }
-        SupportedLanguage::TypeScript => {
-            Some(Box::new(self::javascript_plugin::JavaScriptPlugin {
-                language: SupportedLanguage::TypeScript,
-            }))
-        }
-        SupportedLanguage::JavaScript => {
-            Some(Box::new(self::javascript_plugin::JavaScriptPlugin {
-                language: SupportedLanguage::JavaScript,
-            }))
-        }
-        SupportedLanguage::Go => Some(Box::new(self::go_plugin::GoPlugin)),
-        SupportedLanguage::Java => {
-            Some(Box::new(self::java_plugin::JavaPlugin))
-        }
-        SupportedLanguage::C => {
-            Some(Box::new(self::c_cpp_plugin::CCppPlugin {
-                language: SupportedLanguage::C,
-            }))
-        }
-        SupportedLanguage::Cpp => {
-            Some(Box::new(self::c_cpp_plugin::CCppPlugin {
-                language: SupportedLanguage::Cpp,
-            }))
-        }
+        SupportedLanguage::Rust => Some(&RUST_IMPORT),
+        SupportedLanguage::Python => Some(&PYTHON_IMPORT),
+        SupportedLanguage::TypeScript => Some(&TYPESCRIPT_IMPORT),
+        SupportedLanguage::JavaScript => Some(&JAVASCRIPT_IMPORT),
+        SupportedLanguage::Go => Some(&GO_IMPORT),
+        SupportedLanguage::Java => Some(&JAVA_IMPORT),
+        SupportedLanguage::C => Some(&C_IMPORT),
+        SupportedLanguage::Cpp => Some(&CPP_IMPORT),
     }
 }
+
+/// Every bundled resolver plugin, as a static.
+///
+/// Same reasoning as [`RUST_IMPORT`] and the rest: no state to build, no
+/// allocation per call, and shareable across threads.
+static RUST_RESOLVER: self::rust_plugin::RustPlugin =
+    self::rust_plugin::RustPlugin;
+static PYTHON_RESOLVER: self::python_plugin::PythonPlugin =
+    self::python_plugin::PythonPlugin;
+static TYPESCRIPT_RESOLVER: self::javascript_plugin::JavaScriptPlugin =
+    self::javascript_plugin::JavaScriptPlugin {
+        language: SupportedLanguage::TypeScript,
+    };
+static JAVASCRIPT_RESOLVER: self::javascript_plugin::JavaScriptPlugin =
+    self::javascript_plugin::JavaScriptPlugin {
+        language: SupportedLanguage::JavaScript,
+    };
+static GO_RESOLVER: self::go_plugin::GoPlugin = self::go_plugin::GoPlugin;
+static JAVA_RESOLVER: self::java_plugin::JavaPlugin =
+    self::java_plugin::JavaPlugin;
+static C_RESOLVER: self::c_cpp_plugin::CCppPlugin =
+    self::c_cpp_plugin::CCppPlugin {
+        language: SupportedLanguage::C,
+    };
+static CPP_RESOLVER: self::c_cpp_plugin::CCppPlugin =
+    self::c_cpp_plugin::CCppPlugin {
+        language: SupportedLanguage::Cpp,
+    };
 
 /// The resolution plugin for a language, if one is bundled.
 #[must_use]
 pub fn builtin_resolver_plugin(
     language: SupportedLanguage,
-) -> Option<Box<dyn ResolverPlugin>> {
+) -> Option<&'static dyn ResolverPlugin> {
     match language {
-        SupportedLanguage::Rust => {
-            Some(Box::new(self::rust_plugin::RustPlugin))
-        }
-        SupportedLanguage::Python => {
-            Some(Box::new(self::python_plugin::PythonPlugin))
-        }
-        SupportedLanguage::TypeScript => {
-            Some(Box::new(self::javascript_plugin::JavaScriptPlugin {
-                language: SupportedLanguage::TypeScript,
-            }))
-        }
-        SupportedLanguage::JavaScript => {
-            Some(Box::new(self::javascript_plugin::JavaScriptPlugin {
-                language: SupportedLanguage::JavaScript,
-            }))
-        }
-        SupportedLanguage::Go => Some(Box::new(self::go_plugin::GoPlugin)),
-        SupportedLanguage::Java => {
-            Some(Box::new(self::java_plugin::JavaPlugin))
-        }
-        SupportedLanguage::C => {
-            Some(Box::new(self::c_cpp_plugin::CCppPlugin {
-                language: SupportedLanguage::C,
-            }))
-        }
-        SupportedLanguage::Cpp => {
-            Some(Box::new(self::c_cpp_plugin::CCppPlugin {
-                language: SupportedLanguage::Cpp,
-            }))
-        }
+        SupportedLanguage::Rust => Some(&RUST_RESOLVER),
+        SupportedLanguage::Python => Some(&PYTHON_RESOLVER),
+        SupportedLanguage::TypeScript => Some(&TYPESCRIPT_RESOLVER),
+        SupportedLanguage::JavaScript => Some(&JAVASCRIPT_RESOLVER),
+        SupportedLanguage::Go => Some(&GO_RESOLVER),
+        SupportedLanguage::Java => Some(&JAVA_RESOLVER),
+        SupportedLanguage::C => Some(&C_RESOLVER),
+        SupportedLanguage::Cpp => Some(&CPP_RESOLVER),
     }
 }
 

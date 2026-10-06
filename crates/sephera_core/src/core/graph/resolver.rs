@@ -10,6 +10,7 @@ use std::{
 };
 
 use anyhow::{Context, Result, bail};
+use rayon::prelude::*;
 
 use crate::core::{
     compression::SupportedLanguage,
@@ -189,56 +190,95 @@ struct FileImportData {
 ///
 /// Also builds the declaration index, which resolution needs for paths that name
 /// a declaration rather than a module. Both come from one read per file.
+///
+/// Across a thread pool, because the cost is one Tree-sitter parse per file and
+/// the files are independent. Two things keep the result identical to the
+/// sequential version it replaced: `collect` preserves input order, and the
+/// declaration index is folded afterwards rather than being mutated from
+/// several workers, so nothing depends on which thread finished first.
 fn extract_all_imports(
     project_files: &[ProjectFile],
 ) -> Result<(Vec<FileImportData>, declarations::DeclarationIndex)> {
-    let mut results = Vec::new();
+    let extracted: Vec<ExtractedFile> = project_files
+        .par_iter()
+        .map(extract_one_file)
+        .collect::<Result<Vec<_>>>()?
+        .into_iter()
+        .flatten()
+        .collect();
+
+    let mut results = Vec::with_capacity(extracted.len());
     let mut declarations = declarations::DeclarationIndex::default();
 
-    for project_file in project_files {
-        if project_file.size_bytes > MAX_IMPORT_FILE_BYTES
-            || project_file.size_bytes == 0
-        {
-            continue;
+    for file in extracted {
+        if let Some((path, declared)) = file.declared {
+            declarations.insert(&path, declared);
         }
+        results.push(file.data);
+    }
 
-        let Some((_, language)) = project_file.language_match else {
-            continue;
-        };
+    Ok((results, declarations))
+}
 
-        let Some(ts_language) =
-            SupportedLanguage::from_language_name(language.name)
-        else {
-            continue;
-        };
+/// One file's imports, plus whatever it declares.
+struct ExtractedFile {
+    data: FileImportData,
+    /// The file's path and the names it declares, kept beside the imports so
+    /// the declaration index can be built in one ordered pass.
+    declared: Option<(String, declarations::DeclaredNames)>,
+}
 
-        let source =
-            std::fs::read(&project_file.absolute_path).with_context(|| {
-                format!(
-                    "failed to read `{}` for import extraction",
-                    project_file.absolute_path.display()
-                )
-            })?;
+/// Extracts from one file, or reports that it has nothing to extract.
+///
+/// `Ok(None)` covers every reason a file is skipped — unsupported language,
+/// empty, too large — and is not an error. A read failure is, because it means
+/// a file that should have been analysed was silently dropped otherwise.
+fn extract_one_file(
+    project_file: &ProjectFile,
+) -> Result<Option<ExtractedFile>> {
+    if project_file.size_bytes > MAX_IMPORT_FILE_BYTES
+        || project_file.size_bytes == 0
+    {
+        return Ok(None);
+    }
 
-        // Extraction goes through the language's plugin so that dispatch is uniform:
-        // adding a language means adding one plugin file, not editing the
-        // extractor and the resolver separately.
-        let imports = plugins::builtin_import_plugin(ts_language)
-            .and_then(|plugin| plugin.extract(&source))
-            .unwrap_or_default();
+    let Some((_, language)) = project_file.language_match else {
+        return Ok(None);
+    };
 
-        // What this file declares, for paths that name a declaration rather than
-        // a module. Collected here so it costs one extra parse per file at most,
-        // and only for the one language whose imports need it.
-        let declared = plugins::builtin_import_plugin(ts_language)
-            .and_then(|plugin| plugin.declared_names(&source));
+    let Some(ts_language) =
+        SupportedLanguage::from_language_name(language.name)
+    else {
+        return Ok(None);
+    };
 
-        if let Some(declared) = declared {
-            declarations
-                .insert(&project_file.normalized_relative_path, declared);
-        }
+    let source =
+        std::fs::read(&project_file.absolute_path).with_context(|| {
+            format!(
+                "failed to read `{}` for import extraction",
+                project_file.absolute_path.display()
+            )
+        })?;
 
-        results.push(FileImportData {
+    // Extraction goes through the language's plugin so that dispatch is uniform:
+    // adding a language means adding one plugin file, not editing the extractor
+    // and the resolver separately.
+    let plugin = plugins::builtin_import_plugin(ts_language);
+    let imports = plugin
+        .and_then(|plugin| plugin.extract(&source))
+        .unwrap_or_default();
+
+    // What this file declares, for paths that name a declaration rather than a
+    // module. Collected here so it costs one extra parse per file at most, and
+    // only for the one language whose imports need it.
+    let declared = plugin.and_then(|plugin| {
+        plugin
+            .declared_names(&source)
+            .map(|names| (project_file.normalized_relative_path.clone(), names))
+    });
+
+    Ok(Some(ExtractedFile {
+        data: FileImportData {
             file_path: project_file.normalized_relative_path.clone(),
             language: Some(language.name),
             ts_language,
@@ -252,10 +292,9 @@ fn extract_all_imports(
                     cfg_gated: extracted.cfg_gated,
                 })
                 .collect(),
-        });
-    }
-
-    Ok((results, declarations))
+        },
+        declared,
+    }))
 }
 
 /// Builds the set of focused normalized paths for filtering.
@@ -388,7 +427,7 @@ fn resolve_import_with(
         // local its shape looks. `crate::http::Request` is the case that
         // mattered: `pub use http;` re-exports a crate from outside, so the
         // prefix says "this project" and the code says otherwise.
-        None if leaves_project(plugin.as_ref(), import_path, context) => {
+        None if leaves_project(plugin, import_path, context) => {
             Resolution::External
         }
         None => Resolution::Unresolved,
