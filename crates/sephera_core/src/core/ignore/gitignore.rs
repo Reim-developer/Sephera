@@ -166,15 +166,13 @@ fn parse_line(raw: &str) -> Option<(bool, bool, String)> {
         return None;
     }
 
-    let (negated, rest) = line.strip_prefix('!').map_or(
-        (false, line),
-        |rest| (true, rest),
-    );
+    let (negated, rest) = line
+        .strip_prefix('!')
+        .map_or((false, line), |rest| (true, rest));
 
-    let (rest, directory_only) = rest.strip_suffix('/').map_or(
-        (rest, false),
-        |rest| (rest, true),
-    );
+    let (rest, directory_only) = rest
+        .strip_suffix('/')
+        .map_or((rest, false), |rest| (rest, true));
 
     // `\#` and `\!` are the only way to write a name that starts with those
     // characters. Dropping the backslash and keeping the character is the whole

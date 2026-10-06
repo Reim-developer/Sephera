@@ -33,12 +33,12 @@ impl Default for IgnoreMatcher {
 
 impl IgnoreMatcher {
     /// A matcher that excludes nothing.
-///
-/// # Panics
-///
-/// Never in practice. It compiles zero patterns, and an empty glob set cannot
-/// fail to build; the `expect` states that rather than hiding it.
-#[must_use]
+    ///
+    /// # Panics
+    ///
+    /// Never in practice. It compiles zero patterns, and an empty glob set cannot
+    /// fail to build; the `expect` states that rather than hiding it.
+    #[must_use]
     pub fn empty() -> Self {
         let (regex_ignore, glob_ignore) =
             compile_patterns(&[]).expect("no patterns cannot fail to compile");
