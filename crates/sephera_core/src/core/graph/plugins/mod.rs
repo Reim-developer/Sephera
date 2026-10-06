@@ -29,44 +29,26 @@ pub use super::path_utils as paths;
 /// Every file in an analysis, as normalised relative paths.
 pub type KnownFiles = BTreeSet<String>;
 
-/// Convert the Tree-sitter walker's output into the plugin-facing type.
+/// Everything one source file contributes to the graph.
 ///
-/// Lives here so the six `extract` implementations differ only in which
-/// grammar they pass, rather than repeating the same conversion.
-pub(super) fn to_extracted(
-    statements: Vec<super::types::ImportStatement>,
-) -> Vec<ExtractedImport> {
-    statements
-        .into_iter()
-        .map(|statement| ExtractedImport {
-            raw_path: statement.raw_path,
-            line: usize::try_from(statement.line).unwrap_or(1),
-            kind: statement.kind,
-            module_depth: statement.module_depth,
-            cfg_gated: statement.cfg_gated,
-        })
-        .collect()
-}
-
-/// An import statement as it appears in source text.
-///
-/// `line` is 1-based so it can be reported to a user without adjustment.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ExtractedImport {
-    /// The raw import target exactly as written, such as `crate::core::graph`.
-    pub raw_path: String,
-    /// 1-based line number where the import appears.
-    pub line: usize,
-    /// What this reference says about the file it names.
+/// Returned as a pair because the two halves come from the same parse tree, and
+/// building them separately meant reading and parsing the same bytes twice.
+#[derive(Debug, Default)]
+pub struct ExtractedSource {
+    /// The imports this file names, in source order.
     ///
-    /// Carried through the plugin boundary because the resolver needs it to keep
-    /// declarations out of cycle detection and to apply the edge filters. See
-    /// [`ImportKind`](crate::core::graph::ImportKind).
-    pub kind: ImportKind,
-    /// How many inline mod name { ... } blocks the reference sits inside.
-    pub module_depth: u8,
-    /// Whether a `#[cfg(...)]` attribute gated the reference.
-    pub cfg_gated: bool,
+    /// The graph's own [`ImportStatement`](super::types::ImportStatement),
+    /// which is what the walk produces. A separate plugin-facing import type used
+    /// to sit between the two, and every statement was converted into it only to
+    /// be converted straight back by the caller. It existed to satisfy two
+    /// separate methods, and there is now one.
+    pub imports: Vec<super::types::ImportStatement>,
+
+    /// The names this file declares, when the language needs a lookup by name.
+    ///
+    /// `None` for every language but Rust, and that is the normal answer rather
+    /// than a gap.
+    pub declared: Option<super::declarations::DeclaredNames>,
 }
 
 /// Everything a resolver needs to look at besides the import itself.
@@ -188,8 +170,20 @@ pub trait ImportPlugin: Sync {
         node: &tree_sitter::Node<'_>,
     ) -> Option<Vec<super::types::ImportStatement>>;
 
-    /// Extracts imports from `source`, or `None` if the text cannot be parsed.
-    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>>;
+    /// Everything one source contributes: the imports it names, and what it
+    /// declares.
+    ///
+    /// One parse answers both. They used to be two methods — `extract` and
+    /// `declared_names` — each building its own parser, so a Rust file was read
+    /// and parsed twice to produce two halves of one answer. Two methods that
+    /// must agree about parsing is a way to disagree.
+    ///
+    /// # Panics
+    ///
+    /// Never. A source that cannot be parsed yields `None`, which the caller
+    /// treats as "nothing here" rather than as an error, because a file the
+    /// grammar rejects is a file with no imports in it.
+    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource>;
 
     /// How much deeper references inside this node's children sit.
     ///
@@ -223,13 +217,14 @@ pub trait ImportPlugin: Sync {
     /// answer, and only Rust does, because `use crate::Router;` names a type the
     /// crate root re-exported rather than a file called `Router`.
     ///
-    /// This parses again rather than sharing a tree with [`Self::extract`]. The
-    /// cost is one extra parse per Rust file and buys a trait that stays a
-    /// trait: a language with no name-based imports adds nothing here, and one
-    /// that needs them overrides one method instead of editing the extractor.
-    fn declared_names(
+    /// The tree is a parameter rather than something the plugin parses, because
+    /// that is the whole point: one parse, two answers. The trait used to state
+    /// "one extra parse per Rust file" as though that were a cost worth
+    /// documenting, which is usually a sign the cost should go away instead.
+    fn collect_declarations(
         &self,
         _source: &[u8],
+        _tree: &tree_sitter::Tree,
     ) -> Option<super::declarations::DeclaredNames> {
         None
     }

@@ -10,8 +10,8 @@ use std::collections::BTreeSet;
 use crate::core::compression::SupportedLanguage;
 
 use super::{
-    ExtractedImport, ImportPlugin, ResolveContext, ResolverPlugin, paths,
-    walk::walk_imports,
+    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
+    walk::walk_with_declarations,
 };
 
 /// C or C++ import extraction and resolution.
@@ -34,10 +34,8 @@ impl ImportPlugin for CCppPlugin {
         extract::extract_from_node(source, node)
     }
 
-    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        walk_imports(source, ImportPlugin::language(self), self)
-            .ok()
-            .map(super::to_extracted)
+    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
+        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
     }
 }
 

@@ -263,35 +263,29 @@ fn extract_one_file(
     // Extraction goes through the language's plugin so that dispatch is uniform:
     // adding a language means adding one plugin file, not editing the extractor
     // and the resolver separately.
-    let plugin = plugins::builtin_import_plugin(ts_language);
-    let imports = plugin
-        .and_then(|plugin| plugin.extract(&source))
+    //
+    // One call, one parse. Asking the plugin for imports and then again for
+    // declared names meant reading and parsing every Rust file twice, which is
+    // what the declaration index cost before the plugin returned both halves
+    // together.
+    let mut extracted = plugins::builtin_import_plugin(ts_language)
+        .and_then(|plugin| plugin.extract_source(&source))
         .unwrap_or_default();
 
-    // What this file declares, for paths that name a declaration rather than a
-    // module. Collected here so it costs one extra parse per file at most, and
-    // only for the one language whose imports need it.
-    let declared = plugin.and_then(|plugin| {
-        plugin
-            .declared_names(&source)
-            .map(|names| (project_file.normalized_relative_path.clone(), names))
-    });
+    // Taken rather than cloned: the declaration map is the larger of the two
+    // halves by far, and there is no reason to copy it to get it out of the
+    // struct that is about to be dropped.
+    let declared = extracted
+        .declared
+        .take()
+        .map(|names| (project_file.normalized_relative_path.clone(), names));
 
     Ok(Some(ExtractedFile {
         data: FileImportData {
             file_path: project_file.normalized_relative_path.clone(),
             language: Some(language.name),
             ts_language,
-            imports: imports
-                .into_iter()
-                .map(|extracted| ImportStatement {
-                    raw_path: extracted.raw_path,
-                    line: u64::try_from(extracted.line).unwrap_or(1),
-                    kind: extracted.kind,
-                    module_depth: extracted.module_depth,
-                    cfg_gated: extracted.cfg_gated,
-                })
-                .collect(),
+            imports: extracted.imports,
         },
         declared,
     }))

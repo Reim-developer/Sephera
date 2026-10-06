@@ -19,8 +19,8 @@ use crate::core::{
 };
 
 use super::{
-    ExtractedImport, ImportPlugin, ResolveContext, ResolverPlugin, paths,
-    walk::walk_imports,
+    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
+    walk::walk_with_declarations,
 };
 
 impl ImportPlugin for RustPlugin {
@@ -36,10 +36,8 @@ impl ImportPlugin for RustPlugin {
         extract::extract_from_node(source, node)
     }
 
-    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        walk_imports(source, ImportPlugin::language(self), self)
-            .ok()
-            .map(super::to_extracted)
+    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
+        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
     }
 
     /// What this file declares, so a path naming a declaration rather than a
@@ -50,16 +48,13 @@ impl ImportPlugin for RustPlugin {
     /// module-only lookup reports the project's own type as an external
     /// dependency. Leaving this out of the plugin is not a simplification: on
     /// axum it turned 49 resolved references back into resolver gaps.
-    fn declared_names(
+    fn collect_declarations(
         &self,
         source: &[u8],
+        tree: &tree_sitter::Tree,
     ) -> Option<super::super::declarations::DeclaredNames> {
-        let mut parser =
-            crate::core::compression::new_parser(SupportedLanguage::Rust)
-                .ok()?;
-        let tree = parser.parse(source, None)?;
         Some(super::super::declarations::collect_declared_names(
-            source, &tree,
+            source, tree,
         ))
     }
 
