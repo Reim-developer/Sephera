@@ -29,14 +29,15 @@
 [[corpus]]
 name = "axum"
 language = "Rust"
-# Re-export references such as `crate::BoxError` and names behind
-# `#[cfg(test)]` modules are not resolvable by path, so a floor of gaps is
-# expected here.
-unresolved_local = 66
+# What is left is a `pub use http;` re-export of an external crate, a pair of
+# `#[macro_export]` macros, and names reached only from an inline module. A floor
+# of gaps is expected here; it was 66 before declaration lookup resolved the
+# re-export and crate-root cases.
+unresolved_local = 13
 files = 307
-internal_edges = 589
-self_references = 64
-cycles = 21
+internal_edges = 640
+self_references = 66
+cycles = 18
 structural_cycles = 0
 
 [[corpus]]

@@ -20,7 +20,7 @@ mod go_plugin;
 mod java_plugin;
 mod javascript_plugin;
 mod python_plugin;
-mod rust_plugin;
+pub(crate) mod rust_plugin;
 
 /// Re-exported so plugin files can reach the shared helpers through one path.
 pub use super::path_utils as paths;
@@ -84,6 +84,13 @@ pub struct ResolveContext<'a> {
     /// module legitimately names an item in that file, while `mod missing;`
     /// that resolves to the declaring file would be an invented edge.
     pub kind: ImportKind,
+    /// What each file declares and re-exports.
+    ///
+    /// A path whose last segment is a name rather than a module can only be
+    /// resolved by looking up what a file declares. Absent, every such path is
+    /// reported as external, which is how `use crate::Router;` came to be
+    /// counted as a missing dependency rather than a reference to a re-export.
+    pub declarations: Option<&'a super::declarations::DeclarationIndex>,
 }
 
 impl ResolveContext<'_> {
@@ -117,6 +124,25 @@ pub trait ImportPlugin {
 
     /// Extracts imports from `source`, or `None` if the text cannot be parsed.
     fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>>;
+
+    /// Names this source declares, when the language needs a lookup by name.
+    ///
+    /// Returning `None` is the normal answer and costs nothing: most languages
+    /// resolve an import to a file without knowing what the file declares. Only
+    /// a plugin whose imports can name something other than a module has to
+    /// answer, and only Rust does, because `use crate::Router;` names a type the
+    /// crate root re-exported rather than a file called `Router`.
+    ///
+    /// This parses again rather than sharing a tree with [`Self::extract`]. The
+    /// cost is one extra parse per Rust file and buys a trait that stays a
+    /// trait: a language with no name-based imports adds nothing here, and one
+    /// that needs them overrides one method instead of editing the extractor.
+    fn declared_names(
+        &self,
+        _source: &[u8],
+    ) -> Option<super::declarations::DeclaredNames> {
+        None
+    }
 }
 
 /// Maps an import path onto a file inside the analysis.
@@ -300,6 +326,7 @@ mod tests {
             known_files: &files,
             module_depth: 0,
             kind: ImportKind::Dependency,
+            declarations: None,
         };
 
         assert!(context.contains("src/a.rs"));
@@ -315,6 +342,7 @@ mod tests {
             known_files: &files,
             module_depth: 0,
             kind: ImportKind::Dependency,
+            declarations: None,
         };
 
         assert_eq!(

@@ -107,6 +107,7 @@ mod tests {
             known_files: &known,
             module_depth: 0,
             kind: ImportKind::Dependency,
+            declarations: None,
         };
         PythonPlugin.resolve(import_path, context)
     }

@@ -17,7 +17,7 @@ use crate::core::{
     project_files::{ProjectFile, collect_project_files},
 };
 
-use super::{manifests, plugins};
+use super::{declarations, manifests, plugins};
 
 use super::types::{
     FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
@@ -122,8 +122,9 @@ pub fn build_graph_with(
         .map(|query| normalize_graph_query(base_path, query))
         .transpose()?;
 
-    // Phase 1: Extract imports from all supported files.
-    let mut all_file_imports = extract_all_imports(&project_files)?;
+    // Phase 1: Extract imports from all supported files, and what each declares.
+    let (mut all_file_imports, declarations) =
+        extract_all_imports(&project_files)?;
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
             file.imports.retain(|statement| !filters.rejects(statement));
@@ -138,7 +139,7 @@ pub fn build_graph_with(
 
     // Phase 3: Build the full graph once, then apply selection/filtering.
     let (edges, node_map) =
-        build_edges_and_nodes(&all_file_imports, &known_files);
+        build_edges_and_nodes(&all_file_imports, &known_files, &declarations);
     let selection = select_graph(&node_map, &focus_set, depth, query)?;
     let filtered_node_map = filter_node_map(&node_map, &selection.node_paths);
     let filtered_edges = filter_edges(&edges, &selection.node_paths);
@@ -173,10 +174,14 @@ struct FileImportData {
 }
 
 /// Extracts imports from all project files that have a supported language.
+///
+/// Also builds the declaration index, which resolution needs for paths that name
+/// a declaration rather than a module. Both come from one read per file.
 fn extract_all_imports(
     project_files: &[ProjectFile],
-) -> Result<Vec<FileImportData>> {
+) -> Result<(Vec<FileImportData>, declarations::DeclarationIndex)> {
     let mut results = Vec::new();
+    let mut declarations = declarations::DeclarationIndex::default();
 
     for project_file in project_files {
         if project_file.size_bytes > MAX_IMPORT_FILE_BYTES
@@ -210,6 +215,17 @@ fn extract_all_imports(
             .and_then(|plugin| plugin.extract(&source))
             .unwrap_or_default();
 
+        // What this file declares, for paths that name a declaration rather than
+        // a module. Collected here so it costs one extra parse per file at most,
+        // and only for the one language whose imports need it.
+        let declared = plugins::builtin_import_plugin(ts_language)
+            .and_then(|plugin| plugin.declared_names(&source));
+
+        if let Some(declared) = declared {
+            declarations
+                .insert(&project_file.normalized_relative_path, declared);
+        }
+
         results.push(FileImportData {
             file_path: project_file.normalized_relative_path.clone(),
             language: Some(language.name),
@@ -226,7 +242,7 @@ fn extract_all_imports(
         });
     }
 
-    Ok(results)
+    Ok((results, declarations))
 }
 
 /// Builds the set of focused normalized paths for filtering.
@@ -336,6 +352,7 @@ fn resolve_import(
     kind: ImportKind,
     language: SupportedLanguage,
     known_files: &plugins::KnownFiles,
+    declarations: &declarations::DeclarationIndex,
 ) -> Option<String> {
     let plugin = plugins::builtin_resolver_plugin(language)?;
 
@@ -346,6 +363,7 @@ fn resolve_import(
             known_files,
             module_depth,
             kind,
+            declarations: Some(declarations),
         },
     )
 }
@@ -365,6 +383,7 @@ fn resolve_import_lang(
         ImportKind::Dependency,
         language,
         known_files,
+        &declarations::DeclarationIndex::default(),
     )
 }
 
@@ -372,6 +391,7 @@ fn resolve_import_lang(
 fn build_edges_and_nodes(
     all_imports: &[FileImportData],
     known_files: &BTreeSet<String>,
+    declarations: &declarations::DeclarationIndex,
 ) -> (Vec<GraphEdge>, NodeMap) {
     let mut edges = Vec::new();
     let mut node_map: NodeMap = BTreeMap::new();
@@ -393,24 +413,20 @@ fn build_edges_and_nodes(
                 statement.kind,
                 file_data.ts_language,
                 known_files,
+                declarations,
             );
 
             let is_resolved = resolved.is_some();
 
-            // A module declaration says a module lives in a file; it is not a
-            // dependency, and treating it as one makes every child module that
-            // refers to its parent with `super::` look circular. So the edge is
-            // reported but not fed into the adjacency cycle detection walks.
-            //
-            // The same holds for a plain `use` of a direct child module. A
-            // parent that re-exports its own child says the same thing twice,
-            // and counting the second form brought four cycles back on this
-            // repository: `runtime.rs` declares `mod context;` and also does
-            // `pub use context::{...}`.
+            // Every real dependency goes in the adjacency, including a parent naming its
+            // own child. A blast-radius query wants that edge -- "what breaks if
+            // I edit `service.rs`" must answer `main.rs` -- and filtering it here
+            // to satisfy cycle detection silently answered "nothing", which is how
+            // `--what-depends-on` lost a whole level. Structural edges are
+            // excluded from cycle detection instead, in `detect_cycles`.
             if let Some(ref target) = resolved
                 && statement.kind.is_dependency()
                 && *target != file_data.file_path
-                && !is_own_child_module(&file_data.file_path, target)
             {
                 // Update imported_by for the target
                 node_map
@@ -738,38 +754,48 @@ fn compute_metrics(
     }
 }
 
-/// Whether an import path was meant to name a file in this project.
+/// Whether an edge between a module and its own hierarchy is structural rather
+/// than a dependency.
 ///
-/// A path that starts with a local qualifier and did not resolve is a resolver
-/// gap, not a dependency on something outside the repository. Counting the two
-/// together made `total_external_edges` unreadable.
-/// Whether `target` is a direct child module of the file named by `source`.
+/// Rust's module tree makes these relationships unavoidable in both directions.
+/// A parent names its children with `mod child;` or `pub use child::Thing`, and a
+/// child names anything its ancestors declare with `super::` or `crate::`. So the
+/// pair always points at each other, and neither edge is something an edit can
+/// remove: there is no way to make `error.rs` stop using the `BoxError` alias
+/// `lib.rs` declares without deleting one of them.
 ///
-/// Rust compiles a child module as part of its parent, so an edge from a parent
-/// to its child is structural whichever way it is written: `mod child;`,
-/// `use child::Thing`, or `pub use child::Thing`. Only the declaration form was
-/// recognised, so a re-export counted as a dependency and closed a loop with the
-/// child's own `super::` reference back. That is how `runtime.rs`, which both
-/// declares `mod context;` and does `pub use context::{...}`, reported a cycle.
-fn is_own_child_module(source: &str, target: &str) -> bool {
-    // `plugins/mod.rs` owns the files beside it, so it is its own directory for
-    // this purpose rather than a module nested inside `plugins`.
-    let parent_module = if let Some(directory) = source.strip_suffix("/mod.rs")
-    {
-        directory.to_owned()
-    } else {
-        match source.strip_suffix(".rs") {
-            Some(stem) => stem.to_owned(),
-            None => return false,
-        }
-    };
+/// Reporting them costs the blast radius its meaning. Sephera's own tree went
+/// from 0 cycles to 4 when only the parent's declaration was recognised, and
+/// axum from 21 to 37 once a child could reach a name its ancestor declares.
+/// The edges stay in the report, because "changing `BoxError` affects `error.rs`"
+/// is worth knowing; they just do not close a loop.
+fn is_structural_module_edge(source: &str, target: &str) -> bool {
+    is_own_child_module(source, target)
+        || is_own_child_module(target, source)
+        || is_ancestor_module(target, source)
+}
 
+/// Whether `target` is a direct child module of the file named by `source`.
+fn is_own_child_module(source: &str, target: &str) -> bool {
+    let children = plugins::rust_plugin::module_children_dir(source);
     match target.rsplit_once('/') {
-        Some((directory, _)) => directory == parent_module,
+        Some((directory, _)) => directory == children,
         None => false,
     }
 }
 
+/// Whether `ancestor` encloses `descendant` in the module tree.
+///
+/// Catches the multi-level case a direct parent check misses: a reference from
+/// `src/a/b/c.rs` to `src/lib.rs` is as unavoidable as one to `src/a/mod.rs`, and
+/// a cycle that walked only immediate neighbours would miss it.
+fn is_ancestor_module(ancestor: &str, descendant: &str) -> bool {
+    let enclosing = plugins::rust_plugin::module_children_dir(ancestor);
+    let inner = plugins::rust_plugin::module_children_dir(descendant);
+    inner.starts_with(&enclosing)
+        && inner.len() > enclosing.len()
+        && inner.as_bytes().get(enclosing.len()) == Some(&b'/')
+}
 /// Whether an edge points from a file back to itself.
 fn is_self_edge(edge: &GraphEdge) -> bool {
     edge.to.as_deref() == Some(edge.from.as_str())
@@ -803,11 +829,35 @@ fn cycle_key(cycle: &[String]) -> String {
     ring.join("|")
 }
 
+/// A copy of the adjacency with structural module edges removed.
+///
+/// Rust's module tree makes these edges unavoidable in both directions, so
+/// keeping them in the cycle walk reported relationships no edit can remove: a
+/// parent names its children with `mod child;`, and a child names anything its
+/// ancestors declare with `super::` or `crate::`. On axum, including them turned
+/// 18 real cycles into 37, and on this repository 0 into 4 -- every one of them
+/// `lib.rs` and `error.rs` pointing at each other over an alias.
+///
+/// Filtering here rather than when the graph is built keeps the two purposes
+/// separate. Blast radius wants the edge: editing `service.rs` really does affect
+/// `main.rs`. Only a cycle claim is something an edit cannot resolve.
+fn structural_adjacency(node_map: &NodeMap) -> NodeMap {
+    let mut filtered: NodeMap = node_map.to_owned();
+    for (file, entry) in &mut filtered {
+        entry
+            .imports
+            .retain(|target| !is_structural_module_edge(file, target));
+    }
+    filtered
+}
+
 /// Detect cycles in the dependency graph using iterative DFS.
 ///
 /// Each distinct ring is reported once. Cycles are returned in a deterministic
 /// order so that repeated runs over an unchanged tree produce identical output.
 fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
+    let adjacency = structural_adjacency(node_map);
+    let node_map = &adjacency;
     let mut cycles: Vec<Vec<String>> = Vec::new();
 
     // These three sets deliberately live outside the start-node loop. Marking a
@@ -1525,6 +1575,175 @@ mod tests {
             is_own_child_module("src/core/mod.rs", "src/core/graph.rs"),
             "and so does mod.rs"
         );
+    }
+
+    #[test]
+    fn a_path_naming_a_reachability_resolves_to_the_declaring_file() {
+        // `use crate::Router;` names a type, not a file called `Router`. The
+        // crate root re-exports it, so the crate root is where the reference
+        // lands. These were 66 unresolved edges on axum before the lookup.
+        let files = known_files(&[
+            "axum/src/lib.rs",
+            "axum/src/boxed.rs",
+            "axum/src/routing/mod.rs",
+            "axum-core/src/lib.rs",
+            "axum-core/src/body.rs",
+        ]);
+
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert(
+            "axum/src/lib.rs",
+            // `pub use self::routing::Router;`
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+        index.insert(
+            "axum/src/routing/mod.rs",
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+        // `pub type BoxError = ...` sits directly in the root, with no re-export.
+        index.insert(
+            "axum-core/src/lib.rs",
+            declarations::DeclaredNames::from_names(["BoxError"]),
+        );
+
+        assert_eq!(
+            resolve_with_index(
+                "crate::Router",
+                "axum/src/boxed.rs",
+                &files,
+                &index,
+            ),
+            Some("axum/src/lib.rs".to_owned()),
+            "a name the crate root re-exports points at the crate root"
+        );
+        assert_eq!(
+            resolve_with_index(
+                "crate::BoxError",
+                "axum-core/src/body.rs",
+                &files,
+                &index,
+            ),
+            Some("axum-core/src/lib.rs".to_owned()),
+            "a name the crate root declares directly points there too"
+        );
+    }
+
+    #[test]
+    fn a_private_use_does_not_make_a_name_reachable_from_the_crate_root() {
+        // `use crate::service;` in `main.rs` binds `service` inside `main.rs`.
+        // Treating every `use` as a re-export resolved `crate::service` to
+        // `main.rs` itself -- a file depending on itself -- and a CLI test with
+        // three files caught it.
+        let files = known_files(&["src/main.rs", "src/service.rs"]);
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert("src/main.rs", declarations::DeclaredNames::default());
+        index.insert(
+            "src/service.rs",
+            declarations::DeclaredNames::from_names(["run"]),
+        );
+
+        assert_eq!(
+            resolve_with_index("crate::service", "src/main.rs", &files, &index),
+            Some("src/service.rs".to_owned()),
+            "the module walk answers this one; no name lookup is needed"
+        );
+    }
+
+    #[test]
+    fn an_unqualified_path_never_resolves_through_a_name_lookup() {
+        // `use axum::Router;` in an example's `main.rs` names a *different*
+        // crate. Without this guard the crate-root check found `Router` in the
+        // example's own imports and resolved every example's first `use` to
+        // itself: 934 invented self-edges on axum.
+        let files =
+            known_files(&["examples/demo/src/main.rs", "src/routing/mod.rs"]);
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert(
+            "examples/demo/src/main.rs",
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+        index.insert(
+            "src/routing/mod.rs",
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+
+        assert_eq!(
+            resolve_with_index(
+                "axum::Router",
+                "examples/demo/src/main.rs",
+                &files,
+                &index,
+            ),
+            None,
+            "an unqualified path names a crate, not this file's own module"
+        );
+    }
+
+    #[test]
+    fn a_structural_edge_stays_in_the_graph_and_leaves_the_cycle_walk() {
+        // The two uses of the adjacency conflict. Blast radius wants the edge:
+        // editing `inner.rs` does affect `lib.rs`. A cycle claim through the
+        // module tree is not something an edit can resolve, so the walk drops it.
+        // Filtering when the graph was built made `--what-depends-on` answer
+        // "nothing" for a real dependency, which two CLI tests caught.
+        let mut node_map: NodeMap = BTreeMap::new();
+        // `lib.rs` owns both of these, so neither edge can close a loop.
+        node_map.entry("src/lib.rs".to_owned()).or_default().imports =
+            vec!["src/inner.rs".to_owned(), "src/routing.rs".to_owned()];
+        node_map
+            .entry("src/inner.rs".to_owned())
+            .or_default()
+            .imports = vec!["src/lib.rs".to_owned()];
+        node_map
+            .entry("src/routing.rs".to_owned())
+            .or_default()
+            .imports = vec!["src/lib.rs".to_owned()];
+        // Siblings: no parent, no ancestor, so this one is a real dependency.
+        node_map
+            .entry("src/routing.rs".to_owned())
+            .or_default()
+            .imports
+            .push("src/inner.rs".to_owned());
+
+        let walk = structural_adjacency(&node_map);
+
+        assert_eq!(
+            node_map["src/lib.rs"].imports.len(),
+            2,
+            "both dependencies are reported, so a blast-radius query can use them"
+        );
+        assert_eq!(
+            walk["src/lib.rs"].imports,
+            Vec::<String>::new(),
+            "a parent naming its children is structural in both directions"
+        );
+        assert_eq!(
+            walk["src/inner.rs"].imports,
+            Vec::<String>::new(),
+            "a child naming its ancestor is structural the other way"
+        );
+        assert_eq!(
+            walk["src/routing.rs"].imports,
+            vec!["src/inner.rs".to_owned()],
+            "between siblings the edge is a dependency and must survive"
+        );
+    }
+
+    fn resolve_with_index(
+        import_path: &str,
+        source_file: &str,
+        files: &plugins::KnownFiles,
+        index: &declarations::DeclarationIndex,
+    ) -> Option<String> {
+        resolve_import(
+            import_path,
+            source_file,
+            0,
+            ImportKind::Dependency,
+            SupportedLanguage::Rust,
+            files,
+            index,
+        )
     }
 
     #[test]

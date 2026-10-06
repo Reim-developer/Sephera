@@ -261,7 +261,7 @@ pub enum GraphQuery {
 pub(super) type NodeMap = BTreeMap<String, NodeEntry>;
 
 /// Intermediate entry during graph construction.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct NodeEntry {
     pub language: Option<&'static str>,
     pub imports: Vec<String>,

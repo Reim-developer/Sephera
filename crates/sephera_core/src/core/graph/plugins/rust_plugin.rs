@@ -22,6 +22,19 @@ impl ImportPlugin for RustPlugin {
             .ok()
             .map(super::to_extracted)
     }
+
+    fn declared_names(
+        &self,
+        source: &[u8],
+    ) -> Option<super::super::declarations::DeclaredNames> {
+        let mut parser =
+            crate::core::compression::new_parser(SupportedLanguage::Rust)
+                .ok()?;
+        let tree = parser.parse(source, None)?;
+        Some(super::super::declarations::collect_declared_names(
+            source, &tree,
+        ))
+    }
 }
 
 impl ResolverPlugin for RustPlugin {
@@ -74,13 +87,15 @@ impl ResolverPlugin for RustPlugin {
         // means `src/util.rs`, not `src/main/util.rs`.
         let children = module_children_dir(context.source_file);
         if let Some(rest) = import_path.strip_prefix("self::") {
-            return first_existing(context, &qualify(&children, rest));
+            return resolve_qualified(context, &children, rest, true);
         }
 
         if let Some(module_path) = import_path.strip_prefix("crate::") {
-            return first_existing(
+            return resolve_qualified(
                 context,
-                &qualify(&crate_root(context.source_file), module_path),
+                &crate_root(context.source_file),
+                module_path,
+                true,
             );
         }
 
@@ -88,8 +103,89 @@ impl ResolverPlugin for RustPlugin {
         // in `code_loc.rs` names `code_loc/types.rs`, not a crate called `types`.
         // Trying the local directory first is what the compiler does too, and
         // without it every such import was reported as an external dependency.
-        first_existing(context, &qualify(&children, import_path))
+        resolve_qualified(context, &children, import_path, false)
     }
+}
+
+/// Resolve a path that may end in a name rather than a module.
+///
+/// Most paths name a module, and those resolve to a file. But `use
+/// crate::Router;` names a type the crate root re-exported, and no file is
+/// called `Router`, so a module-only lookup reports it as an external
+/// dependency. Three cases need a declaration lookup, and each is checked
+/// against the file that actually has that scope rather than against every file
+/// in the project:
+///
+/// - The name is declared in the file the path resolved to. That is a reference
+///   to a type in the same module.
+/// - The name is declared in an inline `mod`, which has no file of its own, so
+///   the containing file is the answer.
+/// - The path's prefix resolves to a file and the final name is declared there,
+///   which is what following a re-export looks like.
+fn resolve_qualified(
+    context: ResolveContext<'_>,
+    base: &str,
+    path: &str,
+    // Whether the original path carried a Rust module qualifier.
+    //
+    // The declaration lookups below only make sense for a qualified path. An
+    // unqualified `axum::Router` names a *different* crate, so when the
+    // importing file happens to be its own crate root, checking whether that
+    // file mentions `Router` resolves every example's first `use axum::Router`
+    // to the example itself -- 934 invented self-edges on axum. An unqualified
+    // path gets the module walk and nothing else.
+    qualified: bool,
+) -> Option<String> {
+    if let Some(found) = first_existing(context, &qualify(base, path)) {
+        return Some(found);
+    }
+
+    if !qualified {
+        return None;
+    }
+
+    let index = context.declarations?;
+
+    // Split at the last `::`: everything before names a module path, the last
+    // segment names something declared inside it. A single-segment path has no
+    // prefix at all -- `crate::Router` reaches here with nothing left after the
+    // qualifier -- and needs the crate root check below, so it is not an early
+    // return.
+    let (prefix, name) = path.rsplit_once("::").unwrap_or(("", path));
+
+    // `crate::ext_traits::tests::RequiresState` -- the prefix resolves to
+    // `ext_traits/mod.rs`, which declares `tests` as an inline module holding
+    // `RequiresState`. Both belong to the file the prefix names.
+    if !prefix.is_empty()
+        && let Some(module_file) =
+            first_existing(context, &qualify(base, prefix))
+        && index.file_declares(&module_file, name)
+    {
+        return Some(module_file);
+    }
+
+    // `crate::Router` where `lib.rs` has `pub use self::routing::Router;`. The
+    // name is declared in the crate root, so the crate root is where a path
+    // naming it lands. Requiring the crate root to declare the name is what
+    // keeps this from matching an unrelated `Router` in some other crate.
+    // A re-export is what makes a crate's public API reachable by name, so this
+    // accepts either form. Restricting it to re-exports alone would miss
+    // `pub type BoxError = ...` declared directly in the root, which is how
+    // `crate::BoxError` failed to resolve at all.
+    let root_file = crate_root_file(context, context.source_file)?;
+    if index.file_reaches(&root_file, name) {
+        return Some(root_file);
+    }
+
+    // `self::private::DefaultBodyLimitService` -- an inline module in this very
+    // file, so there is no separate file to name.
+    if context.kind.is_dependency()
+        && index.file_declares(context.source_file, name)
+    {
+        return Some(context.source_file.to_owned());
+    }
+
+    None
 }
 
 /// The module path a file belongs to, without its `.rs` extension.
@@ -112,6 +208,35 @@ pub fn module_path(source_file: &str) -> String {
 #[must_use]
 pub fn crate_root(source_file: &str) -> String {
     paths::through_last_segment(source_file, "src")
+}
+
+/// The file that is a crate's root module, when the analysis found one.
+///
+/// A crate root is a directory in a path sense -- `crate::core` resolves
+/// relative to `src` -- but a declaration lookup needs the file that declares
+/// the names: `lib.rs` or `main.rs` inside it. Going through the same candidate
+/// walk as any other module path means a crate with only `main.rs`, or one that
+/// spells its root as `src/mod.rs`, is found without a second rule to keep in
+/// step with the first.
+fn crate_root_file(
+    context: ResolveContext<'_>,
+    source_file: &str,
+) -> Option<String> {
+    let root = crate_root(source_file);
+    if root.is_empty() {
+        return None;
+    }
+    // The root is a directory, and a module path walk on it would only try
+    // `src.rs`, so the two file names a crate root can have are named here.
+    // `src/mod.rs` is included because it is a valid spelling of a root module
+    // and costs one comparison.
+    for name in ["lib", "main", "mod"] {
+        let candidate = format!("{root}/{name}.rs");
+        if context.contains(&candidate) {
+            return Some(candidate);
+        }
+    }
+    None
 }
 
 /// The directory that holds this module's own submodules.
@@ -228,6 +353,7 @@ fn resolve(
         known_files: &known,
         module_depth: 0,
         kind: ImportKind::Dependency,
+        declarations: None,
     };
     RustPlugin.resolve(import_path, context)
 }
