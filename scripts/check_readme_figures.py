@@ -24,6 +24,13 @@ README = REPO_ROOT / "README.md"
 QUERY_PATH = "crates/sephera_core/src/core/code_loc.rs"
 SUMMARY_ROW = re.compile(r"^\|\s*([A-Za-z ]+?)\s*\|\s*(\d+)\s*\|$")
 MERMAID_NODE = re.compile(r'n\d+\["(.+?)"\]')
+BLAST_RADIUS_ROW = re.compile(r"^\|\s*`(.+?)`\s*\|\s*(.+?)\s*\|$")
+BLAST_RADIUS_FILE_COUNT = re.compile(
+    r"\*\*(\d+) files? import(?:s)? it directly\.\*\*"
+)
+INDIRECT_COUNT = re.compile(
+    r"\*\*(\d+) further files? reach(?:es)? (?:it|them) indirectly\*\*"
+)
 
 
 def binary() -> Path | None:
@@ -142,6 +149,53 @@ def readme_mermaid() -> set[str]:
     return set(MERMAID_NODE.findall(readme_section()))
 
 
+def blast_radius_table(markdown: str) -> dict[str, set[str]] | None:
+    """The dependents table, as a file to imported-names mapping.
+
+    `None` when the section is absent, which is a different problem from an
+    empty one: an absent table means the README predates the section, and an
+    empty one means the answer really is "nothing imports this".
+    """
+    lines = markdown.splitlines()
+    start = next(
+        (
+            index
+            for index, line in enumerate(lines)
+            if line.startswith("## Blast radius")
+        ),
+        None,
+    )
+    if start is None:
+        return None
+
+    table: dict[str, set[str]] = {}
+    for line in lines[start:]:
+        if line.startswith("## ") and not line.startswith("## Blast radius"):
+            break
+        match = BLAST_RADIUS_ROW.match(line.strip())
+        if match:
+            names = {
+                stripped
+                for name in match.group(2).split(",")
+                if (stripped := name.strip().strip("`"))
+            }
+            table[match.group(1)] = names
+
+    return table
+
+
+def blast_radius_count(markdown: str) -> int | None:
+    """The stated number of direct dependents."""
+    match = BLAST_RADIUS_FILE_COUNT.search(markdown)
+    return int(match.group(1)) if match else None
+
+
+def indirect_count(markdown: str) -> int | None:
+    """The stated number of files reaching the target indirectly."""
+    match = INDIRECT_COUNT.search(markdown)
+    return int(match.group(1)) if match else None
+
+
 def main() -> int:
     """Compare every quoted figure against a fresh run."""
     cli = binary()
@@ -171,6 +225,46 @@ def main() -> int:
         if extra:
             problems.append(f"diagram has nodes that no longer exist: {extra}")
 
+    # The dependents table is the whole point of the query, so a stale one is
+    # worse than a stale summary row: the summary is a count of the graph, the
+    # table is the answer to the question the reader asked.
+    quoted_blast = blast_radius_table(readme_section())
+    actual_blast = blast_radius_table(actual)
+    if actual_blast is not None and quoted_blast is None:
+        problems.append(
+            "README quotes no blast radius table; the tool prints one"
+        )
+    elif quoted_blast is not None and actual_blast is not None:
+        for file, names in sorted(actual_blast.items()):
+            quoted_names = quoted_blast.get(file)
+            if quoted_names is None:
+                problems.append(f"blast radius is missing {file}")
+            elif quoted_names != names:
+                problems.append(
+                    f"blast radius for {file}: tool lists "
+                    f"{sorted(names)}, README lists {sorted(quoted_names)}"
+                )
+        for file in sorted(set(quoted_blast) - set(actual_blast)):
+            problems.append(
+                f"blast radius lists {file}, which no longer imports the target"
+            )
+
+        quoted_direct = blast_radius_count(readme_section())
+        actual_direct = blast_radius_count(actual)
+        if quoted_direct is not None and quoted_direct != actual_direct:
+            problems.append(
+                f"blast radius: tool says {actual_direct} direct "
+                f"dependents, README says {quoted_direct}"
+            )
+
+        quoted_indirect = indirect_count(readme_section())
+        actual_indirect = indirect_count(actual)
+        if quoted_indirect is not None and quoted_indirect != actual_indirect:
+            problems.append(
+                f"indirect dependents: tool says {actual_indirect}, "
+                f"README says {quoted_indirect}"
+            )
+
     if problems:
         print(f"{len(problems)} stale figures in README.md:\n")
         for problem in problems:
@@ -181,6 +275,7 @@ def main() -> int:
     print(
         f"README figures match a fresh run: "
         f"{len(quoted_summary)} summary rows, "
+        f"{len(actual_blast or {})} dependents rows, "
         f"{len(actual_nodes)} diagram nodes."
     )
     return 0

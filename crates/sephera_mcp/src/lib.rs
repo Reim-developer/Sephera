@@ -1,17 +1,24 @@
 //! MCP (Model Context Protocol) server for Sephera.
 //!
-//! This crate exposes Sephera's core capabilities -- line-of-code analysis and
-//! context pack generation -- as MCP tools over a `stdio` transport.
+//! This crate exposes Sephera's core capabilities -- line-of-code analysis,
+//! declaration counts, context pack generation, and dependency graph analysis
+//! -- as MCP tools over a `stdio` transport.
 //!
 //! AI agents such as Claude Desktop, Cursor, and other MCP-capable clients can
 //! discover and invoke these tools through the standard Model Context Protocol.
 //!
 //! # Supported tools
 //!
-//! | Tool      | Description                                    |
-//! |-----------|------------------------------------------------|
-//! | `loc`     | Count lines of code per language in a directory |
-//! | `context` | Build an LLM-ready context pack                 |
+//! | Tool      | Description                                       |
+//! |-----------|---------------------------------------------------|
+//! | `loc`     | Count lines of code per language in a directory    |
+//! | `symbols` | Count declarations per language from parse trees  |
+//! | `context` | Build an LLM-ready context pack                    |
+//! | `graph`   | Map file dependencies and answer blast-radius queries |
+//!
+//! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
+//! the CLI exactly: the same arguments produce the same file set, because an
+//! agent and a shell user asking the same question should not get two answers.
 //!
 //! # Quick start
 //!
@@ -36,3 +43,72 @@ mod render;
 mod server;
 
 pub use server::{SepheraServer, run_mcp_server};
+
+#[cfg(test)]
+mod tests {
+    use super::SepheraServer;
+
+    /// Every tool named in the crate doc's table, in the order it appears.
+    fn documented_tools() -> Vec<String> {
+        let source = include_str!("lib.rs");
+        let table = source
+            .lines()
+            .skip_while(|line| !line.contains("| Tool"))
+            .take_while(|line| line.contains('|'))
+            .collect::<Vec<_>>();
+
+        let mut names: Vec<String> = table
+            .iter()
+            .skip(2)
+            .filter_map(|row| {
+                let first_cell = row.split('|').nth(1)?.trim();
+                let name = first_cell.trim_matches('`');
+                (!name.is_empty() && name != "-----------")
+                    .then(|| name.to_owned())
+            })
+            .collect();
+        // Sorted, so the comparison is about which tools are listed rather than
+        // about how the table happens to be ordered.
+        names.sort();
+        names
+    }
+
+    #[test]
+    fn the_crate_doc_lists_every_registered_tool() {
+        // The table claimed `loc` and `context` while the router served four
+        // tools. Nothing caught it, because a doc comment is not compiled.
+        let documented = documented_tools();
+        let registered = SepheraServer::new().registered_tool_names();
+
+        assert_eq!(
+            documented, registered,
+            "the crate doc must list exactly the tools the router serves; \
+             documentation of a tool that is not there is worse than none"
+        );
+    }
+
+    #[test]
+    fn the_documented_table_is_not_empty() {
+        // Guards the parser above: an empty table would make the equality test
+        // pass for the wrong reason.
+        assert_eq!(
+            documented_tools().len(),
+            4,
+            "expected four tools in the crate doc table"
+        );
+    }
+
+    #[test]
+    fn the_documented_table_is_actually_found() {
+        // The parser keys off a `| Tool` header and a `|`-delimited block. If
+        // the table is reformatted past that, `documented_tools` returns
+        // nothing and the equality test would compare nothing against
+        // everything.
+        let source = include_str!("lib.rs");
+        assert!(
+            source.contains("| Tool"),
+            "the crate doc must keep a Markdown table of tools for the check \
+             above to have anything to read"
+        );
+    }
+}

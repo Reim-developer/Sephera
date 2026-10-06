@@ -101,6 +101,18 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 | Standard library edges| 12    |
 | Circular dependencies | 0     |
 
+## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
+
+**3 files import it directly.**
+
+| File | Imports from it |
+|------|------------------|
+| `crates/sephera_core/src/core/code_loc/tests.rs` | `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content` |
+| `crates/sephera_core/src/core/runtime/context.rs` | `crate::core::code_loc::IgnoreMatcher` |
+| `crates/sephera_core/src/core/symbols/lookup.rs` | `crate::core::code_loc::IgnoreMatcher` |
+
+**3 further files reach them indirectly**, through the files above.
+
 ## Dependencies
 
 | Package | Kind | Version | Import paths |

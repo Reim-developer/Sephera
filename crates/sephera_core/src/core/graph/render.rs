@@ -1,5 +1,6 @@
 //! Graph output rendering in JSON, Markdown, XML, and DOT formats.
 
+use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
 use crate::core::graph::{
@@ -38,6 +39,7 @@ fn render_graph_markdown(report: &GraphReport) -> String {
     render_markdown_selection(&mut output, report);
 
     render_markdown_summary(&mut output, report);
+    render_markdown_blast_radius(&mut output, report);
     render_markdown_lists(&mut output, report);
     render_markdown_mermaid(&mut output, report);
 
@@ -120,6 +122,100 @@ fn render_markdown_summary(output: &mut String, report: &GraphReport) {
         "| Circular dependencies | {} |\n\n",
         report.metrics.circular_dependencies
     );
+}
+
+/// The answer to the question a `--what-depends-on` query asks.
+///
+/// Placed immediately after the summary, because until this existed the report
+/// showed only rankings — `Most Imported Files` counting how many references
+/// reach a file, `Most Importing Files` counting how many a file makes — and
+/// left a reader of the headline feature to reconstruct which files break from
+/// a diagram at the bottom of the page.
+///
+/// The names each dependent imports are shown as well as the file, because
+/// "rename `tokenize` and these two files break" is actionable and a list of
+/// paths is not.
+fn render_markdown_blast_radius(output: &mut String, report: &GraphReport) {
+    let Some(GraphQuery::DependsOn(target)) = &report.query else {
+        return;
+    };
+
+    // `target` is the normalized query path, which is the same form edge targets
+    // take, so this is an exact comparison rather than a path-shape guess.
+    let mut direct: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
+    for edge in &report.edges {
+        if edge.to.as_deref() == Some(target.as_str()) {
+            direct
+                .entry(edge.from.as_str())
+                .or_default()
+                .insert(edge.import_path.as_str());
+        }
+    }
+
+    let _ = writeln!(output, "## Blast radius for `{target}`\n");
+
+    if direct.is_empty() {
+        // A clear negative beats an absent section. Without this the reader is
+        // left wondering whether the query failed or the answer was empty.
+        output.push_str("No file in the analysed scope imports this one.\n\n");
+        return;
+    }
+
+    let _ = writeln!(
+        output,
+        "**{} file{} import{} it directly.**\n",
+        direct.len(),
+        plural(direct.len()),
+        if direct.len() == 1 { "s" } else { "" },
+    );
+    output.push_str("| File | Imports from it |\n");
+    output.push_str("|------|------------------|\n");
+    for (file, names) in &direct {
+        let listed = names
+            .iter()
+            .map(|name| format!("`{name}`"))
+            .collect::<Vec<_>>()
+            .join(", ");
+        let _ = writeln!(output, "| `{file}` | {listed} |");
+    }
+    output.push('\n');
+
+    // What the direct list does not show, and why that matters.
+    let indirect: Vec<&str> = report
+        .nodes
+        .iter()
+        .map(|node| node.file_path.as_str())
+        .filter(|path| *path != target.as_str())
+        .filter(|path| !direct.contains_key(path))
+        .collect();
+
+    if !indirect.is_empty() {
+        let _ = writeln!(
+            output,
+            "**{} further file{} reach{} {} indirectly**, through the files above.\n",
+            indirect.len(),
+            plural(indirect.len()),
+            if indirect.len() == 1 { "es" } else { "" },
+            if indirect.len() == 1 { "it" } else { "them" },
+        );
+    }
+
+    // `--depth` bounds the walk, so the list above can be a prefix of the real
+    // blast radius. Saying nothing lets a reader treat a truncated answer as a
+    // complete one, which is the same failure as reporting a resolver gap
+    // without a count.
+    if let Some(depth) = report.depth {
+        let _ = writeln!(
+            output,
+            "> Bounded by `--depth {depth}`. Omit the flag for the full \
+             blast radius.\n"
+        );
+    }
+}
+
+/// The plural `s` for a count of one thing.
+const fn plural(count: usize) -> &'static str {
+    if count == 1 { "" } else { "s" }
 }
 
 fn render_markdown_lists(output: &mut String, report: &GraphReport) {
@@ -588,6 +684,117 @@ mod tests {
         assert!(md.contains("**Query:** `depends_on:src/lib.rs`"));
         assert!(md.contains("```mermaid"));
         assert!(md.contains("graph LR"));
+    }
+
+    #[test]
+    fn markdown_names_the_files_that_break() {
+        // The report used to answer this question only through a diagram at the
+        // bottom of the page, and through two rankings that count references
+        // without naming the files. This is the section that closes that gap.
+        let md = render_graph(&sample_report(), GraphFormat::Markdown);
+
+        assert!(
+            md.contains("## Blast radius for `src/lib.rs`"),
+            "got:\n{md}"
+        );
+        assert!(md.contains("**1 file imports it directly.**"), "got:\n{md}");
+        assert!(
+            md.contains("| `src/main.rs` | `crate::lib` |"),
+            "got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn markdown_says_so_when_nothing_imports_the_target() {
+        // An absent section reads as "the query failed". A stated negative is
+        // an answer.
+        let mut report = sample_report();
+        report.edges.clear();
+
+        let md = render_graph(&report, GraphFormat::Markdown);
+
+        assert!(
+            md.contains("No file in the analysed scope imports this one."),
+            "got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn markdown_flags_a_depth_bounded_answer_as_bounded() {
+        // Reporting a truncated blast radius without saying so is the same
+        // failure as reporting a resolver gap without a count.
+        let mut report = sample_report();
+        report.depth = Some(1);
+
+        let md = render_graph(&report, GraphFormat::Markdown);
+
+        assert!(md.contains("Bounded by `--depth 1`"), "got:\n{md}");
+    }
+
+    #[test]
+    fn markdown_leaves_out_the_blast_radius_without_a_query() {
+        let mut report = sample_report();
+        report.query = None;
+
+        let md = render_graph(&report, GraphFormat::Markdown);
+
+        assert!(
+            !md.contains("Blast radius"),
+            "a whole-graph report has no blast radius to state, got:\n{md}"
+        );
+    }
+
+    #[test]
+    fn markdown_lists_each_imported_name_once_per_file() {
+        let mut report = sample_report();
+        report.edges.push(GraphEdge {
+            from: "src/main.rs".to_owned(),
+            to: Some("src/lib.rs".to_owned()),
+            import_path: "crate::lib".to_owned(),
+            resolved: true,
+            kind: ImportKind::Dependency,
+            local_gap: false,
+            cfg_gated: false,
+        });
+        report.edges.push(GraphEdge {
+            from: "src/main.rs".to_owned(),
+            to: Some("src/lib.rs".to_owned()),
+            import_path: "crate::other".to_owned(),
+            resolved: true,
+            kind: ImportKind::Dependency,
+            local_gap: false,
+            cfg_gated: false,
+        });
+
+        let md = render_graph(&report, GraphFormat::Markdown);
+
+        assert!(md.contains("**1 file imports it directly.**"), "got:\n{md}");
+        assert_eq!(
+            md.matches("`crate::lib`").count(),
+            1,
+            "a repeated import of the same name is one entry, got:\n{md}"
+        );
+        assert!(md.contains("`crate::other`"), "got:\n{md}");
+    }
+
+    #[test]
+    fn markdown_reports_files_that_only_reach_the_target_indirectly() {
+        let mut report = sample_report();
+        report.depth = None;
+        report.nodes.push(GraphNode {
+            file_path: "src/consumer.rs".to_owned(),
+            language: Some("Rust"),
+            imports_count: 1,
+            imported_by_count: 0,
+        });
+
+        let md = render_graph(&report, GraphFormat::Markdown);
+
+        assert!(
+            md.contains("**1 further file reaches it indirectly**"),
+            "got:\n{md}"
+        );
+        assert!(!md.contains("Bounded by"), "got:\n{md}");
     }
 
     #[test]

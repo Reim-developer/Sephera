@@ -65,6 +65,27 @@ impl Default for SepheraServer {
     }
 }
 
+#[cfg(test)]
+impl SepheraServer {
+    /// The names of every registered tool, sorted.
+    ///
+    /// Exposed so the crate doc table can be checked against what the router
+    /// actually serves. That table claimed two tools when four were
+    /// registered, and the omission was of `graph` — the one thing here an
+    /// agent cannot discover by reading `loc`'s output.
+    #[must_use]
+    pub fn registered_tool_names(&self) -> Vec<String> {
+        let mut names: Vec<String> = self
+            .tool_router
+            .list_all()
+            .into_iter()
+            .map(|tool| tool.name.to_string())
+            .collect();
+        names.sort();
+        names
+    }
+}
+
 /// Tool implementations exposed through the Model Context Protocol.
 #[tool_router]
 impl SepheraServer {
