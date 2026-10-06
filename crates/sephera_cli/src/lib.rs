@@ -6,6 +6,7 @@ pub(crate) mod context_config;
 mod output;
 mod progress;
 mod run;
+mod watch;
 
 #[doc(hidden)]
 pub use output::{

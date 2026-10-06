@@ -10,6 +10,12 @@
 /fuzz/corpus/
 /fuzz/target/
 /fuzz/seeds
+# The graph corpus repositories are not ignored here on purpose. They live in a
+# cache directory outside the tree -- see scripts/fetch_corpus.py -- because
+# `graph` reads only the ignore patterns it is given and would analyse test data
+# inside the repository as project code. CI overrides the location with
+# SEPHERA_CORPUS_DIR, so this entry only covers a local run that does the same.
+/.corpus/
 **/*.snap
 !crates/sephera_cli/tests/snapshots/*.snap
 .astro

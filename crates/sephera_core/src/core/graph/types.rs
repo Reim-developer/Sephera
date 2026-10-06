@@ -4,6 +4,68 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use serde::Serialize;
 
+use super::manifests;
+
+/// What a reference in source code actually says about the file it names.
+///
+/// These are mutually exclusive: each comes from a distinct grammar production,
+/// so one enum describes them all and no combination of flags has to be
+/// reasoned about.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ImportKind {
+    /// An ordinary `use` or `import`. A real dependency.
+    #[default]
+    Dependency,
+
+    /// A module declaration such as `mod types;`.
+    ///
+    /// A declaration says a module lives in a file; it does not say the file
+    /// depends on it. Any child module that refers to its parent with `super::`
+    /// would otherwise close a cycle with its own declaration, so cycle
+    /// detection skips these edges.
+    ModuleDeclaration,
+
+    /// A renaming import such as `use foo::Bar as Baz`.
+    ///
+    /// Recorded from the parse rather than left to be found by searching the
+    /// path, since the resolved path does not carry the `as` clause.
+    TypeAlias,
+
+    /// A namespace import such as `use foo::*`.
+    Namespace,
+}
+
+impl ImportKind {
+    /// Whether this reference creates a dependency worth walking.
+    ///
+    /// False for a declaration, which is structural. The remaining kinds are all
+    /// real references; whether they are *useful* is [`EdgeFilters`](crate::core::graph::resolver::EdgeFilters)'s
+    /// decision, not the graph's.
+    #[must_use]
+    pub const fn is_dependency(self) -> bool {
+        !matches!(self, Self::ModuleDeclaration)
+    }
+
+    /// Whether this reference only renames or namespaces what it imports.
+    #[must_use]
+    pub const fn is_renaming(self) -> bool {
+        matches!(self, Self::TypeAlias | Self::Namespace)
+    }
+
+    /// Whether this reference binds a name rather than naming a module.
+    ///
+    /// A namespace import such as Python's `from . import Flask` may name a
+    /// submodule or an attribute the package re-exports, and only the source can
+    /// say which. One that does not resolve is therefore not evidence of a
+    /// resolver gap. A renaming import is different: `use crate::foo::Bar as
+    /// Baz` names exactly one path, so failing to resolve it is a real gap.
+    #[must_use]
+    pub const fn is_namespace(self) -> bool {
+        matches!(self, Self::Namespace)
+    }
+}
+
 /// A single import statement extracted from a source file.
 #[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
 pub struct ImportStatement {
@@ -13,6 +75,29 @@ pub struct ImportStatement {
 
     /// The line number where this import appears (1-indexed).
     pub line: u64,
+
+    /// What this reference says about the file it names.
+    #[serde(default)]
+    pub kind: ImportKind,
+
+    /// How many inline `mod name { ... }` blocks this reference sits inside.
+    ///
+    /// A reference inside `mod tests` starts one level below the file's own
+    /// module, so `super::` there climbs one level and lands back on the file
+    /// rather than on the file's parent directory. Resolving without this
+    /// attribute makes `use super::{Cli, Commands};` in a test module look for a
+    /// sibling file that does not exist.
+    #[serde(default)]
+    pub module_depth: u8,
+
+    /// Whether a `#[cfg(...)]` attribute decorates this import.
+    ///
+    /// The reference is real either way -- turning the feature on makes it
+    /// compile -- but a blast radius that counts it without saying so reports a
+    /// dependency the build may not have. axum gates nine of its public
+    /// re-exports on `feature = "form"` and `feature = "json"`.
+    #[serde(default)]
+    pub cfg_gated: bool,
 }
 
 /// Imports extracted from a single source file.
@@ -43,6 +128,24 @@ pub struct GraphEdge {
 
     /// Whether this edge was resolved to a local file.
     pub resolved: bool,
+    /// Whether this edge was meant to name a file in this project and could not.
+    ///
+    /// Distinct from `!resolved`, which also covers every external crate and
+    /// standard library module. Re-deriving the difference from the path's shape
+    /// in the metrics got `crate::http::Request` wrong: `pub use http;` re-exports
+    /// a crate from outside, so the path says "this project" and the code says
+    /// otherwise.
+    pub local_gap: bool,
+    /// Whether a `#[cfg(...)]` attribute gated this reference.
+    pub cfg_gated: bool,
+
+    /// What this reference says about the file it names.
+    ///
+    /// Carried on the edge so a consumer can tell a structural edge from a
+    /// dependency without re-parsing `import_path`. Cycle detection walks only
+    /// [`ImportKind::is_dependency`] edges.
+    #[serde(default)]
+    pub kind: ImportKind,
 }
 
 /// A node in the dependency graph with aggregated metrics.
@@ -67,11 +170,65 @@ pub struct GraphMetrics {
     /// Total number of files analyzed.
     pub total_files: u64,
 
-    /// Total number of resolved internal edges.
+    /// Total number of resolved edges between two different files.
+    ///
+    /// Self-references are counted separately in [`Self::self_references`]: a
+    /// `use super::*;` inside a test module resolves to the file it is written
+    /// in, which is a real reference but says nothing about how files depend on
+    /// each other.
     pub total_internal_edges: u64,
 
-    /// Total number of unresolved (external) edges.
+    /// Resolved edges whose source and target are the same file.
+    pub self_references: u64,
+
+    /// Total number of edges that leave the project, such as `std::io` or
+    /// `anyhow::Result`.
+    ///
+    /// This does not include [`Self::unresolved_local_edges`]. The two were
+    /// counted together once, which made the number unreadable: a reader could
+    /// not tell "this repository depends on 602 crates" from "the resolver
+    /// failed to place 12 of its own files".
     pub total_external_edges: u64,
+
+    /// Unresolved edges whose path looks local rather than third-party.
+    ///
+    /// Anything starting with `crate::`, `self::`, `super::` or `.` was meant
+    /// to name a file in this project and was not found. A non-zero value is a
+    /// resolver gap, not a dependency, and each one is a file missing from the
+    /// blast radius.
+    pub unresolved_local_edges: u64,
+
+    /// Local-looking paths that did not resolve, for inspection.
+    ///
+    /// Capped so a badly misparsed file cannot flood the report. Empty when
+    /// [`Self::unresolved_local_edges`] is zero.
+    pub unresolved_local_samples: Vec<String>,
+
+    /// Edges that only exist when a `#[cfg]` is on.
+    ///
+    /// The reference is real either way -- enabling the feature makes it compile
+    /// -- but a blast radius that counts these without saying so claims a
+    /// dependency the build may not have. axum gates nine public re-exports on
+    /// `feature = "form"` and `feature = "json"`.
+    pub cfg_gated_edges: u64,
+
+    /// Every package an unresolved edge refers to, most used first.
+    ///
+    /// This is the answer to "which dependency do I need to bump": a name, a
+    /// version where a manifest records one, and how many import paths reach it.
+    /// A crate in this workspace appears here too, under
+    /// [`DependencyKind::Local`](crate::core::graph::manifests::DependencyKind::Local),
+    /// because it is reached by name rather than by path.
+    pub dependencies: Vec<manifests::Dependency>,
+
+    /// How many unresolved edges name a package declared in a manifest.
+    pub declared_dependency_edges: u64,
+
+    /// How many unresolved edges name a workspace member of this project.
+    pub local_crate_edges: u64,
+
+    /// How many unresolved edges name something the language provides.
+    pub builtin_edges: u64,
 
     /// Number of circular dependency chains detected.
     pub circular_dependencies: u64,
@@ -143,7 +300,7 @@ pub enum GraphQuery {
 pub(super) type NodeMap = BTreeMap<String, NodeEntry>;
 
 /// Intermediate entry during graph construction.
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Clone)]
 pub(super) struct NodeEntry {
     pub language: Option<&'static str>,
     pub imports: Vec<String>,

@@ -15,6 +15,14 @@ const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera 
 
 const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.";
 
+const WATCH_LONG_ABOUT: &str = "Re-run an analysis whenever the watched directory changes.\n\nChoose what to re-run with `--target`: `graph` for the dependency report, `symbols` for declaration counts, `loc` for line metrics, or `depends-on` to keep a reverse dependency query live. Writes are debounced, so a burst of editor or build activity produces a single run rather than one per file.\n\nBuild output and dependency trees such as `target`, `node_modules`, and `.git` are never watched. Press Ctrl+C to stop.";
+
+const WATCH_AFTER_LONG_HELP: &str = "Examples:\n  sephera watch --target graph --path .\n  sephera watch --target symbols\n  sephera watch --target depends-on --on src/core/graph.rs\n  sephera watch --target graph --path crates --ignore \"*.snap\"\n  sephera watch --target loc --once";
+
+const SYMBOLS_LONG_ABOUT: &str = "Count declarations per language: functions, types, enums, and constants.\n\nCounts come from Tree-sitter parse trees rather than text matching, so a keyword inside a comment or string is not counted and a function nested inside an impl block or class body is attributed correctly. Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.\n\nUnlike `loc`, which measures how much code exists, this reports what is declared in it. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs.";
+
+const SYMBOLS_AFTER_LONG_HELP: &str = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\"";
+
 const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
 
 #[derive(Debug, Parser)]
@@ -36,12 +44,24 @@ pub enum Commands {
     /// Count lines of code for supported languages in a directory tree
     #[command(long_about = LOC_LONG_ABOUT, after_long_help = LOC_AFTER_LONG_HELP)]
     Loc(LocArgs),
+    /// Count declarations per language
+    #[command(
+        long_about = SYMBOLS_LONG_ABOUT,
+        after_long_help = SYMBOLS_AFTER_LONG_HELP
+    )]
+    Symbols(SymbolsArgs),
     /// Build an LLM-ready context pack for a repository or focused sub-paths
     #[command(
         long_about = CONTEXT_LONG_ABOUT,
         after_long_help = CONTEXT_AFTER_LONG_HELP
     )]
     Context(ContextArgs),
+    /// Re-run an analysis whenever the tree changes
+    #[command(
+        long_about = WATCH_LONG_ABOUT,
+        after_long_help = WATCH_AFTER_LONG_HELP
+    )]
+    Watch(WatchArgs),
     /// Start an MCP (Model Context Protocol) server over stdio
     #[command(
         long_about = "Start an MCP server that exposes Sephera tools (loc, context, graph) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories."
@@ -87,6 +107,174 @@ pub struct LocArgs {
         long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
     )]
     pub git_ref: Option<String>,
+
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+    )]
+    pub ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SymbolOutputFormat {
+    /// Human-readable terminal table.
+    #[value(
+        name = "table",
+        help = "Render a terminal table of declaration counts."
+    )]
+    Table,
+    /// Markdown summary with a table and, in detail mode, every declaration.
+    #[value(
+        name = "markdown",
+        help = "Render Markdown with a per-language table and listed declarations."
+    )]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render structured JSON.")]
+    Json,
+}
+
+#[derive(Debug, Args)]
+pub struct SymbolsArgs {
+    /// Path to the project directory to analyze
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "url",
+        help = "Path to the project directory to analyze.",
+        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Git repository URL to analyze directly
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with = "path",
+        help = "Git repository URL to analyze directly.",
+        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
+    )]
+    pub url: Option<String>,
+
+    /// Git ref to check out before analysis
+    #[arg(
+        long = "ref",
+        value_name = "REF",
+        requires = "url",
+        conflicts_with = "path",
+        help = "Git ref to check out before analysis.",
+        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
+    )]
+    pub git_ref: Option<String>,
+
+    /// Output format for the symbol report
+    #[arg(
+        long,
+        value_enum,
+        default_value_t = SymbolOutputFormat::Table,
+        value_name = "FORMAT",
+        help = "Output format for the symbol report. Supports table, markdown, and json."
+    )]
+    pub format: SymbolOutputFormat,
+
+    /// Write the report to a file instead of standard output
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write the report to a file instead of standard output."
+    )]
+    pub output: Option<PathBuf>,
+
+    /// List every declaration instead of only per-language totals
+    #[arg(
+        long,
+        help = "List every declaration found, with its file, line, and kind.",
+        long_help = "List every declaration found, with its file, line, and kind. This produces far more output than the per-language summary, so it is opt-in."
+    )]
+    pub detail: bool,
+
+    /// Break the report down per file instead of per language
+    #[arg(
+        long,
+        help = "Break the symbol report down per file, heaviest first.",
+        long_help = "Break the symbol report down per file, heaviest first. This answers which files carry the most declarations, where the per-language summary cannot."
+    )]
+    pub by_file: bool,
+
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against basenames. All other patterns are compiled as regular expressions and matched against normalized relative paths. Repeat this flag to combine multiple patterns."
+    )]
+    pub ignore: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum WatchTarget {
+    /// Re-run the dependency graph report.
+    #[value(
+        name = "graph",
+        help = "Watch and re-run the dependency graph analysis."
+    )]
+    Graph,
+    /// Re-run the symbol counts.
+    #[value(name = "symbols", help = "Watch and re-run the symbol counts.")]
+    Symbols,
+    /// Re-run the line-count report.
+    #[value(name = "loc", help = "Watch and re-run the line-count analysis.")]
+    Loc,
+    /// Re-run a reverse dependency query, so the blast radius updates live.
+    #[value(
+        name = "depends-on",
+        help = "Watch and re-run a reverse dependency query."
+    )]
+    DependsOn,
+}
+
+#[derive(Debug, Args)]
+pub struct WatchArgs {
+    /// What to re-run on change
+    #[arg(
+        long,
+        value_enum,
+        value_name = "TARGET",
+        required_unless_present = "once",
+        help = "What to re-run when the tree changes.",
+        long_help = "What to re-run when the tree changes. Choose one of graph, symbols, loc, or depends-on. Required unless --once is passed."
+    )]
+    pub target: Option<WatchTarget>,
+
+    /// Path to the project directory to watch
+    #[arg(
+        long,
+        value_name = "PATH",
+        default_value = ".",
+        help = "Path to the project directory to watch.",
+        long_help = "Path to the project directory to watch. Relative paths are resolved from the current working directory."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Target path for a depends-on query
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "File to trace reverse dependencies for, used with --target depends-on.",
+        long_help = "File to trace reverse dependencies for, used with --target depends-on. Runs the query after every change."
+    )]
+    pub on: Option<String>,
+
+    /// Exit after one run instead of continuing to watch
+    #[arg(
+        long,
+        help = "Run once and exit, which is what invoking the analysis command directly would do.",
+        long_help = "Run once and exit. Combined with --target this behaves exactly like invoking that analysis command, which is useful when a script wants to exercise the same argument parsing."
+    )]
+    pub once: bool,
 
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
@@ -193,6 +381,15 @@ pub struct ContextArgs {
         long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to prioritize multiple files or directories. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended. Focused paths must resolve inside the local `--path` or the remote repo/tree scope selected by `--url`."
     )]
     pub focus: Vec<PathBuf>,
+
+    /// Focus the pack on a named declaration instead of a whole file
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Pack only the declaration with this name, rather than its whole file. Repeatable.",
+        long_help = "Pack only the declaration with this name, rather than its whole file. Repeat this flag to pack several declarations. The name is matched case-insensitively and partially, so `resolve` also finds `resolve_source`. A name matching several declarations is reported rather than guessed; a name matching none is reported while the rest of the pack still builds. Cannot be combined with `--diff`, which selects whole changed files."
+    )]
+    pub focus_symbol: Vec<String>,
 
     /// Git diff source used to prioritize changed files in the context pack.
     #[arg(
@@ -381,6 +578,14 @@ pub struct GraphArgs {
         long_help = "Show all files that import or depend on the specified file path. The path should be relative to the selected analysis base."
     )]
     pub what_depends_on: Option<String>,
+
+    /// Drop imports that describe types rather than runtime dependencies
+    #[arg(
+        long,
+        help = "Exclude type aliases and wildcard imports from the graph.",
+        long_help = "Exclude type aliases and wildcard imports from the graph. A `type X = Y` alias or an `import ... .*` wildcard names a namespace rather than a runtime dependency, so the edges they create never fail at runtime."
+    )]
+    pub exclude_types: bool,
 
     /// Optional file path for exporting the rendered graph
     #[arg(

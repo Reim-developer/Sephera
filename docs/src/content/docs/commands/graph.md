@@ -13,6 +13,8 @@ sephera graph [OPTIONS]
 
 ## Basic Usage
 
+<img src="/demo/graph.gif" alt="Terminal demo of sephera graph resolving a reverse dependency query and reporting how many files import the target." width="900" />
+
 Run dependency analysis on the current directory and output to terminal as JSON (the default format):
 
 ```bash
@@ -48,31 +50,54 @@ sephera graph --path . --format dot --output deps.dot
 ```markdown
 # Dependency Graph Report
 
-**Base path:** `crates`
+**Base path:** `crates/sephera_cli`
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Files analyzed | 82 |
-| Internal edges | 48 |
-| External edges | 495 |
+| Files analyzed | 29 |
+| Internal edges | 89 |
+| External edges | 160 |
+| Declared dependencies | 104 |
+| Local crate edges | 1 |
+| Standard library edges | 55 |
 | Circular dependencies | 0 |
+
+`Unresolved local paths` and `Feature-gated edges` appear only when non-zero. The first counts imports meant for this project that the resolver could not place; the second counts edges that only compile when a `#[cfg]` is on, so a blast radius that counted them silently would claim a dependency the build may not have.
+
+## Dependencies
+
+| Package | Kind | Version | Import paths |
+|---------|------|---------|--------------|
+| `std` | stdlib | unknown | 55 |
+| `sepheracore` | declared | unknown | 37 |
+| `anyhow` | declared | unknown | 17 |
+| `tempfile` | declared | unknown | 12 |
+| `sephera` | workspace | unknown | 1 |
+
+Unresolved edges are attributed to real packages by reading the manifests at the base path: `Cargo.toml` and `Cargo.lock`, `package.json`, `go.mod`, `requirements.txt`. This separates three things that all used to be counted as one "external" number:
+
+- **declared** — named by a manifest, so a version is known when the lockfile records one
+- **workspace** — a crate in this repository, reached by name rather than by path
+- **stdlib** — provided by the language, so there is nothing to manage
+
+Versions resolve when a lockfile is found at the base path. Analysing a subdirectory therefore reports `unknown`, because the manifest sits above the path given to `--path`; point `--path` at the repository root to get them.
 
 ## Most Imported Files
 
 | File | Imported by |
 |------|-------------|
-| `sephera_core/src/core.rs` | 42 |
-| `sephera_core/tests/support/loc_matrix.rs` | 6 |
+| `src/args.rs` | 20 |
+| `src/context_config/types.rs` | 16 |
 
 ## Most Importing Files
 
 | File | Imports |
 |------|---------|
-| `sephera_core/src/core/context/builder.rs` | 17 |
-| `sephera_core/src/core/graph/resolver.rs` | 7 |
-| `sephera_core/tests/comment_style_matrix.rs` | 6 |
+| `src/run.rs` | 25 |
+| `src/context_config/resolve.rs` | 17 |
+| `src/context_config/load.rs` | 5 |
 
 ## Dependency Diagram
 

@@ -161,6 +161,8 @@ These are intentionally rejected in URL mode because the checkout is always clea
 
 The `--compress` flag tells Sephera to use Tree-sitter to drop implementations and compress source files into API-only excerpts, significantly reducing the prompt burden. It replaces complex blocks with `{ ... }`.
 
+The saving scales with how much of a file is body. Measured on whole Rust files it runs 50-70%. On files that are mostly declarations there is little left to remove, and a file whose bodies are already one-liners can grow, because the `{ ... }` markers and retained signatures cost more than the bodies they replace. Compressing an *excerpt* rather than a whole file saves very little, because an excerpt is already mostly declarations -- measured at 0.4% across this repository.
+
 Supported modes:
 
 - `none` (default): Standard full-text excerpts.

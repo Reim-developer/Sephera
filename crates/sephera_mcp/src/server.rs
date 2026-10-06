@@ -1,4 +1,15 @@
 //! MCP server handler and tool implementations.
+//!
+//! This module owns the protocol surface: the [`SepheraServer`] type, the
+//! three tool handlers, and the stdio entry point. Everything it needs from the
+//! surrounding crate lives in sibling modules:
+//!
+//! - [`input`] holds the tool argument schemas that form the published MCP schema
+//! - [`error`] maps core failures into MCP error responses
+//! - [`render`] turns a context report into Markdown
+//!
+//! Handlers are thin by design: resolve a source, delegate to `sephera_core`,
+//! then format. They hold no state between calls.
 
 use rmcp::{
     ServerHandler, ServiceExt,
@@ -9,12 +20,23 @@ use rmcp::{
 };
 
 use sephera_core::core::{
-    code_loc::{CodeLoc, IgnoreMatcher},
-    graph::{resolver::build_graph, types::GraphQuery},
+    code_loc::CodeLoc,
+    graph::{
+        render::render_graph,
+        resolver::build_graph,
+        types::{GraphFormat, GraphQuery},
+    },
     runtime::{
         ContextCommandInput, ResolvedContextCommand, SourceRequest,
         build_context_report, resolve_context_command, resolve_source,
     },
+    symbols::{SymbolAnalyzer, SymbolDetail},
+};
+
+use crate::{
+    error::{build_ignore_matcher, map_internal_error, serialize_json},
+    input::{ContextInput, GraphInput, LocInput, SymbolsInput},
+    render::render_context_markdown,
 };
 
 /// The MCP server handler for Sephera.
@@ -54,10 +76,16 @@ impl SepheraServer {
         name = "loc",
         description = "Count lines of code, comment lines, and empty lines for supported languages in a directory tree. Accepts exactly one of path or url, plus an optional ref for repo URLs. Returns per-language metrics and aggregate totals."
     )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
     fn loc(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<LocInput>,
     ) -> Result<String, rmcp::ErrorData> {
+        use std::fmt::Write as _;
+
         let ignore_matcher = build_ignore_matcher(param.ignore)?;
         let source = resolve_source(&SourceRequest {
             path: param.path.map(std::path::PathBuf::from),
@@ -71,29 +99,35 @@ impl SepheraServer {
             .map_err(map_internal_error("analysis failed"))?;
 
         let mut output = String::new();
-        output.push_str(&format!(
+        write!(
+            output,
             "Files scanned: {}\nLanguages detected: {}\n\n",
             report.files_scanned, report.languages_detected
-        ));
+        )
+        .expect("writing to String must succeed");
 
         for lang in &report.by_language {
-            output.push_str(&format!(
-                "{}: {} code, {} comment, {} empty ({} bytes)\n",
+            writeln!(
+                output,
+                "{}: {} code, {} comment, {} empty ({} bytes)",
                 lang.language,
                 lang.metrics.code_lines,
                 lang.metrics.comment_lines,
                 lang.metrics.empty_lines,
                 lang.metrics.size_bytes,
-            ));
+            )
+            .expect("writing to String must succeed");
         }
 
-        output.push_str(&format!(
-            "\nTotal: {} code, {} comment, {} empty ({} bytes)\n",
+        writeln!(
+            output,
+            "\nTotal: {} code, {} comment, {} empty ({} bytes)",
             report.totals.code_lines,
             report.totals.comment_lines,
             report.totals.empty_lines,
             report.totals.size_bytes,
-        ));
+        )
+        .expect("writing to String must succeed");
 
         Ok(output)
     }
@@ -105,6 +139,10 @@ impl SepheraServer {
     #[tool(
         name = "context",
         description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
     )]
     fn context(
         &self,
@@ -127,6 +165,7 @@ impl SepheraServer {
                 .into_iter()
                 .map(std::path::PathBuf::from)
                 .collect(),
+            focus_symbol: param.focus_symbol.unwrap_or_default(),
             diff: param.diff,
             budget: param.budget,
             compress: param.compress,
@@ -154,13 +193,58 @@ impl SepheraServer {
         }
     }
 
+    /// Count declarations per language.
+    ///
+    /// Returns functions, types, enums, and constants per language as JSON.
+    #[tool(
+        name = "symbols",
+        description = "Count declarations per language: functions, types, enums, and constants. Counts come from Tree-sitter parse trees, so keywords inside comments or strings are not counted and nested functions are attributed correctly. Accepts exactly one of path or url, plus an optional ref for repo URLs. Set detail=true to list every declaration with its file and line instead of only per-language totals."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    fn symbols(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SymbolsInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore = build_ignore_matcher(param.ignore)?;
+        let source = resolve_source(&SourceRequest {
+            path: param.path.map(std::path::PathBuf::from),
+            url: param.url,
+            git_ref: param.git_ref,
+        })
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
+        let mut detail = if param.detail.unwrap_or(false) {
+            analyzer
+                .analyze_detailed()
+                .map_err(map_internal_error("symbol analysis failed"))?
+        } else {
+            analyzer
+                .analyze()
+                .map(SymbolDetail::from)
+                .map_err(map_internal_error("symbol analysis failed"))?
+        };
+        if let Some(display_path) = source.display_path {
+            detail.report.base_path = display_path.into();
+        }
+
+        serialize_json(&detail)
+    }
+
     /// Build a dependency graph report for a repository or focused sub-paths.
     ///
     /// Returns the graph report as JSON, including optional reverse dependency
     /// filtering via `depends_on`.
     #[tool(
         name = "graph",
-        description = "Build a dependency graph for a repository or focused sub-paths. Accepts exactly one of path or url, plus an optional ref for repo URLs. Supports traversal depth and reverse dependency queries through depends_on. Returns structured JSON."
+        description = "Build a dependency graph for a repository or focused sub-paths. Accepts exactly one of path or url, plus an optional ref for repo URLs. Supports traversal depth, reverse dependency queries through depends_on, and cycle detection. Use format=markdown for a compact summary, the default json for programmatic node and edge access, xml for structured agent input, or dot for Graphviz."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
     )]
     fn graph(
         &self,
@@ -193,417 +277,22 @@ impl SepheraServer {
             report.base_path = display_path.into();
         }
 
-        serialize_json(&report)
+        let format = parse_graph_format(param.format.as_deref())?;
+        match format {
+            GraphFormat::Json => serialize_json(&report),
+            other => Ok(render_graph(&report, other)),
+        }
     }
 }
 
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct LocInput {
-    /// Absolute or relative path to the directory to analyze. Mutually exclusive with `url`.
-    path: Option<String>,
-    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
-    url: Option<String>,
-    /// Optional git ref to check out before analysis. Only valid with repo URLs.
-    #[serde(rename = "ref")]
-    git_ref: Option<String>,
-    /// Optional list of ignore patterns (globs or regexes)
-    ignore: Option<Vec<String>>,
-}
-
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct ContextInput {
-    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
-    path: Option<String>,
-    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
-    url: Option<String>,
-    /// Optional git ref to check out before analysis. Only valid with repo URLs.
-    #[serde(rename = "ref")]
-    git_ref: Option<String>,
-    /// Optional explicit config path on the local machine
-    config: Option<String>,
-    /// Disable config loading for this invocation
-    no_config: Option<bool>,
-    /// Optional named profile from `.sephera.toml`
-    profile: Option<String>,
-    /// List available profiles and return JSON instead of a context pack
-    list_profiles: Option<bool>,
-    /// Optional list of focus paths (relative to the analysis path)
-    focus: Option<Vec<String>>,
-    /// Optional list of ignore patterns (globs or regexes)
-    ignore: Option<Vec<String>>,
-    /// Optional diff source or base ref. URL mode only supports base refs such as `main` or `HEAD~1`.
-    diff: Option<String>,
-    /// Approximate token budget (default: 128000)
-    budget: Option<u64>,
-    /// Compression mode: 'none', 'signatures', or 'skeleton' (default: 'none')
-    compress: Option<String>,
-    /// Output format: 'markdown' or 'json' (default: 'json')
-    format: Option<String>,
-}
-
-#[derive(serde::Deserialize, schemars::JsonSchema)]
-struct GraphInput {
-    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
-    path: Option<String>,
-    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
-    url: Option<String>,
-    /// Optional git ref to check out before analysis. Only valid with repo URLs.
-    #[serde(rename = "ref")]
-    git_ref: Option<String>,
-    /// Optional list of focus paths (relative to the analysis path)
-    focus: Option<Vec<String>>,
-    /// Optional list of ignore patterns (globs or regexes)
-    ignore: Option<Vec<String>>,
-    /// Optional traversal depth (0 = roots and direct neighbors)
-    depth: Option<u32>,
-    /// Optional reverse dependency target path
-    depends_on: Option<String>,
-}
-
-fn build_ignore_matcher(
-    ignore_patterns: Option<Vec<String>>,
-) -> Result<IgnoreMatcher, rmcp::ErrorData> {
-    IgnoreMatcher::from_patterns(&ignore_patterns.unwrap_or_default()).map_err(
-        |error| {
-            rmcp::ErrorData::internal_error(
-                format!("invalid ignore pattern: {error}"),
-                None,
-            )
-        },
-    )
-}
-
-fn map_internal_error(
-    prefix: &'static str,
-) -> impl Fn(anyhow::Error) -> rmcp::ErrorData {
-    move |error| {
-        rmcp::ErrorData::internal_error(format!("{prefix}: {error}"), None)
-    }
-}
-
-fn serialize_json<T: serde::Serialize>(
-    value: &T,
-) -> Result<String, rmcp::ErrorData> {
-    serde_json::to_string_pretty(value).map_err(|error| {
-        rmcp::ErrorData::internal_error(
-            format!("JSON serialization failed: {error}"),
-            None,
-        )
-    })
-}
-
-fn render_context_markdown(
-    report: &sephera_core::core::context::ContextReport,
-) -> String {
-    use std::fmt::Write as _;
-
-    use sephera_core::core::context::{
-        ContextFile, ContextGroupKind, ContextGroupSummary, ContextMetadata,
-    };
-
-    fn write_metadata(output: &mut String, metadata: &ContextMetadata) {
-        writeln!(output, "## Metadata")
-            .expect("writing to String must succeed");
-        writeln!(output, "| Field | Value |")
-            .expect("writing to String must succeed");
-        writeln!(output, "| --- | --- |")
-            .expect("writing to String must succeed");
-        write_metadata_row(
-            output,
-            "Base path",
-            &format!("`{}`", metadata.base_path.display()),
-        );
-        write_metadata_row(
-            output,
-            "Focus paths",
-            &format_focus_paths(&metadata.focus_paths),
-        );
-        if let Some(diff) = &metadata.diff {
-            write_metadata_row(
-                output,
-                "Diff spec",
-                &format!("`{}`", diff.spec),
-            );
-            write_metadata_row(
-                output,
-                "Diff repo root",
-                &format!("`{}`", diff.repo_root.display()),
-            );
-            write_metadata_row(
-                output,
-                "Changed files detected",
-                &diff.changed_files_detected.to_string(),
-            );
-            write_metadata_row(
-                output,
-                "Changed files in scope",
-                &diff.changed_files_in_scope.to_string(),
-            );
-            write_metadata_row(
-                output,
-                "Changed files selected",
-                &diff.changed_files_selected.to_string(),
-            );
-            write_metadata_row(
-                output,
-                "Skipped deleted or missing",
-                &diff.skipped_deleted_or_missing.to_string(),
-            );
-        }
-        write_metadata_row(
-            output,
-            "Budget tokens",
-            &metadata.budget_tokens.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Metadata budget tokens",
-            &metadata.metadata_budget_tokens.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Excerpt budget tokens",
-            &metadata.excerpt_budget_tokens.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Estimated total tokens",
-            &metadata.estimated_tokens.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Estimated metadata tokens",
-            &metadata.estimated_metadata_tokens.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Estimated excerpt tokens",
-            &metadata.estimated_excerpt_tokens.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Files considered",
-            &metadata.files_considered.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Files selected",
-            &metadata.files_selected.to_string(),
-        );
-        write_metadata_row(
-            output,
-            "Truncated files",
-            &metadata.truncated_files.to_string(),
-        );
-    }
-
-    fn write_metadata_row(output: &mut String, field: &str, value: &str) {
-        writeln!(output, "| {field} | {value} |")
-            .expect("writing to String must succeed");
-    }
-
-    fn write_dominant_languages(
-        output: &mut String,
-        report: &sephera_core::core::context::ContextReport,
-    ) {
-        writeln!(output, "## Dominant Languages")
-            .expect("writing to String must succeed");
-
-        if report.dominant_languages.is_empty() {
-            writeln!(output, "No recognized languages were found.")
-                .expect("writing to String must succeed");
-            return;
-        }
-
-        writeln!(output, "| Language | Files | Size (bytes) |")
-            .expect("writing to String must succeed");
-        writeln!(output, "| --- | ---: | ---: |")
-            .expect("writing to String must succeed");
-
-        for language in &report.dominant_languages {
-            writeln!(
-                output,
-                "| {} | {} | {} |",
-                language.language, language.files, language.size_bytes
-            )
-            .expect("writing to String must succeed");
-        }
-    }
-
-    fn write_group_summaries(
-        output: &mut String,
-        report: &sephera_core::core::context::ContextReport,
-    ) {
-        writeln!(output, "## File Groups")
-            .expect("writing to String must succeed");
-
-        if report.groups.is_empty() {
-            writeln!(output, "No files fit within the current context budget.")
-                .expect("writing to String must succeed");
-            return;
-        }
-
-        writeln!(output, "| Group | Files | Tokens | Truncated |")
-            .expect("writing to String must succeed");
-        writeln!(output, "| --- | ---: | ---: | ---: |")
-            .expect("writing to String must succeed");
-
-        for group in &report.groups {
-            writeln!(
-                output,
-                "| {} | {} | {} | {} |",
-                group.label,
-                group.files,
-                group.estimated_tokens,
-                group.truncated_files
-            )
-            .expect("writing to String must succeed");
-        }
-    }
-
-    fn write_group_section(
-        output: &mut String,
-        report: &sephera_core::core::context::ContextReport,
-        group: &ContextGroupSummary,
-    ) {
-        writeln!(output, "## {}", group.label)
-            .expect("writing to String must succeed");
-        writeln!(
-            output,
-            "_{} files, {} estimated tokens, {} truncated_",
-            group.files, group.estimated_tokens, group.truncated_files
-        )
-        .expect("writing to String must succeed");
-        writeln!(output).expect("writing to String must succeed");
-
-        writeln!(
-            output,
-            "| Path | Language | Reason | Size (bytes) | Tokens | Truncated |"
-        )
-        .expect("writing to String must succeed");
-        writeln!(output, "| --- | --- | --- | ---: | ---: | --- |")
-            .expect("writing to String must succeed");
-
-        let group_files =
-            report.files_in_group(group.group).collect::<Vec<_>>();
-        for file in &group_files {
-            writeln!(
-                output,
-                "| `{}` | {} | {} | {} | {} | {} |",
-                file.relative_path,
-                file.language.unwrap_or("unknown"),
-                file.selection_class.as_str(),
-                file.size_bytes,
-                file.estimated_tokens,
-                yes_no(file.truncated),
-            )
-            .expect("writing to String must succeed");
-        }
-
-        for file in group_files {
-            writeln!(output).expect("writing to String must succeed");
-            write_excerpt(output, file, group.group);
-        }
-    }
-
-    fn write_excerpt(
-        output: &mut String,
-        file: &ContextFile,
-        group_kind: ContextGroupKind,
-    ) {
-        writeln!(output, "### File: `{}`", file.relative_path)
-            .expect("writing to String must succeed");
-        writeln!(output, "- Group: {}", group_kind.label())
-            .expect("writing to String must succeed");
-        writeln!(output, "- Language: {}", file.language.unwrap_or("unknown"))
-            .expect("writing to String must succeed");
-        writeln!(output, "- Reason: {}", file.selection_class.as_str())
-            .expect("writing to String must succeed");
-        writeln!(output, "- Size: {} bytes", file.size_bytes)
-            .expect("writing to String must succeed");
-        writeln!(output, "- Estimated tokens: {}", file.estimated_tokens)
-            .expect("writing to String must succeed");
-        writeln!(output, "- Truncated: {}", yes_no(file.truncated))
-            .expect("writing to String must succeed");
-        writeln!(
-            output,
-            "- Lines: {}-{}",
-            file.excerpt.line_start, file.excerpt.line_end
-        )
-        .expect("writing to String must succeed");
-        writeln!(output).expect("writing to String must succeed");
-
-        let fence_language = fence_language(&file.relative_path);
-        if fence_language.is_empty() {
-            writeln!(output, "````").expect("writing to String must succeed");
-        } else {
-            writeln!(output, "````{fence_language}")
-                .expect("writing to String must succeed");
-        }
-        writeln!(output, "{}", file.excerpt.content)
-            .expect("writing to String must succeed");
-        writeln!(output, "````").expect("writing to String must succeed");
-    }
-
-    fn format_focus_paths(focus_paths: &[String]) -> String {
-        if focus_paths.is_empty() {
-            String::from("_none_")
-        } else {
-            focus_paths
-                .iter()
-                .map(|path| format!("`{path}`"))
-                .collect::<Vec<_>>()
-                .join(", ")
-        }
-    }
-
-    fn fence_language(relative_path: &str) -> &str {
-        std::path::Path::new(relative_path)
-            .extension()
-            .and_then(std::ffi::OsStr::to_str)
-            .map_or("", |extension| match extension {
-                "rs" => "rust",
-                "py" => "python",
-                "ts" => "ts",
-                "tsx" => "tsx",
-                "js" => "js",
-                "jsx" => "jsx",
-                "go" => "go",
-                "java" => "java",
-                "c" => "c",
-                "cc" | "cpp" | "cxx" | "hpp" | "hh" | "hxx" => "cpp",
-                "json" => "json",
-                "md" => "markdown",
-                "toml" => "toml",
-                "yml" | "yaml" => "yaml",
-                "sh" => "bash",
-                _ => "",
-            })
-    }
-
-    fn yes_no(value: bool) -> &'static str {
-        if value { "yes" } else { "no" }
-    }
-
-    let mut output = String::new();
-    writeln!(output, "# Sephera Context Pack")
-        .expect("writing to String must succeed");
-    writeln!(output).expect("writing to String must succeed");
-
-    write_metadata(&mut output, &report.metadata);
-    writeln!(output).expect("writing to String must succeed");
-    write_dominant_languages(&mut output, report);
-    writeln!(output).expect("writing to String must succeed");
-    write_group_summaries(&mut output, report);
-
-    for group in &report.groups {
-        writeln!(output).expect("writing to String must succeed");
-        write_group_section(&mut output, report, group);
-    }
-
-    output
-}
-
+/// Server identity advertised during MCP initialization.
+///
+/// `get_info` cannot await anything, but the trait signature is `async`, so the
+/// corresponding clippy lint is suppressed for this impl.
+#[allow(
+    clippy::unused_async_trait_impl,
+    reason = "ServerHandler::get_info is async by trait definition"
+)]
 #[tool_handler]
 impl ServerHandler for SepheraServer {
     fn get_info(&self) -> ServerInfo {
@@ -612,6 +301,29 @@ impl ServerHandler for SepheraServer {
                 env!("CARGO_PKG_NAME"),
                 env!("CARGO_PKG_VERSION"),
             ))
+    }
+}
+
+/// Map a requested graph output format onto [`GraphFormat`].
+///
+/// An absent value keeps JSON, which is the historical behaviour of this tool.
+/// An unrecognised value is rejected rather than silently falling back, so a
+/// mistyped format surfaces immediately instead of returning JSON that the
+/// caller did not ask for.
+fn parse_graph_format(
+    requested: Option<&str>,
+) -> Result<GraphFormat, rmcp::ErrorData> {
+    match requested {
+        None | Some("json") => Ok(GraphFormat::Json),
+        Some("markdown") => Ok(GraphFormat::Markdown),
+        Some("xml") => Ok(GraphFormat::Xml),
+        Some("dot") => Ok(GraphFormat::Dot),
+        Some(other) => Err(rmcp::ErrorData::invalid_params(
+            format!(
+                "unsupported graph format `{other}`; expected json, markdown, xml, or dot"
+            ),
+            None,
+        )),
     }
 }
 
@@ -631,416 +343,4 @@ pub async fn run_mcp_server() -> anyhow::Result<()> {
 }
 
 #[cfg(test)]
-mod tests {
-    use std::{fs, path::Path, process::Command};
-
-    use tempfile::tempdir;
-
-    use super::*;
-
-    fn write_file(
-        base_dir: &std::path::Path,
-        relative_path: &str,
-        contents: &[u8],
-    ) {
-        let absolute_path = base_dir.join(relative_path);
-        if let Some(parent) = absolute_path.parent() {
-            fs::create_dir_all(parent).unwrap();
-        }
-        fs::write(absolute_path, contents).unwrap();
-    }
-
-    fn run_git(repo_root: &Path, args: &[&str]) {
-        let output = Command::new("git")
-            .current_dir(repo_root)
-            .args(args)
-            .output()
-            .unwrap_or_else(|error| {
-                panic!("failed to run git {:?}: {error}", args)
-            });
-        assert!(
-            output.status.success(),
-            "git {:?} failed\nstdout:\n{}\nstderr:\n{}",
-            args,
-            String::from_utf8_lossy(&output.stdout),
-            String::from_utf8_lossy(&output.stderr),
-        );
-    }
-
-    fn init_git_repo(repo_root: &Path) {
-        run_git(repo_root, &["init"]);
-        run_git(repo_root, &["config", "user.name", "Sephera Tests"]);
-        run_git(repo_root, &["config", "user.email", "tests@example.com"]);
-    }
-
-    fn commit_all(repo_root: &Path, message: &str) {
-        run_git(repo_root, &["add", "-A"]);
-        run_git(repo_root, &["commit", "-m", message]);
-    }
-
-    fn remote_repo_url(repo_root: &Path) -> String {
-        format!("file://{}", repo_root.display())
-    }
-
-    #[test]
-    fn server_info_returns_expected_metadata() {
-        let server = SepheraServer::new();
-        let info = server.get_info();
-        assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
-        assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
-    }
-
-    #[test]
-    fn loc_tool_valid_directory() {
-        let server = SepheraServer::new();
-        let current_dir = env!("CARGO_MANIFEST_DIR");
-        let param = rmcp::handler::server::wrapper::Parameters(LocInput {
-            path: Some(current_dir.to_string()),
-            url: None,
-            git_ref: None,
-            ignore: None,
-        });
-
-        let result = server.loc(param);
-        assert!(result.is_ok(), "loc tool should succeed for manifest dir");
-        let output = result.unwrap();
-        assert!(output.contains("Files scanned:"));
-        assert!(output.contains("Languages detected:"));
-    }
-
-    #[test]
-    fn loc_tool_invalid_directory() {
-        let server = SepheraServer::new();
-        let param = rmcp::handler::server::wrapper::Parameters(LocInput {
-            path: Some("/path/to/nonexistent/dir/for/test/sephera".to_string()),
-            url: None,
-            git_ref: None,
-            ignore: None,
-        });
-
-        let result = server.loc(param);
-        assert!(result.is_err(), "loc tool should fail for nonexistent dir");
-    }
-
-    #[test]
-    fn context_tool_valid_directory() {
-        let server = SepheraServer::new();
-        let current_dir = env!("CARGO_MANIFEST_DIR");
-        let param = rmcp::handler::server::wrapper::Parameters(ContextInput {
-            path: Some(current_dir.to_string()),
-            url: None,
-            git_ref: None,
-            config: None,
-            no_config: Some(true),
-            profile: None,
-            list_profiles: None,
-            focus: None,
-            ignore: None,
-            diff: None,
-            budget: Some(1000),
-            compress: Some("signatures".to_string()),
-            format: Some("json".to_string()),
-        });
-
-        let result = server.context(param);
-        assert!(
-            result.is_ok(),
-            "context tool should succeed for manifest dir"
-        );
-        let output = result.unwrap();
-        assert!(output.contains("\"files_considered\""));
-        assert!(output.contains("\"budget_tokens\""));
-    }
-
-    #[test]
-    fn graph_tool_valid_directory() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        write_file(temp_dir.path(), "src/main.rs", b"use crate::util;\n");
-        write_file(temp_dir.path(), "src/util.rs", b"pub fn util() {}\n");
-
-        let param = rmcp::handler::server::wrapper::Parameters(GraphInput {
-            path: Some(temp_dir.path().to_string_lossy().into_owned()),
-            url: None,
-            git_ref: None,
-            focus: Some(vec!["src/main.rs".to_owned()]),
-            ignore: None,
-            depth: Some(0),
-            depends_on: None,
-        });
-
-        let result = server.graph(param);
-        assert!(result.is_ok(), "graph tool should succeed for temp dir");
-        let output = result.unwrap();
-        let parsed_json: serde_json::Value =
-            serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed_json["depth"], 0);
-        assert!(parsed_json["nodes"].is_array());
-    }
-
-    #[test]
-    fn graph_tool_depends_on_query_is_serialized() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        write_file(temp_dir.path(), "src/main.rs", b"use crate::service;\n");
-        write_file(temp_dir.path(), "src/service.rs", b"use crate::util;\n");
-        write_file(temp_dir.path(), "src/util.rs", b"pub fn util() {}\n");
-
-        let param = rmcp::handler::server::wrapper::Parameters(GraphInput {
-            path: Some(temp_dir.path().to_string_lossy().into_owned()),
-            url: None,
-            git_ref: None,
-            focus: None,
-            ignore: None,
-            depth: Some(1),
-            depends_on: Some("src/util.rs".to_owned()),
-        });
-
-        let result = server.graph(param);
-        assert!(result.is_ok(), "graph query should succeed");
-        let output = result.unwrap();
-        let parsed_json: serde_json::Value =
-            serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed_json["query"]["depends_on"], "src/util.rs");
-        assert_eq!(parsed_json["depth"], 1);
-    }
-
-    #[test]
-    fn graph_tool_invalid_ignore_pattern_fails() {
-        let server = SepheraServer::new();
-        let param = rmcp::handler::server::wrapper::Parameters(GraphInput {
-            path: Some(env!("CARGO_MANIFEST_DIR").to_owned()),
-            url: None,
-            git_ref: None,
-            focus: None,
-            ignore: Some(vec!["(".to_owned()]),
-            depth: None,
-            depends_on: None,
-        });
-
-        let result = server.graph(param);
-        assert!(result.is_err(), "graph tool should reject invalid ignore");
-    }
-
-    #[test]
-    fn graph_tool_missing_depends_on_target_fails() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        write_file(temp_dir.path(), "src/main.rs", b"fn main() {}\n");
-
-        let param = rmcp::handler::server::wrapper::Parameters(GraphInput {
-            path: Some(temp_dir.path().to_string_lossy().into_owned()),
-            url: None,
-            git_ref: None,
-            focus: None,
-            ignore: None,
-            depth: None,
-            depends_on: Some("src/missing.rs".to_owned()),
-        });
-
-        let result = server.graph(param);
-        assert!(
-            result.is_err(),
-            "graph query should fail for missing target"
-        );
-    }
-
-    #[test]
-    fn loc_tool_supports_url_mode() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        init_git_repo(temp_dir.path());
-        write_file(temp_dir.path(), "src/main.rs", b"fn main() {}\n");
-        commit_all(temp_dir.path(), "initial");
-
-        let param = rmcp::handler::server::wrapper::Parameters(LocInput {
-            path: None,
-            url: Some(remote_repo_url(temp_dir.path())),
-            git_ref: None,
-            ignore: None,
-        });
-
-        let result = server.loc(param);
-        assert!(result.is_ok(), "loc tool should support URL mode");
-    }
-
-    #[test]
-    fn graph_tool_supports_url_mode() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        init_git_repo(temp_dir.path());
-        write_file(temp_dir.path(), "src/main.rs", b"use crate::util;\n");
-        write_file(temp_dir.path(), "src/util.rs", b"pub fn util() {}\n");
-        commit_all(temp_dir.path(), "initial");
-
-        let param = rmcp::handler::server::wrapper::Parameters(GraphInput {
-            path: None,
-            url: Some(remote_repo_url(temp_dir.path())),
-            git_ref: None,
-            focus: Some(vec!["src/main.rs".to_owned()]),
-            ignore: None,
-            depth: Some(0),
-            depends_on: None,
-        });
-
-        let result = server.graph(param);
-        assert!(result.is_ok(), "graph tool should support URL mode");
-        let output = result.unwrap();
-        let parsed_json: serde_json::Value =
-            serde_json::from_str(&output).unwrap();
-        assert!(
-            parsed_json["base_path"]
-                .as_str()
-                .unwrap()
-                .starts_with("file://")
-        );
-    }
-
-    #[test]
-    fn context_tool_supports_url_profiles_diff_and_markdown() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        init_git_repo(temp_dir.path());
-        write_file(
-            temp_dir.path(),
-            ".sephera.toml",
-            b"[context]\nfocus = [\"src/lib.rs\"]\n\n[profiles.review.context]\nfocus = [\"src/main.rs\"]\n",
-        );
-        write_file(
-            temp_dir.path(),
-            "src/lib.rs",
-            b"pub fn answer() -> u64 {\n    42\n}\n",
-        );
-        write_file(
-            temp_dir.path(),
-            "src/main.rs",
-            b"fn main() {\n    println!(\"demo\");\n}\n",
-        );
-        commit_all(temp_dir.path(), "initial");
-        write_file(
-            temp_dir.path(),
-            "src/lib.rs",
-            b"pub fn answer() -> u64 {\n    99\n}\n",
-        );
-        commit_all(temp_dir.path(), "second");
-
-        let param = rmcp::handler::server::wrapper::Parameters(ContextInput {
-            path: None,
-            url: Some(remote_repo_url(temp_dir.path())),
-            git_ref: None,
-            config: None,
-            no_config: Some(false),
-            profile: Some("review".to_owned()),
-            list_profiles: Some(false),
-            focus: None,
-            ignore: None,
-            diff: Some("HEAD~1".to_owned()),
-            budget: Some(4_000),
-            compress: None,
-            format: Some("markdown".to_owned()),
-        });
-
-        let result = server.context(param);
-        assert!(result.is_ok(), "context tool should support URL mode");
-        let output = result.unwrap();
-        assert!(output.starts_with("# Sephera Context Pack"));
-        assert!(output.contains("HEAD~1"));
-        assert!(output.contains("src/main.rs"));
-    }
-
-    #[test]
-    fn context_tool_list_profiles_with_url_returns_json() {
-        let server = SepheraServer::new();
-        let temp_dir = tempdir().unwrap();
-        init_git_repo(temp_dir.path());
-        write_file(
-            temp_dir.path(),
-            ".sephera.toml",
-            b"[profiles.review.context]\nfocus = [\"src\"]\n",
-        );
-        write_file(temp_dir.path(), "src/lib.rs", b"pub fn lib() {}\n");
-        commit_all(temp_dir.path(), "initial");
-
-        let param = rmcp::handler::server::wrapper::Parameters(ContextInput {
-            path: None,
-            url: Some(remote_repo_url(temp_dir.path())),
-            git_ref: None,
-            config: None,
-            no_config: Some(false),
-            profile: None,
-            list_profiles: Some(true),
-            focus: None,
-            ignore: None,
-            diff: None,
-            budget: None,
-            compress: None,
-            format: None,
-        });
-
-        let result = server.context(param);
-        assert!(result.is_ok(), "context list_profiles should succeed");
-        let output = result.unwrap();
-        let parsed_json: serde_json::Value =
-            serde_json::from_str(&output).unwrap();
-        assert_eq!(parsed_json["profiles"][0], "review");
-        assert!(
-            parsed_json["source_path"]
-                .as_str()
-                .unwrap()
-                .starts_with("file://")
-        );
-    }
-
-    #[test]
-    fn tools_reject_path_and_url_together() {
-        let server = SepheraServer::new();
-        let param = rmcp::handler::server::wrapper::Parameters(LocInput {
-            path: Some(".".to_owned()),
-            url: Some("file:///tmp/demo".to_owned()),
-            git_ref: None,
-            ignore: None,
-        });
-
-        let result = server.loc(param);
-        assert!(result.is_err(), "path and url together should fail");
-    }
-
-    #[test]
-    fn tools_reject_ref_without_url_and_blob_urls() {
-        let server = SepheraServer::new();
-        let ref_error = server.graph(
-            rmcp::handler::server::wrapper::Parameters(GraphInput {
-                path: Some(".".to_owned()),
-                url: None,
-                git_ref: Some("main".to_owned()),
-                focus: None,
-                ignore: None,
-                depth: None,
-                depends_on: None,
-            }),
-        );
-        assert!(ref_error.is_err(), "ref without url should fail");
-
-        let blob_error = server.context(
-            rmcp::handler::server::wrapper::Parameters(ContextInput {
-                path: None,
-                url: Some(
-                    "https://github.com/reim/sephera/blob/main/README.md"
-                        .to_owned(),
-                ),
-                git_ref: None,
-                config: None,
-                no_config: Some(true),
-                profile: None,
-                list_profiles: Some(false),
-                focus: None,
-                ignore: None,
-                diff: None,
-                budget: None,
-                compress: None,
-                format: Some("json".to_owned()),
-            }),
-        );
-        assert!(blob_error.is_err(), "blob URLs should fail");
-    }
-}
+mod tests;

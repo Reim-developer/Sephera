@@ -29,7 +29,7 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 
 - Fast `loc` analysis with per-language totals, table output, and elapsed-time reporting
 - Deterministic `context` packs with focus-path prioritization, Git diff awareness, and approximate token budgeting
-- Tree-sitter AST compression reducing token usage by 50-70% for 8 supported languages
+- Tree-sitter AST compression that keeps the API surface and drops function bodies, typically 50-70% fewer tokens on implementation-heavy files
 - Dependency `graph` generation with cycle detection and exports to Markdown, JSON, XML, and DOT
 - Built-in MCP server for direct integration with AI agents like Claude Desktop
 - URL mode for direct analysis of cloneable repo URLs and GitHub/GitLab tree URLs
@@ -107,6 +107,13 @@ sephera context --path . --list-profiles
       <span>deterministic context bundles for people, tools, and Git review flows</span>
     </header>
     <img src="/demo/context.png" alt="Terminal demo of sephera context building a structured context pack." loading="lazy" />
+  </figure>
+  <figure class="demo-card">
+    <header>
+      <strong><code>sephera graph</code></strong>
+      <span>reverse dependency queries — what breaks if you change this file</span>
+    </header>
+    <img src="/demo/graph.gif" alt="Terminal demo of sephera graph answering a reverse dependency query." loading="lazy" />
   </figure>
 </div>
 

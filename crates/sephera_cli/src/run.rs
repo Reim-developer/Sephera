@@ -5,22 +5,29 @@ use clap::Parser;
 use sephera_core::core::{
     code_loc::{CodeLoc, IgnoreMatcher},
     graph::{
-        resolver::build_graph,
+        resolver::{EdgeFilters, build_graph_with},
         types::{GraphFormat, GraphQuery},
     },
     runtime::{SourceRequest, build_context_report, resolve_source},
+    symbols::{SymbolAnalyzer, SymbolDetail},
 };
 
 use crate::{
-    args::{Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs},
+    args::{
+        Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, LocArgs,
+        SymbolOutputFormat, SymbolsArgs, WatchArgs, WatchTarget,
+    },
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
     output::{
         emit_rendered_output, print_available_profiles, print_report,
-        render_context_json, render_context_markdown, render_graph,
+        print_symbol_report, print_symbols_by_file, render_context_json,
+        render_context_markdown, render_graph, render_symbol_json,
+        render_symbol_markdown,
     },
     progress::CliProgress,
+    watch,
 };
 
 #[must_use]
@@ -45,9 +52,108 @@ pub fn run() -> Result<()> {
 fn dispatch(cli: Cli) -> Result<()> {
     match cli.command {
         Commands::Loc(arguments) => run_loc(arguments),
+        Commands::Symbols(arguments) => run_symbols(arguments),
         Commands::Context(arguments) => run_context(arguments),
         Commands::Mcp => run_mcp(),
         Commands::Graph(arguments) => run_graph(&arguments),
+        Commands::Watch(arguments) => run_watch(&arguments),
+    }
+}
+
+/// Re-run a chosen analysis whenever the watched tree changes.
+///
+/// `--once` short-circuits to a single run, which keeps the watch argument
+/// parsing usable from scripts without needing a separate code path.
+fn run_watch(arguments: &WatchArgs) -> Result<()> {
+    let Some(target) = arguments.target else {
+        anyhow::bail!("`--target` is required unless `--once` is passed");
+    };
+
+    if target == WatchTarget::DependsOn && arguments.on.is_none() {
+        anyhow::bail!("`--on <file>` is required with `--target depends-on`");
+    }
+
+    let root = watch::resolve_root(arguments.path.as_deref());
+    let ignore = arguments.ignore.clone();
+
+    if arguments.once {
+        return run_watch_target(
+            target,
+            arguments.on.as_deref(),
+            &root,
+            &ignore,
+        );
+    }
+
+    println!(
+        "Watching {} for changes. Press Ctrl+C to stop.",
+        root.display()
+    );
+
+    watch::watch(&root, || {
+        run_watch_target(target, arguments.on.as_deref(), &root, &ignore)
+    })
+}
+
+/// Run one analysis pass for the watch target.
+fn run_watch_target(
+    target: WatchTarget,
+    on: Option<&str>,
+    root: &std::path::Path,
+    ignore: &[String],
+) -> Result<()> {
+    // Each arm builds its own argument struct from the same root, so a value is
+    // never shared across arms.
+    let path = || Some(root.to_path_buf());
+
+    match target {
+        WatchTarget::Loc => run_loc(LocArgs {
+            path: path(),
+            url: None,
+            git_ref: None,
+            ignore: ignore.to_vec(),
+        }),
+        WatchTarget::Symbols => run_symbols(SymbolsArgs {
+            path: path(),
+            url: None,
+            git_ref: None,
+            format: SymbolOutputFormat::Table,
+            output: None,
+            detail: false,
+            by_file: false,
+            ignore: ignore.to_vec(),
+        }),
+        WatchTarget::Graph => run_graph(&GraphArgs {
+            path: path(),
+            url: None,
+            git_ref: None,
+            focus: Vec::new(),
+            ignore: ignore.to_vec(),
+            depth: None,
+            what_depends_on: None,
+            exclude_types: false,
+            format: GraphOutputFormat::Markdown,
+            output: None,
+        }),
+        WatchTarget::DependsOn => {
+            let Some(target_path) = on else {
+                anyhow::bail!(
+                    "`--on <file>` is required with `--target depends-on`"
+                );
+            };
+            run_graph(&GraphArgs {
+                path: path(),
+                url: None,
+                git_ref: None,
+                focus: Vec::new(),
+                ignore: ignore.to_vec(),
+                depth: None,
+                what_depends_on: Some(target_path.to_owned()),
+                exclude_types: false,
+                format: GraphOutputFormat::Markdown,
+                output: None,
+            })
+        }
     }
 }
 
@@ -71,6 +177,53 @@ fn run_loc(arguments: LocArgs) -> Result<()> {
     progress.finish();
     print_report(&report);
     Ok(())
+}
+
+fn run_symbols(arguments: SymbolsArgs) -> Result<()> {
+    let progress = CliProgress::start("Counting declarations...");
+    let ignore = IgnoreMatcher::from_patterns(&arguments.ignore)?;
+    let source = resolve_source(&SourceRequest {
+        path: arguments.path,
+        url: arguments.url,
+        git_ref: arguments.git_ref,
+    })?;
+
+    let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
+
+    // The declaration list is only collected when a format can carry it.
+    // Parsing twice would double the work, so the summary path reads only the
+    // report and the paths that need per-file data read both.
+    let needs_symbols = arguments.detail
+        || arguments.by_file
+        || matches!(arguments.format, SymbolOutputFormat::Json);
+    let mut detail = if needs_symbols {
+        analyzer.analyze_detailed()?
+    } else {
+        SymbolDetail::from(analyzer.analyze()?)
+    };
+    if let Some(display_path) = source.display_path {
+        detail.report.base_path = display_path.into();
+    }
+    progress.finish();
+
+    let rendered = match arguments.format {
+        SymbolOutputFormat::Table => {
+            if arguments.by_file {
+                print_symbols_by_file(&detail);
+            } else {
+                print_symbol_report(&detail.report);
+            }
+            None
+        }
+        SymbolOutputFormat::Json => Some(render_symbol_json(&detail)),
+        SymbolOutputFormat::Markdown => Some(render_symbol_markdown(&detail)),
+    };
+
+    if let Some(rendered) = rendered {
+        emit_rendered_output(arguments.output.as_deref(), &rendered)
+    } else {
+        Ok(())
+    }
 }
 
 fn run_context(arguments: ContextArgs) -> Result<()> {
@@ -102,7 +255,27 @@ fn execute_context(arguments: &ResolvedContextOptions) -> Result<()> {
     if writes_to_stdout {
         progress.finish();
     }
+    report_unresolved_symbols(&arguments.unresolved_symbols);
     emit_rendered_output(arguments.output.as_deref(), &rendered)
+}
+
+/// Warn about `--focus-symbol` names that matched nothing or too much.
+///
+/// Reported on stderr rather than as an error so the pack still reaches the
+/// caller: a typo in one name should not discard the declarations that did
+/// resolve, but it must not pass unnoticed either.
+fn report_unresolved_symbols(names: &[String]) {
+    if names.is_empty() {
+        return;
+    }
+
+    let listed: Vec<String> =
+        names.iter().map(|name| format!("  `{name}`")).collect();
+    eprintln!(
+        "warning: {} `--focus-symbol` name(s) matched no single declaration and were left out of the pack:\n{}",
+        names.len(),
+        listed.join("\n")
+    );
 }
 
 fn run_graph(arguments: &GraphArgs) -> Result<()> {
@@ -119,12 +292,15 @@ fn run_graph(arguments: &GraphArgs) -> Result<()> {
         .what_depends_on
         .as_ref()
         .map(|path| GraphQuery::DependsOn(path.clone()));
-    let mut report = build_graph(
+    let mut report = build_graph_with(
         &source.analysis_path,
         &ignore,
         &arguments.focus,
         arguments.depth,
         query,
+        EdgeFilters {
+            exclude_type_aliases: arguments.exclude_types,
+        },
     )?;
     if let Some(display_path) = source.display_path {
         report.base_path = display_path.into();

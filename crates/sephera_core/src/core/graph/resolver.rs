@@ -17,16 +17,21 @@ use crate::core::{
     project_files::{ProjectFile, collect_project_files},
 };
 
-use super::{
-    imports::extract_imports,
-    types::{
-        FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery,
-        GraphReport, NodeMap,
-    },
+use super::{declarations, manifests, plugins};
+
+use super::types::{
+    FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
+    ImportKind, ImportStatement, NodeMap,
 };
 
 /// Maximum file size in bytes to analyze for imports.
 const MAX_IMPORT_FILE_BYTES: u64 = 512 * 1024;
+
+/// How many unresolved local paths to list in the report.
+///
+/// Enough to see a pattern; few enough that a badly misparsed file cannot
+/// flood the output.
+const MAX_UNRESOLVED_LOCAL_SAMPLES: usize = 20;
 
 /// Builds a dependency graph for the given project.
 ///
@@ -40,6 +45,43 @@ const MAX_IMPORT_FILE_BYTES: u64 = 512 * 1024;
 ///
 /// # Errors
 ///
+/// Import forms to leave out of the graph.
+///
+/// Some imports describe a name rather than a runtime dependency. A Rust
+/// `use foo::Bar as Baz` alias or a wildcard import such as `use foo::*`
+/// introduces a local name; neither says which file must be recompiled when
+/// the target changes, so these edges add noise to a blast-radius answer.
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct EdgeFilters {
+    /// Drop aliasing and wildcard imports.
+    pub exclude_type_aliases: bool,
+}
+
+impl EdgeFilters {
+    /// Whether an import should be dropped.
+    ///
+    /// Only these forms are filtered, and only when explicitly enabled: a
+    /// plain `use path::to::thing` is a real dependency and is always kept.
+    ///
+    /// The alias and glob forms are recognised from the parse rather than by
+    /// searching the path text, because the path no longer carries the `as`
+    /// clause and a substring test would miss it.
+    #[must_use]
+    pub const fn rejects(&self, statement: &ImportStatement) -> bool {
+        if !self.exclude_type_aliases {
+            return false;
+        }
+
+        // `use foo::Bar as Baz`, `use foo::*` and `use foo::* as f` introduce a
+        // local name without saying which file must be recompiled.
+        statement.kind.is_renaming()
+    }
+}
+
+/// Builds a dependency graph for a project.
+///
+/// # Errors
+///
 /// Returns an error when project traversal or import extraction fails.
 pub fn build_graph(
     base_path: &Path,
@@ -48,14 +90,46 @@ pub fn build_graph(
     depth: Option<u32>,
     query: Option<GraphQuery>,
 ) -> Result<GraphReport> {
+    build_graph_with(
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        EdgeFilters::default(),
+    )
+}
+
+/// Build a graph, applying edge filters.
+///
+/// [`build_graph`] remains the plain entry point; this exists so callers can
+/// drop imports that describe types rather than runtime coupling.
+///
+/// # Errors
+///
+/// Returns an error when project traversal or import extraction fails.
+pub fn build_graph_with(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+    focus_paths: &[PathBuf],
+    depth: Option<u32>,
+    query: Option<GraphQuery>,
+    filters: EdgeFilters,
+) -> Result<GraphReport> {
     let project_files = collect_project_files(base_path, ignore)?;
     let focus_set = build_focus_set(base_path, focus_paths);
     let query = query
         .map(|query| normalize_graph_query(base_path, query))
         .transpose()?;
 
-    // Phase 1: Extract imports from all supported files.
-    let all_file_imports = extract_all_imports(&project_files)?;
+    // Phase 1: Extract imports from all supported files, and what each declares.
+    let (mut all_file_imports, declarations) =
+        extract_all_imports(&project_files)?;
+    if filters != EdgeFilters::default() {
+        for file in &mut all_file_imports {
+            file.imports.retain(|statement| !filters.rejects(statement));
+        }
+    }
 
     // Phase 2: Build a lookup set of all known file paths for resolution.
     let known_files: BTreeSet<String> = project_files
@@ -64,14 +138,27 @@ pub fn build_graph(
         .collect();
 
     // Phase 3: Build the full graph once, then apply selection/filtering.
-    let (edges, node_map) =
-        build_edges_and_nodes(&all_file_imports, &known_files);
+    //
+    // The manifests are read once here and used twice: resolution needs Go's
+    // module path, and the metrics attribute each edge to a package.
+    let manifests = manifests::ManifestIndex::discover(base_path);
+    let project = ResolutionInputs {
+        base_path: base_path.to_path_buf(),
+        known_files,
+        declarations,
+        manifests,
+    };
+    let (edges, node_map) = build_edges_and_nodes(&all_file_imports, &project);
     let selection = select_graph(&node_map, &focus_set, depth, query)?;
     let filtered_node_map = filter_node_map(&node_map, &selection.node_paths);
     let filtered_edges = filter_edges(&edges, &selection.node_paths);
 
     // Phase 4: Compute metrics.
-    let metrics = compute_metrics(&filtered_node_map, &filtered_edges);
+    let metrics = compute_metrics(
+        &project.manifests,
+        &filtered_node_map,
+        &filtered_edges,
+    );
 
     // Phase 5: Build final nodes list.
     let nodes = build_node_list(&filtered_node_map);
@@ -95,14 +182,18 @@ struct FileImportData {
     file_path: String,
     language: Option<&'static str>,
     ts_language: SupportedLanguage,
-    imports: Vec<(String, u64)>,
+    imports: Vec<ImportStatement>,
 }
 
 /// Extracts imports from all project files that have a supported language.
+///
+/// Also builds the declaration index, which resolution needs for paths that name
+/// a declaration rather than a module. Both come from one read per file.
 fn extract_all_imports(
     project_files: &[ProjectFile],
-) -> Result<Vec<FileImportData>> {
+) -> Result<(Vec<FileImportData>, declarations::DeclarationIndex)> {
     let mut results = Vec::new();
+    let mut declarations = declarations::DeclarationIndex::default();
 
     for project_file in project_files {
         if project_file.size_bytes > MAX_IMPORT_FILE_BYTES
@@ -129,7 +220,23 @@ fn extract_all_imports(
                 )
             })?;
 
-        let imports = extract_imports(&source, ts_language).unwrap_or_default();
+        // Extraction goes through the language's plugin so that dispatch is uniform:
+        // adding a language means adding one plugin file, not editing the
+        // extractor and the resolver separately.
+        let imports = plugins::builtin_import_plugin(ts_language)
+            .and_then(|plugin| plugin.extract(&source))
+            .unwrap_or_default();
+
+        // What this file declares, for paths that name a declaration rather than
+        // a module. Collected here so it costs one extra parse per file at most,
+        // and only for the one language whose imports need it.
+        let declared = plugins::builtin_import_plugin(ts_language)
+            .and_then(|plugin| plugin.declared_names(&source));
+
+        if let Some(declared) = declared {
+            declarations
+                .insert(&project_file.normalized_relative_path, declared);
+        }
 
         results.push(FileImportData {
             file_path: project_file.normalized_relative_path.clone(),
@@ -137,12 +244,18 @@ fn extract_all_imports(
             ts_language,
             imports: imports
                 .into_iter()
-                .map(|imp| (imp.raw_path, imp.line))
+                .map(|extracted| ImportStatement {
+                    raw_path: extracted.raw_path,
+                    line: u64::try_from(extracted.line).unwrap_or(1),
+                    kind: extracted.kind,
+                    module_depth: extracted.module_depth,
+                    cfg_gated: extracted.cfg_gated,
+                })
                 .collect(),
         });
     }
 
-    Ok(results)
+    Ok((results, declarations))
 }
 
 /// Builds the set of focused normalized paths for filtering.
@@ -239,359 +352,154 @@ fn normalize_user_relative_path(path: &Path) -> Result<String> {
         parts.join("/")
     })
 }
-
 /// Attempts to resolve an import path to a known file in the project.
-fn resolve_import(
+///
+/// Resolution is delegated to the language's [`ResolverPlugin`]. An import that
+/// leaves the project, or a language with no bundled plugin, yields
+/// [`Resolution::External`]; a path that should be local but cannot be placed
+/// yields [`Resolution::Unresolved`]. Both are recorded as edges rather than
+/// errors, because a graph of first-party dependencies is useful on its own, but
+/// the report tells them apart because only one is worth fixing.
+fn resolve_import_with(
     import_path: &str,
     source_file: &str,
-    ts_language: SupportedLanguage,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    match ts_language {
-        SupportedLanguage::Rust => {
-            resolve_rust_import(import_path, source_file, known_files)
+    module_depth: u8,
+    kind: ImportKind,
+    language: SupportedLanguage,
+    project: &ResolutionInputs,
+) -> Resolution {
+    let Some(plugin) = plugins::builtin_resolver_plugin(language) else {
+        return Resolution::External;
+    };
+
+    let context = plugins::ResolveContext {
+        source_file,
+        known_files: &project.known_files,
+        module_depth,
+        kind,
+        declarations: Some(&project.declarations),
+        manifests: Some(&project.manifests),
+        base_path: &project.base_path,
+    };
+
+    match plugin.resolve(import_path, context) {
+        Some(file) => Resolution::File(file),
+        // A path the resolver proved leaves the project is not a gap, however
+        // local its shape looks. `crate::http::Request` is the case that
+        // mattered: `pub use http;` re-exports a crate from outside, so the
+        // prefix says "this project" and the code says otherwise.
+        None if leaves_project(plugin.as_ref(), import_path, context) => {
+            Resolution::External
         }
-        SupportedLanguage::Python => {
-            resolve_python_import(import_path, source_file, known_files)
-        }
-        SupportedLanguage::TypeScript | SupportedLanguage::JavaScript => {
-            resolve_js_ts_import(import_path, source_file, known_files)
-        }
-        SupportedLanguage::Go => resolve_go_import(import_path, known_files),
-        SupportedLanguage::Java => {
-            resolve_java_import(import_path, known_files)
-        }
-        SupportedLanguage::C | SupportedLanguage::Cpp => {
-            resolve_c_cpp_import(import_path, source_file, known_files)
-        }
+        None => Resolution::Unresolved,
     }
 }
 
-/// Resolves a Rust `use` path to a local file.
+/// Ask a resolver whether an unresolved path was meant to name an outside crate.
 ///
-/// Handles `crate::`, `super::`, and module paths.
-fn resolve_rust_import(
+/// The qualifier is stripped first: `crate::http::Request` has to be judged on
+/// `http`, the name the crate root re-exports, not on the whole path.
+fn leaves_project(
+    plugin: &dyn plugins::ResolverPlugin,
+    import_path: &str,
+    context: plugins::ResolveContext<'_>,
+) -> bool {
+    const QUALIFIERS: [&str; 3] = ["crate::", "self::", "super::"];
+    let Some(rest) = QUALIFIERS
+        .iter()
+        .find_map(|prefix| import_path.strip_prefix(prefix))
+    else {
+        return false;
+    };
+    let name = rest.split("::").next().unwrap_or(rest);
+    !name.is_empty() && plugin.leaves_project(name, context)
+}
+
+/// What an import path turned out to name.
+///
+/// `Option<String>` could not express the third case. A path that fails to
+/// resolve is either a gap in this resolver or a reference to code outside the
+/// project, and the report draws a line between them: one is worth fixing, the
+/// other is the answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// A file in the analysis.
+    File(String),
+    /// Meant for this project; the resolver could not place it.
+    Unresolved,
+    /// A crate, package, or standard library outside the analysis.
+    External,
+}
+
+impl Resolution {
+    /// The file this resolved to, if any.
+    #[must_use]
+    pub fn file(&self) -> Option<&str> {
+        match self {
+            Self::File(file) => Some(file),
+            Self::Unresolved | Self::External => None,
+        }
+    }
+
+    /// Whether a file was found.
+    #[must_use]
+    pub const fn is_resolved(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
+}
+
+/// Test shim naming the language first, so the assertions read left to right.
+#[cfg(test)]
+fn resolve_import_lang(
+    language: SupportedLanguage,
     import_path: &str,
     source_file: &str,
-    known_files: &BTreeSet<String>,
+    known_files: &plugins::KnownFiles,
 ) -> Option<String> {
-    // Only resolve crate-local imports
-    if let Some(rest) = import_path.strip_prefix("super::") {
-        let parent_module = rust_module_parent(source_file);
-        return try_resolve_rust_module(
-            &qualify_rust_module_path(&parent_module, rest),
-            known_files,
-        );
-    }
+    resolve_plain(language, import_path, source_file, known_files)
+        .file()
+        .map(ToOwned::to_owned)
+}
 
-    if let Some(rest) = import_path.strip_prefix("self::") {
-        return try_resolve_rust_module(
-            &qualify_rust_module_path(&rust_module_path(source_file), rest),
-            known_files,
-        );
-    }
-
-    let Some(module_path) = import_path.strip_prefix("crate::") else {
-        // External crate import — not resolvable locally
-        return None;
-    };
-
-    try_resolve_rust_module(
-        &qualify_rust_module_path(&rust_crate_root(source_file), module_path),
-        known_files,
+/// Resolve with no project indexes attached, which is what most tests want.
+#[cfg(test)]
+fn resolve_plain(
+    language: SupportedLanguage,
+    import_path: &str,
+    source_file: &str,
+    known_files: &plugins::KnownFiles,
+) -> Resolution {
+    resolve_import_with(
+        import_path,
+        source_file,
+        0,
+        ImportKind::Dependency,
+        language,
+        &ResolutionInputs {
+            base_path: std::path::PathBuf::new(),
+            known_files: known_files.clone(),
+            declarations: declarations::DeclarationIndex::default(),
+            manifests: manifests::ManifestIndex::default(),
+        },
     )
 }
 
-fn rust_module_parent(source_file: &str) -> String {
-    let module_path = rust_module_path(source_file);
-    if let Some((parent, _)) = module_path.rsplit_once('/') {
-        parent.to_owned()
-    } else {
-        String::new()
-    }
-}
-
-fn rust_module_path(source_file: &str) -> String {
-    source_file
-        .strip_suffix("/mod.rs")
-        .or_else(|| source_file.strip_suffix(".rs"))
-        .unwrap_or(source_file)
-        .to_owned()
-}
-
-fn rust_crate_root(source_file: &str) -> String {
-    let mut parts: Vec<&str> = source_file.split('/').collect();
-    parts.pop();
-
-    parts
-        .iter()
-        .rposition(|part| *part == "src")
-        .map_or_else(String::new, |index| parts[..=index].join("/"))
-}
-
-fn qualify_rust_module_path(base: &str, rest: &str) -> String {
-    let rest = rest.replace("::", "/");
-    if base.is_empty() {
-        rest
-    } else {
-        format!("{base}/{rest}")
-    }
-}
-
-/// Tries multiple possible file paths for a Rust module path.
-fn try_resolve_rust_module(
-    module_path: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Convert `core::graph::types` → `core/graph/types`
-    let file_path = module_path.replace("::", "/");
-
-    // Try: `core/graph/types.rs`
-    let candidate = format!("{file_path}.rs");
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // Try: `core/graph/types/mod.rs`
-    let candidate = format!("{file_path}/mod.rs");
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // Try one level up (e.g., `core/graph.rs` for `core::graph::types`)
-    if let Some((parent, _)) = file_path.rsplit_once('/') {
-        let candidate = format!("{parent}.rs");
-        if known_files.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-/// Resolves a Python import to a local file.
-fn resolve_python_import(
-    import_path: &str,
-    source_file: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    let relative_levels =
-        import_path.bytes().take_while(|byte| *byte == b'.').count();
-    let module_path = &import_path[relative_levels..];
-    let file_path = module_path.replace('.', "/");
-
-    if relative_levels > 0 {
-        let module_base = source_file.rsplit_once('/').map_or("", |(p, _)| p);
-        let relative_base = ascend_python_package(
-            module_base,
-            relative_levels.saturating_sub(1),
-        );
-        let relative_module =
-            join_python_module_path(&relative_base, &file_path);
-
-        for candidate in python_module_candidates(&relative_module) {
-            if known_files.contains(candidate.as_str()) {
-                return Some(candidate);
-            }
-        }
-    }
-
-    // Absolute import
-    python_module_candidates(&file_path)
-        .into_iter()
-        .find(|candidate| known_files.contains(candidate.as_str()))
-}
-
-fn ascend_python_package(module_base: &str, levels: usize) -> String {
-    let mut parts: Vec<&str> = if module_base.is_empty() {
-        Vec::new()
-    } else {
-        module_base.split('/').collect()
-    };
-
-    for _ in 0..levels {
-        parts.pop();
-    }
-
-    parts.join("/")
-}
-
-fn join_python_module_path(base: &str, module_path: &str) -> String {
-    if base.is_empty() {
-        module_path.to_owned()
-    } else if module_path.is_empty() {
-        base.to_owned()
-    } else {
-        format!("{base}/{module_path}")
-    }
-}
-
-fn python_module_candidates(module_path: &str) -> [String; 2] {
-    [
-        format!("{module_path}.py"),
-        format!("{module_path}/__init__.py"),
-    ]
-}
-
-/// Resolves a JS/TS import to a local file.
-fn resolve_js_ts_import(
-    import_path: &str,
-    source_file: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Only resolve relative imports
-    if !import_path.starts_with('.') {
-        return None;
-    }
-
-    let parent = source_file.rsplit_once('/').map_or("", |(p, _)| p);
-    let resolved = simplify_relative_path(parent, import_path);
-
-    let extensions =
-        ["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
-    for ext in &extensions {
-        let candidate = format!("{resolved}{ext}");
-        if known_files.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-/// Resolves a Go import to a local file.
-fn resolve_go_import(
-    import_path: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // Only resolve imports that look like relative paths within the project
-    // Go module imports are typically `module/path/package`
-    let dir_path = import_path.rsplit_once('/').map_or(import_path, |(_, p)| p);
-
-    // Try to find any .go file in a matching directory
-    for file in known_files {
-        if std::path::Path::new(file)
-            .extension()
-            .is_some_and(|ext| ext.eq_ignore_ascii_case("go"))
-        {
-            let file_dir = file.rsplit_once('/').map_or("", |(d, _)| d);
-            let dir_name =
-                file_dir.rsplit_once('/').map_or(file_dir, |(_, n)| n);
-            if dir_name == dir_path {
-                return Some(file.clone());
-            }
-        }
-    }
-
-    None
-}
-
-/// Resolves a Java import to a local file.
-fn resolve_java_import(
-    import_path: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // `java.util.List` → `java/util/List.java`
-    let file_path = import_path.replace('.', "/");
-    let candidate = format!("{file_path}.java");
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    if let Some(candidate) = find_java_suffix_match(&candidate, known_files) {
-        return Some(candidate);
-    }
-
-    // Try without the full package prefix (common in local projects)
-    // e.g., `com.example.utils.Helper` → look for `utils/Helper.java`
-    let parts: Vec<&str> = file_path.split('/').collect();
-    for start in 0..parts.len() {
-        let partial = parts[start..].join("/");
-        let candidate = format!("{partial}.java");
-        if known_files.contains(&candidate) {
-            return Some(candidate);
-        }
-
-        if let Some(candidate) = find_java_suffix_match(&candidate, known_files)
-        {
-            return Some(candidate);
-        }
-    }
-
-    None
-}
-
-fn find_java_suffix_match(
-    candidate: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    known_files
-        .iter()
-        .find(|known_file| {
-            *known_file == candidate
-                || known_file
-                    .strip_suffix(candidate)
-                    .is_some_and(|prefix| prefix.ends_with('/'))
-        })
-        .cloned()
-}
-
-/// Resolves a C/C++ `#include` to a local file.
-fn resolve_c_cpp_import(
-    import_path: &str,
-    source_file: &str,
-    known_files: &BTreeSet<String>,
-) -> Option<String> {
-    // System includes (`<...>`) are not resolved locally
-    if import_path.starts_with('<') {
-        return None;
-    }
-
-    let parent = source_file.rsplit_once('/').map_or("", |(p, _)| p);
-
-    // Try relative to source file
-    let candidate = if parent.is_empty() {
-        import_path.to_owned()
-    } else {
-        format!("{parent}/{import_path}")
-    };
-    if known_files.contains(&candidate) {
-        return Some(candidate);
-    }
-
-    // Try from project root
-    if known_files.contains(import_path) {
-        return Some(import_path.to_owned());
-    }
-
-    None
-}
-
-/// Simplifies a relative path like `../utils` resolved from a base directory.
-fn simplify_relative_path(base: &str, relative: &str) -> String {
-    let mut parts: Vec<&str> = if base.is_empty() {
-        Vec::new()
-    } else {
-        base.split('/').collect()
-    };
-
-    for segment in relative.split('/') {
-        match segment {
-            ".." => {
-                parts.pop();
-            }
-            "." | "" => {}
-            s => parts.push(s),
-        }
-    }
-
-    parts.join("/")
+/// The project-wide facts every resolution reads.
+///
+/// Grouped because the argument list outgrew what a reader can hold: the eighth
+/// parameter was a second index, and a caller that passed them in the wrong
+/// order would compile and resolve against the wrong table.
+struct ResolutionInputs {
+    base_path: PathBuf,
+    known_files: plugins::KnownFiles,
+    declarations: declarations::DeclarationIndex,
+    manifests: manifests::ManifestIndex,
 }
 
 /// Builds edges and populates the node map from extracted imports.
 fn build_edges_and_nodes(
     all_imports: &[FileImportData],
-    known_files: &BTreeSet<String>,
+    project: &ResolutionInputs,
 ) -> (Vec<GraphEdge>, NodeMap) {
     let mut edges = Vec::new();
     let mut node_map: NodeMap = BTreeMap::new();
@@ -605,17 +513,40 @@ fn build_edges_and_nodes(
     }
 
     for file_data in all_imports {
-        for (import_path, _line) in &file_data.imports {
-            let resolved = resolve_import(
-                import_path,
+        for statement in &file_data.imports {
+            let resolved = resolve_import_with(
+                &statement.raw_path,
                 &file_data.file_path,
+                statement.module_depth,
+                statement.kind,
                 file_data.ts_language,
-                known_files,
+                project,
             );
 
-            let is_resolved = resolved.is_some();
+            let is_resolved = resolved.is_resolved();
+            let target = resolved.file().map(ToOwned::to_owned);
+            // Only a path the resolver could not place, that still looks local,
+            // counts as a gap. One it proved leaves the project is an external
+            // dependency whatever its prefix says.
+            let local_gap = matches!(resolved, Resolution::Unresolved)
+                && looks_local(&statement.raw_path)
+                // A namespace import binds a name rather than naming a module,
+                // so one that does not resolve is not a gap in the resolver.
+                // `from . import Flask` in flask's `cli.py` names a class the
+                // package re-exports, and there is no `Flask.py` for it to find.
+                // A renaming import gets no such leniency: it names one path.
+                && !statement.kind.is_namespace();
 
-            if let Some(ref target) = resolved {
+            // Every real dependency goes in the adjacency, including a parent naming its
+            // own child. A blast-radius query wants that edge -- "what breaks if
+            // I edit `service.rs`" must answer `main.rs` -- and filtering it here
+            // to satisfy cycle detection silently answered "nothing", which is how
+            // `--what-depends-on` lost a whole level. Structural edges are
+            // excluded from cycle detection instead, in `detect_cycles`.
+            if let Some(ref target) = target
+                && statement.kind.is_dependency()
+                && *target != file_data.file_path
+            {
                 // Update imported_by for the target
                 node_map
                     .entry(target.clone())
@@ -633,9 +564,15 @@ fn build_edges_and_nodes(
 
             edges.push(GraphEdge {
                 from: file_data.file_path.clone(),
-                to: resolved,
-                import_path: import_path.clone(),
+                to: target,
+                import_path: statement.raw_path.clone(),
                 resolved: is_resolved,
+                kind: statement.kind,
+                cfg_gated: statement.cfg_gated,
+                // Whether this edge was meant for the project and could not be
+                // placed. Carried on the edge so the metrics read a fact rather
+                // than re-guessing from the path's shape.
+                local_gap,
             });
         }
     }
@@ -837,14 +774,72 @@ fn build_node_list(node_map: &NodeMap) -> Vec<GraphNode> {
 }
 
 /// Computes graph metrics including cycle detection.
-fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
+fn compute_metrics(
+    index: &manifests::ManifestIndex,
+    node_map: &NodeMap,
+    edges: &[GraphEdge],
+) -> GraphMetrics {
     let total_files = u64::try_from(node_map.len()).unwrap_or(u64::MAX);
-    let total_internal_edges =
-        u64::try_from(edges.iter().filter(|e| e.resolved).count())
+    // A `use super::*;` inside a test module resolves to the file it is written
+    // in. That is a real reference but says nothing about how files depend on
+    // each other, so it is counted apart from the internal edges.
+    let self_references = u64::try_from(
+        edges
+            .iter()
+            .filter(|edge| edge.resolved && is_self_edge(edge))
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+    let total_internal_edges = u64::try_from(
+        edges
+            .iter()
+            .filter(|edge| edge.resolved && !is_self_edge(edge))
+            .count(),
+    )
+    .unwrap_or(u64::MAX);
+
+    let cfg_gated_edges =
+        u64::try_from(edges.iter().filter(|edge| edge.cfg_gated).count())
             .unwrap_or(u64::MAX);
+    let unresolved_local: Vec<&GraphEdge> =
+        edges.iter().filter(|edge| edge.local_gap).collect();
+    let external_count = edges.iter().filter(|e| !e.resolved).count();
     let total_external_edges =
-        u64::try_from(edges.iter().filter(|e| !e.resolved).count())
+        u64::try_from(external_count - unresolved_local.len())
             .unwrap_or(u64::MAX);
+    let unresolved_local_edges =
+        u64::try_from(unresolved_local.len()).unwrap_or(u64::MAX);
+    let unresolved_local_samples = unresolved_local
+        .iter()
+        .take(MAX_UNRESOLVED_LOCAL_SAMPLES)
+        .map(|edge| format!("{}: {}", edge.from, edge.import_path))
+        .collect();
+
+    // Attribute what is left to actual packages, so the report can answer which
+    // dependency an edge refers to rather than only how many there are.
+    let dependencies = index.summarise(edges.iter().filter_map(|edge| {
+        // The ecosystem follows from the file the import was written in, which
+        // is what decides whether a bare name is a standard library module.
+        let extension = std::path::Path::new(&edge.from)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)?;
+        let language = SupportedLanguage::from_extension(extension)?;
+        (!edge.resolved).then_some((
+            edge.import_path.as_str(),
+            manifests::Ecosystem::of(language),
+        ))
+    }));
+    let edges_of_kind = |kind: manifests::DependencyKind| {
+        dependencies
+            .iter()
+            .filter(|dependency| dependency.kind == kind)
+            .map(|dependency| dependency.edge_count)
+            .sum::<u64>()
+    };
+    let declared_dependency_edges =
+        edges_of_kind(manifests::DependencyKind::Declared);
+    let local_crate_edges = edges_of_kind(manifests::DependencyKind::Local);
+    let builtin_edges = edges_of_kind(manifests::DependencyKind::Builtin);
 
     let mut most_importing: Vec<FileMetric> = node_map
         .iter()
@@ -854,7 +849,7 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
         })
         .filter(|m| m.count > 0)
         .collect();
-    most_importing.sort_by(|a, b| b.count.cmp(&a.count));
+    most_importing.sort_by_key(|m| std::cmp::Reverse(m.count));
     most_importing.truncate(10);
 
     let mut most_imported: Vec<FileMetric> = node_map
@@ -865,7 +860,7 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
         })
         .filter(|m| m.count > 0)
         .collect();
-    most_imported.sort_by(|a, b| b.count.cmp(&a.count));
+    most_imported.sort_by_key(|m| std::cmp::Reverse(m.count));
     most_imported.truncate(10);
 
     let cycles = detect_cycles(node_map);
@@ -874,7 +869,15 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
     GraphMetrics {
         total_files,
         total_internal_edges,
+        self_references,
         total_external_edges,
+        unresolved_local_edges,
+        unresolved_local_samples,
+        cfg_gated_edges,
+        dependencies,
+        declared_dependency_edges,
+        local_crate_edges,
+        builtin_edges,
         circular_dependencies,
         most_importing,
         most_imported,
@@ -882,9 +885,117 @@ fn compute_metrics(node_map: &NodeMap, edges: &[GraphEdge]) -> GraphMetrics {
     }
 }
 
-/// Detects cycles in the dependency graph using iterative DFS.
+/// Whether an edge between a module and its own hierarchy is structural rather
+/// than a dependency.
+///
+/// Rust's module tree makes these relationships unavoidable in both directions.
+/// A parent names its children with `mod child;` or `pub use child::Thing`, and a
+/// child names anything its ancestors declare with `super::` or `crate::`. So the
+/// pair always points at each other, and neither edge is something an edit can
+/// remove: there is no way to make `error.rs` stop using the `BoxError` alias
+/// `lib.rs` declares without deleting one of them.
+///
+/// Reporting them costs the blast radius its meaning. Sephera's own tree went
+/// from 0 cycles to 4 when only the parent's declaration was recognised, and
+/// axum from 21 to 37 once a child could reach a name its ancestor declares.
+/// The edges stay in the report, because "changing `BoxError` affects `error.rs`"
+/// is worth knowing; they just do not close a loop.
+fn is_structural_module_edge(source: &str, target: &str) -> bool {
+    is_own_child_module(source, target)
+        || is_own_child_module(target, source)
+        || is_ancestor_module(target, source)
+}
+
+/// Whether `target` is a direct child module of the file named by `source`.
+fn is_own_child_module(source: &str, target: &str) -> bool {
+    let children = plugins::rust_plugin::module_children_dir(source);
+    match target.rsplit_once('/') {
+        Some((directory, _)) => directory == children,
+        None => false,
+    }
+}
+
+/// Whether `ancestor` encloses `descendant` in the module tree.
+///
+/// Catches the multi-level case a direct parent check misses: a reference from
+/// `src/a/b/c.rs` to `src/lib.rs` is as unavoidable as one to `src/a/mod.rs`, and
+/// a cycle that walked only immediate neighbours would miss it.
+fn is_ancestor_module(ancestor: &str, descendant: &str) -> bool {
+    let enclosing = plugins::rust_plugin::module_children_dir(ancestor);
+    let inner = plugins::rust_plugin::module_children_dir(descendant);
+    inner.starts_with(&enclosing)
+        && inner.len() > enclosing.len()
+        && inner.as_bytes().get(enclosing.len()) == Some(&b'/')
+}
+/// Whether an edge points from a file back to itself.
+fn is_self_edge(edge: &GraphEdge) -> bool {
+    edge.to.as_deref() == Some(edge.from.as_str())
+}
+
+fn looks_local(import_path: &str) -> bool {
+    const LOCAL_QUALIFIERS: [&str; 4] = ["crate::", "self::", "super::", "."];
+
+    LOCAL_QUALIFIERS
+        .iter()
+        .any(|qualifier| import_path.starts_with(qualifier))
+}
+
+/// Canonical identity of a cycle, used to collapse duplicates.
+///
+/// A cycle is reported once per edge by the traversal, so the same ring can be
+/// discovered from several of its members and in either direction. Keying on
+/// the rotation-normalised ring makes those discoveries compare equal, which is
+/// what keeps the reported cycle count an actual count of distinct rings rather
+/// than a count of traversal artefacts.
+fn cycle_key(cycle: &[String]) -> String {
+    // `cycle` repeats its entry node at the end, so the repeat is dropped
+    // before keying: otherwise a self-import and a two-node ring would not
+    // compare equal to themselves across representations.
+    let mut ring: Vec<String> = cycle
+        .iter()
+        .take(cycle.len().saturating_sub(1))
+        .cloned()
+        .collect();
+    ring.sort();
+    ring.join("|")
+}
+
+/// A copy of the adjacency with structural module edges removed.
+///
+/// Rust's module tree makes these edges unavoidable in both directions, so
+/// keeping them in the cycle walk reported relationships no edit can remove: a
+/// parent names its children with `mod child;`, and a child names anything its
+/// ancestors declare with `super::` or `crate::`. On axum, including them turned
+/// 18 real cycles into 37, and on this repository 0 into 4 -- every one of them
+/// `lib.rs` and `error.rs` pointing at each other over an alias.
+///
+/// Filtering here rather than when the graph is built keeps the two purposes
+/// separate. Blast radius wants the edge: editing `service.rs` really does affect
+/// `main.rs`. Only a cycle claim is something an edit cannot resolve.
+fn structural_adjacency(node_map: &NodeMap) -> NodeMap {
+    let mut filtered: NodeMap = node_map.to_owned();
+    for (file, entry) in &mut filtered {
+        entry
+            .imports
+            .retain(|target| !is_structural_module_edge(file, target));
+    }
+    filtered
+}
+
+/// Detect cycles in the dependency graph using iterative DFS.
+///
+/// Each distinct ring is reported once. Cycles are returned in a deterministic
+/// order so that repeated runs over an unchanged tree produce identical output.
 fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
+    let adjacency = structural_adjacency(node_map);
+    let node_map = &adjacency;
     let mut cycles: Vec<Vec<String>> = Vec::new();
+
+    // These three sets deliberately live outside the start-node loop. Marking a
+    // node visited once, globally, is what confines each connected component to
+    // a single traversal: a ring is therefore discovered from one of its members
+    // and every later member is skipped, rather than the ring being rediscovered
+    // once per member.
     let mut visited: BTreeSet<String> = BTreeSet::new();
     let mut in_stack: BTreeSet<String> = BTreeSet::new();
     let mut seen_cycle_keys: BTreeSet<String> = BTreeSet::new();
@@ -924,11 +1035,7 @@ fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
                     .collect();
                 cycle.push(child.clone());
 
-                // Normalize cycle for deduplication
-                let mut sorted_cycle = cycle.clone();
-                sorted_cycle.sort();
-                let key = sorted_cycle.join("|");
-                if seen_cycle_keys.insert(key) {
+                if seen_cycle_keys.insert(cycle_key(&cycle)) {
                     cycles.push(cycle);
                 }
             } else if !visited.contains(&child) {
@@ -944,11 +1051,421 @@ fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::core::graph::ImportKind;
     use std::fs;
     use tempfile::tempdir;
 
     fn known_files(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    /// Build a statement of the given kind for filter tests.
+    fn statement(raw_path: &str, kind: ImportKind) -> ImportStatement {
+        ImportStatement {
+            raw_path: raw_path.to_owned(),
+            line: 1,
+            kind,
+            module_depth: 0,
+            cfg_gated: false,
+        }
+    }
+
+    #[test]
+    fn type_alias_imports_are_kept_by_default() {
+        // Dropping edges silently would be worse than showing them, so the
+        // filter is opt-in and the default graph is unchanged.
+        let filters = EdgeFilters::default();
+
+        assert!(
+            !filters
+                .rejects(&statement("crate::foo::Bar", ImportKind::TypeAlias))
+        );
+        assert!(
+            !filters.rejects(&statement("crate::foo", ImportKind::Namespace))
+        );
+    }
+
+    #[test]
+    fn type_alias_imports_are_dropped_when_enabled() {
+        let filters = EdgeFilters {
+            exclude_type_aliases: true,
+        };
+
+        assert!(
+            filters
+                .rejects(&statement("crate::foo::Bar", ImportKind::TypeAlias))
+        );
+        assert!(
+            filters.rejects(&statement("crate::foo", ImportKind::Namespace))
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_survives_the_filter() {
+        // `--exclude-types` is about import forms, not about declarations. A
+        // declaration is kept in the edge list either way; cycle detection is
+        // what ignores it.
+        let filters = EdgeFilters {
+            exclude_type_aliases: true,
+        };
+
+        assert!(
+            !filters.rejects(&statement(
+                "self::types",
+                ImportKind::ModuleDeclaration
+            ))
+        );
+    }
+
+    #[test]
+    fn ordinary_imports_survive_the_filter() {
+        let filters = EdgeFilters {
+            exclude_type_aliases: true,
+        };
+
+        for import in [
+            "crate::core::graph",
+            "crate::foo::Bar",
+            "std::collections::HashMap",
+            // A name that merely starts with `*` is an ordinary item, not a
+            // namespace import.
+            "crate::a::b::*inner",
+        ] {
+            assert!(
+                !filters.rejects(&statement(import, ImportKind::Dependency)),
+                "{import} is a real dependency and must be kept"
+            );
+        }
+    }
+
+    #[test]
+    fn excluding_type_aliases_removes_only_that_edge() {
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in [
+            (
+                "src/main.rs",
+                "mod util;\nuse crate::alias::Thing as Other;\nuse crate::util::u;\n",
+            ),
+            ("src/util.rs", "pub fn u() {}\n"),
+            ("src/alias.rs", "pub struct Thing;\n"),
+        ] {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+
+        let baseline = build_graph(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+        )
+        .expect("baseline graph");
+
+        let filtered = build_graph_with(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+            EdgeFilters {
+                exclude_type_aliases: true,
+            },
+        )
+        .expect("filtered graph");
+
+        // Three edges in the baseline: the mod declaration plus two uses. The
+        // alias use is the only one dropped.
+        assert_eq!(baseline.metrics.total_internal_edges, 3);
+        assert_eq!(filtered.metrics.total_internal_edges, 2);
+
+        let kept: Vec<&str> = filtered
+            .edges
+            .iter()
+            .filter(|edge| edge.resolved)
+            .filter_map(|edge| edge.to.as_deref())
+            .collect();
+        assert!(
+            kept.contains(&"src/util.rs"),
+            "a real import must survive: {kept:?}"
+        );
+    }
+
+    #[test]
+    fn an_unresolved_local_path_is_not_counted_as_external() {
+        // `std::io` and a `crate::` path the resolver failed to place were both
+        // counted in `total_external_edges`, so the number could not be read: it
+        // did not say which crates the project uses and which of its own files
+        // are missing from the analysis.
+        let report = graph_for(&[
+            (
+                "src/main.rs",
+                "use std::io;\nuse crate::nowhere::Thing;\nfn main() {}\n",
+            ),
+            ("src/lib.rs", "pub fn f() {}\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.total_external_edges, 1,
+            "only std::io leaves the project"
+        );
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
+        assert_eq!(
+            report.metrics.unresolved_local_samples,
+            vec!["src/main.rs: crate::nowhere::Thing".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_resolvable_project_reports_no_unresolved_local_paths() {
+        let report = graph_for(&[("src/main.rs", "fn main() {}\n")]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 0);
+        assert!(
+            report.metrics.unresolved_local_samples.is_empty(),
+            "nothing should be listed when nothing is unresolved"
+        );
+    }
+
+    #[test]
+    fn unresolved_local_samples_are_capped() {
+        // One badly misparsed file must not flood the report, so the sample list
+        // is bounded while the count stays exact.
+        let files: Vec<(String, String)> = (0..MAX_UNRESOLVED_LOCAL_SAMPLES
+            + 5)
+            .map(|index| {
+                (
+                    format!("src/f{index}.rs"),
+                    format!("use crate::absent{index}::Thing;\n"),
+                )
+            })
+            .collect();
+        let borrowed: Vec<(&str, &str)> = files
+            .iter()
+            .map(|(path, contents)| (path.as_str(), contents.as_str()))
+            .collect();
+
+        let report = graph_for(&borrowed);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges,
+            u64::try_from(MAX_UNRESOLVED_LOCAL_SAMPLES + 5).unwrap_or(u64::MAX),
+            "the count must stay exact even when the list is capped"
+        );
+        assert_eq!(
+            report.metrics.unresolved_local_samples.len(),
+            MAX_UNRESOLVED_LOCAL_SAMPLES,
+            "the sample list must be capped"
+        );
+    }
+
+    /// A parent module that declares a child, and a child that refers back to
+    /// its parent with `super::`. This is ordinary Rust, not a dependency loop.
+    fn nested_module_tree() -> Vec<(&'static str, &'static str)> {
+        vec![
+            ("src/main.rs", "mod util;\nfn main() {}\n"),
+            ("src/util.rs", "mod helper;\npub fn u() {}\n"),
+            ("src/util/helper.rs", "use super::u;\npub fn h() {}\n"),
+        ]
+    }
+
+    #[test]
+    fn a_parent_and_child_module_are_not_reported_as_a_cycle() {
+        // Every nested Rust module with a `super::` reference produced a
+        // phantom cycle, because the `mod` declaration closed the loop. Sephera's
+        // own repository reported 38 cycles for this reason and 0 real ones.
+        let report = graph_for(&nested_module_tree());
+
+        assert_eq!(
+            report.metrics.circular_dependencies, 0,
+            "module structure is not a dependency cycle: {:?}",
+            report.metrics.cycles
+        );
+    }
+
+    #[test]
+    fn a_real_import_cycle_is_still_reported() {
+        // The point of excluding declarations is precision, not silence: a cycle
+        // between two `use` statements must still be found.
+        let report = graph_for(&[
+            ("src/main.rs", "mod a;\nmod b;\nfn main() {}\n"),
+            ("src/a.rs", "use crate::b::Thing;\npub struct A;\n"),
+            ("src/b.rs", "use crate::a::A;\npub struct Thing;\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.circular_dependencies, 1,
+            "a genuine import cycle must be reported: {:?}",
+            report.metrics.cycles
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_is_still_reported_as_an_edge() {
+        // Excluding declarations from cycle detection must not remove them from
+        // the graph: they are the structure a reader wants to see.
+        let report = graph_for(&nested_module_tree());
+
+        assert!(
+            report
+                .edges
+                .iter()
+                .any(|edge| edge.kind == ImportKind::ModuleDeclaration
+                    && edge.to.as_deref() == Some("src/util.rs")),
+            "the `mod util;` edge must still be present: {:?}",
+            report.edges
+        );
+    }
+
+    #[test]
+    fn no_edge_points_at_its_own_file() {
+        // A resolver fallback used to answer an unresolved module with the
+        // declaring file, which reported a resolved self-edge.
+        let report = graph_for(&[
+            ("src/main.rs", "mod missing;\nfn main() {}\n"),
+            ("src/lib.rs", "pub fn f() {}\n"),
+        ]);
+
+        let self_loops: Vec<&str> = report
+            .edges
+            .iter()
+            .filter(|edge| {
+                edge.from == *edge.to.as_ref().unwrap_or(&String::new())
+            })
+            .map(|edge| edge.import_path.as_str())
+            .collect();
+        assert_eq!(
+            self_loops,
+            Vec::<&str>::new(),
+            "a file never depends on itself"
+        );
+    }
+
+    /// Build a graph over an in-memory tree and return the report.
+    fn graph_for(files: &[(&str, &str)]) -> GraphReport {
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in files {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+
+        build_graph(temp_dir.path(), &IgnoreMatcher::empty(), &[], None, None)
+            .expect("graph build must succeed")
+    }
+
+    /// Paths that a file imports, according to the resolved edge list.
+    fn imports_of(report: &GraphReport, source: &str) -> Vec<String> {
+        report
+            .edges
+            .iter()
+            .filter(|edge| edge.from == source && edge.resolved)
+            .filter_map(|edge| edge.to.clone())
+            .collect()
+    }
+
+    #[test]
+    fn mod_declarations_create_internal_edges() {
+        // `mod util;` is a compile-time dependency: editing util.rs forces a
+        // rebuild of the module that declares it, so it must appear as an edge.
+        // It previously produced none, which made a `mod`-only crate look
+        // completely disconnected.
+        let report = graph_for(&[
+            ("src/main.rs", "mod util;\nfn main() {}\n"),
+            ("src/util.rs", "pub fn helper() {}\n"),
+        ]);
+
+        let imports = imports_of(&report, "src/main.rs");
+
+        assert_eq!(
+            imports,
+            vec!["src/util.rs".to_owned()],
+            "a mod declaration must resolve to its file"
+        );
+    }
+
+    #[test]
+    fn a_mod_only_crate_is_fully_connected() {
+        let report = graph_for(&[
+            ("src/main.rs", "mod a;\nmod b;\nfn main() {}\n"),
+            ("src/a.rs", "pub fn a() {}\n"),
+            ("src/b.rs", "pub fn b() {}\n"),
+        ]);
+
+        assert_eq!(report.metrics.total_internal_edges, 2);
+        assert_eq!(report.metrics.circular_dependencies, 0);
+    }
+
+    #[test]
+    fn inline_modules_are_not_edges() {
+        // An inline module declares no file, so there is nothing to point at.
+        let report = graph_for(&[(
+            "src/main.rs",
+            "mod inner {\n    pub fn f() {}\n}\nfn main() {}\n",
+        )]);
+
+        assert_eq!(
+            report.metrics.total_internal_edges, 0,
+            "an inline module has no file to import"
+        );
+    }
+
+    #[test]
+    fn a_path_attribute_module_is_skipped() {
+        // With `#[path = "..."]` the declared name no longer matches the file,
+        // so reporting `crate::util` would invent an edge that cannot resolve.
+        let report = graph_for(&[
+            (
+                "src/main.rs",
+                "#[path = \"other/renamed.rs\"]\nmod util;\nfn main() {}\n",
+            ),
+            ("src/other/renamed.rs", "pub fn r() {}\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.total_internal_edges, 0,
+            "a renamed module must not resolve against the declared name"
+        );
+    }
+
+    #[test]
+    fn mod_and_use_together_both_resolve() {
+        let report = graph_for(&[
+            (
+                "src/main.rs",
+                "mod util;\nuse crate::helper::h;\nfn main() {}\n",
+            ),
+            ("src/util.rs", "pub fn u() {}\n"),
+            ("src/helper.rs", "pub fn h() {}\n"),
+        ]);
+
+        let mut imports = imports_of(&report, "src/main.rs");
+        imports.sort();
+
+        assert_eq!(
+            imports,
+            vec!["src/helper.rs".to_owned(), "src/util.rs".to_owned()]
+        );
+    }
+
+    #[test]
+    fn mod_resolves_through_mod_rs() {
+        let report = graph_for(&[
+            ("src/lib.rs", "mod graph;\n"),
+            ("src/graph/mod.rs", "pub mod types;\n"),
+            ("src/graph/types.rs", "pub struct T;\n"),
+        ]);
+
+        assert_eq!(
+            imports_of(&report, "src/lib.rs"),
+            vec!["src/graph/mod.rs".to_owned()]
+        );
+        assert_eq!(
+            imports_of(&report, "src/graph/mod.rs"),
+            vec!["src/graph/types.rs".to_owned()],
+            "a nested mod must also resolve"
+        );
     }
 
     fn write_file(base_dir: &Path, relative_path: &str, contents: &str) {
@@ -957,6 +1474,116 @@ mod tests {
             fs::create_dir_all(parent).unwrap();
         }
         fs::write(absolute_path, contents).unwrap();
+    }
+
+    fn node_map_from_edges(edges: &[(&str, &[&str])]) -> NodeMap {
+        let mut map: NodeMap = BTreeMap::new();
+        for (node, imports) in edges {
+            let entry = map.entry((*node).to_owned()).or_default();
+            for import in *imports {
+                entry.imports.push((*import).to_owned());
+            }
+        }
+        map
+    }
+
+    #[test]
+    fn cycle_key_ignores_rotation_and_direction() {
+        let a = vec![
+            "a".to_owned(),
+            "b".to_owned(),
+            "c".to_owned(),
+            "a".to_owned(),
+        ];
+        let rotated = vec![
+            "b".to_owned(),
+            "c".to_owned(),
+            "a".to_owned(),
+            "b".to_owned(),
+        ];
+
+        assert_eq!(cycle_key(&a), cycle_key(&rotated));
+    }
+
+    #[test]
+    fn cycle_key_distinguishes_different_node_sets() {
+        let a = vec!["a".to_owned(), "b".to_owned(), "a".to_owned()];
+        let b = vec!["a".to_owned(), "c".to_owned(), "a".to_owned()];
+
+        assert_ne!(cycle_key(&a), cycle_key(&b));
+    }
+
+    #[test]
+    fn detects_a_two_node_cycle() {
+        let map =
+            node_map_from_edges(&[("a.rs", &["b.rs"]), ("b.rs", &["a.rs"])]);
+
+        let cycles = detect_cycles(&map);
+
+        assert_eq!(cycles.len(), 1, "got {cycles:?}");
+    }
+
+    #[test]
+    fn a_ring_is_reported_once_not_once_per_member() {
+        // Three files in a ring. Every member can start the traversal and reach
+        // the same ring, which previously produced duplicate entries.
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs"]),
+            ("b.rs", &["c.rs"]),
+            ("c.rs", &["a.rs"]),
+        ]);
+
+        let cycles = detect_cycles(&map);
+
+        assert_eq!(
+            cycles.len(),
+            1,
+            "a 3-node ring must report once: {cycles:?}"
+        );
+    }
+
+    #[test]
+    fn a_self_importing_file_is_one_cycle() {
+        let map = node_map_from_edges(&[("a.rs", &["a.rs"])]);
+
+        assert_eq!(detect_cycles(&map).len(), 1);
+    }
+
+    #[test]
+    fn distinct_rings_are_reported_separately() {
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs"]),
+            ("b.rs", &["a.rs"]),
+            ("x.rs", &["y.rs"]),
+            ("y.rs", &["x.rs"]),
+        ]);
+
+        assert_eq!(detect_cycles(&map).len(), 2);
+    }
+
+    #[test]
+    fn acyclic_graph_reports_no_cycles() {
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs"]),
+            ("b.rs", &["c.rs"]),
+            ("c.rs", &[]),
+        ]);
+
+        assert_eq!(detect_cycles(&map), Vec::<Vec<String>>::new());
+    }
+
+    #[test]
+    fn detection_is_deterministic_across_repeated_runs() {
+        let map = node_map_from_edges(&[
+            ("a.rs", &["b.rs", "c.rs"]),
+            ("b.rs", &["c.rs", "a.rs"]),
+            ("c.rs", &["a.rs", "b.rs"]),
+        ]);
+
+        let first = detect_cycles(&map);
+        let second = detect_cycles(&map);
+
+        assert_eq!(first, second);
     }
 
     #[test]
@@ -970,21 +1597,291 @@ mod tests {
         ]);
 
         assert_eq!(
-            resolve_rust_import("crate::core::graph", "src/main.rs", &files),
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "crate::core::graph",
+                "src/main.rs",
+                &files
+            ),
             Some("src/core/graph.rs".to_owned())
         );
         assert_eq!(
-            resolve_rust_import("self::types", "src/core/graph/mod.rs", &files),
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "self::types",
+                "src/core/graph/mod.rs",
+                &files
+            ),
             Some("src/core/graph/types.rs".to_owned())
         );
         assert_eq!(
-            resolve_rust_import(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
                 "super::types",
                 "src/core/graph/parser.rs",
                 &files
             ),
             Some("src/core/graph/types.rs".to_owned())
         );
+    }
+
+    #[test]
+    fn an_unqualified_rust_path_resolves_to_the_local_module() {
+        // Rust 2018 uniform paths: `pub use types::{A};` inside `code_loc.rs`
+        // names `code_loc/types.rs`, not a crate called `types`. Treating it as
+        // external was worth 105 wrong edges on this repository and put junk like
+        // `types` at the top of the dependency table.
+        let files = known_files(&[
+            "src/main.rs",
+            "src/core/code_loc.rs",
+            "src/core/code_loc/analyzer.rs",
+            "src/core/code_loc/types.rs",
+            "src/types.rs",
+        ]);
+
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "types::CodeLocReport",
+                "src/core/code_loc.rs",
+                &files,
+            ),
+            Some("src/core/code_loc/types.rs".to_owned()),
+            "the module beside the importing file wins over the crate root"
+        );
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "analyzer::CodeLoc",
+                "src/core/code_loc.rs",
+                &files,
+            ),
+            Some("src/core/code_loc/analyzer.rs".to_owned())
+        );
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Rust,
+                "serde::Serialize",
+                "src/core/code_loc.rs",
+                &files,
+            ),
+            None,
+            "with no local module of that name the path is an external crate"
+        );
+    }
+
+    #[test]
+    fn a_parent_referring_to_its_own_child_is_not_a_cycle() {
+        // Rust compiles a child module as part of its parent, so `mod context;`
+        // and `pub use context::{...}` say the same thing. Counting only the
+        // first form left the second looking like a dependency, which closed a
+        // loop with the child's own `super::` reference.
+        assert!(
+            is_own_child_module(
+                "src/core/runtime.rs",
+                "src/core/runtime/context.rs"
+            ),
+            "a parent to its declared child is structural"
+        );
+        assert!(
+            is_own_child_module(
+                "src/core/code_loc.rs",
+                "src/core/code_loc/analyzer.rs"
+            ),
+            "however the child is named"
+        );
+        assert!(
+            !is_own_child_module("src/core/graph.rs", "src/core/types.rs"),
+            "a sibling module is a real dependency"
+        );
+        assert!(
+            !is_own_child_module("src/core/context.rs", "src/core.rs"),
+            "a child naming its parent is a real reference, which is why the \\
+             declaration edge is the one excluded"
+        );
+        assert!(
+            is_own_child_module("src/core.rs", "src/core/context.rs"),
+            "a module file owns the directory beside it"
+        );
+        assert!(
+            is_own_child_module("src/core/mod.rs", "src/core/graph.rs"),
+            "and so does mod.rs"
+        );
+    }
+
+    #[test]
+    fn a_path_naming_a_reachability_resolves_to_the_declaring_file() {
+        // `use crate::Router;` names a type, not a file called `Router`. The
+        // crate root re-exports it, so the crate root is where the reference
+        // lands. These were 66 unresolved edges on axum before the lookup.
+        let files = known_files(&[
+            "axum/src/lib.rs",
+            "axum/src/boxed.rs",
+            "axum/src/routing/mod.rs",
+            "axum-core/src/lib.rs",
+            "axum-core/src/body.rs",
+        ]);
+
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert(
+            "axum/src/lib.rs",
+            // `pub use self::routing::Router;`
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+        index.insert(
+            "axum/src/routing/mod.rs",
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+        // `pub type BoxError = ...` sits directly in the root, with no re-export.
+        index.insert(
+            "axum-core/src/lib.rs",
+            declarations::DeclaredNames::from_names(["BoxError"]),
+        );
+
+        assert_eq!(
+            resolve_with_index(
+                "crate::Router",
+                "axum/src/boxed.rs",
+                &files,
+                &index,
+            ),
+            Some("axum/src/lib.rs".to_owned()),
+            "a name the crate root re-exports points at the crate root"
+        );
+        assert_eq!(
+            resolve_with_index(
+                "crate::BoxError",
+                "axum-core/src/body.rs",
+                &files,
+                &index,
+            ),
+            Some("axum-core/src/lib.rs".to_owned()),
+            "a name the crate root declares directly points there too"
+        );
+    }
+
+    #[test]
+    fn a_private_use_does_not_make_a_name_reachable_from_the_crate_root() {
+        // `use crate::service;` in `main.rs` binds `service` inside `main.rs`.
+        // Treating every `use` as a re-export resolved `crate::service` to
+        // `main.rs` itself -- a file depending on itself -- and a CLI test with
+        // three files caught it.
+        let files = known_files(&["src/main.rs", "src/service.rs"]);
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert("src/main.rs", declarations::DeclaredNames::default());
+        index.insert(
+            "src/service.rs",
+            declarations::DeclaredNames::from_names(["run"]),
+        );
+
+        assert_eq!(
+            resolve_with_index("crate::service", "src/main.rs", &files, &index),
+            Some("src/service.rs".to_owned()),
+            "the module walk answers this one; no name lookup is needed"
+        );
+    }
+
+    #[test]
+    fn an_unqualified_path_never_resolves_through_a_name_lookup() {
+        // `use axum::Router;` in an example's `main.rs` names a *different*
+        // crate. Without this guard the crate-root check found `Router` in the
+        // example's own imports and resolved every example's first `use` to
+        // itself: 934 invented self-edges on axum.
+        let files =
+            known_files(&["examples/demo/src/main.rs", "src/routing/mod.rs"]);
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert(
+            "examples/demo/src/main.rs",
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+        index.insert(
+            "src/routing/mod.rs",
+            declarations::DeclaredNames::from_names(["Router"]),
+        );
+
+        assert_eq!(
+            resolve_with_index(
+                "axum::Router",
+                "examples/demo/src/main.rs",
+                &files,
+                &index,
+            ),
+            None,
+            "an unqualified path names a crate, not this file's own module"
+        );
+    }
+
+    #[test]
+    fn a_structural_edge_stays_in_the_graph_and_leaves_the_cycle_walk() {
+        // The two uses of the adjacency conflict. Blast radius wants the edge:
+        // editing `inner.rs` does affect `lib.rs`. A cycle claim through the
+        // module tree is not something an edit can resolve, so the walk drops it.
+        // Filtering when the graph was built made `--what-depends-on` answer
+        // "nothing" for a real dependency, which two CLI tests caught.
+        let mut node_map: NodeMap = BTreeMap::new();
+        // `lib.rs` owns both of these, so neither edge can close a loop.
+        node_map.entry("src/lib.rs".to_owned()).or_default().imports =
+            vec!["src/inner.rs".to_owned(), "src/routing.rs".to_owned()];
+        node_map
+            .entry("src/inner.rs".to_owned())
+            .or_default()
+            .imports = vec!["src/lib.rs".to_owned()];
+        node_map
+            .entry("src/routing.rs".to_owned())
+            .or_default()
+            .imports = vec!["src/lib.rs".to_owned()];
+        // Siblings: no parent, no ancestor, so this one is a real dependency.
+        node_map
+            .entry("src/routing.rs".to_owned())
+            .or_default()
+            .imports
+            .push("src/inner.rs".to_owned());
+
+        let walk = structural_adjacency(&node_map);
+
+        assert_eq!(
+            node_map["src/lib.rs"].imports.len(),
+            2,
+            "both dependencies are reported, so a blast-radius query can use them"
+        );
+        assert_eq!(
+            walk["src/lib.rs"].imports,
+            Vec::<String>::new(),
+            "a parent naming its children is structural in both directions"
+        );
+        assert_eq!(
+            walk["src/inner.rs"].imports,
+            Vec::<String>::new(),
+            "a child naming its ancestor is structural the other way"
+        );
+        assert_eq!(
+            walk["src/routing.rs"].imports,
+            vec!["src/inner.rs".to_owned()],
+            "between siblings the edge is a dependency and must survive"
+        );
+    }
+
+    fn resolve_with_index(
+        import_path: &str,
+        source_file: &str,
+        files: &plugins::KnownFiles,
+        index: &declarations::DeclarationIndex,
+    ) -> Option<String> {
+        resolve_import_with(
+            import_path,
+            source_file,
+            0,
+            ImportKind::Dependency,
+            SupportedLanguage::Rust,
+            &ResolutionInputs {
+                base_path: std::path::PathBuf::new(),
+                known_files: files.clone(),
+                declarations: index.clone(),
+                manifests: manifests::ManifestIndex::default(),
+            },
+        )
+        .file()
+        .map(ToOwned::to_owned)
     }
 
     #[test]
@@ -997,19 +1894,39 @@ mod tests {
         ]);
 
         assert_eq!(
-            resolve_python_import("pkg.local", "pkg/sub/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                "pkg.local",
+                "pkg/sub/module.py",
+                &files
+            ),
             Some("pkg/local.py".to_owned())
         );
         assert_eq!(
-            resolve_python_import(".local", "pkg/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                ".local",
+                "pkg/module.py",
+                &files
+            ),
             Some("pkg/local.py".to_owned())
         );
         assert_eq!(
-            resolve_python_import("..shared.util", "pkg/sub/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                "..shared.util",
+                "pkg/sub/module.py",
+                &files
+            ),
             Some("pkg/shared/util.py".to_owned())
         );
         assert_eq!(
-            resolve_python_import("requests", "pkg/sub/module.py", &files),
+            resolve_import_lang(
+                SupportedLanguage::Python,
+                "requests",
+                "pkg/sub/module.py",
+                &files
+            ),
             None
         );
     }
@@ -1024,14 +1941,32 @@ mod tests {
         ]);
 
         assert_eq!(
-            resolve_js_ts_import("./utils", "src/main.ts", &files),
+            resolve_import_lang(
+                SupportedLanguage::TypeScript,
+                "./utils",
+                "src/main.ts",
+                &files
+            ),
             Some("src/utils.ts".to_owned())
         );
         assert_eq!(
-            resolve_js_ts_import("../lib", "src/features/item.ts", &files),
+            resolve_import_lang(
+                SupportedLanguage::TypeScript,
+                "../lib",
+                "src/features/item.ts",
+                &files
+            ),
             Some("src/lib/index.ts".to_owned())
         );
-        assert_eq!(resolve_js_ts_import("react", "src/main.ts", &files), None);
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::TypeScript,
+                "react",
+                "src/main.ts",
+                &files
+            ),
+            None
+        );
     }
 
     #[test]
@@ -1039,31 +1974,64 @@ mod tests {
         let go_files =
             known_files(&["internal/app/main.go", "internal/pkg/service.go"]);
         assert_eq!(
-            resolve_go_import("github.com/demo/pkg", &go_files),
+            resolve_import_lang(
+                SupportedLanguage::Go,
+                "github.com/demo/pkg",
+                "internal/app/main.go",
+                &go_files
+            ),
             Some("internal/pkg/service.go".to_owned())
         );
-        assert_eq!(resolve_go_import("fmt", &go_files), None);
+        assert_eq!(
+            resolve_import_lang(
+                SupportedLanguage::Go,
+                "fmt",
+                "internal/app/main.go",
+                &go_files
+            ),
+            None
+        );
 
         let java_files = known_files(&[
             "src/com/example/utils/Helper.java",
             "utils/Helper.java",
         ]);
         assert_eq!(
-            resolve_java_import("com.example.utils.Helper", &java_files),
+            resolve_import_lang(
+                SupportedLanguage::Java,
+                "com.example.utils.Helper",
+                "src/com/example/Main.java",
+                &java_files
+            ),
             Some("src/com/example/utils/Helper.java".to_owned())
         );
         assert_eq!(
-            resolve_java_import("utils.Helper", &java_files),
+            resolve_import_lang(
+                SupportedLanguage::Java,
+                "utils.Helper",
+                "src/com/example/Main.java",
+                &java_files
+            ),
             Some("utils/Helper.java".to_owned())
         );
 
         let c_files = known_files(&["src/main.c", "include/util.h", "util.h"]);
         assert_eq!(
-            resolve_c_cpp_import("util.h", "src/main.c", &c_files),
+            resolve_import_lang(
+                SupportedLanguage::C,
+                "util.h",
+                "src/main.c",
+                &c_files
+            ),
             Some("util.h".to_owned())
         );
         assert_eq!(
-            resolve_c_cpp_import("<stdio.h>", "src/main.c", &c_files),
+            resolve_import_lang(
+                SupportedLanguage::C,
+                "<stdio.h>",
+                "src/main.c",
+                &c_files
+            ),
             None
         );
     }
@@ -1087,7 +2055,11 @@ mod tests {
             build_graph(temp_dir.path(), &ignore, &[], None, None).unwrap();
 
         assert!(report.nodes.len() >= 2);
-        assert!(!report.edges.is_empty());
+        assert_ne!(
+            report.edges,
+            Vec::<GraphEdge>::new(),
+            "expected at least one edge"
+        );
     }
 
     #[test]
@@ -1251,9 +2223,15 @@ mod tests {
 
     #[test]
     fn simplify_relative_path_works() {
-        assert_eq!(simplify_relative_path("src/core", "../utils"), "src/utils");
-        assert_eq!(simplify_relative_path("src", "./helpers"), "src/helpers");
-        assert_eq!(simplify_relative_path("", "./foo"), "foo");
+        assert_eq!(
+            plugins::paths::resolve_relative("src/core", "../utils"),
+            "src/utils"
+        );
+        assert_eq!(
+            plugins::paths::resolve_relative("src", "./helpers"),
+            "src/helpers"
+        );
+        assert_eq!(plugins::paths::resolve_relative("", "./foo"), "foo");
     }
 
     #[test]
@@ -1263,7 +2241,7 @@ mod tests {
         let report =
             build_graph(temp_dir.path(), &ignore, &[], None, None).unwrap();
 
-        assert!(report.nodes.is_empty());
-        assert!(report.edges.is_empty());
+        assert_eq!(report.nodes, Vec::<GraphNode>::new());
+        assert_eq!(report.edges, Vec::<GraphEdge>::new());
     }
 }

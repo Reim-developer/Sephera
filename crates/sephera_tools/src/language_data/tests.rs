@@ -29,7 +29,11 @@ languages:
 
     assert_eq!(registry.languages.len(), 1);
     assert_eq!(registry.languages[0].extensions, vec![".rs"]);
-    assert!(registry.languages[0].exact_names.is_empty());
+    assert_eq!(
+        registry.languages[0].exact_names,
+        Vec::<String>::new(),
+        "a language with no `exact_names` key must default to none"
+    );
 }
 
 #[test]

@@ -48,6 +48,12 @@ jobs:
       - name: Run clippy
         run: cargo clippy --workspace --all-targets --all-features -- -D warnings
 
+      # `fuzz/` is excluded from the workspace, so the step above never compiles
+      # the fuzz targets. Without this, a target that stopped compiling is only
+      # found by the fuzz job, which used to report success regardless.
+      - name: Run clippy on fuzz targets
+        run: cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
   test:
     name: Rust Test
     runs-on: ubuntu-latest
@@ -63,6 +69,24 @@ jobs:
 
       - name: Install cargo-insta
         run: cargo install cargo-insta --locked
+
+      # The graph corpus tests skip when the corpus is absent, which is right for
+      # an offline developer and wrong for CI: a green run has to mean the
+      # accuracy checks actually ran. So the fetch is a step of its own and its
+      # failure fails the job.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # `SEPHERA_CORPUS_DIR` rather than the default cache location, because the
+      # fetcher and the test would otherwise each pick a directory by their own
+      # rules. If those two ever disagree the test skips and the job still goes
+      # green, which is the one outcome worth preventing here.
+      - name: Fetch graph corpus
+        env:
+          SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
+        run: python scripts/fetch_corpus.py
 
       - name: Run tests
         run: cargo test --workspace
@@ -107,6 +131,19 @@ jobs:
 
       - name: Install Node dependencies
         run: npm ci
+
+      # `scripts/make_graph_demo.py` imports Pillow and
+      # `scripts/probe_symbol_node_kinds.py` imports tree-sitter plus six
+      # grammars. Pyright still reports on a file whose imports do not resolve,
+      # but every type derived from them becomes unknown, so an unresolvable
+      # import turns one missing package into a hundred errors.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Install Python packages for type checking
+        run: pip install -r scripts/requirements-ci.txt
 
       - name: Run Pyright
         run: npm run pyright
@@ -188,11 +225,20 @@ jobs:
       - name: Install cargo-fuzz
         run: cargo install cargo-fuzz --locked
 
-      - name: Create fuzz log directory
-        run: mkdir -p fuzz/logs
+      - name: Create fuzz log and corpus directories
+        # libFuzzer exits with "The required directory ... does not exist" rather
+        # than creating its corpus directory. `fuzz/seeds/` is gitignored, so a
+        # fresh checkout has to make it before the run starts.
+        run: mkdir -p fuzz/logs "${{ matrix.seed_dir }}"
 
       - name: Run fuzz smoke target
+        # `pipefail` is required: without it the pipeline reports `tee`'s exit
+        # status, so a build failure or a crash in the fuzz target leaves the
+        # step green. This job was reporting success while `render_context_markdown`
+        # did not compile.
+        shell: bash
         run: |
+          set -o pipefail
           cargo +nightly fuzz run "${{ matrix.target }}" "${{ matrix.seed_dir }}" -- -max_total_time=60 \
             | tee "fuzz/logs/${{ matrix.target }}.log"
 

@@ -1,0 +1,77 @@
+# Pinned expectations for the third-party corpus.
+#
+# These exist because every accuracy bug in `graph` shipped with a green test
+# suite: the tests asserted behaviour, not correctness, and no test ran against
+# code nobody on this project wrote. `scripts/fetch_corpus.py` clones each
+# repository at the commit named there; the numbers below are what `graph`
+# reports for it.
+#
+# `unresolved_local` is the important one. It counts paths that were meant to
+# name a file in the repository and were not found, so it is a resolver gap
+# rather than a property of the project. It should go down over time, never up.
+#
+# `structural_cycles` is separated from `cycles` because the two mean different
+# things. A structural cycle closes through module navigation alone -- a parent
+# declaring a child, and the child naming something the parent re-exports -- so
+# editing either file cannot break it and it is noise in a blast radius. Only
+# `cycles - structural_cycles` are worth acting on. It is zero everywhere now:
+# a parent referring to its own child is excluded whatever way it is spelled.
+#
+# `self_references` is edges from a file to itself, which a `use super::*;`
+# inside a test module produces. They are real references but carry no
+# information about how files depend on each other, so they are excluded from
+# `internal_edges` and counted here instead.
+#
+# To refresh after an intended change: run scripts/fetch_corpus.py, then
+# `cargo run -- graph --path <corpus>/<name> --format json` and update the
+# numbers here, with the reason in the commit message.
+
+[[corpus]]
+name = "axum"
+language = "Rust"
+# What is left is a pair of `#[macro_export]` macros, a `pub use` re-export the
+# declaration index reads as local, and names reached only from an inline
+# module. A floor of gaps is expected here; it was 66 before declaration lookup
+# resolved the re-export and crate-root cases, and 13 once a `pub use http;` of an
+# external crate stopped being counted as a missing file.
+unresolved_local = 8
+files = 307
+internal_edges = 640
+self_references = 66
+# Edges that only compile when a `#[cfg]` is on. axum gates its public API on
+# `feature = "form"` and `feature = "json"`, so an unqualified count would claim
+# a dependency a default build does not have.
+cfg_gated_edges = 86
+cycles = 18
+structural_cycles = 0
+
+[[corpus]]
+name = "flask"
+language = "Python"
+# Relative imports resolve fully; the number is a floor to catch regressions,
+# not a target to raise.
+unresolved_local = 0
+files = 80
+# Up from 171 when `from . import helper` stopped being reported as pointing at
+# the package's `__init__.py` instead of at the submodule it names.
+internal_edges = 185
+self_references = 5
+cfg_gated_edges = 0
+cycles = 43
+# Flask's `__init__.py` is the public API and its modules import back through it,
+# so every cycle here involves a real dependency.
+structural_cycles = 0
+
+[[corpus]]
+name = "express"
+language = "JavaScript"
+# Relative imports resolve fully, including the package root that
+# `require('../..')` names from every example. Up from 63 edges when the
+# root-relative path produced `/index.js` instead of `index.js`.
+unresolved_local = 0
+files = 141
+internal_edges = 159
+self_references = 0
+cfg_gated_edges = 0
+cycles = 0
+structural_cycles = 0

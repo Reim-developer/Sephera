@@ -57,10 +57,34 @@ impl SupportedLanguage {
             "Python" => Some(Self::Python),
             "TypeScript" | "TSX" => Some(Self::TypeScript),
             "JavaScript" | "JSX" => Some(Self::JavaScript),
-            "Go" => Some(Self::Go),
+            // `config/languages.yml` names this language `Golang`, while
+            // `SupportedLanguage::Go` is the enum spelling. Accepting both
+            // keeps the scanner's naming and the enum from drifting apart,
+            // which silently dropped every Go file from graph analysis.
+            "Go" | "Golang" => Some(Self::Go),
             "Java" => Some(Self::Java),
             "C++" => Some(Self::Cpp),
             "C" | "C Header" => Some(Self::C),
+            _ => None,
+        }
+    }
+
+    /// The language a file extension names.
+    ///
+    /// A graph edge carries the file it came from but not the language, and the
+    /// extension is what the scanner itself keys on, so this is the same decision
+    /// made in one more place rather than a second rule to keep in step.
+    #[must_use]
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension {
+            "rs" => Some(Self::Rust),
+            "py" | "pyi" => Some(Self::Python),
+            "ts" | "tsx" => Some(Self::TypeScript),
+            "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "go" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "cpp" | "cc" | "cxx" | "hpp" | "hh" => Some(Self::Cpp),
+            "c" | "h" => Some(Self::C),
             _ => None,
         }
     }
@@ -166,6 +190,13 @@ mod tests {
         );
         assert_eq!(
             SupportedLanguage::from_language_name("Go"),
+            Some(SupportedLanguage::Go)
+        );
+        // The scanner reports this language as `Golang`, so that spelling must
+        // resolve as well; it did not, which dropped every Go file from graph
+        // analysis while `loc` still counted its lines.
+        assert_eq!(
+            SupportedLanguage::from_language_name("Golang"),
             Some(SupportedLanguage::Go)
         );
         assert_eq!(
