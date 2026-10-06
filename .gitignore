@@ -3,6 +3,7 @@
 /benchmarks/generated_corpus/
 /benchmarks/reports/
 /benchmarks/__pycache__/
+__pycache__/
 /node_modules/
 /docs/node_modules/
 /docs/dist/
