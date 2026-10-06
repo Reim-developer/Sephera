@@ -6,14 +6,16 @@ measurement that nobody re-measured. Writing this README section found the
 summary table claiming four files where the tool reports seven, and a dependency
 diagram listing four nodes where there are seven.
 
-This re-runs the documented commands and compares the summary table and the
-mermaid diagram against what the binary actually prints.
+Checked: the summary table, the mermaid diagram, and the blast-radius table with
+the exact import names each dependent takes. Every format the query prints is
+represented, because a tool that answers a question in JSON but not in Markdown
+has not answered it.
+
+Deliberately not checked: a quoted `loc` table. See `readme_loc_block`.
 """
 
 from __future__ import annotations
 
-import importlib.util
-import os
 import re
 import subprocess
 import sys
@@ -33,70 +35,6 @@ BLAST_RADIUS_FILE_COUNT = re.compile(
 INDIRECT_COUNT = re.compile(
     r"\*\*(\d+) further files? reach(?:es)? (?:it|them) indirectly\*\*"
 )
-# The `loc` table uses box-drawing separators, so the row shape differs from
-# the Markdown graph tables above.
-LOC_ROW = re.compile(
-    r"^│\s*(\S[^│]*?)\s*┆\s*(\d+)\s*┆\s*(\d+)\s*┆\s*(\d+)\s*┆\s*(\d+)\s*│$"
-)
-LOC_SCANNED = re.compile(r"^Files scanned:\s*(\d+)\s*$", re.MULTILINE)
-LOC_LANGUAGES = re.compile(r"^Languages detected:\s*(\d+)\s*$", re.MULTILINE)
-# The repository the quoted `loc` table describes, and where it is fetched.
-LOC_TARGET = "axum"
-
-
-def corpus_root() -> Path | None:
-    """Where the pinned repositories are, honouring the CI override.
-
-    Mirrors `scripts/measure_accuracy.py`, kept as a copy rather than an import
-    so this script still runs standalone in a checkout where the other is not
-    present. The two have to agree or one of them silently measures nothing, so
-    `the_two_corpus_resolvers_agree` checks they do.
-    """
-    override = os.environ.get("SEPHERA_CORPUS_DIR")
-    if override and Path(override).is_dir():
-        return Path(override)
-    fallback = Path.home() / "AppData" / "Local" / "sephera" / "corpus"
-    if fallback.is_dir():
-        return fallback
-    xdg = Path.home() / ".cache" / "sephera" / "corpus"
-    return xdg if xdg.is_dir() else None
-
-
-def the_two_corpus_resolvers_agree() -> bool:
-    """Whether this script and `measure_accuracy.py` find the same corpus.
-
-    They resolve independently, so a change to one that misses the other turns
-    a verification step into a no-op without anything reporting it. Found the
-    hard way: `fetch_corpus.py` honoured `SEPHERA_CORPUS_DIR` and
-    `measure_accuracy.py` did not, so CI cloned into the workspace and verified
-    nothing.
-    """
-    other = REPO_ROOT / "scripts" / "measure_accuracy.py"
-    if not other.is_file():
-        return True
-    try:
-        # Imported rather than `exec`d: the module defines a dataclass, and a
-        # dataclass resolves its annotations through `sys.modules`, which an
-        # `exec` never populates.
-        spec = importlib.util.spec_from_file_location(
-            "sephera_measure_accuracy_probe", other
-        )
-        if spec is None or spec.loader is None:
-            return False
-        module = importlib.util.module_from_spec(spec)
-        # Registered before loading, not after: the module defines a dataclass,
-        # and a dataclass with postponed annotations looks itself up through
-        # `sys.modules[cls.__module__]` while its own body is still running.
-        sys.modules[spec.name] = module
-        spec.loader.exec_module(module)
-    except Exception as error:  # noqa: BLE001
-        print(f"could not compare against {other.name}: {error}")
-        return False
-
-    resolver = getattr(module, "corpus_root", None)
-    if not callable(resolver):
-        return False
-    return resolver() == corpus_root()
 
 
 def binary() -> Path | None:
@@ -263,10 +201,19 @@ def indirect_count(markdown: str) -> int | None:
 
 
 def readme_loc_block() -> str:
-    """The quoted `loc` table, from its header rule down to the elapsed line.
+    """The quoted `loc` table, if the README has one.
 
-    Scoped by the header row rather than by position, so inserting a section
-    above it does not silently start checking a different block.
+    Returned rather than compared, and the reason is worth reading before
+    adding a comparison. Every byte count in such a table depends on whether the
+    checkout has CRLF endings, and so does one Markdown file's line count. A
+    check built over it passed on Windows and failed on Linux on a table that had
+    been correct when written.
+
+    The alternatives were worse. Loosening the comparison until it could not fail
+    is theatre. Turning off line-ending conversion in the corpus clone would mean
+    verifying something other than what a user gets. So the README states these
+    figures in prose and this script reports the table as unverified rather than
+    quietly ignoring it.
     """
     text = README.read_text(encoding="utf-8")
     start = text.find("│ Language ")
@@ -274,96 +221,6 @@ def readme_loc_block() -> str:
         return ""
     end = text.find("Elapsed:", start)
     return text[start:end] if end > 0 else ""
-
-
-def loc_table(markdown: str) -> dict[str, tuple[int, int, int, int]]:
-    """Per-language code, comment, empty, and byte counts."""
-    rows: dict[str, tuple[int, int, int, int]] = {}
-    for line in markdown.splitlines():
-        match = LOC_ROW.match(line)
-        if match:
-            rows[match.group(1).strip()] = tuple(
-                int(match.group(index)) for index in range(2, 6)
-            )
-    return rows
-
-
-def run_loc(cli: Path | None) -> str | None:
-    """Run the documented `loc` command, or `None` if its target is absent.
-
-    The README quotes axum rather than this repository, deliberately: a README
-    that lists its own line counts is wrong on every commit, and a check that
-    fires on every commit trains people to ignore it. The corpus is pinned by
-    commit, so these figures describe something that does not move.
-    """
-    corpus = corpus_root()
-    if corpus is None or not (corpus / LOC_TARGET).is_dir():
-        print(
-            f"skipping the loc table: {LOC_TARGET} is not fetched. "
-            "Run scripts/fetch_corpus.py to check it."
-        )
-        return None
-
-    argv = (
-        [str(cli)]
-        if cli is not None
-        else ["cargo", "run", "--quiet", "--package", "sephera", "--"]
-    )
-    result = subprocess.run(
-        [*argv, "loc", "--path", str(corpus / LOC_TARGET)],
-        cwd=REPO_ROOT,
-        capture_output=True,
-        text=True,
-        encoding="utf-8",
-        check=True,
-    )
-    return result.stdout
-
-
-def check_loc_figures(
-    quoted: str,
-    actual: str,
-    problems: list[str],
-) -> None:
-    """Compare the quoted `loc` table against a fresh run."""
-    quoted_table = loc_table(quoted)
-    actual_table = loc_table(actual)
-
-    if not quoted_table:
-        problems.append(
-            "the quoted `loc` table could not be parsed, so it is not being "
-            "checked at all"
-        )
-        return
-
-    for language, counts in actual_table.items():
-        quoted_counts = quoted_table.get(language)
-        if quoted_counts is None:
-            problems.append(
-                f"loc table is missing the {language} row, which the tool reports"
-            )
-        elif quoted_counts != counts:
-            problems.append(
-                f"loc {language}: tool reports {counts}, README says {quoted_counts}"
-            )
-    for language in sorted(set(quoted_table) - set(actual_table)):
-        if language != "Totals":
-            problems.append(
-                f"loc table lists {language}, which the tool no longer reports"
-            )
-
-    for label, pattern in (
-        ("files scanned", LOC_SCANNED),
-        ("languages detected", LOC_LANGUAGES),
-    ):
-        quoted_match = pattern.search(quoted)
-        actual_match = pattern.search(actual)
-        if quoted_match and actual_match:
-            if quoted_match.group(1) != actual_match.group(1):
-                problems.append(
-                    f"loc {label}: tool reports {actual_match.group(1)}, "
-                    f"README says {quoted_match.group(1)}"
-                )
 
 
 def main() -> int:
@@ -436,17 +293,14 @@ def main() -> int:
             )
 
     quoted_loc = readme_loc_block()
-    loc_rows = 0
-    if not the_two_corpus_resolvers_agree():
-        problems.append(
-            "check_readme_figures.py and measure_accuracy.py resolve the corpus "
-            "to different places, so one of them is verifying nothing"
-        )
     if quoted_loc:
-        actual_loc = run_loc(cli)
-        if actual_loc is not None:
-            check_loc_figures(quoted_loc, actual_loc, problems)
-            loc_rows = len(loc_table(quoted_loc))
+        # Reported rather than ignored, so the table cannot sit here looking
+        # checked. See `readme_loc_block` for why it is not compared.
+        problems.append(
+            "README quotes a `loc` table, whose byte counts and one Markdown "
+            "line count differ between CRLF and LF checkouts. State those "
+            "figures in prose instead."
+        )
 
     if problems:
         print(f"{len(problems)} stale figures in README.md:\n")
@@ -459,8 +313,7 @@ def main() -> int:
         f"README figures match a fresh run: "
         f"{len(quoted_summary)} summary rows, "
         f"{len(actual_blast or {})} dependents rows, "
-        f"{len(actual_nodes)} diagram nodes, "
-        f"{loc_rows} loc rows."
+        f"{len(actual_nodes)} diagram nodes."
     )
     return 0
 

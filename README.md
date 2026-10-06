@@ -322,30 +322,21 @@ Packs are **deterministic** — same inputs, same bytes out — which makes them
 
 ### `loc` — per-language line counts
 
-Run against [axum](https://github.com/tokio-rs/axum) at a pinned commit, so these
-numbers describe a repository that does not change underneath the claim. Fetch
-it with `python scripts/fetch_corpus.py`, then pass that path to `--path`:
+Code, comment, and empty-line counts per language, from Tree-sitter rather than
+pattern matching, so a `//` inside a string is not a comment. It reads the
+repository's own `.gitignore` and `.sepheraignore` while it walks.
 
-```text
-╭────────────┬───────┬─────────┬───────┬──────────────╮
-│ Language   ┆  Code ┆ Comment ┆ Empty ┆ Size (bytes) │
-╞════════════╪═══════╪═════════╪═══════╪══════════════╡
-│ Rust       ┆ 31912 ┆    9841 ┆  5830 ┆      1470372 │
-│ Markdown   ┆  5659 ┆       0 ┆  1730 ┆       267393 │
-│ TOML       ┆  1270 ┆      45 ┆   128 ┆        42144 │
-│ YAML       ┆   286 ┆       8 ┆    17 ┆         9863 │
-│ HTML       ┆    57 ┆       0 ┆     9 ┆         2464 │
-│ JavaScript ┆    35 ┆       0 ┆     8 ┆         1276 │
-│ JSON       ┆    21 ┆       0 ┆     0 ┆          397 │
-│ SQL        ┆    12 ┆       4 ┆     0 ┆          396 │
-│ Totals     ┆ 39252 ┆    9898 ┆  7722 ┆      1794305 │
-╰────────────┴───────┴─────────┴───────┴──────────────╯
-Files scanned: 429
-Languages detected: 8
-Elapsed: 29.892 ms (0.029892 s)
-```
+On [axum](https://github.com/tokio-rs/axum) at a pinned commit it scans 429
+files and reports 8 languages in about 30 ms. The exact figures are not printed
+here on purpose: byte counts and, for one Markdown file, line counts depend on
+whether the checkout has CRLF endings, so a quoted table could not be true on
+every platform at once. The command's numbers are all there — they are just not
+a claim that would survive being pasted into a README.
 
-**429 files in 30 ms**, reading axum's own `.gitignore` as it goes. If you only need raw counts, `cloc` and `tokei` are fine — use Sephera when you want the next step.
+Fetch the pinned repository with `python scripts/fetch_corpus.py` and point
+`--path` at it to reproduce the accuracy figures below.
+
+If you only need raw counts, `cloc` and `tokei` are fine — use Sephera when you want the next step.
 
 ### `mcp` — expose it all to your AI agent
 
