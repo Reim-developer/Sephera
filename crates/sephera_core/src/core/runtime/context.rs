@@ -103,10 +103,26 @@ struct LoadedContextSection {
 #[derive(Debug, Default, serde::Deserialize)]
 #[serde(deny_unknown_fields)]
 struct SepheraToml {
+    /// Settings every command reads, not just `context`.
+    #[serde(default)]
+    project: ProjectToml,
     #[serde(default)]
     context: ContextToml,
     #[serde(default)]
     profiles: BTreeMap<String, ProfileToml>,
+}
+
+/// Settings shared by every command.
+///
+/// Separate from `[context]` because a project that wants `target` excluded
+/// from `graph` wants it excluded from `loc` too, and making every command
+/// re-state it is how a repository ends up with three different ignore lists.
+#[derive(Debug, Default, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProjectToml {
+    /// Ignore patterns applied to every command unless a flag overrides them.
+    #[serde(default)]
+    ignore: Vec<String>,
 }
 
 #[derive(Debug, Default, serde::Deserialize)]
@@ -452,6 +468,83 @@ fn resolve_selected_profile<'config>(
     )
 }
 
+/// Settings every command reads from `.sephera.toml`, not just `context`.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ProjectSettings {
+    /// Ignore patterns every command should apply by default.
+    pub ignore: Vec<String>,
+
+    /// Where the settings came from, when a file was found.
+    ///
+    /// Kept so a caller can report it rather than leaving the user to wonder
+    /// whether their file was read at all.
+    pub source_path: Option<PathBuf>,
+}
+
+impl ProjectSettings {
+    /// The patterns to apply, given what the command line asked for.
+    ///
+    /// Config first, flags second, deduplicated in that order. Order matters
+    /// only for reporting, since ignore patterns are a set of exclusions rather
+    /// than a first-match-wins list -- but a duplicate in a merged list is a
+    /// sign the merge did the wrong thing.
+    #[must_use]
+    pub fn merged_ignore(&self, from_flags: &[String]) -> Vec<String> {
+        let mut merged: Vec<String> =
+            Vec::with_capacity(self.ignore.len() + from_flags.len());
+        for pattern in self.ignore.iter().chain(from_flags) {
+            if !merged.contains(pattern) {
+                merged.push(pattern.clone());
+            }
+        }
+        merged
+    }
+}
+
+/// Read the `[project]` table for an analysis rooted at `base_path`.
+///
+/// Returns defaults when `no_config` is set or no file is found, because most
+/// repositories have no `.sephera.toml` and demanding one would make every
+/// command fail by default. A malformed file is an error rather than a silent
+/// default: a typo that quietly did nothing is invisible, while a message
+/// naming the file is not.
+///
+/// # Errors
+///
+/// Returns an error when the config file cannot be read or parsed.
+pub fn load_project_settings(
+    base_path: &Path,
+    config: Option<&Path>,
+    no_config: bool,
+) -> Result<ProjectSettings> {
+    if no_config {
+        return Ok(ProjectSettings::default());
+    }
+
+    let source_path = match config {
+        Some(path) => Some(path.to_path_buf()),
+        None => discover_config_path(base_path)?,
+    };
+
+    let Some(source_path) = source_path else {
+        return Ok(ProjectSettings::default());
+    };
+
+    let raw_config =
+        std::fs::read_to_string(&source_path).with_context(|| {
+            format!("failed to read `{}`", source_path.display())
+        })?;
+    let parsed: SepheraToml =
+        toml::from_str(&raw_config).with_context(|| {
+            format!("failed to parse `{}`", source_path.display())
+        })?;
+
+    Ok(ProjectSettings {
+        ignore: parsed.project.ignore,
+        source_path: Some(source_path),
+    })
+}
+
 fn discover_config_path(base_path: &Path) -> Result<Option<PathBuf>> {
     let anchor = discovery_anchor(base_path)?;
     let mut current = Some(anchor.as_path());
@@ -719,6 +812,24 @@ fn display_config_path(config_path: &Path, source: &ResolvedSource) -> PathBuf {
     }
 
     config_path.to_path_buf()
+}
+
+/// Which files a diff spec touched.
+///
+/// Exposed so `graph --diff` and `impact` answer "what did I just change, and
+/// what does it reach?" from the same selection `context --diff` packs, rather
+/// than each command re-deriving changed files with its own git invocation. A
+/// second implementation is a second answer to the same question.
+///
+/// # Errors
+///
+/// Returns an error when the spec is invalid, the path is outside a git
+/// repository, or git itself fails.
+pub fn resolve_changed_files(
+    source: &ResolvedSource,
+    spec: &str,
+) -> Result<ContextDiffSelection> {
+    resolve_context_diff(source, spec)
 }
 
 fn resolve_context_diff(
@@ -989,6 +1100,174 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
+
+    #[test]
+    fn project_ignore_is_read_by_any_command() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(CONFIG_FILE_NAME),
+            "[project]\nignore = [\"target\", \"vendor\"]\n",
+        )
+        .unwrap();
+
+        let settings =
+            load_project_settings(temp_dir.path(), None, false).unwrap();
+
+        assert_eq!(settings.ignore, vec!["target", "vendor"]);
+    }
+
+    #[test]
+    fn project_ignore_applies_even_without_a_context_section() {
+        // The point of `[project]` is that it is not per-command. A repository
+        // whose only setting is `ignore` must not have to write an empty
+        // `[context]` table for it to take effect.
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(CONFIG_FILE_NAME),
+            "[project]\nignore = [\"target\"]\n",
+        )
+        .unwrap();
+
+        let settings =
+            load_project_settings(temp_dir.path(), None, false).unwrap();
+
+        assert_eq!(settings.ignore, vec!["target"]);
+    }
+
+    #[test]
+    fn a_project_section_may_omit_ignore_entirely() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(temp_dir.path().join(CONFIG_FILE_NAME), "[project]\n")
+            .unwrap();
+
+        let settings =
+            load_project_settings(temp_dir.path(), None, false).unwrap();
+
+        assert_eq!(settings.ignore, Vec::<String>::new());
+        assert_eq!(
+            settings.source_path,
+            Some(temp_dir.path().join(CONFIG_FILE_NAME))
+        );
+    }
+
+    #[test]
+    fn a_config_without_a_project_section_still_parses() {
+        // Adding a table must not break every existing `.sephera.toml` that
+        // only ever had `[context]` and `[profiles]`.
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(CONFIG_FILE_NAME),
+            "[context]\nbudget = \"32k\"\n",
+        )
+        .unwrap();
+
+        let settings =
+            load_project_settings(temp_dir.path(), None, false).unwrap();
+
+        assert_eq!(
+            settings.ignore,
+            Vec::<String>::new(),
+            "a config with no `[project]` table yields no shared patterns"
+        );
+    }
+
+    #[test]
+    fn flags_are_merged_on_top_of_the_config_and_deduplicated() {
+        let settings = ProjectSettings {
+            ignore: vec!["target".to_owned(), "vendor".to_owned()],
+            source_path: None,
+        };
+
+        let merged =
+            settings.merged_ignore(&["vendor".to_owned(), "docs".to_owned()]);
+
+        assert_eq!(
+            merged,
+            vec!["target", "vendor", "docs"],
+            "a pattern named twice is a merge bug, not a second exclusion"
+        );
+    }
+
+    #[test]
+    fn no_config_ignores_the_file_entirely() {
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(CONFIG_FILE_NAME),
+            "[project]\nignore = [\"target\"]\n",
+        )
+        .unwrap();
+
+        let settings =
+            load_project_settings(temp_dir.path(), None, true).unwrap();
+
+        assert_eq!(settings.ignore, Vec::<String>::new());
+        assert_eq!(settings.source_path, None);
+    }
+
+    #[test]
+    fn a_missing_file_is_not_an_error() {
+        // Most repositories have no `.sephera.toml`. Demanding one would make
+        // every other command fail by default.
+        let temp_dir = tempdir().unwrap();
+
+        let settings =
+            load_project_settings(temp_dir.path(), None, false).unwrap();
+
+        assert_eq!(settings.ignore, Vec::<String>::new());
+        assert_eq!(settings.source_path, None);
+    }
+
+    #[test]
+    fn an_explicit_path_is_read_even_outside_the_base() {
+        let temp_dir = tempdir().unwrap();
+        let nested = temp_dir.path().join("crates").join("demo");
+        fs::create_dir_all(&nested).unwrap();
+        let config = temp_dir.path().join("elsewhere.toml");
+        fs::write(&config, "[project]\nignore = [\"target\"]\n").unwrap();
+
+        let settings =
+            load_project_settings(&nested, Some(&config), false).unwrap();
+
+        assert_eq!(settings.ignore, vec!["target"]);
+        assert_eq!(settings.source_path, Some(config));
+    }
+
+    #[test]
+    fn a_malformed_file_is_an_error_rather_than_a_silent_default() {
+        // A typo that quietly did nothing would be invisible; a message naming
+        // the file is not.
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(CONFIG_FILE_NAME),
+            "[project]\nignore = \"should have been a list\"\n",
+        )
+        .unwrap();
+
+        let error =
+            load_project_settings(temp_dir.path(), None, false).unwrap_err();
+
+        assert!(
+            format!("{error:#}").contains(CONFIG_FILE_NAME),
+            "the error must name the file: {error:#}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_key_is_still_rejected() {
+        // `deny_unknown_fields` on `[project]` means a typo like `ignroe`
+        // fails loudly instead of silently excluding nothing.
+        let temp_dir = tempdir().unwrap();
+        fs::write(
+            temp_dir.path().join(CONFIG_FILE_NAME),
+            "[project]\nignroe = [\"target\"]\n",
+        )
+        .unwrap();
+
+        let error =
+            load_project_settings(temp_dir.path(), None, false).unwrap_err();
+
+        assert!(format!("{error:#}").contains("ignroe"), "{error:#}");
+    }
 
     fn run_git(repo_root: &Path, args: &[&str]) {
         let output = Command::new("git")

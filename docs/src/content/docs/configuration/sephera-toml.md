@@ -5,21 +5,24 @@ description: Configure repo-level defaults for the context command.
 
 # `.sephera.toml`
 
-Sephera currently supports repo-level configuration for the `context` command through a `.sephera.toml` file.
-
-This page reflects the `v0.5.x` configuration model.
+Sephera reads repo-level configuration from a `.sephera.toml` file. The
+`[project]` table applies to **every** command; the rest applies to `context`.
 
 ## Discovery rules
 
-When you run `sephera context`, the CLI behaves like this:
+When you run any command, the CLI behaves like this:
 
 1. if `--config <FILE>` is provided, use only that file
 2. if `--no-config` is provided, skip config entirely
 3. otherwise, start from the selected analysis base and walk upward through parent directories looking for `.sephera.toml`
 
-If no config file is found, Sephera falls back to built-in defaults.
+If no config file is found, Sephera falls back to built-in defaults. A missing
+file is therefore never an error — most repositories do not have one.
 
 In URL mode, the selected analysis base is the temporary checkout created from `--url`. Auto-discovery still works there, but user-facing output keeps the logical URL instead of exposing the temp path.
+
+A malformed file **is** an error. A typo that quietly did nothing is invisible,
+while a message naming the file is not.
 
 ## Precedence
 
@@ -30,20 +33,36 @@ Configuration precedence is:
 3. an optional named profile selected with `--profile`
 4. explicit CLI flags
 
-Scalar values from CLI override config values. Repeated CLI lists are appended to list values from the config file and the selected profile.
+Scalar values from CLI override config values. Repeated CLI lists are appended to
+list values from the config file and the selected profile, then deduplicated.
 
 ## Supported sections
 
-`v0.5.x` supports two configuration layers:
+- `[project]` — read by every command: `loc`, `symbols`, `context`, `graph`, `impact`
+- `[context]` — read by `context` only
+- `[profiles.<name>.context]` — named overrides for `context`, activated with `--profile`
 
-- `[context]`
-- `[profiles.<name>.context]`
+### `[project]`
 
-`[context]` defines shared defaults for the repository. `[profiles.<name>.context]` defines named overrides that can be activated with `sephera context --profile <name>`.
+This table exists because repeating `--ignore` on every command is how a
+repository ends up with three different ignore lists and no idea which one a
+number came from.
+
+```toml
+[project]
+ignore = ["vendor", "benchmarks/**"]
+```
+
+Every command applies it. `--ignore` flags are merged on top, so a pattern typed
+on the command line still wins. `--no-config` skips it.
 
 ## Annotated example
 
 ```toml
+[project]
+# Applied to loc, symbols, context, graph, and impact alike.
+ignore = ["vendor", "benchmarks/**"]
+
 [context]
 # Ignore low-signal paths. Globs match the file name and the relative path,
 # so "dist/**" excludes a tree; other patterns are regexes over the path.

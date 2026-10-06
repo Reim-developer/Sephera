@@ -5,11 +5,12 @@ description: Fast LOC analysis and deterministic context packs for review, debug
 
 # Sephera
 
-Sephera is a Rust workspace for codebase inspection. It currently focuses on four practical workflows:
+Sephera is a Rust workspace for codebase inspection. It currently focuses on five practical workflows:
 
 - `loc` for fast, language-aware line counting
 - `context` for deterministic Markdown or JSON context packs with AST compression
 - `graph` for multi-language dependency graph analysis
+- `impact` for the blast radius of a single file, with a CI exit-code gate
 - `mcp` for built-in MCP server agent integration
 
 The current docs reflect the `v0.5.x` release line.
@@ -27,13 +28,15 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 
 ## Current capabilities
 
-- Fast `loc` analysis with per-language totals, table output, and elapsed-time reporting
+- Fast `loc` analysis with per-language totals in table, Markdown, JSON, and CSV
 - Deterministic `context` packs with focus-path prioritization, Git diff awareness, and approximate token budgeting
 - Tree-sitter AST compression that keeps the API surface and drops function bodies, typically 50-70% fewer tokens on implementation-heavy files
 - Dependency `graph` generation with cycle detection and exports to Markdown, JSON, XML, and DOT
+- `impact` blast-radius reports for a single file or for every file a change touched
+- CI gates via `--fail-on`, `--fail-on-cycles`, and `--fail-on-unresolved`, exiting 2 on a violated rule and 1 on a broken run
 - Built-in MCP server for direct integration with AI agents like Claude Desktop
 - URL mode for direct analysis of cloneable repo URLs and GitHub/GitLab tree URLs
-- Repo-level defaults and named profiles through `.sephera.toml`
+- Repo-level defaults through `.sephera.toml`, with `[project]` shared by every command and `[context]` plus named profiles for packs
 - Export to Markdown for human copy-paste workflows and JSON for automation
 - Generated language metadata sourced from `config/languages.yml`
 - Byte-oriented scanning with newline portability across `LF`, `CRLF`, and classic `CR`

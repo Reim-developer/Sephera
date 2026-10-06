@@ -2,7 +2,10 @@
 
 mod args;
 mod budget;
+mod change_impact;
 pub(crate) mod context_config;
+mod gate;
+mod impact;
 mod output;
 mod progress;
 mod run;

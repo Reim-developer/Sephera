@@ -73,6 +73,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera graph --path .\n  sephera graph --path . --format dot --output deps.dot\n  sephera graph --path . --focus crates/sephera_core --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format xml --output graph.xml\n  sephera graph --path . --what-depends-on src/core/context/builder.rs"
     )]
     Graph(GraphArgs),
+    /// Report what breaks if one file changes
+    #[command(
+        long_about = IMPACT_LONG_ABOUT,
+        after_long_help = IMPACT_AFTER_LONG_HELP
+    )]
+    Impact(ImpactArgs),
 }
 
 #[derive(Debug, Args)]
@@ -124,6 +130,77 @@ pub struct LocArgs {
         long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
     )]
     pub no_gitignore: bool,
+
+    /// Output format for the line-count report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "table",
+        value_name = "FORMAT",
+        help = "Output format for the line-count report. Supports table, markdown, json, and csv.",
+        long_help = "Output format for the line-count report. Supports table (default), markdown, json, and csv. `table` is the only format intended for a terminal; the other three are for piping into another tool or writing to a file."
+    )]
+    pub format: LocOutputFormat,
+
+    /// Write the report to a file instead of standard output
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write the report to a file instead of standard output."
+    )]
+    pub output: Option<PathBuf>,
+
+    /// Shared settings source
+    #[command(flatten)]
+    pub config_args: ConfigArgs,
+}
+
+/// Which `.sephera.toml` a command reads, and whether to read one at all.
+///
+/// Mixed into every command's argument struct so that `--config` and
+/// `--no-config` cannot mean one thing for `context` and another for `graph`.
+/// Sharing the struct rather than repeating the two fields is what keeps the
+/// discovery rule identical across commands.
+#[derive(Debug, Args)]
+pub struct ConfigArgs {
+    /// Read shared settings from this file instead of discovering one
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Read shared settings from this file instead of discovering one.",
+        long_help = "Read shared settings from this file instead of searching upward from the analysis base for a `.sephera.toml`. Only the `[project]` table applies to this command; per-command sections are still ignored."
+    )]
+    pub config: Option<PathBuf>,
+
+    /// Ignore `.sephera.toml` and its `[project]` settings
+    #[arg(
+        long,
+        help = "Ignore `.sephera.toml` and its `[project]` settings.",
+        long_help = "Do not read `.sephera.toml`. Patterns configured under `[project]` are not applied, which widens the analysis to whatever `.gitignore` and the always-skipped generated trees leave behind. `.gitignore` and `.sepheraignore` are unaffected; use `--no-gitignore` for those."
+    )]
+    pub no_config: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum LocOutputFormat {
+    /// Human-readable terminal table.
+    #[value(name = "table", help = "Render a terminal table of line metrics.")]
+    Table,
+    /// Markdown table, for pasting into a pull request or issue.
+    #[value(
+        name = "markdown",
+        help = "Render a Markdown table of line metrics."
+    )]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render structured JSON.")]
+    Json,
+    /// Comma-separated values, for spreadsheet imports.
+    #[value(
+        name = "csv",
+        help = "Render comma-separated values for spreadsheet import."
+    )]
+    Csv,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -211,6 +288,10 @@ pub struct SymbolsArgs {
         long_help = "Break the symbol report down per file, heaviest first. This answers which files carry the most declarations, where the per-language summary cannot."
     )]
     pub by_file: bool,
+
+    /// Shared settings source
+    #[command(flatten)]
+    pub config_args: ConfigArgs,
 
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
     #[arg(
@@ -620,6 +701,40 @@ pub struct GraphArgs {
     )]
     pub what_depends_on: Option<String>,
 
+    /// Fail with exit code 2 when the project has this many or more circular dependencies
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many circular dependencies.",
+        long_help = "Exit with code 2 when the project has at least this many circular dependencies. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on-cycles 1` fails on a single cycle."
+    )]
+    pub fail_on_cycles: Option<u64>,
+
+    /// Fail with exit code 2 when this many or more local import paths fail to resolve
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many unresolved local paths.",
+        long_help = "Exit with code 2 when at least this many local-looking import paths fail to resolve. An unresolved path was meant to name a file in this project and was not found, so it is a resolver gap rather than a dependency, and a blast radius that counts one silently omits a file. The report is still printed; only the exit code changes."
+    )]
+    pub fail_on_unresolved: Option<u64>,
+
+    /// Report the blast radius of every file changed since a Git base
+    #[arg(
+        long,
+        value_name = "SPEC",
+        conflicts_with = "what_depends_on",
+        help = "Report what every changed file reaches, against a Git base.",
+        long_help = "Report the blast radius of every file changed against a Git base, so a reviewer or a pre-commit hook can see what this change reaches. Accepts a ref such as `HEAD~1` or `origin/master`, or the keywords `working-tree` and `staged`. The graph is built once and every changed file is measured against it. Deleted files are skipped and listed separately, because a file that no longer exists has no blast radius. Cannot be combined with `--what-depends-on`, which answers about one named file rather than about a change."
+    )]
+    pub diff: Option<String>,
+
+    /// Shared settings source
+    #[command(flatten)]
+    pub config_args: ConfigArgs,
+
     /// Drop imports that describe types rather than runtime dependencies
     #[arg(
         long,
@@ -635,6 +750,130 @@ pub struct GraphArgs {
         help = "Optional file path for exporting the rendered graph."
     )]
     pub output: Option<PathBuf>,
+}
+
+const IMPACT_LONG_ABOUT: &str = "Report what breaks if one file changes.\n\nAnswers the question a reviewer, a pre-commit hook, or a nervous contributor asks before editing: if I touch this file, what else stops working? The answer is the file's blast radius -- every file that imports it, directly or through however many hops, along with the name each one imports.\n\nThis is `graph --what-depends-on` as its own command. The same analysis, but reachable without reading `graph --help`, composable in a script, and with `--fail-on` so a pipeline can refuse a change whose blast radius is too wide.";
+
+const IMPACT_AFTER_LONG_HELP: &str = "Examples:\n  sephera impact src/core/graph/resolver.rs\n  sephera impact src/lib.rs --depth 1\n  sephera impact src/core/ignore.rs --format json\n  sephera impact src/lib.rs --fail-on 40\n  sephera impact crates/sephera_core/src/core/graph.rs --fail-on 10 --output impact.md";
+
+/// Report the blast radius of one file.
+#[derive(Debug, Args)]
+pub struct ImpactArgs {
+    /// File to report the blast radius of
+    #[arg(
+        value_name = "FILE",
+        help = "File whose blast radius to report.",
+        long_help = "Path of the file whose blast radius to report, relative to the analysis base. The path must resolve to a file in the analysis; a path that matches nothing is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
+    )]
+    pub file: String,
+
+    /// Path to the project directory to analyze
+    #[arg(
+        long,
+        value_name = "PATH",
+        conflicts_with = "url",
+        help = "Path to the project directory to analyze.",
+        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Git repository URL to analyze directly
+    #[arg(
+        long,
+        value_name = "URL",
+        conflicts_with = "path",
+        help = "Git repository URL to analyze directly.",
+        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
+    )]
+    pub url: Option<String>,
+
+    /// Git ref to check out before analysis
+    #[arg(
+        long = "ref",
+        value_name = "REF",
+        requires = "url",
+        conflicts_with = "path",
+        help = "Git ref to check out before analysis.",
+        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
+    )]
+    pub git_ref: Option<String>,
+
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
+    )]
+    pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
+
+    /// Maximum distance from the file whose dependents are reported
+    #[arg(
+        long,
+        value_name = "DEPTH",
+        help = "Maximum distance to report.",
+        long_help = "How many hops away a dependent may be. 1 reports only files that import this one directly; 2 also reports files that import those. Omit for the whole transitive closure."
+    )]
+    pub depth: Option<u32>,
+
+    /// Drop imports that describe types rather than runtime dependencies
+    #[arg(
+        long,
+        help = "Exclude type aliases and wildcard imports from the blast radius.",
+        long_help = "Exclude type aliases and wildcard imports from the blast radius. A `type X = Y` alias or an `import ... .*` wildcard names a namespace rather than a runtime dependency, so the edges they create never fail at runtime."
+    )]
+    pub exclude_types: bool,
+
+    /// Fail with exit code 2 when this many or more files depend on the target
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many dependents.",
+        long_help = "Exit with code 2 when at least this many files depend on the target. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth."
+    )]
+    pub fail_on: Option<u64>,
+
+    /// Output format for the blast radius
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the blast radius. Supports markdown and json.",
+        long_help = "Output format for the blast radius. Supports markdown and json."
+    )]
+    pub format: ImpactOutputFormat,
+
+    /// Write the report to a file instead of standard output
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write the report to a file instead of standard output."
+    )]
+    pub output: Option<PathBuf>,
+
+    /// Shared settings source
+    #[command(flatten)]
+    pub config_args: ConfigArgs,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ImpactOutputFormat {
+    /// Markdown list of dependents.
+    #[value(name = "markdown", help = "Render the blast radius as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the blast radius as JSON.")]
+    Json,
 }
 
 #[cfg(test)]

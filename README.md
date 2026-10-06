@@ -94,8 +94,9 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 | Metric                | Value |
 |-----------------------|-------|
 | Files analyzed        | 7     |
-| Internal edges        | 33    |
+| Internal edges        | 36    |
 | External edges        | 21    |
+| Self-references (excluded above) | 2 |
 | Declared dependencies | 9     |
 | Local crate edges     | 0     |
 | Standard library edges| 12    |
@@ -240,7 +241,31 @@ Current release line: `v0.5.0` (pre-1.0).
 
 ---
 
-## The four commands
+## The commands
+
+### `impact` — what breaks if you change this file
+
+The question a reviewer or a pre-commit hook asks before an edit. Answers it
+directly, so you do not have to know that `graph` has a flag for it.
+
+```bash
+# What transitively imports this file? 6 files do.
+sephera impact crates/sephera_core/src/core/code_loc.rs
+
+# Only direct importers
+sephera impact crates/sephera_core/src/core/code_loc.rs --depth 1
+
+# Machine-readable, for a script
+sephera impact crates/sephera_core/src/core/ignore.rs --format json
+
+# Fail the build when one file reaches more than 10 dependents
+sephera impact crates/sephera_cli/src/run.rs --fail-on 40
+```
+
+`--fail-on` exits **2**, which is deliberately different from the **1** that
+means the analysis could not run. A broken install and a violated rule look the
+same in a log otherwise, and that is where someone adds `--ignore-failures` to
+the workflow and then never notices either.
 
 ### `graph` — dependency structure and blast radius
 
@@ -259,6 +284,9 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 # Limit how far the impact spreads
 sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --depth 1
 
+# What does this change reach? Widest blast radius first.
+sephera graph --path . --diff origin/master --format markdown
+
 # Scope analysis to a subtree, export for Graphviz
 sephera graph --path . --focus crates/sephera_core --format dot --output deps.dot
 
@@ -267,6 +295,30 @@ sephera graph --url https://github.com/owner/repo --format markdown
 ```
 
 `--what-depends-on` traverses the graph **in reverse** from the target, so you get real transitive dependents rather than direct importers.
+
+`--diff` answers the pull-request question: it reports the blast radius of
+*every* file the change touched, widest first. The graph is built once and each
+changed file is measured against it, so the cost does not scale with the size of
+the diff. Deleted files are skipped and listed separately — a file that no
+longer exists has no blast radius.
+
+### Enforcing it in CI
+
+Three thresholds turn a report into a gate. Each prints its report as usual and
+changes only the exit code.
+
+```bash
+# Fail on an import cycle. This repository has none, so it exits 0.
+sephera graph --path . --fail-on-cycles 1
+
+# Fail when the resolver cannot place a project's own import paths.
+# Also none here, so also exits 0.
+sephera graph --path . --fail-on-unresolved 1
+
+# Fail when one file reaches more than 40 dependents.
+# `run.rs` has 1, so this exits 0.
+sephera impact crates/sephera_cli/src/run.rs --fail-on 40
+```
 
 ### `context` — token-budgeted packs for LLMs
 
@@ -340,6 +392,14 @@ caption in the image states which checkout produced it.
 If you only need raw counts, `cloc` and `tokei` are fine — use Sephera when you
 want the next step.
 
+`loc` also speaks machine, so it can go straight into a dashboard or a CI step:
+
+```bash
+sephera loc --path . --format json --output reports/loc.json
+sephera loc --path . --format csv
+sephera loc --path . --format markdown
+```
+
 ### `mcp` — expose it all to your AI agent
 
 ```bash
@@ -366,6 +426,11 @@ Serves `loc`, `context`, and `graph` as tools over stdio for Claude Desktop, Cla
 Share team defaults in `.sephera.toml`:
 
 ```toml
+# Read by every command: loc, symbols, context, graph, impact
+[project]
+ignore = ["vendor", "benchmarks/**"]
+
+# Read by context only
 [context]
 focus = ["crates/sephera_core"]
 budget = "64k"
@@ -378,6 +443,16 @@ diff = "origin/master"
 budget = "32k"
 output = "reports/review.md"
 ```
+
+`[project]` is the part that used to be missing. A repository that wants
+`vendor` out of its analysis should say so once, not repeat `--ignore` on every
+command — which is how a project ends up with three different ignore lists and
+no idea which one a number came from.
+
+Explicit flags still win, `--no-config` ignores the file, and `--config <file>`
+reads a specific one. A malformed `.sephera.toml` is an error rather than a
+silent default: a typo that quietly did nothing is invisible, and a message
+naming the file is not.
 
 ---
 
