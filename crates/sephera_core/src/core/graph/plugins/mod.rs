@@ -42,6 +42,7 @@ pub(super) fn to_extracted(
             line: usize::try_from(statement.line).unwrap_or(1),
             kind: statement.kind,
             module_depth: statement.module_depth,
+            cfg_gated: statement.cfg_gated,
         })
         .collect()
 }
@@ -63,6 +64,8 @@ pub struct ExtractedImport {
     pub kind: ImportKind,
     /// How many inline mod name { ... } blocks the reference sits inside.
     pub module_depth: u8,
+    /// Whether a `#[cfg(...)]` attribute gated the reference.
+    pub cfg_gated: bool,
 }
 
 /// Everything a resolver needs to look at besides the import itself.
@@ -91,6 +94,34 @@ pub struct ResolveContext<'a> {
     /// reported as external, which is how `use crate::Router;` came to be
     /// counted as a missing dependency rather than a reference to a re-export.
     pub declarations: Option<&'a super::declarations::DeclarationIndex>,
+
+    /// What the project's manifests say about it.
+    ///
+    /// Read for one thing: Go's module path. An import of the bare module path
+    /// names the package at the project root, and no directory-name match finds
+    /// it, because the files sit at the top level rather than in a directory
+    /// named after the module.
+    pub manifests: Option<&'a super::manifests::ManifestIndex>,
+}
+
+/// A context for a resolver test, with no lookup tables attached.
+///
+/// The two indexes are what a production resolution reads, and a test that
+/// populated them would be testing the fixture as much as the resolver. Tests
+/// that do exercise a lookup build the index and pass it explicitly.
+#[cfg(test)]
+pub(crate) const fn test_context<'a>(
+    source_file: &'a str,
+    known_files: &'a KnownFiles,
+) -> ResolveContext<'a> {
+    ResolveContext {
+        source_file,
+        known_files,
+        module_depth: 0,
+        kind: crate::core::graph::ImportKind::Dependency,
+        declarations: None,
+        manifests: None,
+    }
 }
 
 impl ResolveContext<'_> {
@@ -152,10 +183,27 @@ pub trait ImportPlugin {
 /// `None` means "external", not "failed", so a language with no local imports
 /// still produces a usable graph.
 pub trait ResolverPlugin {
+    /// Whether a path that names `name` provably leaves the project.
+    ///
+    /// Most languages can answer this from the path's shape, so the default
+    /// says "no" and a local-looking path stays a local-looking path. Rust is
+    /// the exception: `pub use http;` in a crate root re-exports an external
+    /// crate, so `crate::http::Request` names a dependency on `http` while
+    /// looking exactly like a missing file. Only a resolver that has read the
+    /// crate root can tell those apart, and counting them as gaps made a
+    /// correctly declared dependency look broken.
+    fn leaves_project(
+        &self,
+        _name: &str,
+        _context: ResolveContext<'_>,
+    ) -> bool {
+        false
+    }
+
     /// The language this plugin handles.
     fn language(&self) -> SupportedLanguage;
 
-    /// Resolves an import to a project file, or `None` when it is external.
+    /// Turn an import path into a project-relative file path.
     fn resolve(
         &self,
         import_path: &str,
@@ -321,13 +369,7 @@ mod tests {
     fn context_reports_membership() {
         let files: BTreeSet<String> =
             std::iter::once("src/a.rs".to_owned()).collect();
-        let context = ResolveContext {
-            source_file: "src/b.rs",
-            known_files: &files,
-            module_depth: 0,
-            kind: ImportKind::Dependency,
-            declarations: None,
-        };
+        let context = test_context("src/b.rs", &files);
 
         assert!(context.contains("src/a.rs"));
         assert!(!context.contains("src/missing.rs"));
@@ -337,13 +379,7 @@ mod tests {
     fn first_existing_skips_unknown_candidates() {
         let files: BTreeSet<String> =
             std::iter::once("src/b.rs".to_owned()).collect();
-        let context = ResolveContext {
-            source_file: "src/a.rs",
-            known_files: &files,
-            module_depth: 0,
-            kind: ImportKind::Dependency,
-            declarations: None,
-        };
+        let context = test_context("src/a.rs", &files);
 
         assert_eq!(
             context.first_existing(["src/x.rs", "src/b.rs", "src/y.rs"]),

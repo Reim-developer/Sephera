@@ -81,19 +81,13 @@ fn first_existing(context: ResolveContext<'_>, path: &str) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::core::graph::ImportKind;
     use std::collections::BTreeSet;
 
     fn resolve(import_path: &str, files: &[&str]) -> Option<String> {
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context = ResolveContext {
-            source_file: "src/Main.java",
-            known_files: &known,
-            module_depth: 0,
-            kind: ImportKind::Dependency,
-            declarations: None,
-        };
+        let context =
+            crate::core::graph::plugins::test_context("main.go", &known);
         JavaPlugin.resolve(import_path, context)
     }
 

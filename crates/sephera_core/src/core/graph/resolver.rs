@@ -138,15 +138,26 @@ pub fn build_graph_with(
         .collect();
 
     // Phase 3: Build the full graph once, then apply selection/filtering.
-    let (edges, node_map) =
-        build_edges_and_nodes(&all_file_imports, &known_files, &declarations);
+    //
+    // The manifests are read once here and used twice: resolution needs Go's
+    // module path, and the metrics attribute each edge to a package.
+    let manifests = manifests::ManifestIndex::discover(base_path);
+    let project = ResolutionInputs {
+        known_files,
+        declarations,
+        manifests,
+    };
+    let (edges, node_map) = build_edges_and_nodes(&all_file_imports, &project);
     let selection = select_graph(&node_map, &focus_set, depth, query)?;
     let filtered_node_map = filter_node_map(&node_map, &selection.node_paths);
     let filtered_edges = filter_edges(&edges, &selection.node_paths);
 
     // Phase 4: Compute metrics.
-    let metrics =
-        compute_metrics(base_path, &filtered_node_map, &filtered_edges);
+    let metrics = compute_metrics(
+        &project.manifests,
+        &filtered_node_map,
+        &filtered_edges,
+    );
 
     // Phase 5: Build final nodes list.
     let nodes = build_node_list(&filtered_node_map);
@@ -237,6 +248,7 @@ fn extract_all_imports(
                     line: u64::try_from(extracted.line).unwrap_or(1),
                     kind: extracted.kind,
                     module_depth: extracted.module_depth,
+                    cfg_gated: extracted.cfg_gated,
                 })
                 .collect(),
         });
@@ -342,30 +354,96 @@ fn normalize_user_relative_path(path: &Path) -> Result<String> {
 /// Attempts to resolve an import path to a known file in the project.
 ///
 /// Resolution is delegated to the language's [`ResolverPlugin`]. An import that
-/// leaves the project, or a language with no bundled plugin, yields `None`; both
-/// are recorded as external edges rather than errors, because a graph of
-/// first-party dependencies is useful on its own.
-fn resolve_import(
+/// leaves the project, or a language with no bundled plugin, yields
+/// [`Resolution::External`]; a path that should be local but cannot be placed
+/// yields [`Resolution::Unresolved`]. Both are recorded as edges rather than
+/// errors, because a graph of first-party dependencies is useful on its own, but
+/// the report tells them apart because only one is worth fixing.
+fn resolve_import_with(
     import_path: &str,
     source_file: &str,
     module_depth: u8,
     kind: ImportKind,
     language: SupportedLanguage,
-    known_files: &plugins::KnownFiles,
-    declarations: &declarations::DeclarationIndex,
-) -> Option<String> {
-    let plugin = plugins::builtin_resolver_plugin(language)?;
+    project: &ResolutionInputs,
+) -> Resolution {
+    let Some(plugin) = plugins::builtin_resolver_plugin(language) else {
+        return Resolution::External;
+    };
 
-    plugin.resolve(
-        import_path,
-        plugins::ResolveContext {
-            source_file,
-            known_files,
-            module_depth,
-            kind,
-            declarations: Some(declarations),
-        },
-    )
+    let context = plugins::ResolveContext {
+        source_file,
+        known_files: &project.known_files,
+        module_depth,
+        kind,
+        declarations: Some(&project.declarations),
+        manifests: Some(&project.manifests),
+    };
+
+    match plugin.resolve(import_path, context) {
+        Some(file) => Resolution::File(file),
+        // A path the resolver proved leaves the project is not a gap, however
+        // local its shape looks. `crate::http::Request` is the case that
+        // mattered: `pub use http;` re-exports a crate from outside, so the
+        // prefix says "this project" and the code says otherwise.
+        None if leaves_project(plugin.as_ref(), import_path, context) => {
+            Resolution::External
+        }
+        None => Resolution::Unresolved,
+    }
+}
+
+/// Ask a resolver whether an unresolved path was meant to name an outside crate.
+///
+/// The qualifier is stripped first: `crate::http::Request` has to be judged on
+/// `http`, the name the crate root re-exports, not on the whole path.
+fn leaves_project(
+    plugin: &dyn plugins::ResolverPlugin,
+    import_path: &str,
+    context: plugins::ResolveContext<'_>,
+) -> bool {
+    const QUALIFIERS: [&str; 3] = ["crate::", "self::", "super::"];
+    let Some(rest) = QUALIFIERS
+        .iter()
+        .find_map(|prefix| import_path.strip_prefix(prefix))
+    else {
+        return false;
+    };
+    let name = rest.split("::").next().unwrap_or(rest);
+    !name.is_empty() && plugin.leaves_project(name, context)
+}
+
+/// What an import path turned out to name.
+///
+/// `Option<String>` could not express the third case. A path that fails to
+/// resolve is either a gap in this resolver or a reference to code outside the
+/// project, and the report draws a line between them: one is worth fixing, the
+/// other is the answer.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum Resolution {
+    /// A file in the analysis.
+    File(String),
+    /// Meant for this project; the resolver could not place it.
+    Unresolved,
+    /// A crate, package, or standard library outside the analysis.
+    External,
+}
+
+impl Resolution {
+    /// The file this resolved to, if any.
+    #[must_use]
+    pub fn file(&self) -> Option<&str> {
+        match self {
+            Self::File(file) => Some(file),
+            Self::Unresolved | Self::External => None,
+        }
+    }
+
+    /// Whether a file was found.
+    #[must_use]
+    pub const fn is_resolved(&self) -> bool {
+        matches!(self, Self::File(_))
+    }
 }
 
 /// Test shim naming the language first, so the assertions read left to right.
@@ -376,22 +454,48 @@ fn resolve_import_lang(
     source_file: &str,
     known_files: &plugins::KnownFiles,
 ) -> Option<String> {
-    resolve_import(
+    resolve_plain(language, import_path, source_file, known_files)
+        .file()
+        .map(ToOwned::to_owned)
+}
+
+/// Resolve with no project indexes attached, which is what most tests want.
+#[cfg(test)]
+fn resolve_plain(
+    language: SupportedLanguage,
+    import_path: &str,
+    source_file: &str,
+    known_files: &plugins::KnownFiles,
+) -> Resolution {
+    resolve_import_with(
         import_path,
         source_file,
         0,
         ImportKind::Dependency,
         language,
-        known_files,
-        &declarations::DeclarationIndex::default(),
+        &ResolutionInputs {
+            known_files: known_files.clone(),
+            declarations: declarations::DeclarationIndex::default(),
+            manifests: manifests::ManifestIndex::default(),
+        },
     )
+}
+
+/// The project-wide facts every resolution reads.
+///
+/// Grouped because the argument list outgrew what a reader can hold: the eighth
+/// parameter was a second index, and a caller that passed them in the wrong
+/// order would compile and resolve against the wrong table.
+struct ResolutionInputs {
+    known_files: plugins::KnownFiles,
+    declarations: declarations::DeclarationIndex,
+    manifests: manifests::ManifestIndex,
 }
 
 /// Builds edges and populates the node map from extracted imports.
 fn build_edges_and_nodes(
     all_imports: &[FileImportData],
-    known_files: &BTreeSet<String>,
-    declarations: &declarations::DeclarationIndex,
+    project: &ResolutionInputs,
 ) -> (Vec<GraphEdge>, NodeMap) {
     let mut edges = Vec::new();
     let mut node_map: NodeMap = BTreeMap::new();
@@ -406,17 +510,28 @@ fn build_edges_and_nodes(
 
     for file_data in all_imports {
         for statement in &file_data.imports {
-            let resolved = resolve_import(
+            let resolved = resolve_import_with(
                 &statement.raw_path,
                 &file_data.file_path,
                 statement.module_depth,
                 statement.kind,
                 file_data.ts_language,
-                known_files,
-                declarations,
+                project,
             );
 
-            let is_resolved = resolved.is_some();
+            let is_resolved = resolved.is_resolved();
+            let target = resolved.file().map(ToOwned::to_owned);
+            // Only a path the resolver could not place, that still looks local,
+            // counts as a gap. One it proved leaves the project is an external
+            // dependency whatever its prefix says.
+            let local_gap = matches!(resolved, Resolution::Unresolved)
+                && looks_local(&statement.raw_path)
+                // A namespace import binds a name rather than naming a module,
+                // so one that does not resolve is not a gap in the resolver.
+                // `from . import Flask` in flask's `cli.py` names a class the
+                // package re-exports, and there is no `Flask.py` for it to find.
+                // A renaming import gets no such leniency: it names one path.
+                && !statement.kind.is_namespace();
 
             // Every real dependency goes in the adjacency, including a parent naming its
             // own child. A blast-radius query wants that edge -- "what breaks if
@@ -424,7 +539,7 @@ fn build_edges_and_nodes(
             // to satisfy cycle detection silently answered "nothing", which is how
             // `--what-depends-on` lost a whole level. Structural edges are
             // excluded from cycle detection instead, in `detect_cycles`.
-            if let Some(ref target) = resolved
+            if let Some(ref target) = target
                 && statement.kind.is_dependency()
                 && *target != file_data.file_path
             {
@@ -445,10 +560,15 @@ fn build_edges_and_nodes(
 
             edges.push(GraphEdge {
                 from: file_data.file_path.clone(),
-                to: resolved,
+                to: target,
                 import_path: statement.raw_path.clone(),
                 resolved: is_resolved,
                 kind: statement.kind,
+                cfg_gated: statement.cfg_gated,
+                // Whether this edge was meant for the project and could not be
+                // placed. Carried on the edge so the metrics read a fact rather
+                // than re-guessing from the path's shape.
+                local_gap,
             });
         }
     }
@@ -651,7 +771,7 @@ fn build_node_list(node_map: &NodeMap) -> Vec<GraphNode> {
 
 /// Computes graph metrics including cycle detection.
 fn compute_metrics(
-    base_path: &Path,
+    index: &manifests::ManifestIndex,
     node_map: &NodeMap,
     edges: &[GraphEdge],
 ) -> GraphMetrics {
@@ -674,10 +794,11 @@ fn compute_metrics(
     )
     .unwrap_or(u64::MAX);
 
-    let unresolved_local: Vec<&GraphEdge> = edges
-        .iter()
-        .filter(|edge| !edge.resolved && looks_local(edge.import_path.as_str()))
-        .collect();
+    let cfg_gated_edges =
+        u64::try_from(edges.iter().filter(|edge| edge.cfg_gated).count())
+            .unwrap_or(u64::MAX);
+    let unresolved_local: Vec<&GraphEdge> =
+        edges.iter().filter(|edge| edge.local_gap).collect();
     let external_count = edges.iter().filter(|e| !e.resolved).count();
     let total_external_edges =
         u64::try_from(external_count - unresolved_local.len())
@@ -692,13 +813,18 @@ fn compute_metrics(
 
     // Attribute what is left to actual packages, so the report can answer which
     // dependency an edge refers to rather than only how many there are.
-    let index = manifests::ManifestIndex::discover(base_path);
-    let dependencies = index.summarise(
-        edges
-            .iter()
-            .filter(|edge| !edge.resolved)
-            .map(|edge| edge.import_path.as_str()),
-    );
+    let dependencies = index.summarise(edges.iter().filter_map(|edge| {
+        // The ecosystem follows from the file the import was written in, which
+        // is what decides whether a bare name is a standard library module.
+        let extension = std::path::Path::new(&edge.from)
+            .extension()
+            .and_then(std::ffi::OsStr::to_str)?;
+        let language = SupportedLanguage::from_extension(extension)?;
+        (!edge.resolved).then_some((
+            edge.import_path.as_str(),
+            manifests::Ecosystem::of(language),
+        ))
+    }));
     let edges_of_kind = |kind: manifests::DependencyKind| {
         dependencies
             .iter()
@@ -743,6 +869,7 @@ fn compute_metrics(
         total_external_edges,
         unresolved_local_edges,
         unresolved_local_samples,
+        cfg_gated_edges,
         dependencies,
         declared_dependency_edges,
         local_crate_edges,
@@ -935,6 +1062,7 @@ mod tests {
             line: 1,
             kind,
             module_depth: 0,
+            cfg_gated: false,
         }
     }
 
@@ -1735,15 +1863,20 @@ mod tests {
         files: &plugins::KnownFiles,
         index: &declarations::DeclarationIndex,
     ) -> Option<String> {
-        resolve_import(
+        resolve_import_with(
             import_path,
             source_file,
             0,
             ImportKind::Dependency,
             SupportedLanguage::Rust,
-            files,
-            index,
+            &ResolutionInputs {
+                known_files: files.clone(),
+                declarations: index.clone(),
+                manifests: manifests::ManifestIndex::default(),
+            },
         )
+        .file()
+        .map(ToOwned::to_owned)
     }
 
     #[test]

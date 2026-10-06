@@ -64,6 +64,8 @@ sephera graph --path . --format dot --output deps.dot
 | Standard library edges | 55 |
 | Circular dependencies | 0 |
 
+`Unresolved local paths` and `Feature-gated edges` appear only when non-zero. The first counts imports meant for this project that the resolver could not place; the second counts edges that only compile when a `#[cfg]` is on, so a blast radius that counted them silently would claim a dependency the build may not have.
+
 ## Dependencies
 
 | Package | Kind | Version | Import paths |

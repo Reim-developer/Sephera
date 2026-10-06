@@ -56,8 +56,15 @@ fn collect_imports_recursive(
     imports: &mut Vec<ImportStatement>,
 ) {
     if let Some(mut extracted) = try_extract_import(source, node, language) {
+        // A `#[cfg(feature = "...")]` import is only compiled when the feature
+        // is on, so an edge through it is a dependency the build may not
+        // actually have. That is worth reporting rather than hiding: it is the
+        // difference between "this crate needs json" and "this crate needs json
+        // only if you enable it".
+        let gated = is_cfg_gated(source, node);
         for statement in &mut extracted {
             statement.module_depth = module_depth;
+            statement.cfg_gated = gated;
         }
         imports.extend(extracted);
     }
@@ -90,6 +97,26 @@ fn collect_imports_recursive(
 /// keyed on the grammar's own node kind.
 fn is_inline_module(node: &Node<'_>) -> bool {
     node.kind() == "mod_item" && node.child_by_field_name("body").is_some()
+}
+
+/// Whether a `#[cfg(...)]` attribute decorates this node.
+///
+/// The attribute is a preceding sibling on the line above, and the `attribute`
+/// child's own text starts with the attribute's name. Both facts were probed
+/// against the grammar rather than assumed, because the `#[path]` guard above
+/// already had to be corrected once for assuming the wrong parent.
+fn is_cfg_gated(source: &[u8], node: &Node<'_>) -> bool {
+    let Some(previous) = node.prev_sibling() else {
+        return false;
+    };
+    if previous.kind() != "attribute_item"
+        || previous.end_position().row + 1 != node.start_position().row
+    {
+        return false;
+    }
+    previous.named_child(0).is_some_and(|attribute| {
+        node_text(source, &attribute).starts_with("cfg")
+    })
 }
 
 /// Attempts to extract import information from a single AST node.
@@ -164,6 +191,7 @@ fn extract_rust_mod(
         line: u64::try_from(node.start_position().row + 1).unwrap_or(1),
         kind: ImportKind::ModuleDeclaration,
         module_depth: 0,
+        cfg_gated: false,
     }])
 }
 
@@ -224,6 +252,7 @@ fn extract_rust_import(
                 line,
                 kind: use_path.kind,
                 module_depth: 0,
+                cfg_gated: false,
             })
             .collect(),
     )
@@ -344,35 +373,95 @@ fn extract_python_import(
 
     match kind {
         "import_statement" => {
-            // `import os` or `import os, sys`
-            let text = node_text(source, node);
-            let path = text.strip_prefix("import ").unwrap_or(&text).trim();
-
-            Some(
-                path.split(',')
-                    .map(|p| ImportStatement {
-                        raw_path: p.trim().to_owned(),
-                        line,
-                        kind: ImportKind::Dependency,
-                        module_depth: 0,
-                    })
-                    .collect(),
-            )
+            // Every module named, taken from the children rather than by
+            // splitting the text. `import os, sys` has two `dotted_name`
+            // children, and `import typing as t` has one `aliased_import` whose
+            // `name` is the module -- the `name` field on the statement itself
+            // holds `typing as t`, so splitting the text produced 23 paths on
+            // flask reading `typing as t`.
+            let mut statements = Vec::new();
+            let mut cursor = node.walk();
+            for child in node.named_children(&mut cursor) {
+                let raw = match child.kind() {
+                    "aliased_import" => child
+                        .child_by_field_name("name")
+                        .map_or_else(String::new, |name| {
+                            node_text(source, &name)
+                        }),
+                    _ => node_text(source, &child),
+                };
+                if raw.is_empty() {
+                    continue;
+                }
+                statements.push(ImportStatement {
+                    raw_path: raw,
+                    line,
+                    kind: ImportKind::Dependency,
+                    module_depth: 0,
+                    cfg_gated: false,
+                });
+            }
+            (!statements.is_empty()).then_some(statements)
         }
         "import_from_statement" => {
-            // `from pathlib import Path`
-            let text = node_text(source, node);
-            let path = text.strip_prefix("from ").unwrap_or(&text).trim();
+            // The grammar separates the two halves: `from a.b import c` puts
+            // `a.b` in `module_name` and `c` in `name`, and the relative form
+            // keeps its dots there too -- `from .mod import thing` is
+            // `module_name: ".mod"`. Reading the text and splitting on `" import"`
+            // could not tell `from . import x` from a bare import.
+            let module = node.child_by_field_name("module_name")?;
+            let raw = node_text(source, &module).trim().to_owned();
+            if raw.is_empty() {
+                return None;
+            }
 
-            // Take only the module part (before " import")
-            let module = path.split(" import").next().unwrap_or(path).trim();
-
-            Some(vec![ImportStatement {
-                raw_path: module.to_owned(),
+            // `from . import helper` names `helper` in the current package, and
+            // the grammar puts only the dots in `module_name`. Reporting the dots
+            // pointed the edge at the package's `__init__.py` rather than at the
+            // module the import actually reaches.
+            let dots_only = raw.chars().all(|c| c == '.');
+            let mut statements = vec![ImportStatement {
+                raw_path: raw.clone(),
                 line,
                 kind: ImportKind::Dependency,
                 module_depth: 0,
-            }])
+                cfg_gated: false,
+            }];
+            let imported: Vec<String> = if dots_only {
+                let mut cursor = node.walk();
+                let mut names = node.named_children(&mut cursor);
+                let _ = names.next(); // the module itself
+                names
+                    // `from . import typing as ft` imports the module `typing`;
+                    // the node's text is `typing as ft`, so the alias has to be
+                    // dropped or the path names something that does not exist.
+                    .map(|name| {
+                        name.child_by_field_name("name").map_or_else(
+                            || node_text(source, &name),
+                            |module| node_text(source, &module),
+                        )
+                    })
+                    .filter(|leaf| !leaf.is_empty())
+                    .collect()
+            } else {
+                Vec::new()
+            };
+            statements.extend(imported.into_iter().map(|leaf| {
+                ImportStatement {
+                    raw_path: format!("{raw}{leaf}"),
+                    line,
+                    // A name imported from a package may be a submodule or an
+                    // attribute the package re-exports -- `from . import Flask` in
+                    // flask's `cli.py` names the class, and no `Flask.py` exists.
+                    // Marking it a namespace keeps the edge when a submodule does
+                    // exist without reporting a gap when one does not.
+                    kind: ImportKind::Namespace,
+                    module_depth: 0,
+                    cfg_gated: false,
+                }
+            }));
+
+            Some(statements)
         }
         _ => None,
     }
@@ -381,6 +470,13 @@ fn extract_python_import(
 // ---- TypeScript / JavaScript ----
 
 /// Extracts `import` declarations and `require()` calls from JS/TS source.
+///
+/// Both forms are read from the grammar rather than from the statement text.
+/// Searching the text for `"from "` matched the `from` in
+/// `import { from as origin } from './b'`, which is a binding named `from`, and
+/// produced the path `as origin } from './b'`. Trimming `require(` off the text
+/// broke on `require('pbkdf2-password')()`, where the trailing `()` left
+/// `pbkdf2-password')(`. Both are node kinds away from an exact answer.
 fn extract_js_ts_import(
     source: &[u8],
     node: &Node<'_>,
@@ -388,65 +484,41 @@ fn extract_js_ts_import(
     let kind = node.kind();
     let line = u64::try_from(node.start_position().row + 1).unwrap_or(1);
 
+    let statement = |raw: String| {
+        vec![ImportStatement {
+            raw_path: raw,
+            line,
+            kind: ImportKind::Dependency,
+            module_depth: 0,
+            cfg_gated: false,
+        }]
+    };
+
     match kind {
+        // `import { foo } from './bar'`, `export * from './baz'`, and the bare
+        // `import './side-effect'`. The grammar points at the module string in
+        // all three, which is what made the text search unnecessary.
         "import_statement" | "export_statement" => {
-            // `import { foo } from './bar';`
-            // `export { baz } from './baz';`
-            let text = node_text(source, node);
-
-            // Extract the string after "from"
-            if let Some(from_idx) = text.find("from ") {
-                let path_part = &text[from_idx + 5..];
-                let path = path_part
-                    .trim()
-                    .trim_matches(|c| c == '\'' || c == '"' || c == ';');
-                if !path.is_empty() {
-                    return Some(vec![ImportStatement {
-                        raw_path: path.to_owned(),
-                        line,
-                        kind: ImportKind::Dependency,
-                        module_depth: 0,
-                    }]);
-                }
-            }
-
-            // `import './side-effect';`
-            if text.starts_with("import ") && !text.contains("from ") {
-                let path = text
-                    .strip_prefix("import ")
-                    .unwrap_or(&text)
-                    .trim()
-                    .trim_matches(|c| c == '\'' || c == '"' || c == ';');
-                if !path.is_empty() && !path.contains(' ') {
-                    return Some(vec![ImportStatement {
-                        raw_path: path.to_owned(),
-                        line,
-                        kind: ImportKind::Dependency,
-                        module_depth: 0,
-                    }]);
-                }
-            }
-
-            None
+            let module = node.child_by_field_name("source")?;
+            let path = string_value(source, &module);
+            (!path.is_empty()).then(|| statement(path))
         }
         "call_expression" => {
-            // `const foo = require('./bar');`
-            let text = node_text(source, node);
-            if text.starts_with("require(") {
-                let path = text
-                    .trim_start_matches("require(")
-                    .trim_end_matches(')')
-                    .trim_matches(|c| c == '\'' || c == '"');
-                if !path.is_empty() {
-                    return Some(vec![ImportStatement {
-                        raw_path: path.to_owned(),
-                        line,
-                        kind: ImportKind::Dependency,
-                        module_depth: 0,
-                    }]);
-                }
+            // `require('./bar')`. Checking the callee rather than the text also
+            // excludes `require('pkg')()`, where the outer call's callee is the
+            // inner call; the inner one is visited on its own and read there.
+            let callee = node.child_by_field_name("function")?;
+            if node_text(source, &callee) != "require" {
+                return None;
             }
-            None
+            let arguments = node.child_by_field_name("arguments")?;
+            let first =
+                arguments.named_children(&mut arguments.walk()).next()?;
+            if first.kind() != "string" {
+                return None;
+            }
+            let path = string_value(source, &first);
+            (!path.is_empty()).then(|| statement(path))
         }
         _ => None,
     }
@@ -480,6 +552,7 @@ fn extract_go_import(
                         module_depth: 0,
                         raw_path: path,
                         line: spec_line,
+                        cfg_gated: false,
                     });
                 }
             }
@@ -498,6 +571,7 @@ fn extract_go_import(
                                 module_depth: 0,
                                 raw_path: path,
                                 line: spec_line,
+                                cfg_gated: false,
                             });
                         }
                     }
@@ -513,6 +587,7 @@ fn extract_go_import(
                         module_depth: 0,
                         raw_path: path.to_owned(),
                         line,
+                        cfg_gated: false,
                     });
                 }
             }
@@ -568,6 +643,7 @@ fn extract_java_import(
         module_depth: 0,
         raw_path: path.to_owned(),
         line,
+        cfg_gated: false,
     }])
 }
 
@@ -597,6 +673,7 @@ fn extract_c_cpp_import(
                         module_depth: 0,
                         raw_path: path.to_owned(),
                         line,
+                        cfg_gated: false,
                     }]);
                 }
             }
@@ -609,6 +686,7 @@ fn extract_c_cpp_import(
                         module_depth: 0,
                         raw_path: format!("<{path}>"),
                         line,
+                        cfg_gated: false,
                     }]);
                 }
             }
@@ -617,6 +695,25 @@ fn extract_c_cpp_import(
     }
 
     None
+}
+
+/// The value a string literal node holds, without its quotes.
+///
+/// Prefers the grammar's own `string_fragment`, which is the unescaped content,
+/// and falls back to trimming the quote characters for grammars that do not
+/// expose one. An empty result means the node was not a usable path, so a
+/// caller can treat it as "no import here" rather than an empty path.
+fn string_value(source: &[u8], node: &Node<'_>) -> String {
+    if let Some(fragment) = node.named_child(0) {
+        let text = node_text(source, &fragment);
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    node_text(source, node)
+        .trim_matches(['\'', '"', '`', ';'])
+        .trim()
+        .to_owned()
 }
 
 /// Returns the text content of a Tree-sitter node.
@@ -634,6 +731,147 @@ fn node_text(source: &[u8], node: &Node<'_>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// Every path an extractor reports for one snippet.
+    fn paths(source: &[u8], language: SupportedLanguage) -> Vec<String> {
+        extract_imports(source, language)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|statement| statement.raw_path)
+            .collect()
+    }
+
+    // ---- JavaScript / TypeScript ----
+
+    #[test]
+    fn a_binding_named_from_is_not_mistaken_for_the_module_specifier() {
+        // Searching the statement text for `"from "` found the `from` inside the
+        // braces and produced the path `as origin } from './b'`. The grammar
+        // points at the module string directly, so the binding cannot interfere.
+        let source = b"import { from as origin } from './b';\n";
+
+        assert_eq!(
+            paths(source, SupportedLanguage::JavaScript),
+            vec!["./b".to_owned()]
+        );
+    }
+
+    #[test]
+    fn an_instantiated_require_names_only_its_module() {
+        // `require('pbkdf2-password')()` was trimmed of `require(` and every
+        // trailing `)`, leaving `pbkdf2-password')(`. This exact line is in
+        // express's own `examples/auth/index.js`.
+        let source = b"var hash = require('pbkdf2-password')()\n";
+
+        assert_eq!(
+            paths(source, SupportedLanguage::JavaScript),
+            vec!["pbkdf2-password".to_owned()]
+        );
+    }
+
+    #[test]
+    fn every_js_module_form_reports_its_module() {
+        let source = b"import x from './a';\n\
+                      import { a, b } from './c';\n\
+                      import * as ns from './d';\n\
+                      import './side';\n\
+                      export { z } from './e';\n\
+                      const q = require('./f');\n";
+
+        for expected in ["./a", "./c", "./d", "./side", "./e", "./f"] {
+            assert!(
+                paths(source, SupportedLanguage::JavaScript)
+                    .iter()
+                    .any(|path| path == expected),
+                "{expected} missing from the extracted paths"
+            );
+        }
+    }
+
+    #[test]
+    fn a_call_that_is_not_require_is_not_an_import() {
+        // `callee('./x')` is an ordinary function call that happens to receive a
+        // path-like string.
+        let source = b"callee('./x')\n";
+        assert_eq!(
+            paths(source, SupportedLanguage::JavaScript),
+            Vec::<String>::new()
+        );
+    }
+
+    // ---- Python ----
+
+    #[test]
+    fn an_aliased_python_import_reports_the_module_not_the_binding() {
+        // The statement's own `name` field holds `typing as t`, so splitting the
+        // text produced paths reading `typing as t`. Twenty-three of those
+        // appeared on flask as dependencies.
+        let source = b"import typing as t\n";
+
+        assert_eq!(
+            paths(source, SupportedLanguage::Python),
+            vec!["typing".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_python_from_import_reports_the_module_half() {
+        let source = b"from a.b.c import d\n";
+
+        assert_eq!(
+            paths(source, SupportedLanguage::Python),
+            vec!["a.b.c".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_relative_python_import_keeps_its_dots() {
+        for (source, expected) in [
+            (&b"from .mod import thing\n"[..], ".mod"),
+            (&b"from ..pkg import other\n"[..], "..pkg"),
+        ] {
+            assert_eq!(
+                paths(source, SupportedLanguage::Python),
+                vec![expected.to_owned()],
+                "{expected} lost its leading dots"
+            );
+        }
+    }
+
+    #[test]
+    fn importing_a_name_from_a_package_names_the_submodule_too() {
+        // `from . import helper` puts only the dots in `module_name`. Reporting
+        // the dots alone pointed the edge at the package's `__init__.py` instead
+        // of at the module the import reaches.
+        let source = b"from . import helper\n";
+        let found = paths(source, SupportedLanguage::Python);
+
+        assert!(
+            found.contains(&".helper".to_owned()),
+            "the submodule is missing from {found:?}"
+        );
+    }
+
+    #[test]
+    fn an_aliased_package_import_drops_the_alias_from_the_submodule_path() {
+        // `from . import typing as ft` imports the module `typing`; the child's
+        // text is `typing as ft`, which names nothing on disk.
+        let source = b"from . import typing as ft\n";
+
+        assert!(
+            paths(source, SupportedLanguage::Python)
+                .contains(&".typing".to_owned()),
+            "the alias leaked into the path"
+        );
+    }
+
+    #[test]
+    fn a_comma_separated_python_import_names_each_module() {
+        assert_eq!(
+            paths(b"import os, sys\n", SupportedLanguage::Python),
+            vec!["os".to_owned(), "sys".to_owned()]
+        );
+    }
 
     // ---- Rust ----
 

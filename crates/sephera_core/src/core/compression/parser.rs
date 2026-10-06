@@ -69,6 +69,26 @@ impl SupportedLanguage {
         }
     }
 
+    /// The language a file extension names.
+    ///
+    /// A graph edge carries the file it came from but not the language, and the
+    /// extension is what the scanner itself keys on, so this is the same decision
+    /// made in one more place rather than a second rule to keep in step.
+    #[must_use]
+    pub fn from_extension(extension: &str) -> Option<Self> {
+        match extension {
+            "rs" => Some(Self::Rust),
+            "py" | "pyi" => Some(Self::Python),
+            "ts" | "tsx" => Some(Self::TypeScript),
+            "js" | "jsx" | "mjs" | "cjs" => Some(Self::JavaScript),
+            "go" => Some(Self::Go),
+            "java" => Some(Self::Java),
+            "cpp" | "cc" | "cxx" | "hpp" | "hh" => Some(Self::Cpp),
+            "c" | "h" => Some(Self::C),
+            _ => None,
+        }
+    }
+
     /// Returns the [`tree_sitter::Language`] grammar for this variant.
     #[must_use]
     fn tree_sitter_language(self) -> Language {

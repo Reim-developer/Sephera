@@ -230,6 +230,13 @@ Measured on 12 uncompressed Rust files from this repo:
 
 The API surface survives — signatures, types, imports, and traits are all still there, only bodies are replaced.
 
+**Where that number stops applying.** The figure above is whole files, chosen for having large function bodies — the case compression is built for. Two other cases behave differently, and both were measured rather than assumed:
+
+- `--compress` compresses *excerpts*, not whole files. An excerpt is already mostly declarations, so compressing it saved **0.4%** across this repository (108,815 → 108,396 tokens). It is not the lever for the excerpt budget.
+- A file that is almost entirely declarations can **grow**: `graph/plugins/mod.rs` went from 1,161 to 2,026 tokens, because `{ ... }` markers and retained signatures can exceed the bodies they replace. 4 of 238 files grew in that run.
+
+The gain scales with how much of a file is body. Check before relying on it.
+
 **Where it does not help:** files with no implementation to strip. `core.rs` and `lib.rs` are almost entirely `mod` declarations and type definitions, and came out 2–3% *larger*. Compression pays off in proportion to how much of a file is executable body, so point it at logic-heavy directories rather than expecting a flat rate.
 
 Real pack metadata from this repo:

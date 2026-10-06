@@ -88,6 +88,17 @@ fn render_markdown_summary(output: &mut String, report: &GraphReport) {
             "| Unresolved local paths | {} |",
             report.metrics.unresolved_local_edges
         );
+        // Shown when non-zero for the same reason as the row above: a limitation to
+        // state, not a permanent fixture. These edges only compile when the feature
+        // is on, so a blast radius that counted them silently claims a dependency
+        // the build may not have.
+        if report.metrics.cfg_gated_edges > 0 {
+            let _ = writeln!(
+                output,
+                "| Feature-gated edges | {} |",
+                report.metrics.cfg_gated_edges
+            );
+        }
     }
     let _ = writeln!(
         output,
@@ -535,6 +546,8 @@ mod tests {
                 import_path: "crate::lib".to_owned(),
                 resolved: true,
                 kind: ImportKind::Dependency,
+                local_gap: false,
+                cfg_gated: false,
             }],
             metrics: GraphMetrics {
                 total_files: 2,
@@ -543,6 +556,7 @@ mod tests {
                 total_external_edges: 0,
                 unresolved_local_edges: 0,
                 unresolved_local_samples: Vec::new(),
+                cfg_gated_edges: 0,
                 dependencies: Vec::new(),
                 declared_dependency_edges: 0,
                 local_crate_edges: 0,
@@ -584,6 +598,8 @@ mod tests {
             import_path: "x".to_owned(),
             resolved: to.is_some(),
             kind: ImportKind::Dependency,
+            local_gap: false,
+            cfg_gated: false,
         };
         let report = GraphReport {
             base_path: PathBuf::from("/tmp/test"),
@@ -643,6 +659,8 @@ mod tests {
                 import_path: "super".to_owned(),
                 resolved: true,
                 kind: ImportKind::Dependency,
+                local_gap: false,
+                cfg_gated: false,
             }],
             metrics: sample_report().metrics,
         };

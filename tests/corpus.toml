@@ -29,14 +29,19 @@
 [[corpus]]
 name = "axum"
 language = "Rust"
-# What is left is a `pub use http;` re-export of an external crate, a pair of
-# `#[macro_export]` macros, and names reached only from an inline module. A floor
-# of gaps is expected here; it was 66 before declaration lookup resolved the
-# re-export and crate-root cases.
-unresolved_local = 13
+# What is left is a pair of `#[macro_export]` macros, a `pub use` re-export the
+# declaration index reads as local, and names reached only from an inline
+# module. A floor of gaps is expected here; it was 66 before declaration lookup
+# resolved the re-export and crate-root cases, and 13 once a `pub use http;` of an
+# external crate stopped being counted as a missing file.
+unresolved_local = 8
 files = 307
 internal_edges = 640
 self_references = 66
+# Edges that only compile when a `#[cfg]` is on. axum gates its public API on
+# `feature = "form"` and `feature = "json"`, so an unqualified count would claim
+# a dependency a default build does not have.
+cfg_gated_edges = 86
 cycles = 18
 structural_cycles = 0
 
@@ -47,9 +52,12 @@ language = "Python"
 # not a target to raise.
 unresolved_local = 0
 files = 80
-internal_edges = 171
+# Up from 171 when `from . import helper` stopped being reported as pointing at
+# the package's `__init__.py` instead of at the submodule it names.
+internal_edges = 185
 self_references = 5
-cycles = 39
+cfg_gated_edges = 0
+cycles = 43
 # Flask's `__init__.py` is the public API and its modules import back through it,
 # so every cycle here involves a real dependency.
 structural_cycles = 0
@@ -57,11 +65,12 @@ structural_cycles = 0
 [[corpus]]
 name = "express"
 language = "JavaScript"
-# `require('../..')` names the package root, which needs package.json to
-# resolve. That accounts for most of the gap.
-unresolved_local = 97
+# `require('../..')` names the package root, which needs package.json's `main`
+# field to resolve. That accounts for most of the gap.
+unresolved_local = 96
 files = 141
 internal_edges = 63
 self_references = 0
+cfg_gated_edges = 0
 cycles = 0
 structural_cycles = 0

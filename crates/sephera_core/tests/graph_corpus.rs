@@ -37,6 +37,7 @@ struct CorpusExpectation {
     files: u64,
     internal_edges: u64,
     self_references: u64,
+    cfg_gated_edges: u64,
     cycles: u64,
     structural_cycles: u64,
 }
@@ -173,7 +174,7 @@ fn graph_metrics_match_the_pinned_corpus() {
 
         let metrics = &report.metrics;
         let structural = count_structural_cycles(&report);
-        let cases: [(&str, u64, u64); 5] = [
+        let cases: [(&str, u64, u64); 6] = [
             ("files", metrics.total_files, expected.files),
             (
                 "internal_edges",
@@ -184,6 +185,11 @@ fn graph_metrics_match_the_pinned_corpus() {
                 "self_references",
                 metrics.self_references,
                 expected.self_references,
+            ),
+            (
+                "cfg_gated_edges",
+                metrics.cfg_gated_edges,
+                expected.cfg_gated_edges,
             ),
             (
                 "unresolved_local",

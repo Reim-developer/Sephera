@@ -105,6 +105,31 @@ impl ResolverPlugin for RustPlugin {
         // without it every such import was reported as an external dependency.
         resolve_qualified(context, &children, import_path, false)
     }
+
+    /// Whether a name the crate root re-exports is an external crate.
+    ///
+    /// `pub use http;` in `lib.rs` makes `http` reachable as `crate::http`, so
+    /// `crate::http::Request` is a dependency on the `http` crate rather than a
+    /// missing file. The test is that the name resolves to nothing local: a name
+    /// that also names a module in this crate is a local reference whatever else
+    /// the root re-exports.
+    fn leaves_project(&self, name: &str, context: ResolveContext<'_>) -> bool {
+        let Some(index) = context.declarations else {
+            return false;
+        };
+        let Some(root_file) = crate_root_file(context, context.source_file)
+        else {
+            return false;
+        };
+        if !index.file_reaches(&root_file, name) {
+            return false;
+        }
+
+        // A local module of the same name wins in Rust, so a path that could name
+        // one is a local reference and not an external re-export.
+        let root = crate_root(context.source_file);
+        first_existing(context, &qualify(&root, name)).is_none()
+    }
 }
 
 /// Resolve a path that may end in a name rather than a module.
@@ -348,13 +373,8 @@ fn resolve(
 ) -> Option<String> {
     let known: super::KnownFiles =
         files.iter().map(|f| (*f).to_owned()).collect();
-    let context = ResolveContext {
-        source_file,
-        known_files: &known,
-        module_depth: 0,
-        kind: ImportKind::Dependency,
-        declarations: None,
-    };
+    let context =
+        crate::core::graph::plugins::test_context(source_file, &known);
     RustPlugin.resolve(import_path, context)
 }
 

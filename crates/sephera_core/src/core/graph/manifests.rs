@@ -1,9 +1,3 @@
-//! Reads project manifests so unresolved edges can be attributed.
-//!
-//! An unresolved import is not the same thing as a third-party dependency.
-//! `use axum_core::body::Body;` inside the axum workspace names a crate in the
-//! same repository, and `std::io` names the standard library. Counting all three
-//! as "external" made `total_external_edges` unreadable: on the axum corpus 1018
 //! of 2615 unresolved edges were workspace members.
 //!
 //! This module answers three questions about one import path: is the first
@@ -19,6 +13,38 @@ use std::{
 
 /// One manifest reader, so the readers can be listed as a table.
 type ReadManifest = fn(&mut ManifestIndex, &str);
+
+/// Which language's standard library applies to an import.
+///
+/// Needed because the languages share names. `http` is a Node builtin module and
+/// a Rust crate of the same name; calling it a builtin everywhere reported
+/// axum's 191 references to the `http` crate as standard library.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Ecosystem {
+    Rust,
+    Python,
+    Node,
+    Go,
+    /// A language with no builtin list here, such as Java or C.
+    Other,
+}
+
+impl Ecosystem {
+    /// The ecosystem an import written in `language` belongs to.
+    #[must_use]
+    pub const fn of(
+        language: crate::core::compression::SupportedLanguage,
+    ) -> Self {
+        use crate::core::compression::SupportedLanguage as Language;
+        match language {
+            Language::Rust => Self::Rust,
+            Language::Python => Self::Python,
+            Language::JavaScript | Language::TypeScript => Self::Node,
+            Language::Go => Self::Go,
+            Language::Java | Language::C | Language::Cpp => Self::Other,
+        }
+    }
+}
 
 /// What an unresolved import path turned out to name.
 #[derive(
@@ -67,7 +93,12 @@ pub struct ManifestIndex {
     /// Declared third-party packages, mapped to a version when known.
     declared: BTreeMap<String, Option<String>>,
     /// Names provided without a manifest, which only the standard library has.
-    builtin_names: BTreeSet<String>,
+    ///
+    /// Keyed by ecosystem because the lists collide: `http`, `url`, `os` and
+    /// `path` are all Node builtins and all common crate names.
+    builtin_names: BTreeMap<Ecosystem, BTreeSet<String>>,
+    /// Go's module path from `go.mod`, which maps to the project root directory.
+    module_path: Option<String>,
 }
 
 impl ManifestIndex {
@@ -117,11 +148,24 @@ impl ManifestIndex {
                 .into_iter()
                 .map(|(name, version)| (normalise(&name), version))
                 .collect(),
-            builtin_names: BTreeSet::new(),
-            ..Self::default()
+            builtin_names: BTreeMap::new(),
+            module_path: None,
+            base_path: std::path::PathBuf::new(),
         };
         index.add_builtins();
         index
+    }
+
+    /// Whether `name` is this ecosystem's standard library.
+    ///
+    /// Scoped to the ecosystem on purpose. `http` is a Node builtin module and
+    /// the most widely used Rust web crate, and one shared list reported axum's
+    /// 191 references to the crate as standard library.
+    #[must_use]
+    pub fn is_builtin(&self, name: &str, ecosystem: Ecosystem) -> bool {
+        self.builtin_names
+            .get(&ecosystem)
+            .is_some_and(|names| names.contains(name))
     }
 
     /// Classify one import path and return the package name it names.
@@ -131,6 +175,7 @@ impl ManifestIndex {
     pub fn attribute(
         &self,
         import_path: &str,
+        ecosystem: Ecosystem,
     ) -> Option<(String, DependencyKind, Option<String>)> {
         if is_local_path(import_path) {
             return None;
@@ -141,7 +186,7 @@ impl ManifestIndex {
         // path contains `.` in its domain. So every plausible prefix is tried and
         // the index decides which one names a real package.
         for candidate in package_candidates(import_path) {
-            if self.builtin_names.contains(&candidate) {
+            if self.is_builtin(&candidate, ecosystem) {
                 return Some((candidate, DependencyKind::Builtin, None));
             }
             if self.local_names.contains(&candidate) {
@@ -172,15 +217,16 @@ impl ManifestIndex {
     #[must_use]
     pub fn summarise<'a>(
         &self,
-        import_paths: impl IntoIterator<Item = &'a str>,
+        import_paths: impl IntoIterator<Item = (&'a str, Ecosystem)>,
     ) -> Vec<Dependency> {
         let mut counts: BTreeMap<
             (String, DependencyKind),
             (Option<String>, u64),
         > = BTreeMap::new();
 
-        for path in import_paths {
-            let Some((name, kind, version)) = self.attribute(path) else {
+        for (path, ecosystem) in import_paths {
+            let Some((name, kind, version)) = self.attribute(path, ecosystem)
+            else {
                 continue;
             };
             let entry = counts.entry((name, kind)).or_insert((version, 0));
@@ -211,6 +257,34 @@ impl ManifestIndex {
     #[must_use]
     pub const fn local_names(&self) -> &BTreeSet<String> {
         &self.local_names
+    }
+
+    /// Go's module path, when a `go.mod` declared one.
+    #[must_use]
+    pub fn module_path(&self) -> Option<&str> {
+        self.module_path.as_deref()
+    }
+
+    /// Record a Go module path directly, for tests and for callers that already
+    /// have one.
+    pub fn set_go_module_path(&mut self, module_path: &str) {
+        self.module_path = Some(module_path.to_owned());
+    }
+
+    /// Whether an import names this project's own Go module root package.
+    ///
+    /// Go maps the module path to the directory holding `go.mod`, and the root
+    /// package's files sit directly in it. An import of the bare module path is
+    /// therefore a reference to that directory, which no directory-name match
+    /// can find: `example.com/app` names package `app`, and there is no
+    /// directory called `app`.
+    ///
+    /// Returns a flag rather than a path because the graph's file list holds
+    /// paths relative to the project root, so the directory it names is the root
+    /// itself.
+    #[must_use]
+    pub fn is_go_module_root(&self, import_path: &str) -> bool {
+        self.module_path.as_deref() == Some(import_path)
     }
 
     fn read_cargo_toml(&mut self, contents: &str) {
@@ -362,6 +436,18 @@ impl ManifestIndex {
         let mut in_require = false;
         for line in contents.lines() {
             let line = line.trim();
+            // `module example.com/app` -- the path that maps to the project
+            // root directory. Without it `import "example.com/app"` cannot
+            // resolve, because Go names the root package by the module path
+            // while the files sit at the top level rather than in a directory
+            // called `app`.
+            if let Some(rest) = line.strip_prefix("module ") {
+                let name = rest.split_whitespace().next().unwrap_or("");
+                if !name.is_empty() {
+                    self.module_path = Some(name.to_owned());
+                }
+                continue;
+            }
             if line.starts_with("require (") {
                 in_require = true;
                 continue;
@@ -404,7 +490,7 @@ impl ManifestIndex {
         }
     }
 
-    /// Names provided without being declared anywhere.
+    /// Names the standard library provides, per ecosystem.
     ///
     /// Only lists that are short and stable are kept. Python's standard library
     /// is deliberately absent: it has over three hundred names and no single
@@ -412,10 +498,15 @@ impl ManifestIndex {
     /// wrong answer for every undeclared third-party package too. A Python
     /// standard library module is therefore reported as undeclared, which is
     /// imprecise but not wrong.
+    ///
+    /// The lists are per ecosystem rather than global because the names collide.
+    /// `http` is a Node builtin and also the most common Rust web crate, and one
+    /// shared list reported axum's 191 references to the `http` crate as
+    /// standard library.
     fn add_builtins(&mut self) {
         const RUST: &[&str] = &["std", "core", "alloc"];
         // Node's own modules, from `module.builtinModules`. An explicit
-        // `node:` prefix is handled separately since it needs no list.
+        // `node:` prefix needs no list because it is unambiguous.
         const NODE: &[&str] = &[
             "assert",
             "buffer",
@@ -455,8 +546,12 @@ impl ManifestIndex {
         ];
 
         self.builtin_names
+            .entry(Ecosystem::Rust)
+            .or_default()
             .extend(RUST.iter().map(|name| (*name).to_owned()));
         self.builtin_names
+            .entry(Ecosystem::Node)
+            .or_default()
             .extend(NODE.iter().map(|name| (*name).to_owned()));
     }
 }
@@ -558,7 +653,7 @@ mod tests {
         );
 
         assert_eq!(
-            index.attribute("axum_core::body::Body"),
+            index.attribute("axum_core::body::Body", Ecosystem::Rust),
             Some(("axumcore".to_owned(), DependencyKind::Local, None))
         );
     }
@@ -571,7 +666,7 @@ mod tests {
         );
 
         assert_eq!(
-            index.attribute("anyhow::Result"),
+            index.attribute("anyhow::Result", Ecosystem::Rust),
             Some((
                 "anyhow".to_owned(),
                 DependencyKind::Declared,
@@ -585,7 +680,7 @@ mod tests {
         let index = ManifestIndex::from_parts(Vec::<String>::new(), []);
 
         assert_eq!(
-            index.attribute("werkzeug.utils"),
+            index.attribute("werkzeug.utils", Ecosystem::Rust),
             Some(("werkzeug".to_owned(), DependencyKind::Undeclared, None))
         );
     }
@@ -595,11 +690,11 @@ mod tests {
         let index = ManifestIndex::from_parts(Vec::<String>::new(), []);
 
         assert_eq!(
-            index.attribute("std::collections::BTreeMap"),
+            index.attribute("std::collections::BTreeMap", Ecosystem::Rust),
             Some(("std".to_owned(), DependencyKind::Builtin, None))
         );
         assert_eq!(
-            index.attribute("core::fmt"),
+            index.attribute("core::fmt", Ecosystem::Rust),
             Some(("core".to_owned(), DependencyKind::Builtin, None))
         );
     }
@@ -609,13 +704,39 @@ mod tests {
         let index = ManifestIndex::from_parts(Vec::<String>::new(), []);
 
         assert_eq!(
-            index.attribute("node:fs"),
-            index.attribute("fs"),
+            index.attribute("node:fs", Ecosystem::Node),
+            index.attribute("fs", Ecosystem::Node),
             "the `node:` prefix is a spelling, so both name the same package"
         );
         assert_eq!(
-            index.attribute("path"),
+            index.attribute("path", Ecosystem::Node),
             Some(("path".to_owned(), DependencyKind::Builtin, None))
+        );
+    }
+
+    #[test]
+    fn a_builtin_name_in_another_ecosystem_is_not_a_builtin() {
+        // `http`, `url`, `os` and `path` are Node builtins and all common crate
+        // names. One shared list reported axum's 191 references to the `http`
+        // crate as standard library, which is the opposite of the truth.
+        let index = ManifestIndex::from_parts(
+            Vec::<String>::new(),
+            [("http".to_owned(), Some("1.0".to_owned()))],
+        );
+
+        assert_eq!(
+            index.attribute("http::Request", Ecosystem::Rust),
+            Some((
+                "http".to_owned(),
+                DependencyKind::Declared,
+                Some("1.0".to_owned())
+            )),
+            "a Rust file importing the http crate is importing the crate"
+        );
+        assert_eq!(
+            index.attribute("path", Ecosystem::Rust),
+            Some(("path".to_owned(), DependencyKind::Undeclared, None)),
+            "`path` is a Node builtin, not a Rust one"
         );
     }
 
@@ -636,7 +757,7 @@ mod tests {
             "self",
         ] {
             assert_eq!(
-                index.attribute(path),
+                index.attribute(path, Ecosystem::Rust),
                 None,
                 "{path} is this project's own code, not a package"
             );
@@ -648,12 +769,12 @@ mod tests {
         let index = ManifestIndex::from_parts(Vec::<String>::new(), []);
 
         assert_eq!(
-            index.attribute("superstruct::Thing"),
+            index.attribute("superstruct::Thing", Ecosystem::Rust),
             Some(("superstruct".to_owned(), DependencyKind::Undeclared, None)),
             "`superstruct` is a crate, not the `super` keyword"
         );
         assert_eq!(
-            index.attribute("selfie"),
+            index.attribute("selfie", Ecosystem::Rust),
             Some(("selfie".to_owned(), DependencyKind::Undeclared, None))
         );
     }
@@ -666,8 +787,8 @@ mod tests {
         );
 
         assert_eq!(
-            index.attribute("serde_json::Value"),
-            index.attribute("serde-json/Value"),
+            index.attribute("serde_json::Value", Ecosystem::Rust),
+            index.attribute("serde-json/Value", Ecosystem::Rust),
             "separator style must not create two packages"
         );
     }
@@ -714,7 +835,7 @@ serde = { version = "1", features = ["derive"] }
         ManifestIndex::read_go_mod(&mut index, contents);
 
         assert_eq!(
-            index.attribute("github.com/x/y/pkg"),
+            index.attribute("github.com/x/y/pkg", Ecosystem::Rust),
             Some((
                 "github.com/x/y".to_owned(),
                 DependencyKind::Declared,
@@ -723,7 +844,7 @@ serde = { version = "1", features = ["derive"] }
             "the declared module path must win over its shorter prefixes"
         );
         assert_eq!(
-            index.attribute("github.com/single/s"),
+            index.attribute("github.com/single/s", Ecosystem::Rust),
             Some((
                 "github.com/single/s".to_owned(),
                 DependencyKind::Declared,
@@ -740,7 +861,7 @@ serde = { version = "1", features = ["derive"] }
 
         assert!(index.local_names().contains("demo"));
         assert_eq!(
-            index.attribute("left-pad"),
+            index.attribute("left-pad", Ecosystem::Rust),
             Some((
                 "leftpad".to_owned(),
                 DependencyKind::Declared,
@@ -757,7 +878,7 @@ serde = { version = "1", features = ["derive"] }
         ManifestIndex::read_requirements_txt(&mut index, contents);
 
         assert_eq!(
-            index.attribute("flask"),
+            index.attribute("flask", Ecosystem::Rust),
             Some(("flask".to_owned(), DependencyKind::Declared, None))
         );
         assert!(index.declared.contains_key("requests"));
@@ -775,12 +896,12 @@ serde = { version = "1", features = ["derive"] }
         );
 
         let summary = index.summarise([
-            "std::io",
-            "std::fs",
-            "anyhow::Result",
-            "anyhow::Context",
-            "anyhow::anyhow",
-            "crate::core::graph",
+            ("std::io", Ecosystem::Rust),
+            ("std::fs", Ecosystem::Rust),
+            ("anyhow::Result", Ecosystem::Rust),
+            ("anyhow::Context", Ecosystem::Rust),
+            ("anyhow::anyhow", Ecosystem::Rust),
+            ("crate::core::graph", Ecosystem::Rust),
         ]);
 
         assert_eq!(

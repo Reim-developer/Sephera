@@ -52,6 +52,18 @@ impl ImportKind {
     pub const fn is_renaming(self) -> bool {
         matches!(self, Self::TypeAlias | Self::Namespace)
     }
+
+    /// Whether this reference binds a name rather than naming a module.
+    ///
+    /// A namespace import such as Python's `from . import Flask` may name a
+    /// submodule or an attribute the package re-exports, and only the source can
+    /// say which. One that does not resolve is therefore not evidence of a
+    /// resolver gap. A renaming import is different: `use crate::foo::Bar as
+    /// Baz` names exactly one path, so failing to resolve it is a real gap.
+    #[must_use]
+    pub const fn is_namespace(self) -> bool {
+        matches!(self, Self::Namespace)
+    }
 }
 
 /// A single import statement extracted from a source file.
@@ -77,6 +89,15 @@ pub struct ImportStatement {
     /// sibling file that does not exist.
     #[serde(default)]
     pub module_depth: u8,
+
+    /// Whether a `#[cfg(...)]` attribute decorates this import.
+    ///
+    /// The reference is real either way -- turning the feature on makes it
+    /// compile -- but a blast radius that counts it without saying so reports a
+    /// dependency the build may not have. axum gates nine of its public
+    /// re-exports on `feature = "form"` and `feature = "json"`.
+    #[serde(default)]
+    pub cfg_gated: bool,
 }
 
 /// Imports extracted from a single source file.
@@ -107,6 +128,16 @@ pub struct GraphEdge {
 
     /// Whether this edge was resolved to a local file.
     pub resolved: bool,
+    /// Whether this edge was meant to name a file in this project and could not.
+    ///
+    /// Distinct from `!resolved`, which also covers every external crate and
+    /// standard library module. Re-deriving the difference from the path's shape
+    /// in the metrics got `crate::http::Request` wrong: `pub use http;` re-exports
+    /// a crate from outside, so the path says "this project" and the code says
+    /// otherwise.
+    pub local_gap: bool,
+    /// Whether a `#[cfg(...)]` attribute gated this reference.
+    pub cfg_gated: bool,
 
     /// What this reference says about the file it names.
     ///
@@ -172,6 +203,14 @@ pub struct GraphMetrics {
     /// Capped so a badly misparsed file cannot flood the report. Empty when
     /// [`Self::unresolved_local_edges`] is zero.
     pub unresolved_local_samples: Vec<String>,
+
+    /// Edges that only exist when a `#[cfg]` is on.
+    ///
+    /// The reference is real either way -- enabling the feature makes it compile
+    /// -- but a blast radius that counts these without saying so claims a
+    /// dependency the build may not have. axum gates nine public re-exports on
+    /// `feature = "form"` and `feature = "json"`.
+    pub cfg_gated_edges: u64,
 
     /// Every package an unresolved edge refers to, most used first.
     ///

@@ -67,7 +67,7 @@ Sephera is useful when you need more than raw totals:
 - `context` turns repository structure into deterministic Markdown or JSON bundles
 - `context --diff` can center those bundles on a branch, commit, or current working tree
 - `.sephera.toml` lets teams keep shared context defaults and named profiles in the repository
-- AST compression reduces token usage by 50-70% while preserving API surface
+- AST compression preserves the API surface while dropping function bodies, typically 50-70% fewer tokens on implementation-heavy files
 - focus paths and approximate token budgets make output more practical for LLM use
 - `sephera mcp` provides direct integration with AI agents like Claude Desktop
 
