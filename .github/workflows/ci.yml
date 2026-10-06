@@ -94,6 +94,21 @@ jobs:
       - name: Verify snapshots
         run: cargo insta test --review --workspace
 
+      # The README quotes command output verbatim, so both the commands and the
+      # numbers they produce are checked. Writing the demo section found a summary
+      # table claiming four files where the tool reports seven; without this the
+      # next reader would have found it instead.
+      - name: Check README examples run
+        run: python scripts/check_readme_examples.py
+
+      - name: Check README figures are current
+        run: python scripts/check_readme_figures.py
+
+      - name: Verify the pinned corpus figures
+        env:
+          SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
+        run: python scripts/measure_accuracy.py --verify
+
   publish_dry_run:
     name: Publish Dry Run
     runs-on: ubuntu-latest
