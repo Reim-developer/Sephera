@@ -25,6 +25,7 @@ fn symbols_tool_counts_declarations_per_language() {
         url: None,
         git_ref: None,
         ignore: None,
+        no_gitignore: None,
         detail: None,
     }));
 
@@ -56,6 +57,7 @@ fn symbols_tool_omits_the_symbol_list_without_detail() {
             url: None,
             git_ref: None,
             ignore: None,
+            no_gitignore: None,
             detail: None,
         }))
         .expect("summary must succeed");
@@ -74,6 +76,7 @@ fn symbols_tool_omits_the_symbol_list_without_detail() {
             url: None,
             git_ref: None,
             ignore: None,
+            no_gitignore: None,
             detail: Some(true),
         }))
         .expect("detail mode must succeed");
@@ -99,6 +102,7 @@ fn symbols_tool_rejects_invalid_ignore_pattern() {
         url: None,
         git_ref: None,
         ignore: Some(vec!["(".to_owned()]),
+        no_gitignore: None,
         detail: None,
     }));
 
@@ -114,6 +118,7 @@ fn symbols_tool_rejects_path_and_url_together() {
         url: Some("https://github.com/o/r".to_owned()),
         git_ref: None,
         ignore: None,
+        no_gitignore: None,
         detail: None,
     }));
 
@@ -129,6 +134,7 @@ fn symbols_tool_rejects_ref_without_url() {
         url: None,
         git_ref: Some("main".to_owned()),
         ignore: None,
+        no_gitignore: None,
         detail: None,
     }));
 
@@ -236,6 +242,7 @@ fn loc_tool_valid_directory() {
         url: None,
         git_ref: None,
         ignore: None,
+        no_gitignore: None,
     });
 
     let result = server.loc(param);
@@ -253,6 +260,7 @@ fn loc_tool_invalid_directory() {
         url: None,
         git_ref: None,
         ignore: None,
+        no_gitignore: None,
     });
 
     let result = server.loc(param);
@@ -273,6 +281,7 @@ fn context_tool_valid_directory() {
         list_profiles: None,
         focus: None,
         ignore: None,
+        no_gitignore: None,
         diff: None,
         focus_symbol: None,
         budget: Some(1000),
@@ -303,6 +312,7 @@ fn graph_tool_valid_directory() {
         git_ref: None,
         focus: Some(vec!["src/main.rs".to_owned()]),
         ignore: None,
+        no_gitignore: None,
         depth: Some(0),
         depends_on: None,
         format: None,
@@ -330,6 +340,7 @@ fn graph_tool_depends_on_query_is_serialized() {
         git_ref: None,
         focus: None,
         ignore: None,
+        no_gitignore: None,
         depth: Some(1),
         depends_on: Some("src/util.rs".to_owned()),
         format: None,
@@ -352,6 +363,7 @@ fn graph_tool_invalid_ignore_pattern_fails() {
         git_ref: None,
         focus: None,
         ignore: Some(vec!["(".to_owned()]),
+        no_gitignore: None,
         depth: None,
         depends_on: None,
         format: None,
@@ -373,6 +385,7 @@ fn graph_tool_missing_depends_on_target_fails() {
         git_ref: None,
         focus: None,
         ignore: None,
+        no_gitignore: None,
         depth: None,
         depends_on: Some("src/missing.rs".to_owned()),
         format: None,
@@ -398,6 +411,7 @@ fn loc_tool_supports_url_mode() {
         url: Some(remote_repo_url(temp_dir.path())),
         git_ref: None,
         ignore: None,
+        no_gitignore: None,
     });
 
     let result = server.loc(param);
@@ -419,6 +433,7 @@ fn graph_tool_supports_url_mode() {
         git_ref: None,
         focus: Some(vec!["src/main.rs".to_owned()]),
         ignore: None,
+        no_gitignore: None,
         depth: Some(0),
         depends_on: None,
         format: None,
@@ -475,6 +490,7 @@ fn context_tool_supports_url_profiles_diff_and_markdown() {
         focus: None,
         focus_symbol: None,
         ignore: None,
+        no_gitignore: None,
         diff: Some("HEAD~1".to_owned()),
         budget: Some(4_000),
         compress: None,
@@ -512,6 +528,7 @@ fn context_tool_list_profiles_with_url_returns_json() {
         list_profiles: Some(true),
         focus: None,
         ignore: None,
+        no_gitignore: None,
         diff: None,
         focus_symbol: None,
         budget: None,
@@ -540,6 +557,7 @@ fn tools_reject_path_and_url_together() {
         url: Some("file:///tmp/demo".to_owned()),
         git_ref: None,
         ignore: None,
+        no_gitignore: None,
     });
 
     let result = server.loc(param);
@@ -556,6 +574,7 @@ fn tools_reject_ref_without_url_and_blob_urls() {
             git_ref: Some("main".to_owned()),
             focus: None,
             ignore: None,
+            no_gitignore: None,
             depth: None,
             depends_on: None,
             format: None,
@@ -576,6 +595,7 @@ fn tools_reject_ref_without_url_and_blob_urls() {
             list_profiles: Some(false),
             focus: None,
             ignore: None,
+            no_gitignore: None,
             diff: None,
             focus_symbol: None,
             budget: None,

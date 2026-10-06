@@ -81,6 +81,7 @@ fn merge_context_sources(
     Ok(ResolvedContextOptions {
         base_path: arguments.path,
         ignore,
+        read_ignore_files: !arguments.no_gitignore,
         focus,
         diff: arguments
             .diff

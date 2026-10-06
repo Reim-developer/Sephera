@@ -86,11 +86,15 @@ fn builds_context_and_prioritizes_focus_paths() {
             .iter()
             .any(|file| file.relative_path == "README")
     );
+    // `.gitignore` used to be packed. It no longer is: a file whose content is
+    // instructions about which files to skip costs budget and teaches a model
+    // nothing about the code. Traversal reads it and then leaves it out.
     assert!(
-        report
+        !report
             .files
             .iter()
-            .any(|file| file.relative_path == ".gitignore")
+            .any(|file| file.relative_path == ".gitignore"),
+        "an ignore file describes exclusions, it is not context"
     );
     assert!(
         report

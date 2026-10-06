@@ -19,6 +19,7 @@ pub fn resolve_context_options(
         profile: arguments.profile,
         list_profiles: arguments.list_profiles,
         ignore: arguments.ignore,
+        no_gitignore: arguments.no_gitignore,
         focus: arguments.focus,
         focus_symbol: arguments.focus_symbol,
         diff: arguments.diff,

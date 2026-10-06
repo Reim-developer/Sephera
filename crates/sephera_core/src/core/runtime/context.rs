@@ -28,6 +28,8 @@ pub struct ContextCommandInput {
     pub profile: Option<String>,
     pub list_profiles: bool,
     pub ignore: Vec<String>,
+    /// Skip `.gitignore` and `.sepheraignore`. Set from `--no-gitignore`.
+    pub no_gitignore: bool,
     pub focus: Vec<PathBuf>,
     pub diff: Option<String>,
     pub budget: Option<u64>,
@@ -45,6 +47,11 @@ pub struct ContextCommandInput {
 pub struct ResolvedContextOptions {
     pub source: ResolvedSource,
     pub ignore: Vec<String>,
+    /// Whether `.gitignore` and `.sepheraignore` apply. Set by
+    /// `--no-gitignore`; the config file cannot turn exclusion off, because a
+    /// pack built from a repository's own exclusions should not be able to skip
+    /// them.
+    pub read_ignore_files: bool,
     pub focus: Vec<PathBuf>,
     pub diff: Option<String>,
     pub budget: u64,
@@ -205,7 +212,7 @@ fn apply_focus_symbols(
         return Ok(());
     }
 
-    let ignore = IgnoreMatcher::from_patterns(&options.ignore)?;
+    let ignore = context_ignore_matcher(options)?;
     let detail = SymbolAnalyzer::new(&options.source.analysis_path, ignore)
         .analyze_detailed()
         .map_err(|error| {
@@ -225,6 +232,25 @@ fn apply_focus_symbols(
     Ok(())
 }
 
+/// The exclusion policy for one context build.
+///
+/// Shared by symbol resolution and pack building so that `--focus-symbol` and
+/// the pack itself look at the same set of files. When they disagreed, a name
+/// could resolve against files the pack then excluded.
+///
+/// # Errors
+///
+/// Returns an error when a written ignore pattern is invalid.
+fn context_ignore_matcher(
+    options: &ResolvedContextOptions,
+) -> Result<IgnoreMatcher> {
+    if options.read_ignore_files {
+        IgnoreMatcher::from_patterns(&options.ignore)
+    } else {
+        IgnoreMatcher::from_patterns_without_ignore_files(&options.ignore)
+    }
+}
+
 /// Builds the final context report from resolved context options.
 ///
 /// # Errors
@@ -234,7 +260,7 @@ fn apply_focus_symbols(
 pub fn build_context_report(
     options: &ResolvedContextOptions,
 ) -> Result<ContextReport> {
-    let ignore_matcher = IgnoreMatcher::from_patterns(&options.ignore)?;
+    let ignore_matcher = context_ignore_matcher(options)?;
     let compression_mode = match options.compress.as_deref() {
         Some("signatures") => CompressionMode::Signatures,
         Some("skeleton") => CompressionMode::Skeleton,
@@ -372,6 +398,7 @@ fn merge_context_sources(
     Ok(ResolvedContextOptions {
         source,
         ignore,
+        read_ignore_files: !request.no_gitignore,
         focus,
         diff,
         budget,
@@ -1056,6 +1083,7 @@ mod tests {
             },
             config: None,
             no_config: false,
+            no_gitignore: false,
             profile: None,
             list_profiles: false,
             ignore: Vec::new(),
