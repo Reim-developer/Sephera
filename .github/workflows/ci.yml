@@ -107,7 +107,13 @@ jobs:
       - name: Check README examples run
         run: python scripts/check_readme_examples.py
 
+      # The corpus location has to be set here too, not only on the fetch step.
+      # Without it the loc table is skipped with a message rather than checked,
+      # which is the silent-pass this workflow previously had for the corpus
+      # figures themselves.
       - name: Check README figures are current
+        env:
+          SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/check_readme_figures.py
 
       - name: Verify the pinned corpus figures
