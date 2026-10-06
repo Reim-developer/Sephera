@@ -63,15 +63,24 @@ count that caught it.
 
 ## See it work
 
-You want to refactor `code_loc.rs`. Run Sephera on Sephera:
+You are about to change `parser.rs`. Which files break?
+
+![A reverse dependency query answering which files depend on one file](docs/public/demo/graph.gif)
+
+Three arrows point at `parser.rs`. That is the whole answer, and it took one
+command.
+
+The recording runs on a five-file project in [`docs/demo/fixture`](docs/demo/fixture)
+rather than on this repository, for two reasons. The report has to fit one screen:
+on a 1,400-file repository the summary scrolls away before the reader sees it.
+And the output is fixed, so the recording still shows the same three arrows as
+this repository grows. Regenerate it with `python scripts/record_demo.py`.
+
+On a real codebase, the same query looks like this:
 
 ```bash
-sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs
+sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --format markdown
 ```
-
-![Sephera reverse dependency query showing which files import code_loc.rs](docs/public/demo/graph.gif)
-
-The same query with `--format markdown`:
 
 ````markdown
 # Dependency Graph Report
@@ -84,27 +93,21 @@ The same query with `--format markdown`:
 
 | Metric                | Value |
 |-----------------------|-------|
-| Files analyzed        | 4     |
-| Internal edges        | 7     |
-| External edges        | 19    |
-| Declared dependencies | 8     |
+| Files analyzed        | 7     |
+| Internal edges        | 33    |
+| External edges        | 21    |
+| Declared dependencies | 9     |
 | Local crate edges     | 0     |
-| Standard library edges| 11    |
+| Standard library edges| 12    |
 | Circular dependencies | 0     |
 
-## Most Imported Files
+## Dependencies
 
-| File                                      | Imported by |
-|-------------------------------------------|-------------|
-| `crates/sephera_core/src/core/code_loc.rs`| 6           |
-
-## Most Importing Files
-
-| File                                                | Imports |
-|-----------------------------------------------------|---------|
-| `crates/sephera_core/src/core/code_loc/tests.rs`    | 4       |
-| `crates/sephera_core/src/core/runtime/context.rs`  | 1       |
-| `crates/sephera_core/src/core/symbols/lookup.rs`    | 1       |
+| Package | Kind | Version | Import paths |
+|---------|------|---------|--------------|
+| `std` | stdlib | unknown | 12 |
+| `anyhow` | declared | 1.0.102 | 5 |
+| `tempfile` | declared | 3.27.0 | 4 |
 
 ## Dependency Diagram
 
@@ -112,12 +115,22 @@ The same query with `--format markdown`:
 graph LR
     n0["code_loc.rs"]
     n1["tests.rs"]
-    n2["context.rs"]
-    n3["lookup.rs"]
+    n2["runtime.rs"]
+    n3["context.rs"]
+    n4["lookup.rs"]
+    n5["mod.rs"]
+    n6["tests.rs"]
     n0 --> n1
     n1 --> n0
-    n2 --> n0
+    n2 --> n3
     n3 --> n0
+    n3 --> n5
+    n3 --> n2
+    n4 --> n5
+    n4 --> n0
+    n5 --> n4
+    n5 --> n6
+    n6 --> n5
 ```
 ````
 
