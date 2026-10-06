@@ -19,6 +19,48 @@ cargo install sephera
 
 ---
 
+## The graph is checked against real repositories
+
+A dependency tool that reports confident nonsense is worse than no tool. So the
+numbers are measured on three real projects at pinned commits, asserted in CI,
+and reproducible:
+
+```bash
+python scripts/fetch_corpus.py      # clone the three repositories
+python scripts/measure_accuracy.py --verify
+```
+
+```
+repository  files  internal  self-refs  unresolved  cycles  cfg-gated
+----------  -----  --------  ---------  ----------  ------  ---------
+      axum    307       640         66           8      18         86
+     flask     80       185          5           0      43          0
+   express    141       159          0           0       0          0
+```
+
+`unresolved` counts imports meant for this project that could not be placed to a
+file — the honest measure of what the tool failed at. `self-refs` are references
+a file makes to itself, counted apart because a `use super::*;` in a test module
+says nothing about how files depend on each other. `cfg-gated` counts edges that
+only compile when a `#[cfg]` is on, so the number is not quietly inflated by
+dependencies a default build does not have.
+
+The `axum` row is the honest one. An earlier version reported **66 unresolved
+paths and 54 cycles** on it. Those were module-tree artifacts — a parent
+declaring a child and the child naming its parent with `super::` — not
+dependencies anyone could act on, and this README advertised two of them as bugs
+found in this repository's own source. The graph now reports 8 and 18.
+
+Getting there was mostly measurement rather than design. Reading import
+statements by splitting text produced paths like `typing as t`,
+`pbkdf2-password')(`, and `as origin } from './b'`; treating every `use` as a
+re-export made a path resolve to the file that wrote it; and applying a name
+lookup to unqualified paths resolved every example's first `use axum::Router` to
+the example itself, inventing 934 self-edges. Each is a commit message with the
+count that caught it.
+
+---
+
 ## See it work
 
 You want to refactor `code_loc.rs`. Run Sephera on Sephera:
@@ -187,10 +229,10 @@ sephera graph --path .
 sephera graph --path . --format markdown
 
 # Blast radius: everything that transitively imports a file
-sephera graph --path . --what-depends-on src/core/session.rs
+sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs
 
 # Limit how far the impact spreads
-sephera graph --path . --what-depends-on src/core/session.rs --depth 1
+sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --depth 1
 
 # Scope analysis to a subtree, export for Graphviz
 sephera graph --path . --focus crates/sephera_core --format dot --output deps.dot
