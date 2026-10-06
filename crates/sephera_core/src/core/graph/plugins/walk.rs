@@ -17,19 +17,24 @@ use tree_sitter::Node;
 
 use crate::core::compression::{SupportedLanguage, new_parser};
 
-use super::ImportPlugin;
+use super::{ExtractedSource, ImportPlugin};
 use crate::core::graph::types::ImportStatement;
 
-/// Parse `source` and return every import the plugin recognises.
+/// Parse `source` once and return both what it imports and what it declares.
+///
+/// The two used to be separate methods on the plugin, each building its own
+/// parser, so a Rust file was parsed twice to answer two questions about the same
+/// bytes. The second parse is the reason the trait's doc comment used to say
+/// "one extra parse per Rust file" as though that were a cost worth stating.
 ///
 /// # Errors
 ///
 /// Returns an error when no parser exists for the language or the parse fails.
-pub(super) fn walk_imports(
+pub(super) fn walk_with_declarations(
     source: &[u8],
     language: SupportedLanguage,
     extractor: &dyn ImportPlugin,
-) -> Result<Vec<ImportStatement>> {
+) -> Result<ExtractedSource> {
     let mut parser = new_parser(language)?;
     let tree = parser
         .parse(source, None)
@@ -37,7 +42,11 @@ pub(super) fn walk_imports(
 
     let mut imports = Vec::new();
     descend(source, &tree.root_node(), extractor, 0, &mut imports);
-    Ok(imports)
+
+    Ok(ExtractedSource {
+        imports,
+        declared: extractor.collect_declarations(source, &tree),
+    })
 }
 
 /// Walk a node's children, carrying the depth a reference inside them sits at.

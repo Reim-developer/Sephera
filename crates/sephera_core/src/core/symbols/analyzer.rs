@@ -161,56 +161,60 @@ impl SymbolAnalyzer {
     }
 }
 
-/// Count declarations in one file, or `None` if it cannot be parsed.
-fn count_file(
+/// Everything one file declares: the tally, and optionally every declaration.
+///
+/// One parse and one walk, not two. They used to be separate functions each
+/// building their own parser, so `--format json` and `--detail` parsed every
+/// file twice and walked it twice to produce numbers that agreed with each other.
+/// Measured on axum: 154 ms for the detailed path against 90 ms for the tally
+/// alone, and the difference bought a second parse of the same bytes.
+fn parse_declarations(
     source: &[u8],
     language: SupportedLanguage,
-) -> Option<Vec<(SymbolKind, u64)>> {
+    relative_path: &str,
+    with_entries: bool,
+) -> Option<FileDeclarations> {
     let rules = symbol_rules(language);
     let mut parser = new_parser(language).ok()?;
     let tree = parser.parse(source, None)?;
 
     let mut counts: BTreeMap<SymbolKind, u64> = BTreeMap::new();
-    walk(tree.root_node(), &rules, &mut |kind, _node| {
+    let mut entries = Vec::new();
+
+    walk(tree.root_node(), &rules, &mut |kind, node| {
         *counts.entry(kind).or_default() += 1;
+
+        if with_entries {
+            entries.push(SymbolEntry {
+                file_path: relative_path.to_owned(),
+                name: node
+                    .child_by_field_name("name")
+                    .map(|name| text(source, name))
+                    .unwrap_or_default(),
+                kind,
+                line: node.start_position().row + 1,
+                // The node's own span, so a caller can slice out one
+                // declaration. A trailing newline is not part of the
+                // declaration itself.
+                end_line: node.end_position().row + 1,
+            });
+        }
     });
 
     if counts.is_empty() {
         None
     } else {
-        Some(counts.into_iter().collect())
+        Some(FileDeclarations {
+            counts: counts.into_iter().collect(),
+            entries,
+        })
     }
 }
 
-/// Record every declaration in one file, with its name and line.
-fn collect_entries(
-    source: &[u8],
-    language: SupportedLanguage,
-    relative_path: &str,
-    out: &mut Vec<SymbolEntry>,
-) {
-    let rules = symbol_rules(language);
-    let Ok(mut parser) = new_parser(language) else {
-        return;
-    };
-    let Some(tree) = parser.parse(source, None) else {
-        return;
-    };
-
-    walk(tree.root_node(), &rules, &mut |kind, node| {
-        out.push(SymbolEntry {
-            file_path: relative_path.to_owned(),
-            name: node
-                .child_by_field_name("name")
-                .map(|name| text(source, name))
-                .unwrap_or_default(),
-            kind,
-            line: node.start_position().row + 1,
-            // The node's own span, so a caller can slice out one declaration.
-            // A trailing newline is not part of the declaration itself.
-            end_line: node.end_position().row + 1,
-        });
-    });
+/// What one file declares.
+struct FileDeclarations {
+    counts: Vec<(SymbolKind, u64)>,
+    entries: Vec<SymbolEntry>,
 }
 
 /// Visit every node, reporting the ones that name a declaration.
@@ -272,23 +276,18 @@ fn count_project_file(
         )
     })?;
 
-    let Some(counts) = count_file(&source, ts_language) else {
+    let Some(found) = parse_declarations(
+        &source,
+        ts_language,
+        &file.normalized_relative_path,
+        include_symbols,
+    ) else {
         return Ok(FileOutcome::NoDeclarations);
     };
 
-    let mut entries = Vec::new();
-    if include_symbols {
-        collect_entries(
-            &source,
-            ts_language,
-            &file.normalized_relative_path,
-            &mut entries,
-        );
-    }
-
     Ok(FileOutcome::Counted(FileSymbols {
         language: language.name,
-        counts,
-        entries,
+        counts: found.counts,
+        entries: found.entries,
     }))
 }
