@@ -1,27 +1,106 @@
-//! JavaScript and TypeScript import extraction and resolution.
+//! TypeScript and JavaScript module resolution.
 //!
-//! One plugin serves both languages because their module syntax and resolution
-//! rules are identical; only the Tree-sitter grammar differs, and that is
-//! selected by the `language` field.
+//! One plugin serves both languages: only the grammar differs, and resolution is
+//! identical because a specifier means the same thing in each.
+//!
+//! Node resolves a directory through its `package.json` `main` field before
+//! falling back to `index`, and a relative specifier is resolved against the
+//! package root rather than the filesystem — so `require('../..')` from
+//! `examples/auth/index.js` lands on the root, not above it. Left unclamped that
+//! produced `..` and then `/index.js`, a path no project has, and 46 `../`, 22
+//! `..` and 12 `../..` imports on express's own examples were reported
+//! unresolved.
+
+mod extract;
 
 use crate::core::compression::SupportedLanguage;
 
 use super::{
     ExtractedImport, ImportPlugin, ResolveContext, ResolverPlugin, paths,
+    walk::walk_imports,
 };
 
-/// File spellings tried after a relative specifier resolves to a directory.
+/// Suffixes tried in order when a specifier names a file without an extension.
+///
+/// An empty suffix comes first so an explicit extension in the specifier wins
+/// over a guess.
 const EXTENSION_CANDIDATES: &[&str] =
     &["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
 
+/// JavaScript or TypeScript import extraction and resolution.
+#[derive(Debug, Clone, Copy)]
+pub struct JavaScriptPlugin {
+    /// Selects the grammar used during extraction.
+    pub language: SupportedLanguage,
+}
+
+impl ImportPlugin for JavaScriptPlugin {
+    fn language(&self) -> SupportedLanguage {
+        self.language
+    }
+
+    fn extract_from_node(
+        &self,
+        source: &[u8],
+        node: &tree_sitter::Node<'_>,
+    ) -> Option<Vec<crate::core::graph::types::ImportStatement>> {
+        extract::extract_from_node(source, node)
+    }
+
+    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
+        walk_imports(source, ImportPlugin::language(self), self)
+            .ok()
+            .map(super::to_extracted)
+    }
+}
+
+impl ResolverPlugin for JavaScriptPlugin {
+    fn language(&self) -> SupportedLanguage {
+        self.language
+    }
+
+    fn resolve(
+        &self,
+        import_path: &str,
+        context: ResolveContext<'_>,
+    ) -> Option<String> {
+        resolve_import(import_path, context)
+    }
+}
+
+/// Resolve one specifier to a file in the analysis.
+fn resolve_import(
+    import_path: &str,
+    context: ResolveContext<'_>,
+) -> Option<String> {
+    // Bare specifiers (`react`, `lodash/fp`) name packages, not project files.
+    // Only `./` and `../` can be resolved locally.
+    if !import_path.starts_with('.') {
+        return None;
+    }
+
+    let base = paths::parent(context.source_file);
+    let escaped = paths::resolve_relative(&base, import_path);
+    let resolved = clamp_to_root(&escaped);
+
+    if let Some(entry) = package_entry_point(&context, &resolved) {
+        return Some(entry);
+    }
+
+    EXTENSION_CANDIDATES
+        .iter()
+        .map(|suffix| join_candidate(&resolved, suffix))
+        .find(|candidate| context.contains(candidate))
+}
+
 /// The file a directory's `package.json` points at, if it declares one.
 ///
-/// `main` is relative to the directory holding the manifest. A missing
-/// manifest, an unreadable one, or a `main` that names nothing in the analysis
-/// all mean "no entry point to add" rather than an error: Node falls back to
-/// `index.js`, and so does the candidate walk below.
+/// `main` is relative to the directory holding the manifest. A missing manifest,
+/// an unreadable one, or a `main` that names nothing in the analysis all mean
+/// "no entry point to add" rather than an error: Node falls back to `index.js`,
+/// and so does the candidate walk above.
 fn package_entry_point(
-    context: ResolveContext<'_>,
+    context: &ResolveContext<'_>,
     directory: &str,
 ) -> Option<String> {
     // Read the manifest rather than checking the known-files set first: that set
@@ -44,11 +123,7 @@ fn package_entry_point(
 /// Clamp a relative path that would leave the project to the project root.
 ///
 /// `resolve_relative` keeps leading `..` segments so a caller can notice an
-/// escape attempt, which is right for a user-supplied path and wrong here. Node
-/// resolves relative to the package root, not the filesystem, so `require('../..')`
-/// from `examples/auth/index.js` lands on the root rather than above it. Left
-/// unclamped the result was `..`, and every package-root import became
-/// `../index.js` -- a path nothing has.
+/// escape attempt, which is right for a user-supplied path and wrong here.
 fn clamp_to_root(resolved: &str) -> String {
     let mut segments: Vec<&str> = Vec::new();
     for segment in resolved.split('/') {
@@ -65,76 +140,15 @@ fn clamp_to_root(resolved: &str) -> String {
 
 /// Join a resolved directory and a candidate suffix into one path.
 ///
-/// The empty directory is the case that matters. A specifier like `require('../..')`
-/// from `examples/auth/index.js` resolves to the project root, which as a
-/// relative path is the empty string, and appending `/index.js` to it produced
-/// `/index.js` -- a path no project has. That left every package-root import
-/// unresolved: 46 `../`, 22 `..` and 12 `../..` on express's own examples.
+/// The empty directory is the case that matters. A specifier like
+/// `require('../..')` from `examples/auth/index.js` resolves to the project
+/// root, which as a relative path is the empty string, and appending `/index.js`
+/// to it produced `/index.js` — a path no project has.
 fn join_candidate(directory: &str, suffix: &str) -> String {
     if directory.is_empty() {
         suffix.trim_start_matches('/').to_owned()
     } else {
         format!("{directory}{suffix}")
-    }
-}
-
-/// JavaScript or TypeScript import extraction and resolution.
-#[derive(Debug, Clone, Copy)]
-pub struct JavaScriptPlugin {
-    /// Selects the grammar used during extraction.
-    pub language: SupportedLanguage,
-}
-
-impl ImportPlugin for JavaScriptPlugin {
-    fn language(&self) -> SupportedLanguage {
-        self.language
-    }
-
-    fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>> {
-        // The grammar differs between JS and TS; resolution does not, which is
-        // why one plugin serves both.
-        super::super::imports::walk_imports(source, self.language)
-            .ok()
-            .map(super::to_extracted)
-    }
-}
-
-impl ResolverPlugin for JavaScriptPlugin {
-    fn language(&self) -> SupportedLanguage {
-        self.language
-    }
-
-    fn resolve(
-        &self,
-        import_path: &str,
-        context: ResolveContext<'_>,
-    ) -> Option<String> {
-        // Bare specifiers (`react`, `lodash/fp`) name packages, not project
-        // files. Only `./` and `../` can be resolved locally.
-        if !import_path.starts_with('.') {
-            return None;
-        }
-
-        let base = paths::parent(context.source_file);
-        let escaped = paths::resolve_relative(&base, import_path);
-        let resolved = clamp_to_root(&escaped);
-
-        // Node resolves a directory through its `package.json` `main` field
-        // before falling back to `index.js`. Reading it matters for a package
-        // whose entry point is not called `index`, and it is the only thing that
-        // distinguishes two packages sharing a directory name.
-        if let Some(entry) = package_entry_point(context, &resolved) {
-            return Some(entry);
-        }
-
-        for extension in EXTENSION_CANDIDATES {
-            let candidate = join_candidate(&resolved, extension);
-            if context.contains(&candidate) {
-                return Some(candidate);
-            }
-        }
-
-        None
     }
 }
 

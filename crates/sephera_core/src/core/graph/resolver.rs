@@ -947,7 +947,7 @@ fn is_structural_module_edge(source: &str, target: &str) -> bool {
 
 /// Whether `target` is a direct child module of the file named by `source`.
 fn is_own_child_module(source: &str, target: &str) -> bool {
-    let children = plugins::rust_plugin::module_children_dir(source);
+    let children = plugins::rust::module_children_dir(source);
     match target.rsplit_once('/') {
         Some((directory, _)) => directory == children,
         None => false,
@@ -960,8 +960,8 @@ fn is_own_child_module(source: &str, target: &str) -> bool {
 /// `src/a/b/c.rs` to `src/lib.rs` is as unavoidable as one to `src/a/mod.rs`, and
 /// a cycle that walked only immediate neighbours would miss it.
 fn is_ancestor_module(ancestor: &str, descendant: &str) -> bool {
-    let enclosing = plugins::rust_plugin::module_children_dir(ancestor);
-    let inner = plugins::rust_plugin::module_children_dir(descendant);
+    let enclosing = plugins::rust::module_children_dir(ancestor);
+    let inner = plugins::rust::module_children_dir(descendant);
     inner.starts_with(&enclosing)
         && inner.len() > enclosing.len()
         && inner.as_bytes().get(enclosing.len()) == Some(&b'/')

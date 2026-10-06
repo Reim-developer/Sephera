@@ -15,12 +15,13 @@ use std::collections::BTreeSet;
 
 use crate::core::{compression::SupportedLanguage, graph::ImportKind};
 
-pub(crate) mod c_cpp_plugin;
-mod go_plugin;
-mod java_plugin;
-mod javascript_plugin;
-mod python_plugin;
-pub(crate) mod rust_plugin;
+mod c_cpp;
+mod go;
+mod java;
+mod javascript;
+mod python;
+pub(crate) mod rust;
+mod walk;
 
 /// Re-exported so plugin files can reach the shared helpers through one path.
 pub use super::path_utils as paths;
@@ -168,8 +169,51 @@ pub trait ImportPlugin: Sync {
     /// The language this plugin handles.
     fn language(&self) -> SupportedLanguage;
 
+    /// Read whatever this node says about imports, if it says anything.
+    ///
+    /// One method per AST node rather than one per language statement, because
+    /// the walk visits every node and the plugin decides which are the
+    /// interesting ones. Required rather than defaulted: a plugin with no
+    /// opinion on any node would silently contribute an empty graph, which is
+    /// the hardest kind of failure to notice.
+    ///
+    /// Extracting text from a node is the language's job, not the walker's.
+    /// Searching `import { from as origin } from './b'` for `"from "` found the
+    /// binding named `from` and produced the path `as origin } from './b'`; every
+    /// extractor here reads the grammar's own fields, and none of them splits a
+    /// statement apart.
+    fn extract_from_node(
+        &self,
+        source: &[u8],
+        node: &tree_sitter::Node<'_>,
+    ) -> Option<Vec<super::types::ImportStatement>>;
+
     /// Extracts imports from `source`, or `None` if the text cannot be parsed.
     fn extract(&self, source: &[u8]) -> Option<Vec<ExtractedImport>>;
+
+    /// How much deeper references inside this node's children sit.
+    ///
+    /// Rust's `mod tests { ... }` declares a module, so `super::` inside it
+    /// climbs one level further — ten references in this repository were counted
+    /// as unresolved before the depth was carried. No other supported language
+    /// has the construct, so the answer is zero and costs nothing.
+    fn child_depth_step(&self, _node: &tree_sitter::Node<'_>) -> u8 {
+        0
+    }
+
+    /// Whether this reference only exists when a feature flag is on.
+    ///
+    /// Rust's `#[cfg(feature = "json")]` is the case. The reference is real, but
+    /// a blast radius that counts it without saying so claims a dependency the
+    /// default build does not have. Languages with no conditional imports leave
+    /// this false.
+    fn is_cfg_gated(
+        &self,
+        _source: &[u8],
+        _node: &tree_sitter::Node<'_>,
+    ) -> bool {
+        false
+    }
 
     /// Names this source declares, when the language needs a lookup by name.
     ///
@@ -250,29 +294,24 @@ pub fn builtin_languages() -> Vec<SupportedLanguage> {
 /// `Box` removes one heap allocation per file per lookup — `extract_one_file`
 /// asks twice, once for imports and once for declared names — and it is what
 /// lets extraction run across a thread pool without a lock.
-static RUST_IMPORT: self::rust_plugin::RustPlugin =
-    self::rust_plugin::RustPlugin;
-static PYTHON_IMPORT: self::python_plugin::PythonPlugin =
-    self::python_plugin::PythonPlugin;
-static TYPESCRIPT_IMPORT: self::javascript_plugin::JavaScriptPlugin =
-    self::javascript_plugin::JavaScriptPlugin {
+static RUST_IMPORT: self::rust::RustPlugin = self::rust::RustPlugin;
+static PYTHON_IMPORT: self::python::PythonPlugin = self::python::PythonPlugin;
+static TYPESCRIPT_IMPORT: self::javascript::JavaScriptPlugin =
+    self::javascript::JavaScriptPlugin {
         language: SupportedLanguage::TypeScript,
     };
-static JAVASCRIPT_IMPORT: self::javascript_plugin::JavaScriptPlugin =
-    self::javascript_plugin::JavaScriptPlugin {
+static JAVASCRIPT_IMPORT: self::javascript::JavaScriptPlugin =
+    self::javascript::JavaScriptPlugin {
         language: SupportedLanguage::JavaScript,
     };
-static GO_IMPORT: self::go_plugin::GoPlugin = self::go_plugin::GoPlugin;
-static JAVA_IMPORT: self::java_plugin::JavaPlugin =
-    self::java_plugin::JavaPlugin;
-static C_IMPORT: self::c_cpp_plugin::CCppPlugin =
-    self::c_cpp_plugin::CCppPlugin {
-        language: SupportedLanguage::C,
-    };
-static CPP_IMPORT: self::c_cpp_plugin::CCppPlugin =
-    self::c_cpp_plugin::CCppPlugin {
-        language: SupportedLanguage::Cpp,
-    };
+static GO_IMPORT: self::go::GoPlugin = self::go::GoPlugin;
+static JAVA_IMPORT: self::java::JavaPlugin = self::java::JavaPlugin;
+static C_IMPORT: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
+    language: SupportedLanguage::C,
+};
+static CPP_IMPORT: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
+    language: SupportedLanguage::Cpp,
+};
 
 /// The extraction plugin for a language, if one is bundled.
 #[must_use]
@@ -295,29 +334,24 @@ pub fn builtin_import_plugin(
 ///
 /// Same reasoning as [`RUST_IMPORT`] and the rest: no state to build, no
 /// allocation per call, and shareable across threads.
-static RUST_RESOLVER: self::rust_plugin::RustPlugin =
-    self::rust_plugin::RustPlugin;
-static PYTHON_RESOLVER: self::python_plugin::PythonPlugin =
-    self::python_plugin::PythonPlugin;
-static TYPESCRIPT_RESOLVER: self::javascript_plugin::JavaScriptPlugin =
-    self::javascript_plugin::JavaScriptPlugin {
+static RUST_RESOLVER: self::rust::RustPlugin = self::rust::RustPlugin;
+static PYTHON_RESOLVER: self::python::PythonPlugin = self::python::PythonPlugin;
+static TYPESCRIPT_RESOLVER: self::javascript::JavaScriptPlugin =
+    self::javascript::JavaScriptPlugin {
         language: SupportedLanguage::TypeScript,
     };
-static JAVASCRIPT_RESOLVER: self::javascript_plugin::JavaScriptPlugin =
-    self::javascript_plugin::JavaScriptPlugin {
+static JAVASCRIPT_RESOLVER: self::javascript::JavaScriptPlugin =
+    self::javascript::JavaScriptPlugin {
         language: SupportedLanguage::JavaScript,
     };
-static GO_RESOLVER: self::go_plugin::GoPlugin = self::go_plugin::GoPlugin;
-static JAVA_RESOLVER: self::java_plugin::JavaPlugin =
-    self::java_plugin::JavaPlugin;
-static C_RESOLVER: self::c_cpp_plugin::CCppPlugin =
-    self::c_cpp_plugin::CCppPlugin {
-        language: SupportedLanguage::C,
-    };
-static CPP_RESOLVER: self::c_cpp_plugin::CCppPlugin =
-    self::c_cpp_plugin::CCppPlugin {
-        language: SupportedLanguage::Cpp,
-    };
+static GO_RESOLVER: self::go::GoPlugin = self::go::GoPlugin;
+static JAVA_RESOLVER: self::java::JavaPlugin = self::java::JavaPlugin;
+static C_RESOLVER: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
+    language: SupportedLanguage::C,
+};
+static CPP_RESOLVER: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
+    language: SupportedLanguage::Cpp,
+};
 
 /// The resolution plugin for a language, if one is bundled.
 #[must_use]
