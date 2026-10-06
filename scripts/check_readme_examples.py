@@ -62,6 +62,25 @@ def is_example_of_interest(command: str) -> bool:
     return not any(command.startswith(banned) for banned in SKIP_COMMANDS)
 
 
+def shallow_clone() -> bool:
+    """Whether the checkout has no `HEAD~1`, which `--diff` examples need.
+
+    A shallow clone is a property of the environment, not of the README, so an
+    example that needs history is skipped and reported rather than counted as a
+    failure. CI is configured with `fetch-depth: 0` so this is a backstop for
+    anyone running the script on a shallow clone.
+    """
+    result = subprocess.run(
+        ["git", "rev-parse", "--verify", "--quiet", "HEAD~1"],
+        cwd=REPO_ROOT,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=False,
+    )
+    return result.returncode != 0
+
+
 def invocation() -> str:
     """How to reach the CLI.
 
@@ -99,11 +118,17 @@ def run(command: str) -> tuple[bool, str]:
 
 def main() -> int:
     """Check every runnable example, printing the ones that fail."""
+    needs_history = shallow_clone()
     failures: list[str] = []
     checked = 0
+    skipped = 0
+
     for path in readme_paths():
         for command in examples(path):
             if not is_example_of_interest(command):
+                continue
+            if needs_history and "--diff" in command:
+                skipped += 1
                 continue
             checked += 1
             ok, message = run(command)
@@ -111,6 +136,11 @@ def main() -> int:
                 failures.append(f"{path.name}: {command}\n    -> {message}")
 
     print(f"{checked} examples checked.")
+    if skipped:
+        print(
+            f"{skipped} skipped: this is a shallow clone and they need history "
+            "(`--diff HEAD~1`)."
+        )
     if failures:
         print(f"\n{len(failures)} failing:\n")
         for failure in failures:

@@ -60,6 +60,12 @@ jobs:
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+        with:
+          # Full history, because `context --diff HEAD~1` is a documented
+          # example and the default shallow clone has no `HEAD~1`. Without this
+          # the README check fails on a command that is perfectly correct for a
+          # user with a real clone.
+          fetch-depth: 0
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
