@@ -72,18 +72,31 @@ count that caught it.
 
 You are about to change `parser.rs`. Which files break?
 
-![A reverse dependency query answering which files depend on one file](docs/public/demo/graph.gif)
+![A blast radius listing the four files that depend on src/parser.rs](docs/public/demo/impact.gif)
 
-Three arrows point at `parser.rs`. That is the whole answer, and it took one
-command.
+Four files. Three import names from it; the fourth only declares `mod parser;`,
+which still breaks when you delete or rename it.
+
+That is the whole answer, and it took one command.
 
 The recording runs on a five-file project in [`docs/demo/fixture`](docs/demo/fixture)
 rather than on this repository, for two reasons. The report has to fit one screen:
 on a 1,400-file repository the summary scrolls away before the reader sees it.
-And the output is fixed, so the recording still shows the same three arrows as
-this repository grows. Regenerate it with `python scripts/record_demo.py`.
+And the output is fixed, so the recording still shows the same four files as this
+repository grows.
 
-On a real codebase, the same query looks like this:
+It is rendered from a committed capture of real output, not screen-recorded, so
+it can be re-made:
+
+```bash
+sephera impact src/parser.rs --path docs/demo/fixture > scripts/fixtures/impact-query.md
+python scripts/make_graph_demo.py impact
+```
+
+For the full report behind that number — every edge, the cycle list, the resolver's
+own accounting of what it could not place — the same question through `graph`:
+
+![A reverse dependency query answering which files depend on one file](docs/public/demo/graph.gif)
 
 ```bash
 sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --format markdown

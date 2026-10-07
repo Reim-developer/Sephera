@@ -1,33 +1,56 @@
-"""Render the demo GIF for Sephera's reverse-dependency query.
+"""Render the demo GIFs.
 
-Frames are built from a committed capture of real CLI output
-(fixtures/graph-query.md), revealed progressively to suggest a live session.
-This is a rendered animation of real output, not a screen recording.
+Frames are built from a committed capture of real CLI output, revealed
+progressively to suggest a live session. This is a rendered animation of real
+output, not a screen recording, which is what makes it re-makeable: the GIF is
+generated output and the text capture is its source.
 
-Regenerate the capture after changing the `graph` output format:
+Regenerate a capture after changing that command's output format, then re-render:
+
+    cargo run --release -- impact src/parser.rs --path docs/demo/fixture \\
+        > scripts/fixtures/impact-query.md
+    python scripts/make_graph_demo.py impact
 
     cargo run --release -- graph --path . \\
         --what-depends-on crates/sephera_core/src/core/code_loc.rs \\
         --format markdown > scripts/fixtures/graph-query.md
-    python scripts/make_graph_demo.py
+    python scripts/make_graph_demo.py graph
+
+With no argument every demo is rendered.
 
 Requires Pillow and a Cascadia Mono TTF at FONT_REGULAR.
 """
 
 from __future__ import annotations
 
+import sys
+from dataclasses import dataclass
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFont
 
 # --- canvas ---------------------------------------------------------------
 
-W, H = 1000, 570
+W = 1000
 FONT_REGULAR = r"C:\Windows\Fonts\CascadiaMono.ttf"
 FONT_SIZE = 16
 LINE_H = 22
 PAD_X = 26
 PAD_TOP = 58
+# One line of slack under the last row. Fixed rather than proportional because a
+# demo has no business showing more empty space than it does output.
+PAD_BOTTOM = 22
+
+
+def canvas_height(lines: list[str]) -> int:
+    """Canvas tall enough for `lines` and nothing more.
+
+    A fixed height suited the 21-line `graph` capture and wasted half the canvas
+    on the 10-line `impact` one, which reads as a rendering fault rather than as
+    a short answer. Sizing to the content also means a capture that grows does
+    not silently start clipping instead of just getting taller.
+    """
+    return PAD_TOP + LINE_H + 8 + LINE_H * len(lines) + PAD_BOTTOM
 
 BG = (13, 17, 23)
 CHROME = (22, 27, 34)
@@ -97,6 +120,20 @@ def styled(line: str) -> list[tuple[str, tuple[int, int, int]]]:
     if set(stripped) <= set("|-: "):
         return [(stripped, DIM)]
 
+    # A list item is a dependent file and the names it imports. The file is the
+    # answer, so it gets the accent colour and the import names stay plain --
+    # otherwise the whole list reads as one undifferentiated block of text.
+    #
+    # The graph capture has no list items, so this cannot change that GIF.
+    if stripped.startswith("- "):
+        spans = [("- ", DIM)]
+        for index, part in enumerate(stripped[2:].split("`")):
+            if index:
+                spans.append(("`", DIM))
+            colour = MAGENTA if index % 2 else FG
+            spans.append((part, colour))
+        return spans
+
     if stripped.startswith("|"):
         cells = [c.strip() for c in stripped.strip("|").split("|")]
         spans: list[tuple[str, tuple[int, int, int]]] = [("| ", DIM)]
@@ -117,13 +154,19 @@ def styled(line: str) -> list[tuple[str, tuple[int, int, int]]]:
     return [(stripped, FG)]
 
 
-def is_answer_row(line: str) -> bool:
-    """True for the row that carries the blast-radius count."""
-    return "code_loc.rs" in line and line.strip().startswith("|")
+def is_answer_row(line: str, answer: str) -> bool:
+    """True for the row carrying the count this demo exists to show.
+
+    `answer` is a substring chosen by the demo rather than a pattern derived
+    here. `impact` has no table at all -- its answer is a sentence -- so a rule
+    that looked for a table row could not have worked for it, and inferring which
+    line matters from the output's shape is how the two demos end up disagreeing.
+    """
+    return answer in line
 
 
-def base(title: str) -> Image.Image:
-    img = Image.new("RGB", (W, H), BG)
+def base(title: str, height: int) -> Image.Image:
+    img = Image.new("RGB", (W, height), BG)
     draw = ImageDraw.Draw(img)
     draw.rectangle([0, 0, W, 40], fill=CHROME)
     for i, colour in enumerate([(255, 95, 86), (255, 189, 46), (39, 201, 63)]):
@@ -159,20 +202,22 @@ def draw_line(img: Image.Image, y: int, line: str,
         x += draw.textlength(text, font=body)
 
 
-def build(title: str, prompt: str, lines: list[str]) -> list[tuple[Image.Image, int]]:
+def build(demo: "Demo", lines: list[str]) -> list[tuple[Image.Image, int]]:
     body = font()
     frames: list[tuple[Image.Image, int]] = []
+    height = canvas_height(lines)
+    prompt = demo.prompt
 
-    card = base(title)
+    card = base(demo.title, height)
     d = ImageDraw.Draw(card)
-    d.text((W // 2, H // 2 - 44), "What breaks if I change this file?",
+    d.text((W // 2, height // 2 - 44), "What breaks if I change this file?",
            font=font(22), fill=ACCENT, anchor="mm")
-    d.text((W // 2, H // 2 + 4), "sephera graph --what-depends-on <file>",
+    d.text((W // 2, height // 2 + 4), demo.card_command,
            font=font(15), fill=DIM, anchor="mm")
     frames.append((card, TITLE_HOLD))
 
     for n in range(1, len(prompt) + 1):
-        img = base(title)
+        img = base(demo.title, height)
         dd = ImageDraw.Draw(img)
         dd.text((PAD_X, PAD_TOP), "PS>", font=body, fill=GREEN)
         dd.text((PAD_X + 34, PAD_TOP), prompt[:n], font=body, fill=ACCENT)
@@ -180,34 +225,77 @@ def build(title: str, prompt: str, lines: list[str]) -> list[tuple[Image.Image, 
 
     top = PAD_TOP + LINE_H + 8
     for count in range(1, len(lines) + 1):
-        img = base(title)
+        img = base(demo.title, height)
         draw_command(img, prompt, caret=False)
         for index, line in enumerate(lines[:count]):
             draw_line(img, top + index * LINE_H, line, body, False)
         frames.append((img, LINE_STEP))
 
-    final = base(title)
+    final = base(demo.title, height)
     draw_command(final, prompt, caret=False)
     for index, line in enumerate(lines):
-        draw_line(final, top + index * LINE_H, line, body, is_answer_row(line))
+        draw_line(
+            final, top + index * LINE_H, line, body,
+            is_answer_row(line, demo.answer),
+        )
     frames.append((final, ANSWER_STEP))
     frames.append((final.copy(), HOLD_END))
 
     return frames
 
 
-def main() -> None:
-    here = Path(__file__).parent
-    lines = load_lines(here / "fixtures" / "graph-query.md")
-    prompt = ("sephera graph --path . --what-depends-on "
-              "crates/sephera_core/src/core/code_loc.rs")
-    title = "sephera — reverse dependency query"
+@dataclass(frozen=True)
+class Demo:
+    """One demo GIF, and where each of its pieces comes from."""
 
-    frames = build(title, prompt, lines)
+    name: str
+    """Used on the command line and as the output filename."""
+
+    capture: str
+    """Fixture file holding the command's real output."""
+
+    prompt: str
+    """The command line typed on screen."""
+
+    title: str
+    """Window title."""
+
+    card_command: str
+    """The hint on the opening card, before any command is typed."""
+
+    answer: str
+    """Substring marking the row worth leaving bright in the final frame."""
+
+
+DEMOS = (
+    Demo(
+        name="impact",
+        capture="impact-query.md",
+        prompt="sephera impact src/parser.rs --path docs/demo/fixture",
+        title="sephera — blast radius",
+        card_command="sephera impact <file>",
+        # `impact`'s answer is a sentence, not a table row.
+        answer="files depend on this",
+    ),
+    Demo(
+        name="graph",
+        capture="graph-query.md",
+        prompt=("sephera graph --path . --what-depends-on "
+                "crates/sephera_core/src/core/code_loc.rs"),
+        title="sephera — reverse dependency query",
+        card_command="sephera graph --what-depends-on <file>",
+        answer="code_loc.rs",
+    ),
+)
+
+
+def render(demo: "Demo", here: Path) -> None:
+    """Write one demo GIF from its capture."""
+    lines = load_lines(here / "fixtures" / demo.capture)
+    frames = build(demo, lines)
     seconds = sum(d for _, d in frames) / 1000
-    print(f"lines: {len(lines)}  frames: {len(frames)}  duration: {seconds:.1f}s")
 
-    out = here.parent / "docs" / "public" / "demo" / "graph.gif"
+    out = here.parent / "docs" / "public" / "demo" / f"{demo.name}.gif"
     paletted = [
         f.convert("P", palette=Image.Palette.ADAPTIVE, colors=128)
         for f, _ in frames
@@ -220,8 +308,31 @@ def main() -> None:
         loop=0,
         optimize=True,
     )
-    print(f"wrote {out} ({out.stat().st_size / 1024:.0f} KB)")
+    print(
+        f"{demo.name}: {len(lines)} lines  {len(frames)} frames  "
+        f"{seconds:.1f}s  -> {out.name} ({out.stat().st_size / 1024:.0f} KB)"
+    )
+
+
+def main() -> int:
+    here = Path(__file__).parent
+
+    wanted = sys.argv[1:]
+    if wanted:
+        unknown = sorted(set(wanted) - {d.name for d in DEMOS})
+        if unknown:
+            print(f"unknown demo(s): {', '.join(unknown)}", file=sys.stderr)
+            print(f"known: {', '.join(d.name for d in DEMOS)}", file=sys.stderr)
+            return 1
+        selected = [d for d in DEMOS if d.name in wanted]
+    else:
+        selected = list(DEMOS)
+
+    for demo in selected:
+        render(demo, here)
+
+    return 0
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())
