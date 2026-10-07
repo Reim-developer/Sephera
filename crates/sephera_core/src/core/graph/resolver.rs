@@ -274,6 +274,31 @@ fn extract_one_file(
             )
         })?;
 
+    // Bytes that are not valid UTF-8 yield no edges at all.
+    //
+    // Tree-sitter recovers rather than failing, so a file with a broken encoding
+    // produced *something* -- and what it produced was a fragment. `use crate::`
+    // followed by bytes that are not a name became a `crate` path, which the
+    // module walk then resolved to the file it was written in: a self-dependency
+    // out of bytes that are not a source file.
+    //
+    // Refusing to read the file is the honest answer. Every extractor here reads
+    // node text as a string, so a reference recovered from undecodable bytes is
+    // not a weaker claim than one from decodable bytes -- it is not a claim at
+    // all. The file stays a node, which is what it is; it just contributes
+    // nothing.
+    if std::str::from_utf8(&source).is_err() {
+        return Ok(Some(ExtractedFile {
+            data: FileImportData {
+                file_path: project_file.normalized_relative_path.clone(),
+                language: Some(language.name),
+                ts_language,
+                imports: Vec::new(),
+            },
+            declared: None,
+        }));
+    }
+
     // Extraction goes through the language's plugin so that dispatch is uniform:
     // adding a language means adding one plugin file, not editing the extractor
     // and the resolver separately.
@@ -2104,6 +2129,69 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_is_not_utf8_is_a_node_and_contributes_nothing() {
+        // `use crate::` followed by bytes that are not a name is not an import.
+        // Tree-sitter recovers rather than failing, so the fragment used to reach
+        // the module walk as a bare `crate` and resolve to the file it was
+        // written in -- a self-dependency manufactured from bytes that are not a
+        // source file.
+        //
+        // The file stays a node, because a file the tool cannot read is still a
+        // file in the tree, and it must not take the rest of the graph with it.
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in [
+            ("src/main.rs", "mod broken;\npub struct Config;\n"),
+            ("src/leaf.rs", "use crate::Config;\npub fn leaf() {}\n"),
+        ] {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+        // `broken.rs` opens with a real `use` and then stops being text.
+        fs::write(
+            temp_dir.path().join("src/broken.rs"),
+            b"use crate::\xff\xfe;\n",
+        )
+        .unwrap();
+
+        let report = build_graph(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+        )
+        .expect("graph build must succeed");
+
+        assert!(
+            report
+                .nodes
+                .iter()
+                .any(|node| node.file_path == "src/broken.rs"),
+            "a file whose bytes cannot be decoded is still a node: {:?}",
+            report
+                .nodes
+                .iter()
+                .map(|n| &n.file_path)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            imports_of(&report, "src/broken.rs").is_empty(),
+            "no edge can be claimed from bytes that are not a source file: {:?}",
+            report
+                .edges
+                .iter()
+                .filter(|edge| edge.from == "src/broken.rs")
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            imports_of(&report, "src/leaf.rs"),
+            vec!["src/main.rs".to_owned()],
+            "one unreadable file must not cost the graph its other edges"
+        );
+    }
+
+    #[test]
     fn a_mod_only_crate_is_fully_connected() {
         let report = graph_for(&[
             ("src/main.rs", "mod a;\nmod b;\nfn main() {}\n"),
@@ -2475,6 +2563,51 @@ mod tests {
             ),
             Some("axum-core/src/lib.rs".to_owned()),
             "a name the crate root declares directly points there too"
+        );
+    }
+
+    #[test]
+    fn a_super_path_naming_a_name_this_file_declares_resolves_to_it() {
+        // `use super::JsonLines;` in the `mod tests` of
+        // `axum-extra/src/json_lines.rs`, where the struct is declared at line 61
+        // of that file and used at line 177. The reference is real, so the
+        // fallback has to accept it: a name this file declares is an item of
+        // this file, and `names_a_crate_outside` is what keeps it from being
+        // filed as a crate from outside.
+        //
+        // The index is built by hand rather than parsed, because the struct sits
+        // inside a `pin_project! { }` invocation and tree-sitter records no
+        // item inside a `token_tree` --
+        // `a_struct_inside_a_macro_invocation_is_still_declared` in
+        // `declarations.rs` asserts that limitation rather than a fix. This test
+        // is about what resolution does once the index knows the name, which is
+        // the half that is the resolver's to answer.
+        let files = known_files(&["src/json_lines.rs", "src/lib.rs"]);
+
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert(
+            "src/json_lines.rs",
+            declarations::DeclaredNames::from_names(["JsonLines"]),
+        );
+
+        let resolved = resolve_import_with(
+            "super::JsonLines",
+            "src/json_lines.rs",
+            1,
+            ImportKind::Dependency,
+            SupportedLanguage::Rust,
+            &ResolutionInputs {
+                base_path: std::path::PathBuf::new(),
+                known_files: files,
+                declarations: index,
+                manifests: manifests::ManifestIndex::default(),
+            },
+        );
+
+        assert_eq!(
+            resolved.file().map(ToOwned::to_owned),
+            Some("src/json_lines.rs".to_owned()),
+            "a `super::` path naming a struct in the same file is a self-reference"
         );
     }
 

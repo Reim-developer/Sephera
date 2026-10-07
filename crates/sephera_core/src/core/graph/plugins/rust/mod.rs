@@ -10,6 +10,13 @@
 //! - `#[cfg(feature = "...")]` gates a reference on a feature flag.
 
 mod extract;
+mod names;
+mod paths;
+
+// Re-exported because cycle detection outside this plugin needs to know where a
+// file's own submodules sit, which is the same module-tree arithmetic the
+// resolver asks `self::` and `mod` by. One definition, one caller outside.
+pub use paths::module_children_dir;
 
 use tree_sitter::Node;
 
@@ -19,9 +26,18 @@ use crate::core::{
 };
 
 use super::{
-    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
+    ExtractedSource,
+    ImportPlugin,
+    ResolveContext,
+    ResolverPlugin,
+    // Aliased because `paths` here is this plugin's own module arithmetic, which
+    // the crate shares with every other language. The shared one is string
+    // surgery; this one knows what a module tree looks like.
+    paths as shared_paths,
     walk::walk_with_declarations,
 };
+use names::{crate_root_file, names_a_crate_outside};
+use paths::{crate_root, module_path, qualify};
 
 impl ImportPlugin for RustPlugin {
     fn language(&self) -> SupportedLanguage {
@@ -81,16 +97,13 @@ impl ResolverPlugin for RustPlugin {
         context: ResolveContext<'_>,
     ) -> Option<String> {
         // `super::` climbs the module hierarchy. A file's module is its path without
-        // the extension, so each `super::` removes one module segment. A file at
-        // the crate root has no module to climb out of, so extra `super::`
-        // levels saturate rather than escaping the repository.
-        // `super::` climbs the module hierarchy. A file's module is its path without
         // the extension, so each `super::` removes one module segment. Levels
         // are counted rather than stripped once so that `super::super::x`
         // climbs twice; extra levels saturate at the crate root instead of
         // escaping the repository.
         if import_path.starts_with("super::") {
-            let levels = paths::count_occurrences(import_path, "super::");
+            let levels =
+                shared_paths::count_occurrences(import_path, "super::");
             let rest = import_path
                 .trim_start_matches("super::")
                 .trim_start_matches(':');
@@ -105,14 +118,14 @@ impl ResolverPlugin for RustPlugin {
 
             let mut base = module_path(context.source_file);
             for _ in 0..levels {
-                let parent = paths::parent(&base);
+                let parent = shared_paths::parent(&base);
                 if parent.is_empty() {
                     break;
                 }
                 base = parent;
             }
 
-            return first_existing(context, &qualify(&base, rest));
+            return first_existing(context, &qualify(&base, rest), true);
         }
 
         // `self::` is relative to the module's own directory, which is not the same
@@ -168,7 +181,7 @@ impl ResolverPlugin for RustPlugin {
         // A local module of the same name wins in Rust, so a path that could name
         // one is a local reference and not an external re-export.
         let root = crate_root(context.source_file);
-        first_existing(context, &qualify(&root, name)).is_none()
+        first_existing(context, &qualify(&root, name), true).is_none()
     }
 }
 
@@ -201,7 +214,9 @@ fn resolve_qualified(
     // path gets the module walk and nothing else.
     qualified: bool,
 ) -> Option<String> {
-    if let Some(found) = first_existing(context, &qualify(base, path)) {
+    if let Some(found) =
+        first_existing(context, &qualify(base, path), qualified)
+    {
         return Some(found);
     }
 
@@ -223,7 +238,7 @@ fn resolve_qualified(
     // `RequiresState`. Both belong to the file the prefix names.
     if !prefix.is_empty()
         && let Some(module_file) =
-            first_existing(context, &qualify(base, prefix))
+            first_existing(context, &qualify(base, prefix), qualified)
         && index.file_declares(&module_file, name)
     {
         return Some(module_file);
@@ -253,110 +268,6 @@ fn resolve_qualified(
     None
 }
 
-/// The module path a file belongs to, without its `.rs` extension.
-///
-/// `src/core/graph.rs` and `src/core/graph/mod.rs` both map to
-/// `src/core/graph`, which is what makes `crate::core::graph` resolve to
-/// whichever spelling the crate actually uses.
-#[must_use]
-pub fn module_path(source_file: &str) -> String {
-    if let Some(stripped) = source_file.strip_suffix("/mod.rs") {
-        return stripped.to_owned();
-    }
-    paths::strip_suffix_owned(source_file, ".rs")
-}
-
-/// The crate root, taken as the directory containing the last `src` segment.
-///
-/// Returns an empty string when the file is not under a `src` directory, in
-/// which case `crate::` has no local root to anchor to.
-#[must_use]
-pub fn crate_root(source_file: &str) -> String {
-    paths::through_last_segment(source_file, "src")
-}
-
-/// The file that is a crate's root module, when the analysis found one.
-///
-/// A crate root is a directory in a path sense -- `crate::core` resolves
-/// relative to `src` -- but a declaration lookup needs the file that declares
-/// the names: `lib.rs` or `main.rs` inside it. Going through the same candidate
-/// walk as any other module path means a crate with only `main.rs`, or one that
-/// spells its root as `src/mod.rs`, is found without a second rule to keep in
-/// step with the first.
-fn crate_root_file(
-    context: ResolveContext<'_>,
-    source_file: &str,
-) -> Option<String> {
-    let root = crate_root(source_file);
-    if root.is_empty() {
-        return None;
-    }
-    // The root is a directory, and a module path walk on it would only try
-    // `src.rs`, so the two file names a crate root can have are named here.
-    // `src/mod.rs` is included because it is a valid spelling of a root module
-    // and costs one comparison.
-    for name in ["lib", "main", "mod"] {
-        let candidate = format!("{root}/{name}.rs");
-        if context.contains(&candidate) {
-            return Some(candidate);
-        }
-    }
-    None
-}
-
-/// The directory that holds this module's own submodules.
-///
-/// Rust gives a crate root special treatment: submodules of `main.rs` or
-/// `lib.rs` sit directly beside it, so `self::util` in `src/main.rs` means
-/// `src/util.rs`. For every other file the submodules live in a directory named
-/// after the file, so `self::types` in `src/core/graph.rs` means
-/// `src/core/graph/types.rs`.
-///
-/// Cargo also compiles every `tests/*.rs`, `benches/*.rs`, `examples/*.rs` and
-/// `src/bin/*.rs` as a crate root of its own, so `mod support;` in
-/// `tests/comment_style_matrix.rs` means `tests/support.rs` rather than
-/// `tests/comment_style_matrix/support.rs`.
-#[must_use]
-pub fn module_children_dir(source_file: &str) -> String {
-    if is_target_crate_root(source_file) {
-        paths::parent(source_file)
-    } else {
-        module_path(source_file)
-    }
-}
-
-/// Whether cargo compiles this file as the root of its own crate.
-///
-/// A crate root keeps its submodules beside the file instead of in a directory
-/// named after it, which changes what `self::` means.
-///
-/// The check is on the containing directory rather than against `crate_root`,
-/// because `crate_root` looks for a `src` segment and is empty for a file under
-/// `tests/` or `examples/`.
-#[must_use]
-pub fn is_target_crate_root(source_file: &str) -> bool {
-    let stem = paths::file_stem(source_file);
-    let parent = paths::parent(source_file);
-    let directory = paths::file_name(&parent);
-
-    // The conventional roots sit directly in `src/`. A `mod.rs` deeper in the
-    // tree owns a submodule directory, not a crate.
-    if matches!(stem, "main" | "lib" | "mod") && directory == "src" {
-        return true;
-    }
-
-    // Cargo compiles each file under these directories as its own target.
-    matches!(
-        directory,
-        "tests" | "benches" | "examples" | "src/bin" | "bin"
-    )
-}
-
-/// Append a `::`-separated remainder to a module base.
-fn qualify(base: &str, rest: &str) -> String {
-    paths::join(base, &[&paths::replace_separator(rest, ':')])
-}
-
 /// Try the file spellings a Rust module path can take.
 ///
 /// A module may be `foo.rs`, `foo/mod.rs`, or — when a sibling file carries the
@@ -368,8 +279,25 @@ fn qualify(base: &str, rest: &str) -> String {
 fn first_existing(
     context: ResolveContext<'_>,
     module_path: &str,
+    // Whether the path that got here carried `super::`, `self::` or `crate::`.
+    //
+    // It decides what a re-export in the importing file means, and the two
+    // answers are opposites. `pub use sephera_core::core::graph::blast_radius::
+    // BlastRadius;` in `crates/sephera_cli/src/impact.rs` followed by `use
+    // super::{BlastRadius, render_markdown, ..}` in that file's test module is a
+    // real self-reference: the file brings the name into its own scope on
+    // purpose, and the three names beside it in the same brace group resolved
+    // correctly. `pub use typed_json;` in
+    // `axum-extra/src/response/erased_json.rs` followed by a bare `use
+    // typed_json;` is a crate from outside, and the re-export says nothing about
+    // where the name comes from.
+    //
+    // So a re-export is not the signal either way, and it is not this function's
+    // to read on its own: the qualifier has been stripped by the time the leaf is
+    // left, and it is the only thing that separates the two.
+    qualified: bool,
 ) -> Option<String> {
-    let module_path = paths::replace_separator(module_path, ':');
+    let module_path = shared_paths::replace_separator(module_path, ':');
 
     let candidate = format!("{module_path}.rs");
     if context.contains(&candidate) {
@@ -381,9 +309,9 @@ fn first_existing(
         return Some(candidate);
     }
 
-    let parent = paths::parent(&module_path);
+    let parent = shared_paths::parent(&module_path);
     if !parent.is_empty() {
-        let leaf = paths::file_name(&module_path);
+        let leaf = shared_paths::file_name(&module_path);
         for candidate in [format!("{parent}.rs"), format!("{parent}/mod.rs")] {
             if !context.contains(&candidate) {
                 continue;
@@ -419,7 +347,7 @@ fn first_existing(
             // `MultipartForm` is declared in the very file the path names and
             // `super` is a word rather than a name.
             if candidate == context.source_file
-                && names_a_crate_outside(context, leaf)
+                && names_a_crate_outside(context, leaf, qualified)
             {
                 continue;
             }
@@ -428,57 +356,6 @@ fn first_existing(
     }
 
     None
-}
-
-/// Whether a word is a Rust path qualifier rather than a name.
-///
-/// `super`, `self` and `crate` are the three the resolver strips before walking,
-/// so a path ending in one of them is a reference to a module and never to a
-/// file. Treating them as names is how a guard that meant to catch external
-/// crates ends up deleting every `use super::*;`.
-fn is_qualifier(name: &str) -> bool {
-    matches!(name, "super" | "self" | "crate")
-}
-
-/// Whether `name` is a bare identifier that names no module in this crate.
-///
-/// A bare `use` has no qualifier to read, so the only evidence available is that
-/// the name matches no file anywhere in the analysis. `use serde::Serialize;` and
-/// `use fastrand;` rest on exactly this, and `serde` is qualified while
-/// `fastrand` is not -- a qualifier means the name cannot be a bare crate, so
-/// those two are excluded.
-///
-/// The declaration index cannot answer it. A private `use` is deliberately not
-/// recorded as a re-export, because recording it once made `use crate::service;`
-/// in `main.rs` resolve to `main.rs`.
-fn names_a_crate_outside(context: ResolveContext<'_>, name: &str) -> bool {
-    // A qualifier is a word, not a crate. `use super::*;` writes `super` where a
-    // name would go and is a reference to the file it appears in -- 41 of axum's
-    // 65 self-references are exactly that, and asking whether any file is named
-    // `super.rs` rejects every one of them.
-    if name.is_empty() || name.contains(':') || is_qualifier(name) {
-        return false;
-    }
-
-    let wanted = format!("{name}.rs");
-    if context.files().any(|known| known == &wanted) {
-        return false;
-    }
-
-    // A name declared in this very file is an item of this file, and the whole
-    // point of the `super::Cli` case. This is what separates `use fastrand;`
-    // from `use super::MultipartForm;`.
-    if context
-        .declarations
-        .is_some_and(|index| index.file_declares(context.source_file, name))
-    {
-        return false;
-    }
-
-    // Without a crate root there is no `src` to anchor a bare name against, and
-    // guessing would turn every unresolved single-segment path into an external
-    // dependency.
-    !crate_root(context.source_file).is_empty()
 }
 
 /// Test shim naming the arguments in the order a reader expects.

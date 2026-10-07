@@ -272,18 +272,13 @@ CASES: Final[tuple[Case, ...]] = (
         resolved=False,
         local_gap=False,
     ),
-    Case(
-        id="rust/a_broken_encoding_yields_no_edge_at_all",
-        source=f"{R}/not_utf8.rs",
-        import_path="crate",
-        why="A partial parse of bytes that are not valid UTF-8 leaves the "
-        "fragment `use crate::` behind. No name follows it, so there is nothing "
-        "to resolve and the honest answer is no edge -- not a dependency on the "
-        "file it was written in.",
-        resolves_to=None,
-        resolved=False,
-        local_gap=False,
-    ),
+    # There is deliberately no `Case` for the `crate` fragment a partial parse
+    # leaves in not_utf8.rs. It used to be one, asserting that the fragment
+    # resolved to nothing, and it became unassertable the moment the honest
+    # answer arrived: a file whose bytes are not valid UTF-8 now yields no edges
+    # at all, so there is no `(source, import_path)` pair to look up. The
+    # FileCase below is the assertion that remains -- the file is still a node,
+    # which is what it is, and nothing is claimed about it.
     # ---- recovery ------------------------------------------------------------
     Case(
         id="rust/a_broken_file_still_yields_the_statements_it_can_parse",
@@ -337,41 +332,27 @@ EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 # `compression/mod.rs`, and no `CompressionMode.rs` exists -- so removing it
 # outright is not the fix.
 #
-# Three fixtures hit the other side of that trade.
+# Three fixtures used to hit the other side of that trade, and all three are
+# fixed, so none of them are skipped any more.
 #
 #   1. `super::helper_module` in inline_tests.rs, where `helper_module` is not
-#      declared anywhere. It resolves to the file itself: a self-dependency
-#      invented from a name that exists nowhere.
+#      declared anywhere. It resolved to the file itself: a self-dependency
+#      invented from a name that exists nowhere. It is now a gap.
 #   2. `pub use http;` in a file that is not the crate root. `leaves_project`
-#      only reads the crate root's re-exports, so this falls through the same
-#      way and lands on the file it was written in.
-#   3. The fragment a partial parse leaves in not_utf8.rs, which reaches the
-#      fallback as a bare `crate` and becomes a self-edge.
+#      only read the crate root's re-exports, so this fell through the same way
+#      and landed on the file it was written in. It is now external.
+#   3. The fragment a partial parse left in not_utf8.rs, which reached the
+#      fallback as a bare `crate` and became a self-edge. A file whose bytes are
+#      not valid UTF-8 now yields no edges at all, and stays a node.
 #
-# Measured on axum, guarding the fallback with `DeclarationIndex::file_declares`
-# moves self_references from 66 to 18 and unresolved_local from 8 to 13 while
-# leaving internal_edges at 640. So roughly 48 of those 66 self-references were
-# dependencies the tool claimed and the compiler does not.
-#
-# That guard is not shippable as-is: it also rejects `super::IntoResponse`,
-# which `response/mod.rs` reaches through a re-export rather than a declaration,
-# and `file_declares` excludes re-exports on purpose. Fixing it needs the
-# re-export chain followed to the file that actually declares the name, which is
-# a change to the declaration index rather than to this one condition. The
-# working tree is therefore left unchanged and these cases are skipped, so the
-# defect is recorded rather than re-pinned.
+# The guard that fixed 1 and 2 is `names_a_crate_outside` in `rust/names.rs`,
+# and it is deliberately narrow. Two wider versions were reverted on measurement:
+# guarding qualified paths as well cost five real self-references and five
+# unresolved gaps, and reading a re-export in the importing file as proof the
+# name is local put `typed_json` back and took `super::BlastRadius` in
+# Sephera's own `crates/sephera_cli/src/impact.rs` out. The qualifier is the
+# only thing that separates a bare `use fastrand;` from a `use super::Cli`, and
+# it is gone by the time the leaf is left -- so the question is asked where the
+# qualifier is still in hand.
 
-KNOWN_DEFECTS: Final[dict[str, str]] = {
-    "rust/super_naming_an_undeclared_name_is_invented":
-        "parent fallback in first_existing lands on the sourc"
-        "e file without checking the name is declared; ~48 of"
-        " axum's 66 self-references",
-    "rust/an_external_reexport_outside_the_crate_root_is_invented":
-        "ResolverPlugin::leaves_project reads only the crate "
-        "root's re-exports, so a `pub use` of an external cra"
-        "te elsewhere falls through to the same fallback",
-    "rust/a_broken_encoding_yields_no_edge_at_all":
-        "same parent fallback, reached by the fragment a part"
-        "ial parse leaves behind in a file whose bytes are no"
-        "t valid UTF-8",
-}
+KNOWN_DEFECTS: Final[dict[str, str]] = {}

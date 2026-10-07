@@ -130,6 +130,24 @@ impl DeclaredNames {
         }
     }
 
+    /// Build from names already collected, with re-exports recorded separately.
+    ///
+    /// The two are kept apart because they answer different questions: a
+    /// declaration is an item of this file, while a re-export is a name this
+    /// file makes reachable. `use super::X` in a test module needs the second
+    /// and a bare `use X;` must not read it as local, so a caller that cannot
+    /// tell them apart cannot tell those two apart either.
+    #[must_use]
+    pub fn from_names_and_reexports<'a>(
+        declared: impl IntoIterator<Item = &'a str>,
+        reexported: impl IntoIterator<Item = &'a str>,
+    ) -> Self {
+        Self {
+            declared: declared.into_iter().map(ToOwned::to_owned).collect(),
+            reexported: reexported.into_iter().map(ToOwned::to_owned).collect(),
+        }
+    }
+
     /// Whether `name` was declared here.
     ///
     /// Excludes re-exports on purpose. A re-export makes a name reachable from
@@ -436,6 +454,75 @@ mod tests {
         assert!(
             found.iter().all(|name| name == "a"),
             "expected only the module, got {found:?}"
+        );
+    }
+
+    #[test]
+    fn a_struct_inside_a_macro_invocation_is_still_declared() {
+        // `pin_project! { pub struct JsonLines<S, T = AsExtractor> { .. } }` in
+        // `axum-extra/src/json_lines.rs`. The struct is inside the macro, and
+        // the declaration walk did not record it -- so a `use super::JsonLines`
+        // in that file's test module was answered with "a crate from outside"
+        // and became a gap. `AsExtractor` and `AsResponse`, declared after the
+        // macro closes, were recorded, which is what made the omission look
+        // like a generics problem rather than a macro one.
+        //
+        // This is a tree-sitter limitation, not a walk bug: items inside a
+        // `token_tree` are tokens, not nodes, so there is no `struct_item` to
+        // find. The test asserts the limitation rather than the fix, because
+        // the fix is a text-level scan that would record `struct` keywords in
+        // macro input that is not Rust.
+        let source = "\
+pin_project! {
+    #[must_use]
+    pub struct JsonLines<S, T = AsExtractor> {
+        #[pin]
+        inner: Inner<S>,
+        _marker: PhantomData<T>,
+    }
+}
+pub struct AsExtractor;
+";
+        let mut parser =
+            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let declared = collect_declared_names(source.as_bytes(), &tree);
+
+        assert!(
+            !declared.declares("JsonLines"),
+            "a struct inside a macro invocation is not declared: {:?}",
+            declared.into_sorted_vec()
+        );
+        assert!(
+            declared.declares("AsExtractor"),
+            "a struct after the macro closes is declared"
+        );
+    }
+
+    #[test]
+    fn a_struct_with_attributes_and_fields_is_still_declared() {
+        // `pub struct JsonLines<S, T = AsExtractor>` in
+        // `axum-extra/src/json_lines.rs` carries `#[must_use]` and fields with
+        // `#[pin]`, and the declaration walk did not record it -- so a
+        // `use super::JsonLines` in that file's test module was answered with
+        // "a crate from outside" and became a gap.
+        let source = "\
+#[must_use]
+pub struct JsonLines<S, T = AsExtractor> {
+    #[pin]
+    inner: Inner<S>,
+    _marker: PhantomData<T>,
+}
+";
+        let mut parser =
+            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let declared = collect_declared_names(source.as_bytes(), &tree);
+
+        assert!(
+            declared.declares("JsonLines"),
+            "a struct with attributes and fields is still declared: {:?}",
+            declared.into_sorted_vec()
         );
     }
 
