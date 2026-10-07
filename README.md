@@ -33,7 +33,7 @@ python scripts/measure_accuracy.py --verify
 ```
 repository  files  internal  self-refs  unresolved  cycles  cfg-gated
 ----------  -----  --------  ---------  ----------  ------  ---------
-      axum    307       640         66           8      18         86
+      axum    307       640         66           8      19         86
      flask     80       185          5           0      43          0
    express    141       159          0           0       0          0
 ```
@@ -49,7 +49,14 @@ The `axum` row is the honest one. An earlier version reported **66 unresolved
 paths and 54 cycles** on it. Those were module-tree artifacts — a parent
 declaring a child and the child naming its parent with `super::` — not
 dependencies anyone could act on, and this README advertised two of them as bugs
-found in this repository's own source. The graph now reports 8 and 18.
+found in this repository's own source. The graph now reports 8 and 19.
+
+That cycle count went up by one when it went down by nineteen. Fixing the
+artifact also removed the `mod child;` edges from the graph entirely, which had
+been hiding real rings: the nineteenth is `response/mod.rs` and
+`test_helpers/mod.rs` importing each other, which no edit can undo. Cycle
+detection now drops declaration edges by kind, where the blast radius keeps
+them.
 
 Getting there was mostly measurement rather than design. Reading import
 statements by splitting text produced paths like `typing as t`,
@@ -180,32 +187,11 @@ graph LR
     n7 --> n6
     n8 --> n0
 ```
-```mermaid
-graph LR
-    n0["code_loc.rs"]
-    n1["tests.rs"]
-    n2["runtime.rs"]
-    n3["context.rs"]
-    n4["lookup.rs"]
-    n5["mod.rs"]
-    n6["tests.rs"]
-    n0 --> n1
-    n1 --> n0
-    n2 --> n3
-    n3 --> n0
-    n3 --> n5
-    n3 --> n2
-    n4 --> n5
-    n4 --> n0
-    n5 --> n4
-    n5 --> n6
-    n6 --> n5
-```
 ````
 
-**Six references reach `code_loc.rs`, from three files.** You now know your blast radius before opening the file — not after CI turns red.
+**Eight files reach `code_loc.rs`, four of them importing it directly.** You now know your blast radius before opening the file - not after CI turns red.
 
-The query filters to the blast radius, which is why the report above shows four files rather than the whole repository.
+The query filters to the blast radius, which is why the report above shows nine files rather than the whole repository. `core.rs` is among them because `mod code_loc;` is a real edge: delete the file and the crate root stops building.
 
 ---
 
@@ -257,6 +243,13 @@ reports 0, and it took real fixes to get there: the cycles it used to report wer
 module-tree artifacts — a parent declaring a child and the child naming its parent
 with `super::` — not dependencies you could act on. An early version of this tool
 advertised two "found in its own source tree" cycles for exactly that reason.
+
+A cycle is only reported when every link in it is something an edit can remove.
+`mod child;` is filtered out of cycle detection by kind, because no change to
+either file breaks the pair — but it is kept in the blast radius, because
+editing the child really does force the parent to rebuild. Keeping those two
+answers separate is what took axum from 54 cycles to 19 rather than merely
+suppressing them.
 
 ---
 

@@ -153,6 +153,18 @@ def readme_mermaid() -> set[str]:
     return set(MERMAID_NODE.findall(readme_section()))
 
 
+def mermaid_fence_count() -> int:
+    """How many Mermaid diagrams the quoted example contains.
+
+    Regenerating the example splices new output in without consuming the old
+    block, so a stale diagram can survive a regeneration and sit directly under
+    its replacement, contradicting it. Comparing node labels cannot see that --
+    it reads the first diagram, finds it correct, and passes. Counting the
+    fences can.
+    """
+    return readme_section().count("```mermaid")
+
+
 def blast_radius_table(markdown: str) -> dict[str, set[str]] | None:
     """The dependents table, as a file to imported-names mapping.
 
@@ -244,6 +256,12 @@ def main() -> int:
             problems.append(f"summary: {name} is {found}, README says {quoted}")
 
     quoted_nodes = readme_mermaid()
+    fences = mermaid_fence_count()
+    if fences > 1:
+        problems.append(
+            f"the quoted example contains {fences} mermaid diagrams; a "
+            "regeneration left a stale one behind"
+        )
     if quoted_nodes and quoted_nodes != actual_nodes:
         missing = sorted(actual_nodes - quoted_nodes)
         extra = sorted(quoted_nodes - actual_nodes)
