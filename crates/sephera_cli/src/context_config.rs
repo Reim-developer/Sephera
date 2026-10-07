@@ -10,23 +10,23 @@ pub fn resolve_context_options(
 ) -> Result<ResolvedContextCommand> {
     resolve_context_command(ContextCommandInput {
         source: SourceRequest {
-            path: arguments.path,
-            url: arguments.url,
-            git_ref: arguments.git_ref,
+            path: arguments.source.path,
+            url: arguments.source.url,
+            git_ref: arguments.source.git_ref,
         },
-        config: arguments.config,
-        no_config: arguments.no_config,
+        config: arguments.config_args.config,
+        no_config: arguments.config_args.no_config,
         profile: arguments.profile,
         list_profiles: arguments.list_profiles,
-        ignore: arguments.ignore,
-        no_gitignore: arguments.no_gitignore,
+        ignore: arguments.ignore_args.ignore,
+        no_gitignore: arguments.ignore_args.no_gitignore,
         focus: arguments.focus,
         focus_symbol: arguments.focus_symbol,
         diff: arguments.diff,
         budget: arguments.budget,
         compress: arguments.compress.map(context_compress_name),
         format: arguments.format.map(context_format_name),
-        output: arguments.output,
+        output: arguments.output_args.output,
     })
 }
 
