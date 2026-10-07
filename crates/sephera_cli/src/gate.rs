@@ -32,7 +32,13 @@ pub const GATE_VIOLATED: u8 = 2;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Gate {
     /// What is being counted, phrased for a human.
-    label: &'static str,
+    ///
+    /// Owned rather than `&'static str` because a gate can be about one named
+    /// file out of many: `--fail-on` over five targets names the target that
+    /// broke the rule, and that name is only known at runtime. Leaking a string
+    /// to keep a `&'static str` would be a real leak in a command that runs
+    /// once and exits.
+    label: String,
     /// The value found.
     actual: u64,
     /// The value at or above which the run fails.
@@ -48,9 +54,9 @@ impl Gate {
     /// limit of zero would fail every run, including the clean ones, which looks
     /// like a broken tool rather than a broken repository.
     #[must_use]
-    pub const fn new(label: &'static str, actual: u64, limit: u64) -> Self {
+    pub fn new(label: impl Into<String>, actual: u64, limit: u64) -> Self {
         Self {
-            label,
+            label: label.into(),
             actual,
             limit,
         }

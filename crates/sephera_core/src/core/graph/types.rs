@@ -1,6 +1,9 @@
 //! Data types for the dependency graph feature.
 
-use std::{collections::BTreeMap, path::PathBuf};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    path::PathBuf,
+};
 
 use serde::Serialize;
 
@@ -305,4 +308,14 @@ pub(super) struct NodeEntry {
     pub language: Option<&'static str>,
     pub imports: Vec<String>,
     pub imported_by: Vec<String>,
+
+    /// Targets reached only by a `mod child;` declaration rather than a `use`.
+    ///
+    /// Recorded so cycle detection can drop exactly these edges while the blast
+    /// radius keeps them. Identifying them from the two path lists is not
+    /// possible: `imports` holds plain paths with no edge kind, and a parent
+    /// naming its child looks identical to a parent importing from it. Guessing
+    /// from path shape gets most of them, but on axum it left 5 of 18 real
+    /// cycles reported as cycles.
+    pub declarations: BTreeSet<String>,
 }

@@ -83,6 +83,7 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 ```
 
 ````markdown
+
 # Dependency Graph Report
 
 **Base path:** `.`
@@ -91,28 +92,29 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 
 ## Summary
 
-| Metric                | Value |
-|-----------------------|-------|
-| Files analyzed        | 7     |
-| Internal edges        | 36    |
-| External edges        | 21    |
+| Metric | Value |
+|--------|-------|
+| Files analyzed | 9 |
+| Internal edges | 40 |
+| External edges | 21 |
 | Self-references (excluded above) | 2 |
-| Declared dependencies | 9     |
-| Local crate edges     | 0     |
-| Standard library edges| 12    |
-| Circular dependencies | 0     |
+| Declared dependencies | 9 |
+| Local crate edges | 0 |
+| Standard library edges | 12 |
+| Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
 
-**3 files import it directly.**
+**4 files import it directly.**
 
 | File | Imports from it |
 |------|------------------|
+| `crates/sephera_core/src/core.rs` | `self::code_loc` |
 | `crates/sephera_core/src/core/code_loc/tests.rs` | `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content` |
 | `crates/sephera_core/src/core/runtime/context.rs` | `crate::core::code_loc::IgnoreMatcher` |
 | `crates/sephera_core/src/core/symbols/lookup.rs` | `crate::core::code_loc::IgnoreMatcher` |
 
-**3 further files reach them indirectly**, through the files above.
+**4 further files reach them indirectly**, through the files above.
 
 ## Dependencies
 
@@ -122,8 +124,62 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 | `anyhow` | declared | 1.0.102 | 5 |
 | `tempfile` | declared | 3.27.0 | 4 |
 
+## Most Imported Files
+
+| File | Imported by |
+|------|-------------|
+| `crates/sephera_core/src/core/symbols/mod.rs` | 11 |
+| `crates/sephera_core/src/core/runtime/context.rs` | 10 |
+| `crates/sephera_core/src/core/code_loc.rs` | 7 |
+| `crates/sephera_core/src/core/symbols/lookup.rs` | 5 |
+| `crates/sephera_core/src/core/runtime.rs` | 4 |
+| `crates/sephera_core/src/core.rs` | 1 |
+| `crates/sephera_core/src/core/code_loc/tests.rs` | 1 |
+| `crates/sephera_core/src/core/symbols/tests.rs` | 1 |
+
+## Most Importing Files
+
+| File | Imports |
+|------|---------|
+| `crates/sephera_core/src/core/runtime.rs` | 10 |
+| `crates/sephera_core/src/core/runtime/context.rs` | 6 |
+| `crates/sephera_core/src/core/symbols/lookup.rs` | 6 |
+| `crates/sephera_core/src/core/symbols/mod.rs` | 6 |
+| `crates/sephera_core/src/core/code_loc/tests.rs` | 4 |
+| `crates/sephera_core/src/core.rs` | 3 |
+| `crates/sephera_core/src/core/symbols/tests.rs` | 3 |
+| `crates/sephera_core/src/core/code_loc.rs` | 1 |
+| `crates/sephera_core/src/lib.rs` | 1 |
+
 ## Dependency Diagram
 
+```mermaid
+graph LR
+    n0["core.rs"]
+    n1["code_loc.rs"]
+    n2["tests.rs"]
+    n3["runtime.rs"]
+    n4["context.rs"]
+    n5["lookup.rs"]
+    n6["mod.rs"]
+    n7["tests.rs"]
+    n8["lib.rs"]
+    n0 --> n1
+    n0 --> n3
+    n0 --> n6
+    n1 --> n2
+    n2 --> n1
+    n3 --> n4
+    n4 --> n1
+    n4 --> n6
+    n4 --> n3
+    n5 --> n6
+    n5 --> n1
+    n6 --> n5
+    n6 --> n7
+    n7 --> n6
+    n8 --> n0
+```
 ```mermaid
 graph LR
     n0["code_loc.rs"]
