@@ -40,6 +40,7 @@ pub fn measure_changes(
     report: &GraphReport,
     requested: &[String],
     base_prefix: &str,
+    depth: Option<u32>,
 ) -> Vec<ChangeImpact> {
     let mut measured = Vec::new();
 
@@ -49,7 +50,7 @@ pub fn measure_changes(
             continue;
         };
         measured.push(ChangeImpact {
-            radius: impact::measure(report, &canonical),
+            radius: impact::measure(report, &canonical, depth),
             file: canonical,
         });
     }
@@ -278,6 +279,7 @@ mod tests {
             &repo_report(),
             &["a.rs".to_owned(), "b.rs".to_owned()],
             "",
+            None,
         );
 
         assert_eq!(changes.len(), 2);
@@ -302,8 +304,12 @@ mod tests {
         // A file that no longer exists has no blast radius. Reporting it as
         // "0 dependents" would put a line in a review report that reads like a
         // finding when it is actually an absence.
-        let changes =
-            measure_changes(&repo_report(), &["deleted.rs".to_owned()], "");
+        let changes = measure_changes(
+            &repo_report(),
+            &["deleted.rs".to_owned()],
+            "",
+            None,
+        );
 
         assert_eq!(changes.len(), 0);
     }
@@ -366,6 +372,7 @@ mod tests {
             &repo_report(),
             &["b.rs".to_owned(), "a.rs".to_owned()],
             "",
+            None,
         );
 
         let markdown = render_markdown(&changes, "HEAD~1", &[]);
@@ -413,7 +420,8 @@ mod tests {
 
     #[test]
     fn json_reports_one_entry_per_changed_file_with_a_matching_count() {
-        let changes = measure_changes(&repo_report(), &["a.rs".to_owned()], "");
+        let changes =
+            measure_changes(&repo_report(), &["a.rs".to_owned()], "", None);
         let parsed: serde_json::Value =
             serde_json::from_str(&render_json(&changes, "HEAD~1", &[]))
                 .expect("valid JSON");
@@ -428,7 +436,8 @@ mod tests {
     fn a_change_with_no_dependents_is_still_listed() {
         // `d.rs` imports nothing, but it *was* changed, and silently dropping it
         // would make the report disagree with `git status`.
-        let changes = measure_changes(&repo_report(), &["d.rs".to_owned()], "");
+        let changes =
+            measure_changes(&repo_report(), &["d.rs".to_owned()], "", None);
 
         assert_eq!(changes.len(), 1);
         let markdown = render_markdown(&changes, "HEAD~1", &[]);

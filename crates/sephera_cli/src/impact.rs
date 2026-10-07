@@ -61,10 +61,20 @@ fn canonical_target(report: &GraphReport, requested: &str) -> String {
 /// graph: the blast radius of one file would come back as the whole repository,
 /// which is a plausible-looking number rather than an obviously wrong one.
 ///
+/// `depth` bounds the walk here rather than in graph selection. `impact` builds
+/// the whole repository so several targets can share one build, and a graph
+/// built that way carries no query for a selection depth to attach to -- so
+/// bounding it in `select_graph` would have left `--depth` accepted, documented,
+/// and inert.
+///
 /// Only resolved edges count. An unresolved edge is a path the resolver could
 /// not place, and treating it as a dependency would claim a coupling that may
 /// not exist -- the opposite of what a blast radius is for.
-fn reachable_dependents(report: &GraphReport, target: &str) -> Vec<String> {
+fn reachable_dependents(
+    report: &GraphReport,
+    target: &str,
+    depth: Option<u32>,
+) -> Vec<String> {
     let mut imported_by: std::collections::BTreeMap<&str, Vec<&str>> =
         std::collections::BTreeMap::new();
 
@@ -79,11 +89,17 @@ fn reachable_dependents(report: &GraphReport, target: &str) -> Vec<String> {
 
     let mut seen: std::collections::BTreeSet<&str> =
         std::collections::BTreeSet::new();
-    let mut queue: std::collections::VecDeque<&str> =
+    let mut queue: std::collections::VecDeque<(&str, u32)> =
         std::collections::VecDeque::new();
-    queue.push_back(target);
+    queue.push_back((target, 0));
 
-    while let Some(current) = queue.pop_front() {
+    while let Some((current, distance)) = queue.pop_front() {
+        // `depth` counts hops away, so a node sitting at distance `depth` is
+        // included but not expanded. Depth 1 therefore means direct importers.
+        if depth.is_some_and(|limit| distance >= limit) {
+            continue;
+        }
+
         for dependent in imported_by.get(current).into_iter().flatten() {
             // The target is reached at distance zero when it imports itself.
             // Excluding it keeps `use super::*;` style self-references from
@@ -92,7 +108,7 @@ fn reachable_dependents(report: &GraphReport, target: &str) -> Vec<String> {
                 continue;
             }
             if seen.insert(dependent) {
-                queue.push_back(dependent);
+                queue.push_back((dependent, distance.saturating_add(1)));
             }
         }
     }
@@ -153,6 +169,7 @@ pub fn measure_all(
     report: &GraphReport,
     requested: &[String],
     base_prefix: &str,
+    depth: Option<u32>,
 ) -> anyhow::Result<Vec<BlastRadius>> {
     let mut matched = Vec::with_capacity(requested.len());
     let mut unknown = Vec::new();
@@ -161,7 +178,9 @@ pub fn measure_all(
         match match_path(report, raw, base_prefix) {
             // `measure` reads the target from the query, and this report has
             // none, so the canonical spelling is passed explicitly.
-            Some(canonical) => matched.push(measure(report, &canonical)),
+            Some(canonical) => {
+                matched.push(measure(report, &canonical, depth));
+            }
             None => unknown.push(raw.clone()),
         }
     }
@@ -195,10 +214,18 @@ pub fn measure_all(
 }
 
 /// Count the files that depend on `target`.
+///
+/// `depth` is taken as a parameter rather than read from `report.depth`: the
+/// report is the whole repository, so it carries no query for a depth to be
+/// attached to. The limit is applied to this walk instead.
 #[must_use]
-pub fn measure(report: &GraphReport, requested: &str) -> BlastRadius {
+pub fn measure(
+    report: &GraphReport,
+    requested: &str,
+    depth: Option<u32>,
+) -> BlastRadius {
     let target = canonical_target(report, requested);
-    let reachable = reachable_dependents(report, &target);
+    let reachable = reachable_dependents(report, &target, depth);
 
     // Edges are the only place the imported *name* survives; the node list says
     // who is reachable but not what they wrote to reach it.
@@ -227,7 +254,7 @@ pub fn measure(report: &GraphReport, requested: &str) -> BlastRadius {
     BlastRadius {
         target,
         dependents,
-        depth: report.depth,
+        depth,
     }
 }
 
@@ -467,7 +494,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        measure(&report, "a.rs")
+        measure(&report, "a.rs", None)
     }
 
     #[test]
@@ -517,7 +544,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 3, "{radius:?}");
     }
 
@@ -539,7 +566,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         let d = radius
             .dependents
             .iter()
@@ -575,7 +602,7 @@ mod tests {
         // Treating the node list as proof of dependence would report a radius of
         // 1 for a coupling the resolver never established, which is the one thing
         // a blast radius must not do.
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 0, "{radius:?}");
     }
 
@@ -602,7 +629,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 1, "{radius:?}");
         assert_eq!(radius.dependents[0].file, "b.rs");
         assert_eq!(radius.dependents[0].imports, vec!["crate::a"]);
@@ -683,7 +710,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 1, "{radius:?}");
         assert_eq!(radius.dependents[0].file, "b.rs");
     }
@@ -711,7 +738,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "crates\\core\\a.rs");
+        let radius = measure(&report, "crates\\core\\a.rs", None);
         assert_eq!(
             radius.target, "crates/core/a.rs",
             "the heading must match the dependents' spelling"
@@ -728,7 +755,7 @@ mod tests {
         // Without a query the requested spelling stands, which keeps this
         // function honest for the unit tests that do not go through a resolver.
         report.query = None;
-        let radius = measure(&report, "crates\\core\\a.rs");
+        let radius = measure(&report, "crates\\core\\a.rs", None);
         assert_eq!(radius.target, "crates\\core\\a.rs");
     }
 
@@ -758,7 +785,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 2, "{radius:?}");
     }
 
@@ -780,7 +807,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 1, "{radius:?}");
         assert_eq!(radius.dependents[0].file, "b.rs");
     }
@@ -803,7 +830,7 @@ mod tests {
             metrics: empty_metrics(),
         };
 
-        let radius = measure(&report, "a.rs");
+        let radius = measure(&report, "a.rs", None);
         assert_eq!(dependent_count(&radius), 2, "{radius:?}");
     }
 
@@ -859,7 +886,7 @@ mod tests {
         let requested: Vec<String> =
             vec!["d.rs".to_owned(), "b.rs".to_owned(), "a.rs".to_owned()];
 
-        let radii = measure_all(&repo_report(), &requested, "").unwrap();
+        let radii = measure_all(&repo_report(), &requested, "", None).unwrap();
 
         // `b` and `c` import `a`, and `d` imports `b`, so `a` reaches three
         // files, `b` reaches one, and `d` reaches none.
@@ -884,10 +911,10 @@ mod tests {
             vec!["a.rs".to_owned(), "b.rs".to_owned(), "d.rs".to_owned()];
         let report = repo_report();
 
-        let together = measure_all(&report, &requested, "").unwrap();
+        let together = measure_all(&report, &requested, "", None).unwrap();
         let apart: Vec<u64> = requested
             .iter()
-            .map(|path| dependent_count(&measure(&report, path)))
+            .map(|path| dependent_count(&measure(&report, path, None)))
             .collect();
 
         let mut together_counts: Vec<u64> =
@@ -912,7 +939,8 @@ mod tests {
             "typo_two.rs".to_owned(),
         ];
 
-        let error = measure_all(&repo_report(), &requested, "").unwrap_err();
+        let error =
+            measure_all(&repo_report(), &requested, "", None).unwrap_err();
         let message = format!("{error:#}");
 
         assert!(message.contains("typo_one.rs"), "{message}");
@@ -927,8 +955,8 @@ mod tests {
     fn a_single_target_renders_exactly_as_it_did_before_batching() {
         // One file must not gain a summary table it did not have, or a consumer
         // diffing output across versions would see a change that means nothing.
-        let radii =
-            measure_all(&repo_report(), &["a.rs".to_owned()], "").unwrap();
+        let radii = measure_all(&repo_report(), &["a.rs".to_owned()], "", None)
+            .unwrap();
 
         let report = render_report(&radii);
 
@@ -942,7 +970,7 @@ mod tests {
     #[test]
     fn several_targets_get_a_ranking_before_the_detail() {
         let requested: Vec<String> = vec!["a.rs".to_owned(), "d.rs".to_owned()];
-        let radii = measure_all(&repo_report(), &requested, "").unwrap();
+        let radii = measure_all(&repo_report(), &requested, "", None).unwrap();
 
         let report = render_report(&radii);
 
@@ -960,12 +988,13 @@ mod tests {
     fn json_has_the_same_shape_whether_one_or_several_targets() {
         // A consumer should not have to write one parser for one file and
         // another for two.
-        let one =
-            measure_all(&repo_report(), &["a.rs".to_owned()], "").unwrap();
+        let one = measure_all(&repo_report(), &["a.rs".to_owned()], "", None)
+            .unwrap();
         let two = measure_all(
             &repo_report(),
             &["a.rs".to_owned(), "d.rs".to_owned()],
             "",
+            None,
         )
         .unwrap();
 
@@ -982,6 +1011,61 @@ mod tests {
             parsed_two["targets"][0]["dependent_count"],
             "the first target is the widest in both, and must agree"
         );
+    }
+
+    #[test]
+    fn depth_bounds_the_walk_and_is_reported() {
+        // `--depth` was inert for a while: `impact` stopped passing a
+        // `DependsOn` query so several targets could share one graph build, and
+        // with no query there was nothing in graph selection for a depth to
+        // attach to. The flag stayed accepted, stayed documented, and returned
+        // the same number every time. The bound belongs on this walk.
+        let report = repo_report();
+        let requested: Vec<String> = vec!["a.rs".to_owned()];
+
+        let full = measure_all(&report, &requested, "", None).unwrap();
+        let one_hop = measure_all(&report, &requested, "", Some(1)).unwrap();
+        let two_hops = measure_all(&report, &requested, "", Some(2)).unwrap();
+
+        // `b` and `c` import `a`; `d` imports `b`, so it is two hops away.
+        assert_eq!(dependent_count(&full[0]), 3);
+        assert_eq!(
+            dependent_count(&one_hop[0]),
+            2,
+            "depth 1 must stop at direct importers"
+        );
+        assert_eq!(dependent_count(&two_hops[0]), 3);
+
+        assert_eq!(one_hop[0].depth, Some(1));
+        assert_eq!(full[0].depth, None);
+    }
+
+    #[test]
+    fn a_bounded_radius_says_it_is_bounded() {
+        // A truncated list read as a complete one is the same failure as
+        // reporting a resolver gap without a count.
+        let radii =
+            measure_all(&repo_report(), &["a.rs".to_owned()], "", Some(1))
+                .unwrap();
+
+        let report = render_report(&radii);
+
+        assert!(report.contains("Limited to 1 hop(s) away."), "{report}");
+    }
+
+    #[test]
+    fn depth_applies_to_every_target_not_just_the_first() {
+        // With several targets, a bound that leaked past the first would make the
+        // ranking a mixture of two different questions.
+        let report = repo_report();
+        let requested: Vec<String> = vec!["a.rs".to_owned(), "d.rs".to_owned()];
+
+        let radii = measure_all(&report, &requested, "", Some(1)).unwrap();
+
+        for radius in &radii {
+            assert_eq!(radius.depth, Some(1), "{radius:?}");
+        }
+        assert_eq!(radii.iter().map(dependent_count).sum::<u64>(), 2);
     }
 
     #[test]

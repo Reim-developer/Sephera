@@ -443,7 +443,8 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         },
     )?;
 
-    let radii = impact::measure_all(&report, &arguments.files, "")?;
+    let radii =
+        impact::measure_all(&report, &arguments.files, "", arguments.depth)?;
 
     let rendered = match arguments.format {
         ImpactOutputFormat::Markdown => impact::render_report(&radii),
@@ -513,8 +514,12 @@ fn run_graph_diff(
         .to_string_lossy()
         .into_owned();
 
-    let changes =
-        change_impact::measure_changes(&report, &requested, &base_prefix);
+    let changes = change_impact::measure_changes(
+        &report,
+        &requested,
+        &base_prefix,
+        arguments.depth,
+    );
 
     // A changed path that matched no graph node is either deleted or outside the
     // analysis base. Reporting those separately is the difference between "this
