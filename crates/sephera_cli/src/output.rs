@@ -1,6 +1,7 @@
 mod context_json;
 mod context_markdown;
 mod graph;
+pub mod grid;
 mod loc;
 mod profiles;
 mod symbols;

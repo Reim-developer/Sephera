@@ -247,24 +247,18 @@ Maximum traversal depth applied when `--focus` or `--what-depends-on` is active.
 
 When neither `--focus` nor `--what-depends-on` is provided, Sephera returns the full graph and ignores `--depth`.
 
-:::caution[Counts levels, not hops]
-`sephera impact --depth` counts **hops**: `--depth 1` there means the files that
-import the target directly. This page's convention counts **levels**, with the
-traversal root at level 0, so `--depth 0` already includes its direct
-neighbours and `--depth 1` is one hop wider.
+The number is the number of **hops** from the traversal root, which is always
+included. On a chain `c → b → a → target`:
 
-On a chain `c → b → a → target`:
+| `--depth` | reached |
+| --- | --- |
+| `0` | `target` |
+| `1` | `target`, `a` |
+| `2` | `target`, `a`, `b` |
+| `3` | `target`, `a`, `b`, `c` |
 
-| `--depth` | `impact` | `graph` |
-| --- | ---: | ---: |
-| `0` | 0 | 1 |
-| `1` | 1 | 2 |
-| `2` | 2 | 3 |
-
-With no depth limit both report the same thing. The difference matters when a
-depth is set: reaching for `impact --depth 1` and typing it here returns twice as
-many files as you expected. Use `impact` when the number is the point.
-:::
+`sephera impact --depth` counts hops the same way, so the same flag number bounds
+the same walk on both commands.
 
 ### `--format <FORMAT>`
 
