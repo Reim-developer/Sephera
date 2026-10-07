@@ -124,16 +124,9 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
     ),
 )
 
-
 KNOWN_DEFECTS: Final[dict[str, str]] = {
-
-    "javascript/an_empty_file_is_still_a_node":
-        "a zero-byte file is not added as a node, while an empty Rust file is, so "
-        "the reported file count depends on the language",
-    "javascript/a_dynamic_import_names_a_module":
-        "`import('./lazy')` produces no edge at all, so a file loaded lazily is "
-        "invisible to the graph and to any blast radius through it",
     "javascript/a_package_root_resolves_through_package_json":
-        "`require('..')` is reported as a gap; the `package.json` `main` lookup "
-        "that exists for the corpus does not fire for this path",
+        "`require('..')` is reported as a gap; the `package.j"
+        "son` `main` lookup that exists for the corpus does n"
+        "ot fire for this path",
 }

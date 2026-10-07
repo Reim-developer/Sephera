@@ -363,13 +363,15 @@ EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 
 KNOWN_DEFECTS: Final[dict[str, str]] = {
     "rust/super_naming_an_undeclared_name_is_invented":
-        "parent fallback in first_existing lands on the source file without "
-        "checking the name is declared; ~48 of axum's 66 self-references",
+        "parent fallback in first_existing lands on the sourc"
+        "e file without checking the name is declared; ~48 of"
+        " axum's 66 self-references",
     "rust/an_external_reexport_outside_the_crate_root_is_invented":
-        "ResolverPlugin::leaves_project reads only the crate root's re-exports, "
-        "so a `pub use` of an external crate elsewhere falls through to the same "
-        "fallback",
+        "ResolverPlugin::leaves_project reads only the crate "
+        "root's re-exports, so a `pub use` of an external cra"
+        "te elsewhere falls through to the same fallback",
     "rust/a_broken_encoding_yields_no_edge_at_all":
-        "same parent fallback, reached by the fragment a partial parse leaves "
-        "behind in a file whose bytes are not valid UTF-8",
+        "same parent fallback, reached by the fragment a part"
+        "ial parse leaves behind in a file whose bytes are no"
+        "t valid UTF-8",
 }

@@ -40,12 +40,19 @@ pub(super) fn extract_from_node(
             // `require('pkg')()`, where the outer call's callee is the inner
             // call. The inner one is visited on its own and read there.
             let callee = node.child_by_field_name("function")?;
-            if node_text(source, &callee) != "require" {
+            let name = node_text(source, &callee);
+
+            // `import()` is the second form that names a module, and it was
+            // missing here, so a lazily-loaded file produced no edge at all.
+            if name != "require" && name != "import" {
                 return None;
             }
+
             let arguments = node.child_by_field_name("arguments")?;
             let first =
                 arguments.named_children(&mut arguments.walk()).next()?;
+            // Only a literal string names a module. `import(`./pages/${name}`)`
+            // computes its path, and there is nothing in the source to resolve.
             if first.kind() != "string" {
                 return None;
             }
@@ -143,6 +150,40 @@ mod tests {
                 "{expected} missing from the extracted paths"
             );
         }
+    }
+
+    #[test]
+    fn a_dynamic_import_names_its_module() {
+        // `import('./lazy')` is a module dependency written in a call, and it
+        // was dropped because the callee check below only accepted `require`. A
+        // lazily-loaded module is then invisible to the graph, which is the
+        // worst case for a tool whose job is to say what a change breaks: the
+        // coupling is real and it is the one a reader is least likely to know
+        // about.
+        let source = b"const m = import('./lazy');\n";
+
+        assert_eq!(
+            paths(source, SupportedLanguage::JavaScript),
+            vec!["./lazy".to_owned()]
+        );
+        assert_eq!(
+            paths(source, SupportedLanguage::TypeScript),
+            vec!["./lazy".to_owned()],
+            "the grammar is the only difference between the two"
+        );
+    }
+
+    #[test]
+    fn a_dynamic_import_with_a_template_string_is_not_a_path() {
+        // `import(`./pages/${name}`)` names a module by computation. Reading it
+        // as a path would put an edge on a file whose name is not in the source.
+        assert_eq!(
+            paths(
+                b"const m = import(`./pages/${name}`);\n",
+                SupportedLanguage::JavaScript
+            ),
+            Vec::<String>::new()
+        );
     }
 
     #[test]

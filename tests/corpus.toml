@@ -67,7 +67,14 @@ language = "Python"
 # Relative imports resolve fully; the number is a floor to catch regressions,
 # not a target to raise.
 unresolved_local = 0
-files = 80
+# Up from 80 when a zero-byte file stopped being dropped from the graph. The
+# three are the empty `__init__.py` files under `tests/`, which are the thing
+# that makes each of those directories a package -- and this resolver already
+# resolves `from . import X` onto exactly such a file, so counting it as a node
+# and pointing an edge at it were two answers to one question that disagreed.
+# `src/flask/py.typed` is empty too and is not counted: it has no extension, so
+# it matches no language and is not a source file by that measure.
+files = 83
 # Up from 171 when `from . import helper` stopped being reported as pointing at
 # the package's `__init__.py` instead of at the submodule it names.
 internal_edges = 185

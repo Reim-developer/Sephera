@@ -192,14 +192,5 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
     ),
 )
 
-
 KNOWN_DEFECTS: Final[dict[str, str]] = {
-
-    "java_a_wildcard_import_names_no_single_file":
-        "`import com.example.util.*;` resolves to nothing and is filed as "
-        "external, so a dependency on an entire package disappears from the graph",
-    "java/an_empty_source_is_still_a_node":
-        "same: a zero-byte file is a node in Rust and not in Java",
-    "typescript/an_empty_source_is_still_a_node":
-        "same, for TypeScript",
 }

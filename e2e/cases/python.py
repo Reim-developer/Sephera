@@ -209,24 +209,23 @@ EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 
 KNOWN_DEFECTS: Final[dict[str, str]] = {
     "python/a_missing_submodule_of_an_absolute_import_is_dropped":
-        "`from pkg import absent` resolves the package and emits nothing for the "
-        "missing submodule, so the import leaves no trace at all",
+        "`from pkg import absent` resolves the package and em"
+        "its nothing for the missing submodule, so the import"
+        " leaves no trace at all",
     "python/the_two_halves_of_one_climbing_import_disagree_on_gap":
-        "`...` is counted as a local gap and `...outside_the_package` as "
-        "external; they name the same statement",
+        "`...` is counted as a local gap and `...outside_the_"
+        "package` as external; they name the same statement",
     "python/too_many_dots_is_a_gap":
-        "`...` from `pkg/sub/deep.py` names a directory, and a directory is not "
-        "a package without an `__init__.py`; it lands on whichever module happens "
-        "to sit beside the package instead",
-    "python/an_empty_package_is_still_a_node":
-        "a zero-byte `__init__.py` is not added as a node, while an empty Rust "
-        "file is, so the file count depends on the language",
+        "`...` from `pkg/sub/deep.py` names a directory, and "
+        "a directory is not a package without an `__init__.py"
+        "`; it lands on whichever module happens to sit besid"
+        "e the package instead",
     "python/a_relative_name_that_is_not_reachable":
-        "`.DEEP` is reported as external rather than as a gap, so a local path "
-        "that names nothing is filed with the dependencies on things outside the "
-        "project",
+        "`.DEEP` is reported as external rather than as a gap"
+        ", so a local path that names nothing is filed with t"
+        "he dependencies on things outside the project",
     "python/absolute_module_import":
-        "a dotted absolute path rooted below the analysis base produces no edge "
-        "at all; the relative forms walk up correctly, so the walk works in one "
-        "direction only",
+        "a dotted absolute path rooted below the analysis bas"
+        "e produces no edge at all; the relative forms walk u"
+        "p correctly, so the walk works in one direction only",
 }

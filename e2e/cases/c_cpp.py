@@ -148,16 +148,5 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
     ),
 )
 
-
 KNOWN_DEFECTS: Final[dict[str, str]] = {
-    'c/an_empty_header_is_still_a_node':
-        'a zero-byte header is skipped before it reaches the graph, while an empty Rust file is a node, so the reported file count depends on the language',
-    "cpp/a_quoted_include_that_names_nothing_is_a_gap":
-        "a quoted include that resolves to nothing is file"
-        "d as external rather than as a gap, so a genuine"
-        "ly missing header is indistinguishable from a standard library one",
-    "c/a_quoted_include_that_names_nothing_is_a_gap":
-        "a quoted include that resolves to nothing is file"
-        "d as external rather than as a gap, so a genuine"
-        "ly missing header is indistinguishable from a standard library one",
 }
