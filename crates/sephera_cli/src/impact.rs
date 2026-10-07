@@ -59,7 +59,16 @@ pub fn render_markdown(radius: &BlastRadius, heading_level: usize) -> String {
 }
 
 /// List each dependent with the names it imports from the target.
-fn write_dependents(output: &mut String, radius: &BlastRadius) {
+///
+/// Shared with `graph --diff`, which renders the same `Dependent` list per
+/// changed file. It carried its own copy of this loop, and the two could have
+/// drifted on what a dependent with no named import looks like: one of them
+/// printing `- `src/a.rs` imports` with nothing after it, which reads as a bug
+/// in the graph rather than as a transitive dependent the resolver never saw an
+/// import from.
+///
+/// `pub` within a private module, which is crate-visible and nothing more.
+pub fn write_dependents(output: &mut String, radius: &BlastRadius) {
     for dependent in &radius.dependents {
         if dependent.imports.is_empty() {
             writeln!(output, "- `{}`", dependent.file)

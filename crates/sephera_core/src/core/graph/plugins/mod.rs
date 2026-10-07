@@ -267,102 +267,120 @@ pub trait ResolverPlugin {
 
 /// Every plugin bundled with Sephera, in a stable order.
 ///
-/// Used by [`builtin_import_plugin`] and [`builtin_resolver_plugin`].
+/// Read off the registry rather than spelled out separately. It used to be its
+/// own eight-item `vec!`, which meant adding a language was two edits in this one
+/// file and neither one complained if the other was missed.
 #[must_use]
 pub fn builtin_languages() -> Vec<SupportedLanguage> {
-    vec![
-        SupportedLanguage::Rust,
-        SupportedLanguage::Python,
-        SupportedLanguage::TypeScript,
-        SupportedLanguage::JavaScript,
-        SupportedLanguage::Go,
-        SupportedLanguage::Java,
-        SupportedLanguage::C,
-        SupportedLanguage::Cpp,
-    ]
+    BUNDLED.iter().map(|entry| entry.language).collect()
 }
 
-/// Every bundled extraction plugin, as a static.
+/// One bundled plugin, reachable through either trait.
 ///
-/// A plugin holds no state beyond which language it handles, so there is nothing
-/// to build per call. Handing back a shared reference instead of a
-/// `Box` removes one heap allocation per file per lookup — `extract_one_file`
-/// asks twice, once for imports and once for declared names — and it is what
-/// lets extraction run across a thread pool without a lock.
-static RUST_IMPORT: self::rust::RustPlugin = self::rust::RustPlugin;
-static PYTHON_IMPORT: self::python::PythonPlugin = self::python::PythonPlugin;
-static TYPESCRIPT_IMPORT: self::javascript::JavaScriptPlugin =
-    self::javascript::JavaScriptPlugin {
-        language: SupportedLanguage::TypeScript,
+/// One entry rather than two lists: the plugin behind both traits is the same
+/// value, and the sixteen `static`s and two eight-arm `match`es this replaced
+/// named `RustPlugin` sixteen times and could have disagreed about which plugin
+/// served which language without anything noticing.
+///
+/// Two trait-object fields rather than one `dyn ImportPlugin + ResolverPlugin`
+/// because Rust allows one non-auto trait per trait object. Nothing in the type
+/// stops an entry pairing one language's extractor with another's resolver, so
+/// `the_registry_pairs_each_language_with_its_own_plugin` checks it.
+struct Bundled {
+    /// The language these plugins serve.
+    language: SupportedLanguage,
+    /// The extractor for the language.
+    import: &'static dyn ImportPlugin,
+    /// The resolver for the same language.
+    ///
+    /// `Sync` because the registry is a `static`. Every bundled resolver holds no
+    /// interior state, so this costs nothing.
+    resolver: &'static (dyn ResolverPlugin + Sync),
+}
+
+/// One registry entry.
+///
+/// Both halves take the same expression, which is what keeps a language's
+/// extractor from being paired with another's resolver. The macro exists only for
+/// that: spelled out, each entry names its plugin twice and the table is 82 lines
+/// longer than this form.
+///
+/// `$plugin` is an expression, not a type: `TypeScript`/`JavaScript` share one
+/// struct and `C`/`Cpp` share another, and the field is what says which.
+macro_rules! bundled {
+    ($language:expr, $plugin:expr $(,)?) => {
+        Bundled {
+            language: $language,
+            import: &$plugin,
+            resolver: &$plugin,
+        }
     };
-static JAVASCRIPT_IMPORT: self::javascript::JavaScriptPlugin =
-    self::javascript::JavaScriptPlugin {
-        language: SupportedLanguage::JavaScript,
-    };
-static GO_IMPORT: self::go::GoPlugin = self::go::GoPlugin;
-static JAVA_IMPORT: self::java::JavaPlugin = self::java::JavaPlugin;
-static C_IMPORT: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
-    language: SupportedLanguage::C,
-};
-static CPP_IMPORT: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
-    language: SupportedLanguage::Cpp,
-};
+}
+
+/// Every bundled language, in a stable order.
+///
+/// `JavaScriptPlugin` and `CCppPlugin` carry a `language` field rather than
+/// being unit structs, because one type serves two languages and only the field
+/// says which. A unit struct per language would be two more types to write and
+/// two more implementations of two traits.
+static BUNDLED: &[Bundled] = &[
+    bundled!(SupportedLanguage::Rust, self::rust::RustPlugin),
+    bundled!(SupportedLanguage::Python, self::python::PythonPlugin),
+    bundled!(
+        SupportedLanguage::TypeScript,
+        self::javascript::JavaScriptPlugin {
+            language: SupportedLanguage::TypeScript,
+        }
+    ),
+    bundled!(
+        SupportedLanguage::JavaScript,
+        self::javascript::JavaScriptPlugin {
+            language: SupportedLanguage::JavaScript,
+        }
+    ),
+    bundled!(SupportedLanguage::Go, self::go::GoPlugin),
+    bundled!(SupportedLanguage::Java, self::java::JavaPlugin),
+    bundled!(
+        SupportedLanguage::C,
+        self::c_cpp::CCppPlugin {
+            language: SupportedLanguage::C,
+        }
+    ),
+    bundled!(
+        SupportedLanguage::Cpp,
+        self::c_cpp::CCppPlugin {
+            language: SupportedLanguage::Cpp,
+        }
+    ),
+];
+
+/// The entry serving a language, if one is bundled.
+fn bundled_for(language: SupportedLanguage) -> Option<&'static Bundled> {
+    BUNDLED.iter().find(|entry| entry.language == language)
+}
 
 /// The extraction plugin for a language, if one is bundled.
+///
+/// A shared reference rather than a `Box`: it removes one heap allocation per
+/// lookup, and it is what lets extraction run across a thread pool without a
+/// lock, since every caller wants the same value.
 #[must_use]
 pub fn builtin_import_plugin(
     language: SupportedLanguage,
 ) -> Option<&'static dyn ImportPlugin> {
-    match language {
-        SupportedLanguage::Rust => Some(&RUST_IMPORT),
-        SupportedLanguage::Python => Some(&PYTHON_IMPORT),
-        SupportedLanguage::TypeScript => Some(&TYPESCRIPT_IMPORT),
-        SupportedLanguage::JavaScript => Some(&JAVASCRIPT_IMPORT),
-        SupportedLanguage::Go => Some(&GO_IMPORT),
-        SupportedLanguage::Java => Some(&JAVA_IMPORT),
-        SupportedLanguage::C => Some(&C_IMPORT),
-        SupportedLanguage::Cpp => Some(&CPP_IMPORT),
-    }
+    bundled_for(language).map(|entry| entry.import)
 }
 
-/// Every bundled resolver plugin, as a static.
-///
-/// Same reasoning as [`RUST_IMPORT`] and the rest: no state to build, no
-/// allocation per call, and shareable across threads.
-static RUST_RESOLVER: self::rust::RustPlugin = self::rust::RustPlugin;
-static PYTHON_RESOLVER: self::python::PythonPlugin = self::python::PythonPlugin;
-static TYPESCRIPT_RESOLVER: self::javascript::JavaScriptPlugin =
-    self::javascript::JavaScriptPlugin {
-        language: SupportedLanguage::TypeScript,
-    };
-static JAVASCRIPT_RESOLVER: self::javascript::JavaScriptPlugin =
-    self::javascript::JavaScriptPlugin {
-        language: SupportedLanguage::JavaScript,
-    };
-static GO_RESOLVER: self::go::GoPlugin = self::go::GoPlugin;
-static JAVA_RESOLVER: self::java::JavaPlugin = self::java::JavaPlugin;
-static C_RESOLVER: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
-    language: SupportedLanguage::C,
-};
-static CPP_RESOLVER: self::c_cpp::CCppPlugin = self::c_cpp::CCppPlugin {
-    language: SupportedLanguage::Cpp,
-};
-
 /// The resolution plugin for a language, if one is bundled.
+///
+/// The `Sync` bound is dropped on the way out: the registry needs it because its
+/// contents live in a `static`, and a caller holding a `&'static` reference has
+/// no thread-safety obligation left to satisfy.
 #[must_use]
 pub fn builtin_resolver_plugin(
     language: SupportedLanguage,
 ) -> Option<&'static dyn ResolverPlugin> {
-    match language {
-        SupportedLanguage::Rust => Some(&RUST_RESOLVER),
-        SupportedLanguage::Python => Some(&PYTHON_RESOLVER),
-        SupportedLanguage::TypeScript => Some(&TYPESCRIPT_RESOLVER),
-        SupportedLanguage::JavaScript => Some(&JAVASCRIPT_RESOLVER),
-        SupportedLanguage::Go => Some(&GO_RESOLVER),
-        SupportedLanguage::Java => Some(&JAVA_RESOLVER),
-        SupportedLanguage::C => Some(&C_RESOLVER),
-        SupportedLanguage::Cpp => Some(&CPP_RESOLVER),
-    }
+    bundled_for(language).map(|entry| entry.resolver as &dyn ResolverPlugin)
 }
 
 /// Compares a known file's trailing segments against a candidate suffix.
@@ -385,15 +403,28 @@ mod tests {
     use super::*;
 
     #[test]
-    fn every_builtin_language_has_both_plugins() {
-        for language in builtin_languages() {
+    fn every_variant_has_both_plugins() {
+        // Enumerated from the enum rather than from `builtin_languages()`, which
+        // reads off the registry. Walking the registry to check the registry
+        // passes whatever it contains, so a variant with no entry would leave a
+        // language silently unanalysed instead of failing here.
+        for variant in [
+            SupportedLanguage::Rust,
+            SupportedLanguage::Python,
+            SupportedLanguage::TypeScript,
+            SupportedLanguage::JavaScript,
+            SupportedLanguage::Go,
+            SupportedLanguage::Java,
+            SupportedLanguage::C,
+            SupportedLanguage::Cpp,
+        ] {
             assert!(
-                builtin_import_plugin(language).is_some(),
-                "{language:?} is missing an import plugin"
+                builtin_import_plugin(variant).is_some(),
+                "{variant:?} is missing an import plugin"
             );
             assert!(
-                builtin_resolver_plugin(language).is_some(),
-                "{language:?} is missing a resolver plugin"
+                builtin_resolver_plugin(variant).is_some(),
+                "{variant:?} is missing a resolver plugin"
             );
         }
     }
@@ -414,6 +445,19 @@ mod tests {
                 language,
                 "resolver plugin mismatch"
             );
+        }
+    }
+
+    #[test]
+    fn the_registry_pairs_each_language_with_its_own_plugin() {
+        // A mismatched pair is silent: the C entry would answer with TypeScript's
+        // resolver, and the result would read as a resolver gap on a C file --
+        // exactly the kind of finding that gets believed. Splitting the two
+        // plugins into two registries is what this guards against, and it could
+        // not be stated before they were one entry.
+        for entry in BUNDLED {
+            assert_eq!(entry.import.language(), entry.language, "extractor");
+            assert_eq!(entry.resolver.language(), entry.language, "resolver");
         }
     }
 
