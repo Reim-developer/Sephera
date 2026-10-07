@@ -146,6 +146,13 @@ impl ResolverPlugin for RustPlugin {
     /// missing file. The test is that the name resolves to nothing local: a name
     /// that also names a module in this crate is a local reference whatever else
     /// the root re-exports.
+    ///
+    /// Deliberately still only the crate root. Broadening it to any file that
+    /// re-exports the name turns `use crate::nowhere::Thing;` into an external
+    /// dependency on the strength of `Thing` being a bare word, which is the
+    /// opposite of what the flag says. A re-export written outside the root is
+    /// handled where it actually does harm, in the fallback that was turning it
+    /// into a self-edge.
     fn leaves_project(&self, name: &str, context: ResolveContext<'_>) -> bool {
         let Some(index) = context.declarations else {
             return false;
@@ -376,6 +383,7 @@ fn first_existing(
 
     let parent = paths::parent(&module_path);
     if !parent.is_empty() {
+        let leaf = paths::file_name(&module_path);
         for candidate in [format!("{parent}.rs"), format!("{parent}/mod.rs")] {
             if !context.contains(&candidate) {
                 continue;
@@ -390,11 +398,87 @@ fn first_existing(
             {
                 continue;
             }
+
+            // Landing on the file the import was written in is a real answer for
+            // `use super::Cli` inside a test module, and it is what most of
+            // axum's self-references are: 41 of 65 are `use super::*;`, which
+            // `AGENTS.md` lists under the self-references the counting rules
+            // call real.
+            //
+            // It is also the answer for a bare external crate name, and it should
+            // not be: `use fastrand;` and `pub use typed_json;` name crates
+            // outside this project, in files that are not the crate root, and
+            // both came back as a dependency on themselves. A coupling no
+            // compiler agrees with, and invisible in every direction a reader
+            // would check.
+            //
+            // So this asks the narrow question -- is this name a crate from
+            // outside? -- rather than guarding the fallback against the
+            // declaration index in general. That general guard removes those two
+            // and fifty-one real self-references with it, because a name like
+            // `MultipartForm` is declared in the very file the path names and
+            // `super` is a word rather than a name.
+            if candidate == context.source_file
+                && names_a_crate_outside(context, leaf)
+            {
+                continue;
+            }
             return Some(candidate);
         }
     }
 
     None
+}
+
+/// Whether a word is a Rust path qualifier rather than a name.
+///
+/// `super`, `self` and `crate` are the three the resolver strips before walking,
+/// so a path ending in one of them is a reference to a module and never to a
+/// file. Treating them as names is how a guard that meant to catch external
+/// crates ends up deleting every `use super::*;`.
+fn is_qualifier(name: &str) -> bool {
+    matches!(name, "super" | "self" | "crate")
+}
+
+/// Whether `name` is a bare identifier that names no module in this crate.
+///
+/// A bare `use` has no qualifier to read, so the only evidence available is that
+/// the name matches no file anywhere in the analysis. `use serde::Serialize;` and
+/// `use fastrand;` rest on exactly this, and `serde` is qualified while
+/// `fastrand` is not -- a qualifier means the name cannot be a bare crate, so
+/// those two are excluded.
+///
+/// The declaration index cannot answer it. A private `use` is deliberately not
+/// recorded as a re-export, because recording it once made `use crate::service;`
+/// in `main.rs` resolve to `main.rs`.
+fn names_a_crate_outside(context: ResolveContext<'_>, name: &str) -> bool {
+    // A qualifier is a word, not a crate. `use super::*;` writes `super` where a
+    // name would go and is a reference to the file it appears in -- 41 of axum's
+    // 65 self-references are exactly that, and asking whether any file is named
+    // `super.rs` rejects every one of them.
+    if name.is_empty() || name.contains(':') || is_qualifier(name) {
+        return false;
+    }
+
+    let wanted = format!("{name}.rs");
+    if context.files().any(|known| known == &wanted) {
+        return false;
+    }
+
+    // A name declared in this very file is an item of this file, and the whole
+    // point of the `super::Cli` case. This is what separates `use fastrand;`
+    // from `use super::MultipartForm;`.
+    if context
+        .declarations
+        .is_some_and(|index| index.file_declares(context.source_file, name))
+    {
+        return false;
+    }
+
+    // Without a crate root there is no `src` to anchor a bare name against, and
+    // guessing would turn every unresolved single-segment path into an external
+    // dependency.
+    !crate_root(context.source_file).is_empty()
 }
 
 /// Test shim naming the arguments in the order a reader expects.
