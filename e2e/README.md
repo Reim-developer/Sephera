@@ -1,8 +1,30 @@
 # End-to-end graph cases
 
-Every import shape Sephera claims to resolve, written as a real file with a
-real expectation about what resolving it should produce, and checked against a
-real `sephera graph` run.
+Every import shape Sephera claims to resolve, written as a real file with a real
+expectation about what resolving it should produce, and checked against a real
+`sephera graph` run.
+
+## Status
+
+```
+accuracy over local imports: 40/44 resolved (90.9%)
+external imports left alone: 17/28
+72 import cases, 16 file cases, 6 known defects
+```
+
+All eight bundled languages are covered.
+
+| language | cases | known defects |
+|---|---:|---:|
+| Rust | 27 | 3 |
+| Python | 12 | 2 |
+| JavaScript | 8 | 2 |
+| Go, Java, TypeScript | 14 | 1 |
+| C, C++ | 11 | 2 |
+
+Every known defect is listed with the measurement or the observation that bounds
+it. None of them is a file a user is likely to open and find wrong; they are
+cases the tool currently gets wrong in a direction that costs the reader.
 
 ## Why this exists
 
@@ -28,42 +50,54 @@ recorded, or the resolver is wrong, in which case the resolver is fixed.
 
 ```bash
 python e2e/run.py                     # every case, exits non-zero on a mismatch
-python e2e/run.py --language rust     # one language
+python e2e/run.py --language rust     # one language or group
 python e2e/run.py --list              # the inventory, without running
+python e2e/run.py --summary           # counts only, for CI logs
 ```
 
 The script builds `target/release/sephera` if it is missing. It captures stdout
-as bytes and decodes it explicitly: routing it through a shell pipe re-encodes it,
-which mangles the Unicode fixture paths and makes the tool look broken when it is
-not. That is not a hypothetical — measuring Unicode filename handling through a
-PowerShell pipe produced two convincing fake bugs before the byte-level check.
+as bytes and decodes it explicitly: routing it through a shell pipe re-encodes
+it, which mangles the Unicode fixture paths and makes the tool look broken when
+it is not. That is not hypothetical — measuring Unicode filename handling through
+a PowerShell pipe produced two convincing fake bugs before the byte-level check.
 
 ## Layout
 
 ```
 e2e/
   graph/          the fixtures: real source files, one directory per language
-  cases/          the expectations, one module per language
+  cases/          the expectations, one module per language or group
   support.py      Case, FileCase, Expectation, and how they are collected
   run.py          the driver
 ```
 
 A `Case` pins one import: the file it is written in, the path Sephera should
-report for it, the file it must point at, and the `resolved`, `local_gap` and
-`kind` flags. Edges are **not** deduplicated, so a case also pins how many edges
-its import produces — `use super::Owner` and `use super::Owner as Renamed` are two
-edges with one `import_path`, distinguished only by `kind`.
+report for it, the file it must point at, and the `resolved`, `local_gap`,
+`kind` and `cfg_gated` flags.
 
-Three kinds of case, and the third is the one that matters:
+Two shapes of the tool's output shaped the model:
 
-- a path that must reach a specific local file;
-- a path that names nothing and must stay unresolved — split into an external
-  dependency (`local_gap: false`) and a genuine gap (`local_gap: true`), because
-  conflating them makes every `std::` import look like a defect;
-- a file that must appear, or must not — an empty file, a file of invalid
-  syntax, a file whose bytes are not valid UTF-8. These matter because a file
-  the walker skips is invisible in the edge list: it produces no edges, so its
-  absence is indistinguishable from an absence of imports.
+* **Edges are not deduplicated.** A file that imports the same path twice —
+  once at the top level and once inside an inline `mod` — produces two edges with
+  the same `(from, import_path)` pair. A case therefore pins how many edges its
+  import produces, and the duplication is asserted rather than collapsed.
+* **`resolved: false` covers two different things.** An external dependency and a
+  path that was meant to name a local file and missed. `local_gap` separates
+  them, and it is the one worth asserting: conflating them makes every `std::`
+  import look like a defect, and makes a real missing include look like a
+  standard library one.
+
+The flag is per-edge rather than a report total on purpose. `cfg_gated_edges`
+counts every language in the tree at once, so an expectation phrased that way can
+only be true or false for the whole corpus — it cannot say that *these three*
+imports are the conditional ones.
+
+## The worst cases are the point
+
+An empty file, a file of invalid syntax, a file whose bytes are not valid UTF-8,
+a directory's `index.js`, a package `main` field. These matter because a file the
+walker skips is invisible in the edge list: it produces no edges, so its absence
+is indistinguishable from an absence of imports.
 
 ## Known defects
 
@@ -72,27 +106,21 @@ answer reads and is still run. It is excluded from the pass/fail decision, not
 from the suite, and the reason is printed on every run. Editing it to match
 today's behaviour is the one thing that would make it worthless.
 
-The Rust module currently carries three, all from one parent fallback in
-`first_existing` that lands a path on the enclosing module without checking the
-name is declared or re-exported there. On axum, guarding it with a declaration
-check moves `self_references` from 66 to 18 and `unresolved_local` from 8 to 13
-while leaving `internal_edges` at 640 — so roughly 48 of those 66
-self-dependencies were claimed couplings the compiler does not have.
+What they have in common is a direction. Six of the eight are *absent* rather
+than *wrong*: a dependency the tool cannot see, filed under `node_modules`, the
+standard library, or nothing at all. A blast radius understates a change it
+cannot account for, and the reader has no way to tell the difference from a file
+that genuinely has no imports.
 
-That guard is not shippable on its own: it also rejects `super::IntoResponse`,
-which `response/mod.rs` reaches through a re-export rather than a declaration,
-and `file_declares` excludes re-exports deliberately. Fixing it means following
-the re-export chain to the file that actually declares the name, which is a change
-to the declaration index rather than to this one condition.
+The two exceptions are Rust's, and those invent couplings. The parent fallback in
+`first_existing` lands a path on the enclosing module without checking the name
+is declared or re-exported there. On axum, guarding it with a declaration check
+moves `self_references` from 66 to 18 and `unresolved_local` from 8 to 13 while
+leaving `internal_edges` at 640 — so roughly 48 of those 66 self-dependencies
+were claimed couplings the compiler does not have.
 
-## Status
-
-| language | cases | known defects |
-|---|---:|---:|
-| Rust | 29 | 3 |
-
-Seven languages are still to write. The shape is established by Rust and the
-remaining work is mechanical apart from the forms each language adds: Python's
-relative-import depth rules and `__init__.py`, Node's extension probing and
-`package.json` `main`, Go's package-path model, Java's suffix matching, and the
-include semantics of C and C++.
+That guard is not shippable on its own. It also rejects `super::IntoResponse`,
+which `response/mod.rs` reaches through a re-export rather than a declaration.
+Following re-exports to the file that declares the name recovers those, and then
+200 further edges disappear — which is what the re-export collector needed
+completing first, and why the two work items are sequenced the way they are.
