@@ -167,6 +167,12 @@ pub struct ImpactInput {
     pub no_gitignore: Option<bool>,
     /// Maximum hops from each target. 1 reports only direct importers.
     pub depth: Option<u32>,
+    /// Fail the build when any target reaches this many dependents, mirroring the
+    /// CLI's `--fail-on`. Reported as data in the `gate` field rather than as a
+    /// tool error: a violated rule is not a broken tool, and an agent that cannot
+    /// tell those apart would have to treat every threshold as fatal. The CLI exit
+    /// code is included so a wrapper gets the same number the shell would.
+    pub fail_on: Option<u64>,
     /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
     /// compact summary that fits an agent's context.
     pub format: Option<String>,
