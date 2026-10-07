@@ -18,6 +18,7 @@
 //! private to the binary crate, so a doctest could not name it, and an example
 //! that cannot be compiled is not an example.
 
+use std::borrow::Cow;
 use std::fmt::Display;
 
 use comfy_table::{
@@ -196,6 +197,18 @@ pub fn code<T: Display>(value: T) -> String {
     format!("`{value}`")
 }
 
+/// Escape the one character that would end a Markdown table cell.
+///
+/// Applies to every cell rather than only to paths, because a renderer cannot
+/// know which column holds a filesystem path and a value with a pipe in it is
+/// wrong in any column.
+fn escape_pipe(value: &str) -> Cow<'_, str> {
+    if !value.contains('|') {
+        return Cow::Borrowed(value);
+    }
+    Cow::Owned(value.replace('|', "\\|"))
+}
+
 /// One cell of a terminal table, aligned by its column.
 ///
 /// Right-aligning a number column is what lets a reader compare magnitudes down
@@ -265,11 +278,21 @@ fn render_markdown(grid: &Grid) -> String {
         let mut line = String::new();
         line.push('|');
         for index in 0..grid.columns().len() {
-            let value = cells.get(index).map_or("", String::as_str);
             line.push(' ');
+            // A literal `|` ends the cell, including inside a code span, so a
+            // file named `flags|name.rs` would split one path into two columns
+            // and shift every column after it. Escaping happens before
+            // decoration so the escape applies to whatever ends up rendered.
+            //
+            // Reachable only on a filesystem that permits it in a filename,
+            // which rules out Windows and leaves Linux and git: the name is
+            // legal there and a repository can hold one.
+            let value = cells
+                .get(index)
+                .map_or(Cow::Borrowed(""), |value| escape_pipe(value));
             match decorate {
-                None => line.push_str(value),
-                Some(wrap) => line.push_str(&wrap(value)),
+                None => line.push_str(&value),
+                Some(wrap) => line.push_str(&wrap(&value)),
             }
             line.push_str(" |");
         }
@@ -306,7 +329,7 @@ fn render_markdown(grid: &Grid) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{Alignment, Column, Format, Grid, grid_of};
+    use super::{Alignment, Column, Format, Grid, code, grid_of};
 
     fn sample() -> Grid {
         let mut grid = Grid::new(vec![
@@ -430,5 +453,61 @@ mod tests {
 
         assert_eq!(grid.columns()[0].alignment(), Alignment::Left);
         assert_eq!(grid.columns()[1].alignment(), Alignment::Right);
+    }
+
+    #[test]
+    fn a_pipe_in_a_value_does_not_split_the_cell() {
+        // A pipe ends a Markdown table cell even inside a code span, so a file
+        // named `flags|name.rs` would split one path into two columns and shift
+        // everything after it. Legal on Linux and in git; Windows will not let
+        // such a file be created, so this is pinned here rather than in the
+        // end-to-end tests, which cannot build the fixture on this platform.
+        let mut grid =
+            Grid::new(vec![Column::text("File"), Column::count("Functions")]);
+        grid.push(vec![code("src/flags|name.rs"), "2".into()]);
+        grid.set_totals(vec!["Totals".into(), "2".into()]);
+
+        let markdown = Format::Markdown.render(&grid);
+
+        // Three pipes delimit this row: the start, the one separator, and the end.
+        // A fourth would mean the value split the cell. The escaped pipe is
+        // counted too, so the check is on unescaped separators only -- which is
+        // the whole question, since an escaped one renders as a character and an
+        // unescaped one ends the cell.
+        let data_line = markdown
+            .lines()
+            .find(|line| line.contains("flags"))
+            .expect("the data row");
+        assert_eq!(
+            data_line
+                .split('|')
+                .filter(|piece| !piece.ends_with('\\'))
+                .count(),
+            4,
+            "{data_line}"
+        );
+        assert!(data_line.contains("flags\\|name.rs"), "{data_line}");
+
+        // And the decoration must not undo it: the totals row goes through the
+        // same path, so a value carrying a pipe stays escaped after the `**`
+        // wrapping.
+        let bolded = Format::Markdown.render(&{
+            let mut grid = Grid::new(vec![Column::text("File")]);
+            grid.set_totals(vec![code("a|b")]);
+            grid
+        });
+        assert!(bolded.contains("| **`a\\|b`** |"), "{bolded}");
+    }
+
+    #[test]
+    fn a_value_with_no_pipe_is_not_altered() {
+        // The escaping must not add a backslash where there is nothing to
+        // escape: `a\b` is a Windows path and doubling its separator would
+        // corrupt it.
+        let mut grid = Grid::new(vec![Column::text("File")]);
+        grid.push(vec![code(r"src\windows\path.rs")]);
+
+        let markdown = Format::Markdown.render(&grid);
+        assert!(markdown.contains(r"`src\windows\path.rs`"), "{markdown}");
     }
 }
