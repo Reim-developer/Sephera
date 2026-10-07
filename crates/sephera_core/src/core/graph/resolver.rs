@@ -852,6 +852,16 @@ fn traverse_graph(
     depth: Option<u32>,
     direction: TraversalDirection,
 ) -> BTreeSet<String> {
+    // Deliberately one more than the number asked for, which is what
+    // `docs/commands/graph.md` documents: `--depth 0` keeps the traversal roots
+    // plus their direct neighbours, and each step adds one more hop.
+    //
+    // Worth knowing that this is *not* the same as `impact --depth`, where `1`
+    // means direct importers only. On a chain c -> b -> a -> target, `impact
+    // --depth 1` reports one dependent and `graph --what-depends-on target
+    // --depth 1` reports two. Both are correct for their own command, and the
+    // difference is stated on both pages -- but it is a real trap for someone who
+    // learns the flag from one command and uses it on the other.
     let max_distance = depth.map(|value| value.saturating_add(1));
     let mut visited = BTreeSet::new();
     let mut queue: VecDeque<(String, u32)> =
@@ -1524,6 +1534,85 @@ mod tests {
             scope.iter().any(|path| path.contains("..")),
             "expected the escaping path to survive, got {scope:?}"
         );
+    }
+
+    #[test]
+    fn depth_counts_levels_where_the_roots_level_is_zero() {
+        // The documented convention: `--depth 0` keeps the traversal roots plus
+        // their direct neighbours, and each step adds one more hop. Four existing
+        // tests and `docs/commands/graph.md` pin this, one of them named for it,
+        // so it is behaviour rather than an accident.
+        //
+        // Pinned here as well because `impact --depth` counts *hops* rather than
+        // levels: the two commands answer the same question with the same flag name
+        // and different numbers. That divergence is real and is now stated on both
+        // doc pages -- what is not acceptable is it being discoverable only by
+        // running both commands and comparing the output.
+        let reached = |depth: Option<u32>| {
+            let (node_map, roots) = chain_fixture();
+            traverse_graph(
+                &node_map,
+                &roots,
+                depth,
+                TraversalDirection::ImportedBy,
+            )
+            .len()
+        };
+
+        assert_eq!(reached(None), 4, "unbounded reaches the whole chain");
+        assert_eq!(
+            reached(Some(0)),
+            2,
+            "depth 0 is the root plus its direct neighbours"
+        );
+        assert_eq!(reached(Some(1)), 3, "depth 1 adds one more hop");
+        assert_eq!(reached(Some(2)), 4, "depth 2 reaches the end of the chain");
+        assert_eq!(reached(Some(3)), 4, "already everything; no further hop");
+
+        // The same walk counted in hops, which is the number `impact` reports.
+        // Stated as an assertion so the gap between the two commands is a number
+        // someone reads rather than a surprise they find.
+        let as_hops = |depth: u32| reached(Some(depth)) - 1;
+        assert_eq!(
+            as_hops(0),
+            1,
+            "`impact --depth 0` is the root and nothing else"
+        );
+        assert_eq!(
+            as_hops(1),
+            2,
+            "`impact --depth 1` is the root plus one hop"
+        );
+    }
+
+    /// A node map for `c -> b -> a -> target`, each imported by the one above it.
+    ///
+    /// Paths are spelled the way the graph spells them, so a failure reads as a path.
+    fn chain_fixture() -> (NodeMap, BTreeSet<String>) {
+        let mut node_map: NodeMap = BTreeMap::new();
+
+        let link =
+            |node_map: &mut NodeMap, path: &str, imported_by: &[&str]| {
+                node_map.insert(
+                    path.to_owned(),
+                    crate::core::graph::types::NodeEntry {
+                        language: Some("Rust"),
+                        imports: Vec::new(),
+                        imported_by: imported_by
+                            .iter()
+                            .map(|s| (*s).to_owned())
+                            .collect(),
+                        declarations: BTreeSet::new(),
+                    },
+                );
+            };
+
+        link(&mut node_map, "target", &["a"]);
+        link(&mut node_map, "a", &["b"]);
+        link(&mut node_map, "b", &["c"]);
+        link(&mut node_map, "c", &[]);
+
+        (node_map, BTreeSet::from(["target".to_owned()]))
     }
 
     #[test]
