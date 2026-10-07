@@ -1,0 +1,16 @@
+# Test data, not project code.
+#
+# `e2e/graph/` is a set of hand-written projects used to pin import resolution.
+# Each one contains what a real repository eventually has and a fixture never
+# should: unresolved paths, a cycle, a file that is not valid UTF-8. They exist
+# precisely so `e2e/run.py` can assert those answers.
+#
+# Sephera's own `graph --path .` was walking them as if they were its own source,
+# which put four cycles and ten unresolved paths into a repository that has
+# neither. `scripts/check_readme_examples.py` caught it by failing two README
+# examples it had never failed before.
+#
+# `.gitignore` is the wrong file for this: these fixtures are committed and must
+# stay that way. `.sepheraignore` is the tool's own mechanism and is read for
+# analysis only, which is what the distinction means.
+e2e/graph/

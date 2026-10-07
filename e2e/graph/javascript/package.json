@@ -1,0 +1,5 @@
+{
+  "name": "acme",
+  "main": "lib/entry.js",
+  "version": "1.0.0"
+}

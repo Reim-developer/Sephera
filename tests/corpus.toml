@@ -17,8 +17,34 @@
 # `cycles - structural_cycles` are worth acting on. It is zero everywhere now:
 # a parent referring to its own child is excluded whatever way it is spelled.
 #
-# `self_references` is edges from a file to itself, which a `use super::*;`
-# inside a test module produces. They are real references but carry no
+# `self_references` was 65 and is 60, and `python
+# e2e/where_self_edges_come_from.py` says where they come from -- which changed
+# what the number meant three times over. 41 of the 65 are `use super::*;`
+# inside a test module, which is a reference the counting rules call real, and
+# most of the `super::Something` group names an item declared in the very file it
+# is used in. All of those stay.
+#
+# What went is five edges whose target was the file the import was written in.
+# Two are right to remove: `use fastrand;` in `axum-extra/src/response/
+# multiple.rs` and `pub use typed_json;` in `axum-extra/src/response/
+# erased_json.rs` are **bare** names for crates from outside this project, and
+# both came back as a dependency on the file they were written in.
+#
+# Three are the cost, and they are the same three edges. `super::JsonLines` in
+# `axum-extra/src/json_lines.rs` names a struct declared at line 61 of that file
+# and used at line 177, so the reference is real -- but the struct sits inside a
+# `pin_project! { }` macro invocation, and tree-sitter does not parse items inside
+# a `token_tree`, so the declaration index has no entry for it and the guard
+# answers "a crate from outside". `a_struct_inside_a_macro_invocation_is_still_
+# declared` in `declarations.rs` asserts the limitation rather than the fix.
+# The other two are `super::InvalidFormContentType` and `super::RawFormRejection`
+# in `extract/raw_form.rs`, which name items declared in `extract/rejection.rs`
+# and so are gaps rather than self-references -- the right answer, but a
+# different file from the one the fallback offered.
+#
+# `internal_edges` did not move, which is the number that matters here: all five
+# were self-edges, so removing them is not a lost coupling. `unresolved_local`
+# is 6, up from 3, and that is the price of not inventing couplings.
 # information about how files depend on each other, so they are excluded from
 # `internal_edges` and counted here instead.
 #
@@ -29,15 +55,22 @@
 [[corpus]]
 name = "axum"
 language = "Rust"
-# What is left is a pair of `#[macro_export]` macros, a `pub use` re-export the
-# declaration index reads as local, and names reached only from an inline
-# module. A floor of gaps is expected here; it was 66 before declaration lookup
-# resolved the re-export and crate-root cases, and 13 once a `pub use http;` of an
-# external crate stopped being counted as a missing file.
-unresolved_local = 8
+# What is left is a pair of `#[macro_export]` macros and a `pub use` re-export the
+# declaration index reads as local. A floor of gaps is expected here; it was 66
+# before declaration lookup resolved the re-export and crate-root cases, 13 once
+# a `pub use http;` of an external crate stopped being counted as a missing
+# file, and 3 once grouped re-exports were recorded at all.
+#
+# Grouping is how crates re-export in practice -- `pub use axum_core::extract::{...}`
+# -- and the collector used to record none of them, because walking into the
+# group re-checked whether the node it had reached was itself a public use, and a
+# `use_list` is not. So six internal edges were missing and five resolver gaps
+# were reported against names the crate does re-export. Both numbers moved for
+# the same reason and neither is a behaviour change.
+unresolved_local = 6
 files = 307
-internal_edges = 640
-self_references = 66
+internal_edges = 646
+self_references = 60
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
 # a dependency a default build does not have.
@@ -60,7 +93,14 @@ language = "Python"
 # Relative imports resolve fully; the number is a floor to catch regressions,
 # not a target to raise.
 unresolved_local = 0
-files = 80
+# Up from 80 when a zero-byte file stopped being dropped from the graph. The
+# three are the empty `__init__.py` files under `tests/`, which are the thing
+# that makes each of those directories a package -- and this resolver already
+# resolves `from . import X` onto exactly such a file, so counting it as a node
+# and pointing an edge at it were two answers to one question that disagreed.
+# `src/flask/py.typed` is empty too and is not counted: it has no extension, so
+# it matches no language and is not a source file by that measure.
+files = 83
 # Up from 171 when `from . import helper` stopped being reported as pointing at
 # the package's `__init__.py` instead of at the submodule it names.
 internal_edges = 185

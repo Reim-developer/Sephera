@@ -63,8 +63,15 @@ impl SupportedLanguage {
             // which silently dropped every Go file from graph analysis.
             "Go" | "Golang" => Some(Self::Go),
             "Java" => Some(Self::Java),
-            "C++" => Some(Self::Cpp),
-            "C" | "C Header" => Some(Self::C),
+            "C++" | "C++ Header File" => Some(Self::Cpp),
+            // The registry lists headers as their own language so that
+            // `languages.yml` can give them a comment style, and those names are
+            // what `language_for_path` hands back. Mapping them to the C and
+            // C++ grammars is what makes a header produce edges: a header names
+            // other headers, so without this the graph stopped at the top of
+            // every header tree and described a C project as if its headers
+            // were leaves.
+            "C" | "C Header" | "C Header File" => Some(Self::C),
             _ => None,
         }
     }

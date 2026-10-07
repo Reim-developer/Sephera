@@ -236,9 +236,23 @@ struct ExtractedFile {
 fn extract_one_file(
     project_file: &ProjectFile,
 ) -> Result<Option<ExtractedFile>> {
-    if project_file.size_bytes > MAX_IMPORT_FILE_BYTES
-        || project_file.size_bytes == 0
-    {
+    // Only an oversized file is skipped. A zero-byte file is not.
+    //
+    // It was skipped, and that dropped it from the graph entirely rather than
+    // merely leaving it without edges, so an empty source was invisible in a way
+    // that depended on whether some other file happened to declare it: a Rust
+    // `mod empty;` kept an empty file as a node while an empty `.js`, `.h` or
+    // `__init__.py` vanished. Four languages disagreed about what an empty file is,
+    // and `total_files` therefore depended on the language of the file it was
+    // counting.
+    //
+    // It matters most for Python, where an empty `__init__.py` is the thing that
+    // makes a directory a package -- and this resolver already treats such a file as
+    // a resolution target for `from . import X`. Counting it as a node and
+    // resolving `from . import X` onto it were two answers to the same question and
+    // they disagreed. On flask that is three files: every empty `__init__.py`
+    // under `tests/`.
+    if project_file.size_bytes > MAX_IMPORT_FILE_BYTES {
         return Ok(None);
     }
 
@@ -259,6 +273,31 @@ fn extract_one_file(
                 project_file.absolute_path.display()
             )
         })?;
+
+    // Bytes that are not valid UTF-8 yield no edges at all.
+    //
+    // Tree-sitter recovers rather than failing, so a file with a broken encoding
+    // produced *something* -- and what it produced was a fragment. `use crate::`
+    // followed by bytes that are not a name became a `crate` path, which the
+    // module walk then resolved to the file it was written in: a self-dependency
+    // out of bytes that are not a source file.
+    //
+    // Refusing to read the file is the honest answer. Every extractor here reads
+    // node text as a string, so a reference recovered from undecodable bytes is
+    // not a weaker claim than one from decodable bytes -- it is not a claim at
+    // all. The file stays a node, which is what it is; it just contributes
+    // nothing.
+    if std::str::from_utf8(&source).is_err() {
+        return Ok(Some(ExtractedFile {
+            data: FileImportData {
+                file_path: project_file.normalized_relative_path.clone(),
+                language: Some(language.name),
+                ts_language,
+                imports: Vec::new(),
+            },
+            declared: None,
+        }));
+    }
 
     // Extraction goes through the language's plugin so that dispatch is uniform:
     // adding a language means adding one plugin file, not editing the extractor
@@ -665,13 +704,18 @@ fn build_edges_and_nodes(
             // counts as a gap. One it proved leaves the project is an external
             // dependency whatever its prefix says.
             let local_gap = matches!(resolved, Resolution::Unresolved)
-                && looks_local(&statement.raw_path)
+                && looks_local(&statement.raw_path, file_data.ts_language)
                 // A namespace import binds a name rather than naming a module,
                 // so one that does not resolve is not a gap in the resolver.
                 // `from . import Flask` in flask's `cli.py` names a class the
                 // package re-exports, and there is no `Flask.py` for it to find.
                 // A renaming import gets no such leniency: it names one path.
-                && !statement.kind.is_namespace();
+                //
+                // A wildcard is the exception, and it is the opposite case: a
+                // wildcard names a *package*, which is the broadest dependency a
+                // language has, and there is no file for it to bind to.
+                && (statement.kind.is_namespace()
+                    == statement.raw_path.ends_with('*'));
 
             // Every resolved edge goes in the adjacency, including a parent naming its own
             // child with `mod child;`.
@@ -1142,12 +1186,99 @@ fn is_self_edge(edge: &GraphEdge) -> bool {
     edge.to.as_deref() == Some(edge.from.as_str())
 }
 
-fn looks_local(import_path: &str) -> bool {
-    const LOCAL_QUALIFIERS: [&str; 4] = ["crate::", "self::", "super::", "."];
+/// Whether an unresolved path still looks like it names something in the project.
+///
+/// This decides which bucket a failed resolution is counted in, and it used to
+/// recognise only Rust's qualifiers and a leading dot. So a Java import of a
+/// package that does not exist, a C `#include "missing.h"` and a Go package path
+/// that finds no directory were all filed as *external* -- counted with the
+/// standard library rather than with the problems. `local_gap` existed, and for
+/// four of the eight bundled languages it could never be true.
+/// Whether an unresolved path still looks like it names something in the project.
+///
+/// This decides which bucket a failed resolution is counted in, and it used to
+/// recognise only Rust's qualifiers and a leading dot -- so for four of the
+/// eight bundled languages `local_gap` could never be true. A Java import of a
+/// package that does not exist, a C `#include "missing.h"`, a Go package path
+/// with no matching directory and a JavaScript `require('./gone')` were all
+/// filed as *external*: counted with the standard library rather than with the
+/// problems.
+///
+/// The three-way [`Resolution`] enum already draws this line. A plugin's
+/// `leaves_project` is what decides whether an unresolved path provably leaves
+/// the project, and it answered "no" for every one of those. Asking a Rust
+/// qualifier list a second time therefore re-decided something the resolver had
+/// already settled, using rules from one language.
+fn looks_local(import_path: &str, language: SupportedLanguage) -> bool {
+    if import_path.ends_with('*') {
+        // A wildcard names a package rather than a module, and there is no file
+        // to point at: `import com.example.util.*;` depends on every type in
+        // that package. `ResolverPlugin::resolve` returns one file, so the
+        // honest answer cannot be expressed -- and choosing one file would
+        // present a fraction of the dependency as though it were all of it.
+        //
+        // Counting it as external hides a dependency on a whole package
+        // underneath the standard library's shape. Counting it as a gap puts it
+        // in the number a reader can act on.
+        return true;
+    }
 
-    LOCAL_QUALIFIERS
-        .iter()
-        .any(|qualifier| import_path.starts_with(qualifier))
+    match language {
+        // Rust is the language that has to guess. An unqualified `serde::Serialize`
+        // names a different crate and no path in the source says so; the
+        // qualifier list is the only evidence available, and a path carrying none
+        // of them is left to the resolver's own reasoning.
+        SupportedLanguage::Rust => {
+            const QUALIFIERS: [&str; 4] = ["crate::", "self::", "super::", "."];
+
+            QUALIFIERS
+                .iter()
+                .any(|qualifier| import_path.starts_with(qualifier))
+        }
+
+        // A relative import is local by construction. An absolute one that does
+        // not resolve names a package this analysis can see but does not
+        // contain, and the standard library is already separated from it by
+        // `leaves_project`.
+        //
+        // Not the other four languages, though. `leaves_project` is implemented
+        // for Rust and C/C++ only; a bare `react`, a `fmt` and a `com.example.Foo`
+        // all reach it as "did not leave the project" simply because nothing
+        // asked, and treating that as evidence of locality turns every external
+        // dependency into a resolver gap -- 472 on flask and 241 on express.
+        // Nothing about a bare specifier's shape says it is external, so the
+        // honest answer for those languages is still "cannot tell", and the
+        // count stays where it was.
+        SupportedLanguage::Python => import_path.starts_with('.'),
+
+        // The two include forms are the distinction the language exists for: a
+        // quoted include names a project file and an angled one names the
+        // toolchain's. A quoted include that resolves to nothing is exactly the
+        // case worth reporting, and filing it alongside `<stdio.h>` hid it.
+        SupportedLanguage::C | SupportedLanguage::Cpp => {
+            !import_path.starts_with('<')
+        }
+
+        // A relative specifier names a path inside this project -- Node resolves
+        // `./x` against the importing file and there is nowhere else it could
+        // go. So `./gone` failing to resolve is a gap by construction, and no
+        // evidence is needed.
+        //
+        // A *bare* specifier is the opposite: `react` and `express` are
+        // packages, and their shape says nothing either way. Only a plugin that
+        // has read a manifest can tell, and none of these has one threaded
+        // through yet, so they stay as they were rather than becoming every
+        // external dependency's worth of gaps.
+        SupportedLanguage::JavaScript | SupportedLanguage::TypeScript => {
+            import_path.starts_with("./") || import_path.starts_with("../")
+        }
+
+        // Go package paths and Java dotted paths carry the same problem without
+        // the one shape that settles it. `fmt` and `example.com/acme/store` look
+        // alike; only a directory match or a manifest tells them apart, and the
+        // resolver has already had its say by the time this is asked.
+        SupportedLanguage::Go | SupportedLanguage::Java => false,
+    }
 }
 
 /// Canonical identity of a cycle, used to collapse duplicates.
@@ -1998,6 +2129,69 @@ mod tests {
     }
 
     #[test]
+    fn a_file_that_is_not_utf8_is_a_node_and_contributes_nothing() {
+        // `use crate::` followed by bytes that are not a name is not an import.
+        // Tree-sitter recovers rather than failing, so the fragment used to reach
+        // the module walk as a bare `crate` and resolve to the file it was
+        // written in -- a self-dependency manufactured from bytes that are not a
+        // source file.
+        //
+        // The file stays a node, because a file the tool cannot read is still a
+        // file in the tree, and it must not take the rest of the graph with it.
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in [
+            ("src/main.rs", "mod broken;\npub struct Config;\n"),
+            ("src/leaf.rs", "use crate::Config;\npub fn leaf() {}\n"),
+        ] {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+        // `broken.rs` opens with a real `use` and then stops being text.
+        fs::write(
+            temp_dir.path().join("src/broken.rs"),
+            b"use crate::\xff\xfe;\n",
+        )
+        .unwrap();
+
+        let report = build_graph(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+        )
+        .expect("graph build must succeed");
+
+        assert!(
+            report
+                .nodes
+                .iter()
+                .any(|node| node.file_path == "src/broken.rs"),
+            "a file whose bytes cannot be decoded is still a node: {:?}",
+            report
+                .nodes
+                .iter()
+                .map(|n| &n.file_path)
+                .collect::<Vec<_>>()
+        );
+        assert!(
+            imports_of(&report, "src/broken.rs").is_empty(),
+            "no edge can be claimed from bytes that are not a source file: {:?}",
+            report
+                .edges
+                .iter()
+                .filter(|edge| edge.from == "src/broken.rs")
+                .collect::<Vec<_>>()
+        );
+        assert_eq!(
+            imports_of(&report, "src/leaf.rs"),
+            vec!["src/main.rs".to_owned()],
+            "one unreadable file must not cost the graph its other edges"
+        );
+    }
+
+    #[test]
     fn a_mod_only_crate_is_fully_connected() {
         let report = graph_for(&[
             ("src/main.rs", "mod a;\nmod b;\nfn main() {}\n"),
@@ -2369,6 +2563,51 @@ mod tests {
             ),
             Some("axum-core/src/lib.rs".to_owned()),
             "a name the crate root declares directly points there too"
+        );
+    }
+
+    #[test]
+    fn a_super_path_naming_a_name_this_file_declares_resolves_to_it() {
+        // `use super::JsonLines;` in the `mod tests` of
+        // `axum-extra/src/json_lines.rs`, where the struct is declared at line 61
+        // of that file and used at line 177. The reference is real, so the
+        // fallback has to accept it: a name this file declares is an item of
+        // this file, and `names_a_crate_outside` is what keeps it from being
+        // filed as a crate from outside.
+        //
+        // The index is built by hand rather than parsed, because the struct sits
+        // inside a `pin_project! { }` invocation and tree-sitter records no
+        // item inside a `token_tree` --
+        // `a_struct_inside_a_macro_invocation_is_still_declared` in
+        // `declarations.rs` asserts that limitation rather than a fix. This test
+        // is about what resolution does once the index knows the name, which is
+        // the half that is the resolver's to answer.
+        let files = known_files(&["src/json_lines.rs", "src/lib.rs"]);
+
+        let mut index = declarations::DeclarationIndex::default();
+        index.insert(
+            "src/json_lines.rs",
+            declarations::DeclaredNames::from_names(["JsonLines"]),
+        );
+
+        let resolved = resolve_import_with(
+            "super::JsonLines",
+            "src/json_lines.rs",
+            1,
+            ImportKind::Dependency,
+            SupportedLanguage::Rust,
+            &ResolutionInputs {
+                base_path: std::path::PathBuf::new(),
+                known_files: files,
+                declarations: index,
+                manifests: manifests::ManifestIndex::default(),
+            },
+        );
+
+        assert_eq!(
+            resolved.file().map(ToOwned::to_owned),
+            Some("src/json_lines.rs".to_owned()),
+            "a `super::` path naming a struct in the same file is a self-reference"
         );
     }
 
