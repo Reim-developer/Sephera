@@ -57,6 +57,37 @@ fn resolve_import(
     import_path: &str,
     context: ResolveContext<'_>,
 ) -> Option<String> {
+    // Check for `replace` directives first. A `replace` in `go.mod` redirects
+    // a module path prefix to a local directory. For example:
+    //   replace example.com/foo => ./local/foo
+    // means `import "example.com/foo/bar"` resolves to `local/foo/bar`.
+    if let Some(manifests) = context.manifests {
+        for (prefix, replacement) in manifests.go_replaces() {
+            if let Some(rest) = import_path.strip_prefix(prefix) {
+                let rest = rest.trim_start_matches('/');
+                let replaced = if rest.is_empty() {
+                    replacement.clone()
+                } else {
+                    format!("{replacement}/{rest}")
+                };
+                // The replacement path is relative to the go.mod directory (project
+                // root). Find a Go file in that directory.
+                let package = paths::file_name(&replaced);
+                if !package.is_empty() {
+                    return context
+                        .files()
+                        .filter(|known| is_go_file(known))
+                        .find(|known| {
+                            known.rsplit_once('/').is_some_and(|(dir, _)| {
+                                paths::file_name(dir) == package
+                            })
+                        })
+                        .cloned();
+                }
+            }
+        }
+    }
+
     // `import "example.com/app"` is a reference to the package at the project
     // root, which `go.mod` names by the module path. Falling through to the
     // directory match below looked for a directory called `app` and found none,
@@ -211,6 +242,44 @@ mod tests {
                 context_for(&files, Some(&manifests))
             ),
             None
+        );
+    }
+
+    #[test]
+    fn a_replace_directive_redirects_to_a_local_package() {
+        // `replace github.com/x/y => ./local/x` means imports of
+        // `github.com/x/y/...` resolve to files under `local/x/...`.
+        let files = known(&["main.go", "local/x/y.go", "local/x/z.go"]);
+        let mut manifests = ManifestIndex::default();
+        manifests.set_go_module_path("example.com/app");
+        // Insert the replace directive directly (normally parsed from go.mod)
+        manifests
+            .go_replaces_mut()
+            .insert("github.com/x/y".to_owned(), "./local/x".to_owned());
+
+        // Import of the replaced module itself (no subpath) resolves to the
+        // package directory `local/x/`.
+        let resolved = GoPlugin
+            .resolve("github.com/x/y", context_for(&files, Some(&manifests)))
+            .expect("replace directive must redirect to local package");
+
+        assert!(
+            resolved.starts_with("local/x/"),
+            "expected a file inside local/x/, got {resolved}"
+        );
+
+        // Import with a subpath that exists as a directory under the replacement.
+        let files2 = known(&["main.go", "local/x/pkg/y.go"]);
+        let resolved2 = GoPlugin
+            .resolve(
+                "github.com/x/y/pkg",
+                context_for(&files2, Some(&manifests)),
+            )
+            .expect("replace directive must redirect subpath to local package");
+
+        assert!(
+            resolved2.starts_with("local/x/pkg/"),
+            "expected a file inside local/x/pkg/, got {resolved2}"
         );
     }
 }

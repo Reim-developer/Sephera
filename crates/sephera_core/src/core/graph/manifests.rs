@@ -99,6 +99,10 @@ pub struct ManifestIndex {
     builtin_names: BTreeMap<Ecosystem, BTreeSet<String>>,
     /// Go's module path from `go.mod`, which maps to the project root directory.
     module_path: Option<String>,
+    /// Go `replace` directives from `go.mod`, mapping a module path to its
+    /// replacement path (relative to the go.mod directory). Used by the Go
+    /// resolver to redirect imports to local paths.
+    go_replaces: BTreeMap<String, String>,
 }
 
 impl ManifestIndex {
@@ -150,6 +154,7 @@ impl ManifestIndex {
                 .collect(),
             builtin_names: BTreeMap::new(),
             module_path: None,
+            go_replaces: BTreeMap::new(),
             base_path: std::path::PathBuf::new(),
         };
         index.add_builtins();
@@ -285,6 +290,22 @@ impl ManifestIndex {
     #[must_use]
     pub fn is_go_module_root(&self, import_path: &str) -> bool {
         self.module_path.as_deref() == Some(import_path)
+    }
+
+    /// Go `replace` directives from `go.mod`.
+    ///
+    /// Maps a module path prefix to its replacement path (relative to the
+    /// go.mod directory). Used by the Go resolver to redirect imports to local
+    /// paths.
+    #[must_use]
+    pub const fn go_replaces(&self) -> &BTreeMap<String, String> {
+        &self.go_replaces
+    }
+
+    /// Mutable access to Go `replace` directives, for tests.
+    #[allow(clippy::missing_const_for_fn)]
+    pub fn go_replaces_mut(&mut self) -> &mut BTreeMap<String, String> {
+        &mut self.go_replaces
     }
 
     fn read_cargo_toml(&mut self, contents: &str) {
@@ -434,6 +455,7 @@ impl ManifestIndex {
 
     fn read_go_mod(&mut self, contents: &str) {
         let mut in_require = false;
+        let mut in_replace = false;
         for line in contents.lines() {
             let line = line.trim();
             // `module example.com/app` -- the path that maps to the project
@@ -454,6 +476,40 @@ impl ManifestIndex {
             }
             if in_require && line == ")" {
                 in_require = false;
+                continue;
+            }
+            if line.starts_with("replace (") {
+                in_replace = true;
+                continue;
+            }
+            if in_replace && line == ")" {
+                in_replace = false;
+                continue;
+            }
+            // `replace example.com/foo => ./local/foo` or
+            // `replace example.com/bar v1.2.3 => ./local/bar`
+            if in_replace || line.starts_with("replace ") {
+                let candidate = if in_replace {
+                    line
+                } else if let Some(rest) = line.strip_prefix("replace ") {
+                    rest
+                } else {
+                    continue;
+                };
+                // Split on `=>` to get module and replacement
+                if let Some((module, replacement)) = candidate.split_once("=>")
+                {
+                    let module = module.trim();
+                    let replacement = replacement.trim();
+                    // Module may have a version: `example.com/foo v1.2.3`
+                    let module_name =
+                        module.split_whitespace().next().unwrap_or("");
+                    if !module_name.is_empty() && !replacement.is_empty() {
+                        self.go_replaces
+                            .entry(normalise(module_name))
+                            .or_insert_with(|| replacement.to_owned());
+                    }
+                }
                 continue;
             }
             let candidate = if in_require {
@@ -851,6 +907,27 @@ serde = { version = "1", features = ["derive"] }
                 Some("v2.0.0".to_owned())
             ))
         );
+    }
+
+    #[test]
+    fn go_mod_replaces_are_parsed() {
+        let contents = "module example.com/app\n\nreplace (\n\tgithub.com/x/y => ./local/x\n\tgithub.com/a/b v1.2.3 => ./local/a\n)\n\nreplace github.com/single/s => ./local/s\n";
+        let mut index = ManifestIndex::default();
+        ManifestIndex::read_go_mod(&mut index, contents);
+
+        assert_eq!(
+            index.go_replaces().get("github.com/x/y"),
+            Some(&"./local/x".to_owned())
+        );
+        assert_eq!(
+            index.go_replaces().get("github.com/a/b"),
+            Some(&"./local/a".to_owned())
+        );
+        assert_eq!(
+            index.go_replaces().get("github.com/single/s"),
+            Some(&"./local/s".to_owned())
+        );
+        assert_eq!(index.go_replaces().len(), 3);
     }
 
     #[test]
