@@ -122,24 +122,6 @@ pub struct LocArgs {
 /// them. `--ignore` on `context` used to carry a sentence about `.sephera.toml`
 /// and profile precedence that the same flag on `loc` did not, so the
 /// precedence model was documented on one command and invisible on five.
-/// Where a rendered report goes when it is not going to the terminal.
-///
-/// Flattened into every command that can render text. `graph` and `context`
-/// each carried their own wording for the same flag, so the one command whose
-/// output is a file rather than a table had a differently-worded `--output`
-/// from the rest.
-#[derive(Debug, Clone, Default, Args)]
-pub struct OutputArgs {
-    /// Write the report to a file instead of standard output
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Write the report to a file instead of standard output.",
-        long_help = "Write the report to a file instead of standard output. Parent directories are created automatically when needed. Omitting this writes to standard output, which is what a pipe or a redirect expects."
-    )]
-    pub output: Option<PathBuf>,
-}
-
 #[derive(Debug, Clone, Default, Args)]
 pub struct ConfigArgs {
     /// Read shared settings from this file instead of discovering one
@@ -159,6 +141,24 @@ pub struct ConfigArgs {
         long_help = "Disable `.sephera.toml` loading for this invocation. Both auto-discovery and an explicit `--config` are skipped, and Sephera falls back to built-in defaults plus CLI flags. `[project]` patterns are not applied, which widens the analysis. `.gitignore` and `.sepheraignore` are unaffected; use `--no-gitignore` for those."
     )]
     pub no_config: bool,
+}
+
+/// Where a rendered report goes when it is not going to the terminal.
+///
+/// Flattened into every command that can render text. `graph` and `context`
+/// each carried their own wording for the same flag, so the one command whose
+/// output is a file rather than a table had a differently-worded `--output`
+/// from the rest.
+#[derive(Debug, Clone, Default, Args)]
+pub struct OutputArgs {
+    /// Write the report to a file instead of standard output
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write the report to a file instead of standard output.",
+        long_help = "Write the report to a file instead of standard output. Parent directories are created automatically when needed. Omitting this writes to standard output, which is what a pipe or a redirect expects."
+    )]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
