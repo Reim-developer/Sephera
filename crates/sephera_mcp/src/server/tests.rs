@@ -36,6 +36,7 @@ fn impact_tool_reports_a_blast_radius() {
         ignore: None,
         no_gitignore: None,
         depth: None,
+        fail_on: None,
         format: None,
     }));
 
@@ -83,6 +84,7 @@ fn impact_tool_accepts_several_files_at_once() {
         ignore: None,
         no_gitignore: None,
         depth: None,
+        fail_on: None,
         format: None,
     }));
 
@@ -119,6 +121,7 @@ fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
         ignore: None,
         no_gitignore: None,
         depth: None,
+        fail_on: None,
         format: None,
     }));
 
@@ -127,6 +130,173 @@ fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
     assert!(
         message.contains("src/missing.rs"),
         "the error must name the path it could not find: {message}"
+    );
+}
+
+#[test]
+fn impact_tool_reports_a_crossed_gate_as_data_not_as_an_error() {
+    // The whole point of the split the CLI makes between exit 1 and exit 2. An MCP
+    // tool has no exit code, so a violated threshold returned as a tool error
+    // would collapse "the rule was broken" into "the tool broke" -- and would cost
+    // the caller the measurement that caused it.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/wide.rs", b"pub fn w() {}\n");
+    write_file(temp_dir.path(), "src/narrow.rs", b"pub fn n() {}\n");
+    for index in 0..3 {
+        write_file(
+            temp_dir.path(),
+            &format!("src/u{index}.rs"),
+            b"use crate::wide;\n",
+        );
+    }
+    write_file(
+        temp_dir.path(),
+        "src/uses_narrow.rs",
+        b"use crate::narrow;\n",
+    );
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        fail_on: Some(2),
+        format: None,
+    }));
+
+    let output = result.expect("a crossed gate is not a tool failure");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("impact output must be JSON");
+
+    let gate = &parsed["gate"];
+    assert_eq!(gate["fail_on"], 2);
+    assert_eq!(
+        gate["crossed"], true,
+        "three dependents crosses a limit of 2"
+    );
+    assert_eq!(
+        gate["exit_code"], 2,
+        "the exit code the shell would return, not the tool's"
+    );
+    assert_eq!(
+        gate["violations"].as_array().map(Vec::len),
+        Some(1),
+        "one target crosses, and it is named: {gate}"
+    );
+    assert_eq!(gate["violations"][0]["target"], "src/wide.rs");
+}
+
+#[test]
+fn impact_tool_reports_a_gate_that_held() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(temp_dir.path(), "src/user.rs", b"use crate::a;\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/lib.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        fail_on: Some(10),
+        format: None,
+    }));
+
+    let output = result.expect("impact tool should succeed");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("impact output must be JSON");
+
+    assert_eq!(parsed["gate"]["crossed"], false);
+    assert_eq!(parsed["gate"]["exit_code"], 0);
+    assert_eq!(
+        parsed["gate"]["violations"].as_array().map(Vec::len),
+        Some(0)
+    );
+}
+
+#[test]
+fn impact_tool_reports_null_for_a_gate_that_was_never_set() {
+    // Null rather than `crossed: false`. "No threshold was requested" and "a
+    // threshold was met" are different answers, and collapsing them would report
+    // a passing gate that nobody set.
+    //
+    // Null rather than an omitted key because `depth` already spells absence that
+    // way, and a caller reading this output should not have to learn two
+    // conventions in one object.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(temp_dir.path(), "src/user.rs", b"use crate::a;\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/lib.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        fail_on: None,
+        format: None,
+    }));
+
+    let output = result.expect("impact tool should succeed");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("impact output must be JSON");
+
+    assert!(
+        parsed["gate"].is_null(),
+        "no threshold asked for means a null gate, not a passing one: {output}"
+    );
+}
+
+#[test]
+fn impact_tool_states_the_verdict_in_markdown_too() {
+    // An agent asking for the compact form needs the verdict as much as the
+    // numbers -- the numbers are what it already had, and acting on them is the
+    // reason for asking for a gate.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/wide.rs", b"pub fn w() {}\n");
+    for index in 0..2 {
+        write_file(
+            temp_dir.path(),
+            &format!("src/u{index}.rs"),
+            b"use crate::wide;\n",
+        );
+    }
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/wide.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        fail_on: Some(1),
+        format: Some("markdown".to_owned()),
+    }));
+
+    let output = result.expect("a crossed gate is not a tool failure");
+
+    assert!(output.contains("## Threshold"), "{output}");
+    assert!(output.contains("Crossed."), "{output}");
+    assert!(output.contains("would exit 2"), "{output}");
+    assert!(
+        output.contains("`src/wide.rs` has 2 dependents"),
+        "{output}"
     );
 }
 
@@ -148,6 +318,7 @@ fn impact_tool_refuses_an_empty_file_list() {
         ignore: None,
         no_gitignore: None,
         depth: None,
+        fail_on: None,
         format: None,
     }));
 
@@ -172,6 +343,7 @@ fn impact_tool_rejects_an_unknown_format_instead_of_returning_json() {
         ignore: None,
         no_gitignore: None,
         depth: None,
+        fail_on: None,
         format: Some("md".to_owned()),
     }));
 
@@ -212,6 +384,7 @@ fn impact_tool_markdown_has_one_title_for_several_targets() {
         ignore: None,
         no_gitignore: None,
         depth: None,
+        fail_on: None,
         format: Some("markdown".to_owned()),
     }));
 
@@ -245,6 +418,7 @@ fn impact_tool_renders_markdown_for_an_agents_context() {
         ignore: None,
         no_gitignore: None,
         depth: Some(1),
+        fail_on: None,
         format: Some("markdown".to_owned()),
     }));
 

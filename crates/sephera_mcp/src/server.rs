@@ -390,9 +390,11 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("blast radius measurement failed"))?;
 
+        let built = ImpactReport::new(&radii, param.fail_on);
+
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&ImpactReport::new(&radii)),
-            Some("markdown") => Ok(impact_markdown(&radii)),
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(impact_markdown(&built)),
             // Rejected rather than silently returning JSON, matching
             // `parse_graph_format`. An agent that asked for Markdown and got JSON
             // back would parse the wrong shape and not know.
@@ -411,6 +413,44 @@ impl SepheraServer {
 pub struct ImpactReport {
     /// One entry per file asked about, widest blast radius first.
     pub targets: Vec<ImpactEntry>,
+    /// The verdict on `fail_on`. `null` when no threshold was asked about, which
+    /// is a different answer from a threshold that was asked about and held.
+    ///
+    /// Serialised as `null` rather than omitted, matching how `depth` already
+    /// spells absence, so a caller learns one convention rather than two.
+    pub gate: Option<ImpactGate>,
+}
+
+/// The verdict on a `fail_on` threshold.
+///
+/// Data rather than an error, deliberately. The CLI separates exit 1 (the
+/// analysis could not run) from exit 2 (the analysis ran and something crossed a
+/// threshold) for one reason: a log where those look identical is the situation
+/// where someone adds an ignore flag and then never notices either. An MCP tool
+/// has no exit code, so the distinction has to survive as a field instead --
+/// returning an error here would collapse exactly those two cases, and would cost
+/// the caller the measurement that triggered it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ImpactGate {
+    /// The threshold that was requested.
+    pub fail_on: u64,
+    /// Whether any target reached it.
+    pub crossed: bool,
+    /// The exit code the CLI would return: 0 when the threshold held, 2 when it
+    /// did not. Included so a caller that shells out gets the same number rather
+    /// than having to re-derive the rule.
+    pub exit_code: u8,
+    /// One entry per target that crossed the threshold. Empty when it held.
+    pub violations: Vec<ImpactViolation>,
+}
+
+/// One target that crossed the threshold.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ImpactViolation {
+    /// The file whose blast radius was too wide.
+    pub target: String,
+    /// How many files depend on it.
+    pub dependent_count: u64,
 }
 
 /// One file's blast radius.
@@ -438,25 +478,46 @@ pub struct ImpactDependent {
 }
 
 impl ImpactReport {
-    fn new(radii: &[blast_radius::BlastRadius]) -> Self {
-        Self {
-            targets: radii
+    fn new(radii: &[blast_radius::BlastRadius], fail_on: Option<u64>) -> Self {
+        let targets: Vec<ImpactEntry> = radii
+            .iter()
+            .map(|radius| ImpactEntry {
+                target: radius.target.clone(),
+                dependent_count: blast_radius::dependent_count(radius),
+                depth: radius.depth,
+                dependents: radius
+                    .dependents
+                    .iter()
+                    .map(|dependent| ImpactDependent {
+                        file: dependent.file.clone(),
+                        imports: dependent.imports.clone(),
+                    })
+                    .collect(),
+            })
+            .collect();
+
+        // One violation per offending target rather than a single flag, so the
+        // caller learns *which* file broke the rule. The CLI does the same, and
+        // for the same reason: a count with no owner cannot be acted on.
+        let gate = fail_on.map(|limit| {
+            let violations: Vec<ImpactViolation> = targets
                 .iter()
-                .map(|radius| ImpactEntry {
-                    target: radius.target.clone(),
-                    dependent_count: blast_radius::dependent_count(radius),
-                    depth: radius.depth,
-                    dependents: radius
-                        .dependents
-                        .iter()
-                        .map(|dependent| ImpactDependent {
-                            file: dependent.file.clone(),
-                            imports: dependent.imports.clone(),
-                        })
-                        .collect(),
+                .filter(|entry| entry.dependent_count >= limit)
+                .map(|entry| ImpactViolation {
+                    target: entry.target.clone(),
+                    dependent_count: entry.dependent_count,
                 })
-                .collect(),
-        }
+                .collect();
+
+            ImpactGate {
+                fail_on: limit,
+                crossed: !violations.is_empty(),
+                exit_code: if violations.is_empty() { 0 } else { 2 },
+                violations,
+            }
+        });
+
+        Self { targets, gate }
     }
 }
 
@@ -466,25 +527,33 @@ impl ImpactReport {
 /// matching `sephera impact`'s own Markdown. Emitting a top-level heading per
 /// target instead would give a three-file answer three document titles, which
 /// reads as three unrelated reports rather than one question with three parts.
-fn impact_markdown(radii: &[blast_radius::BlastRadius]) -> String {
+///
+/// Takes the built report rather than the raw radii so the threshold verdict can
+/// be stated. An agent asking for a compact summary needs the verdict as much as
+/// the numbers -- the numbers alone are what it already had before asking for a
+/// gate, and acting on them is the reason for the gate.
+fn impact_markdown(report: &ImpactReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
-    let several = radii.len() > 1;
+    let several = report.targets.len() > 1;
 
     if several {
-        let _ = writeln!(output, "# Blast radius for {} files\n", radii.len());
+        let _ = writeln!(
+            output,
+            "# Blast radius for {} files\n",
+            report.targets.len()
+        );
         let _ = writeln!(output, "Widest first.");
     }
 
-    for radius in radii {
-        let count = blast_radius::dependent_count(radius);
+    for entry in &report.targets {
+        let count = entry.dependent_count;
         if several {
             let _ =
-                writeln!(output, "\n## Blast radius for `{}`\n", radius.target);
+                writeln!(output, "\n## Blast radius for `{}`\n", entry.target);
         } else {
-            let _ =
-                writeln!(output, "# Blast radius for `{}`\n", radius.target);
+            let _ = writeln!(output, "# Blast radius for `{}`\n", entry.target);
         }
         let _ = writeln!(
             output,
@@ -495,15 +564,15 @@ fn impact_markdown(radii: &[blast_radius::BlastRadius]) -> String {
                 other => format!("{other} files depend on this."),
             }
         );
-        if let Some(depth) = radius.depth {
+        if let Some(depth) = entry.depth {
             let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
         }
-        if radius.dependents.is_empty() {
+        if entry.dependents.is_empty() {
             continue;
         }
         let sub = if several { "###" } else { "##" };
         let _ = writeln!(output, "\n{sub} Dependents\n");
-        for dependent in &radius.dependents {
+        for dependent in &entry.dependents {
             if dependent.imports.is_empty() {
                 let _ = writeln!(output, "- `{}`", dependent.file);
             } else {
@@ -522,6 +591,34 @@ fn impact_markdown(radii: &[blast_radius::BlastRadius]) -> String {
         }
         output.push('\n');
     }
+
+    if let Some(gate) = &report.gate {
+        let _ = writeln!(output, "\n## Threshold\n");
+        if gate.crossed {
+            let _ = writeln!(
+                output,
+                "Crossed. {} target(s) reached {} dependents or more. A CI run \
+                 would exit {}.\n",
+                gate.violations.len(),
+                gate.fail_on,
+                gate.exit_code
+            );
+            for violation in &gate.violations {
+                let _ = writeln!(
+                    output,
+                    "- `{}` has {} dependents",
+                    violation.target, violation.dependent_count
+                );
+            }
+        } else {
+            let _ = writeln!(
+                output,
+                "Held. No target reached {} dependents. A CI run would exit {}.",
+                gate.fail_on, gate.exit_code
+            );
+        }
+    }
+
     output
 }
 

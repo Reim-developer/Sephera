@@ -153,9 +153,39 @@ Reports what breaks if one or more files change. This is the tool an agent shoul
 - **`ignore`** (optional): List of ignore patterns.
 - **`no_gitignore`** (optional): Skip the repository's own ignore files.
 - **`depth`** (optional): Maximum hops from each target. `1` reports only direct importers.
+- **`fail_on`** (optional): Mirror the CLI's `--fail-on`. See below.
 - **`format`** (optional): `json` (default) or `markdown`.
 
 Exactly one of `path` or `url` must be provided. Results come back widest first, and `dependent_count` is a plain number so it can be compared against a threshold without walking the list.
+
+### Thresholds
+
+`fail_on` mirrors the CLI's `--fail-on`, and the verdict comes back as **data, not as
+an error**. The call succeeds either way:
+
+```json
+"gate": {
+  "fail_on": 40,
+  "crossed": true,
+  "exit_code": 2,
+  "violations": [
+    { "target": "crates/sephera_core/src/core/ignore.rs", "dependent_count": 36 }
+  ]
+}
+```
+
+- `crossed` is the answer: did any target reach the limit.
+- `exit_code` is what the CLI would exit with — `0` when the threshold held, `2` when it did not. Verified to match the shell for both directions.
+- `violations` names each offending target, because a count with no owner cannot be acted on.
+- `gate` is `null` when no `fail_on` was given. That is a different answer from a threshold that was asked about and held.
+
+A violated threshold is deliberately not returned as a tool error. The CLI
+separates exit 1 (the analysis could not run) from exit 2 (the analysis ran and
+something crossed a threshold) because a log where those look identical is where
+someone adds an ignore flag and then never notices either. An MCP tool has no
+exit code, so the distinction has to survive as a field — returning an error would
+collapse those two cases and would cost the caller the measurement that caused
+it.
 
 The counting shares one implementation with the [`impact` command](/commands/impact/), so the two cannot disagree about what a dependent is.
 
