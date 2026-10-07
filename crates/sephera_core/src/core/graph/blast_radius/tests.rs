@@ -101,13 +101,16 @@ fn scoped_report() -> GraphReport {
     )
 }
 
-fn path(value: &str) -> PathBuf {
-    PathBuf::from(value)
+/// A scope path in the graph's spelling, as `build_focus_set` would
+/// hand it over.
+fn path(value: &str) -> String {
+    value.to_owned()
 }
 
 use super::{
     dependent_count, match_path, measure, measure_all, measure_scoped,
 };
+use crate::core::graph::resolver::build_focus_set;
 
 #[test]
 fn the_target_is_never_a_dependent_of_itself() {
@@ -487,10 +490,116 @@ fn a_query_target_is_used_as_the_graph_spells_it() {
 }
 
 #[test]
-fn the_repository_prefix_is_empty_when_analysis_starts_at_the_root() {
-    assert_eq!(super::base_prefix_for(&path("/repo"), &path("/repo")), "");
+fn measuring_a_second_file_on_a_query_filtered_report_is_refused() {
+    // `measure` takes the target from `report.query` when there is one. Asking
+    // about a different file would therefore answer about the query's file and
+    // say nothing, which is the worst shape a wrong answer can take. Rejected.
+    let filtered = GraphReport {
+        query: Some(GraphQuery::DependsOn("a.rs".to_owned())),
+        ..repo_report()
+    };
+
+    let error = measure_all(&filtered, &["b.rs".to_owned()], "", None, &[])
+        .unwrap_err()
+        .to_string();
+
+    assert!(
+        error.contains("a.rs"),
+        "the error must name the file the report actually describes: {error}"
+    );
+}
+
+#[test]
+fn measuring_the_query_target_itself_is_allowed() {
+    // The refusal above is about a mismatch, not about query-filtered reports
+    // as such.
+    let filtered = GraphReport {
+        query: Some(GraphQuery::DependsOn("a.rs".to_owned())),
+        ..repo_report()
+    };
+
+    let radii =
+        measure_all(&filtered, &["a.rs".to_owned()], "", None, &[]).unwrap();
+
+    assert_eq!(radii[0].target, "a.rs");
+    assert_eq!(dependent_count(&radii[0]), 3);
+}
+
+#[test]
+fn an_absolute_scope_path_is_normalised_before_matching() {
+    // Comparing an absolute `--focus` string against base-relative node paths
+    // matches nothing and the radius comes back as zero with no explanation.
+    // `build_focus_set` is what prevents that, so the measurement takes
+    // already-normalised scopes. This pins the two halves fit together.
+    //
+    // The base is built from the real current directory rather than written as
+    // `/repo`, because a leading slash is not an absolute path on Windows and
+    // the normalisation under test keys off exactly that.
+    let base = std::env::temp_dir().join("repo");
+    let inside = base.join("crates").join("one");
+
+    let scope = build_focus_set(&base, &[inside])
+        .into_iter()
+        .collect::<Vec<_>>();
+
     assert_eq!(
-        super::base_prefix_for(&path("/repo"), &path("/repo/crates/demo")),
+        scope,
+        vec!["crates/one".to_owned()],
+        "an absolute scope must be rewritten base-relative, or it matches \
+         nothing"
+    );
+
+    let radius = measure_scoped(&scoped_report(), "target.rs", None, &scope);
+    assert_eq!(
+        dependent_count(&radius),
+        2,
+        "a normalised absolute scope must reach the same files a relative \
+         one does"
+    );
+}
+
+#[test]
+fn a_relative_base_still_accepts_an_absolute_scope() {
+    // `--path .` leaves the base relative, which is the case that made an
+    // absolute `--focus` match nothing at all: zero dependents, no warning.
+    //
+    // Built under the working directory because the scope has to be inside the
+    // base for the claim to mean anything -- a path elsewhere is out of scope
+    // however the base is spelled.
+    let base = std::env::current_dir().expect("a working directory");
+    let absolute = base.join("crates").join("one");
+
+    let scope = build_focus_set(
+        std::path::Path::new("."),
+        std::slice::from_ref(&absolute),
+    )
+    .into_iter()
+    .collect::<Vec<_>>();
+
+    assert_eq!(scope, vec!["crates/one".to_owned()]);
+
+    let radius = measure_scoped(&scoped_report(), "target.rs", None, &scope);
+    assert_eq!(
+        dependent_count(&radius),
+        2,
+        "an absolute scope under `--path .` must reach the same dependents"
+    );
+}
+
+#[test]
+fn the_repository_prefix_is_empty_when_analysis_starts_at_the_root() {
+    assert_eq!(
+        super::base_prefix_for(
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo")
+        ),
+        ""
+    );
+    assert_eq!(
+        super::base_prefix_for(
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/repo/crates/demo")
+        ),
         "crates/demo"
     );
 }
@@ -500,7 +609,10 @@ fn the_repository_prefix_is_empty_when_the_paths_do_not_nest() {
     // A base outside the repository is not a crash; it just means no prefix to
     // strip.
     assert_eq!(
-        super::base_prefix_for(&path("/repo"), &path("/elsewhere")),
+        super::base_prefix_for(
+            std::path::Path::new("/repo"),
+            std::path::Path::new("/elsewhere")
+        ),
         ""
     );
 }

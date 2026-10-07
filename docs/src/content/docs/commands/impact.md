@@ -86,7 +86,7 @@ complete one.
 ## Narrowing to a subtree
 
 ```bash
-# All 36 dependents, versus the 9 that import it directly
+# Only the 9 files that import it directly, of 36 in total
 sephera impact crates/sephera_core/src/core/ignore.rs --depth 1
 
 # Only the dependents inside one package
@@ -117,7 +117,7 @@ sephera impact crates/sephera_core/src/core/ignore.rs --format json
   "targets": [
     {
       "target": "crates/sephera_core/src/core/ignore.rs",
-      "dependent_count": 34,
+      "dependent_count": 36,
       "depth": null,
       "dependents": [
         { "file": "crates/sephera_core/src/core/code_loc.rs", "imports": [] }

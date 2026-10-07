@@ -56,8 +56,10 @@ without a shell.
   file, confirm it is in the module tree — or just check that the build still
   passes and the tests still run.
 
-- **Where the tests are.** 616 tests. `cargo test --workspace`. They are fast
-  enough to run on every change; there is no excuse for not running them.
+- **Where the tests are.** `cargo test --workspace`, roughly 620 of them, and
+  fast enough to run on every change — there is no excuse for not running them.
+  (The count is deliberately approximate; pin behaviour in a test, not a number
+  in a document.)
 
 - **The gate that must pass.**
 

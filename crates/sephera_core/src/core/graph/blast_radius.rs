@@ -22,7 +22,7 @@
 //! Get any of those wrong and the reported radius drifts upward, which means a
 //! limit fires on changes that are nowhere near as wide as the report claims.
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use anyhow::{Result, bail};
 
@@ -75,7 +75,7 @@ pub fn measure_scoped(
     report: &GraphReport,
     requested: &str,
     depth: Option<u32>,
-    focus: &[PathBuf],
+    focus: &[String],
 ) -> BlastRadius {
     let target = canonical_target(report, requested);
     let reachable = reachable_dependents(report, &target, depth);
@@ -135,8 +135,28 @@ pub fn measure_all(
     requested: &[String],
     base_prefix: &str,
     depth: Option<u32>,
-    focus: &[PathBuf],
+    focus: &[String],
 ) -> Result<Vec<BlastRadius>> {
+    // A query-filtered report describes exactly one file, and `measure` would
+    // take the target from that query rather than from the request. Asking about
+    // a second file would therefore answer about the first one and say nothing,
+    // which is the worst shape a wrong answer can take. Rejected instead.
+    if let Some(GraphQuery::DependsOn(query_target)) = &report.query {
+        let asked_for_another = requested.iter().any(|raw| {
+            match_path(report, raw, base_prefix)
+                .as_deref()
+                .is_none_or(|matched| matched != query_target)
+                && raw != query_target
+        });
+        if asked_for_another {
+            bail!(
+                "this report was built for a reverse query on `{query_target}`, \
+                 so it describes that file only. Build a report over the whole \
+                 repository to measure a blast radius."
+            );
+        }
+    }
+
     let mut matched = Vec::with_capacity(requested.len());
     let mut unknown = Vec::new();
 
@@ -291,17 +311,19 @@ fn reachable_dependents(
 
 /// Whether a dependent belongs in the requested scope.
 ///
-/// An empty scope means everything, which is what makes scoping optional rather
-/// than something every caller has to supply.
-fn in_scope(path: &str, focus: &[PathBuf]) -> bool {
+/// `focus` holds paths already normalised by
+/// [`build_focus_set`](super::resolver::build_focus_set), so an absolute
+/// `--focus` is compared in the graph's spelling rather than against its own. An
+/// empty scope means everything, which is what makes scoping optional rather than
+/// something every caller has to supply.
+fn in_scope(path: &str, focus: &[String]) -> bool {
     if focus.is_empty() {
         return true;
     }
 
-    focus.iter().any(|scope| {
-        let scope = scope.to_string_lossy().replace('\\', "/");
-        path_matches_focus(path, scope.trim_matches('/'))
-    })
+    focus
+        .iter()
+        .any(|scope| path_matches_focus(path, scope.trim_matches('/')))
 }
 
 /// The repository-root-relative prefix that git paths carry but graph paths do

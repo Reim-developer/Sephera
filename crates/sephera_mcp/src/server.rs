@@ -24,7 +24,7 @@ use sephera_core::core::{
     graph::{
         blast_radius,
         render::render_graph,
-        resolver::build_graph,
+        resolver::{build_focus_set, build_graph},
         types::{GraphFormat, GraphQuery},
     },
     runtime::{
@@ -351,12 +351,19 @@ impl SepheraServer {
             &source.repo_root,
             &source.analysis_path,
         );
-        let focus: Vec<std::path::PathBuf> = param
-            .focus
-            .unwrap_or_default()
-            .into_iter()
-            .map(std::path::PathBuf::from)
-            .collect();
+        // Normalised the same way `graph --focus` normalises, so an absolute scope
+        // path is compared in the graph's spelling rather than against its own.
+        let focus = build_focus_set(
+            &source.analysis_path,
+            &param
+                .focus
+                .unwrap_or_default()
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
 
         let radii = blast_radius::measure_all(
             &report,
@@ -368,8 +375,17 @@ impl SepheraServer {
         .map_err(map_internal_error("blast radius measurement failed"))?;
 
         match param.format.as_deref() {
+            None | Some("json") => serialize_json(&ImpactReport::new(&radii)),
             Some("markdown") => Ok(impact_markdown(&radii)),
-            _ => serialize_json(&ImpactReport::new(&radii)),
+            // Rejected rather than silently returning JSON, matching
+            // `parse_graph_format`. An agent that asked for Markdown and got JSON
+            // back would parse the wrong shape and not know.
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported impact format `{other}`; expected json or markdown"
+                ),
+                None,
+            )),
         }
     }
 }
