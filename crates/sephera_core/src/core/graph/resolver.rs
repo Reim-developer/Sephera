@@ -292,6 +292,22 @@ fn extract_one_file(
 }
 
 /// Builds the set of focused normalized paths for filtering.
+/// The given path, spelled with forward slashes.
+///
+/// Only where a backslash actually separates components. On Unix `\` is an
+/// ordinary character in a file name, so rewriting it would turn a scope naming
+/// one file into one naming a whole directory tree -- silently, and to something
+/// the caller never wrote.
+#[must_use]
+pub fn use_forward_slashes(path: &Path) -> String {
+    let spelled = path.to_string_lossy();
+    if cfg!(windows) {
+        spelled.replace('\\', "/")
+    } else {
+        spelled.into_owned()
+    }
+}
+
 /// Normalise focus paths into the `/`-separated, base-relative spelling the
 /// graph uses.
 ///
@@ -342,7 +358,7 @@ pub fn build_focus_set(
                 strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
             };
 
-            let spelled = resolved.to_string_lossy().replace('\\', "/");
+            let spelled = use_forward_slashes(&resolved);
             // `""` is how a scope that means "the whole base" spells itself, and
             // both callers already read an empty set that way.
             (!spelled.is_empty()).then_some(spelled)
@@ -1336,12 +1352,12 @@ mod tests {
         let base = std::env::temp_dir().join("repo");
         // Relative spellings only: an absolute path is stripped against the base
         // rather than normalised through it, and that is a separate rule.
-        let spellings = [
+        let mut spellings = vec![
             PathBuf::from("."),
             PathBuf::from("./"),
-            PathBuf::from(".\\"),
             PathBuf::from("crates/x/../.."),
         ];
+        spellings.extend(windows_paths(&[".\\"]));
 
         for spelling in &spellings {
             assert_eq!(
@@ -1360,7 +1376,6 @@ mod tests {
         for (spelling, resolves_to) in [
             ("crates/cli/./src", "crates/cli/src"),
             ("./crates/cli/src", "crates/cli/src"),
-            (".\\crates\\cli\\src", "crates/cli/src"),
             // One level up, so this resolves to the parent rather than to itself.
             ("crates/cli/src/..", "crates/cli"),
             ("crates/cli/./src/../..", "crates"),
@@ -1372,6 +1387,64 @@ mod tests {
                 ),
                 known_files(&[resolves_to]),
                 "`{spelling}` should resolve to {resolves_to}"
+            );
+        }
+
+        // Backslash-separated input only means anything where the separator is a
+        // backslash. On Unix `.\\crates` is an ordinary file name with a backslash
+        // in it, and asserting it resolves to a directory would be asserting that
+        // a legal file name is silently rewritten.
+        for (spelling, resolves_to) in
+            windows_spellings(&[(".\\crates\\cli\\src", "crates/cli/src")])
+        {
+            assert_eq!(
+                build_focus_set(
+                    std::env::temp_dir().join("repo").as_path(),
+                    &[PathBuf::from(spelling)],
+                ),
+                known_files(&[resolves_to]),
+                "`{spelling}` should resolve to {resolves_to}"
+            );
+        }
+    }
+
+    /// Windows-only spellings, as paths.
+    fn windows_paths(raw: &[&str]) -> Vec<PathBuf> {
+        if cfg!(windows) {
+            raw.iter().map(PathBuf::from).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Windows-only spellings, as (spelling, expected) pairs.
+    ///
+    /// Guards two mistakes at once: a Unix run failing on a Windows-only input,
+    /// and a Windows run quietly skipping coverage it thought it had.
+    fn windows_spellings<'a>(
+        pairs: &[(&'a str, &'a str)],
+    ) -> Vec<(&'a str, &'a str)> {
+        if cfg!(windows) {
+            pairs.to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn a_backslash_is_a_separator_only_where_it_is_one() {
+        // On Unix a backslash is an ordinary character in a file name, so
+        // rewriting it would silently widen a scope from one file to a directory
+        // tree. Found because a Windows-only test input failed on Linux, where it
+        // is a legal file name rather than a spelling mistake.
+        let spelled = use_forward_slashes(Path::new("crates/cli\\src"));
+
+        if cfg!(windows) {
+            assert_eq!(spelled, "crates/cli/src");
+        } else {
+            assert_eq!(
+                spelled, "crates/cli\\src",
+                "a backslash in a Unix file name is part of the name"
             );
         }
     }
