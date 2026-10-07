@@ -66,10 +66,25 @@ without a shell.
   ```bash
   cargo fmt --all
   cargo +1.99.0 clippy --workspace --all-targets --all-features -- -D warnings
+  # The fuzz targets are a separate workspace member tree, so --workspace does not
+  # reach them. CI lints them and a green local run says nothing about them.
+  cargo +1.99.0 clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
   cargo test --workspace
   ```
 
   Clippy is denied at pedantic level, so a suggestion is a failure.
+
+- **Fuzzing.** `cargo fuzz run <target> <corpus> <seeds>` — corpus first, then
+  seeds. Passing one directory for both makes libFuzzer write hundreds of
+  hash-named finds next to the committed regression seeds in
+  `fuzz/seeds/<target>/`; the two are separated for that reason. libFuzzer does
+  not create either directory, so `mkdir -p` both first.
+
+  When you add an assertion, check it has teeth: revert the fix, run the target,
+  confirm it fails and note *which* assertion fired, restore the fix, confirm it
+  passes. A target that passes against broken code reads as protection and is
+  worth less than none. Every wrong assumption about the resolver's contract cost
+  six rounds of that loop while these targets were being written.
 
 - **Python checks.** `npx pyright` is clean-required, and four scripts verify
   claims made in `README.md`:

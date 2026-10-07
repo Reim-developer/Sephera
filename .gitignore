@@ -10,7 +10,18 @@ __pycache__/
 /fuzz/artifacts/
 /fuzz/corpus/
 /fuzz/target/
-/fuzz/seeds
+# Regression seeds are committed; everything else under `seeds/` is a fuzzer's
+# working corpus and is not. A seed is the smallest input that a real bug was
+# found by, so committing it means re-running a target after reverting a fix still
+# fails, which is the only thing that proves the assertion has teeth.
+#
+# One level of `*`, not `**`: git cannot re-include anything inside an excluded
+# directory, so `**` would exclude `seeds/graph_path_utils/` itself and the
+# negations below would silently do nothing.
+/fuzz/seeds/*
+!/fuzz/seeds/graph_path_utils/
+!/fuzz/seeds/resolve_focus_scope/
+!/fuzz/seeds/README.md
 # The graph corpus repositories are not ignored here on purpose. They live in a
 # cache directory outside the tree -- see scripts/fetch_corpus.py -- because
 # `graph` reads only the ignore patterns it is given and would analyse test data

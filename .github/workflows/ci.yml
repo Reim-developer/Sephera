@@ -121,6 +121,67 @@ jobs:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/measure_accuracy.py --verify
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    # The job reads the repository and writes an artifact. Nothing else, so it does
+    # not get a token that can push.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      # Gated at 85 while the measured figure is 91.5, which is deliberate. A gate
+      # set at the current number is a gate that fails on the next honest commit
+      # and gets raised under pressure; one set below it measures regression
+      # without inviting filler tests to close the gap. Line coverage is a floor
+      # here, not a target -- the count that matters is how much of the *resolver*
+      # and *extraction* is exercised, and that is what the fuzz targets in
+      # `fuzz.yml` are for.
+      #
+      # Test files themselves are excluded: they are executed by definition, and
+      # including them inflates the number with the tests that check the tests.
+      #
+      # Two steps, one measurement. `--json --output-path` writes the report to a
+      # file and prints nothing -- no table at all, which is why the comment above
+      # this once claimed otherwise. `cargo llvm-cov report` then re-renders the
+      # per-file table from the data already collected, so the log shows where the
+      # numbers came from without a second build.
+      - name: Measure line coverage
+        run: >-
+          cargo llvm-cov --workspace --json
+          --output-path coverage-summary.json
+          --ignore-filename-regex '(tests?/|benches/|fuzz/)'
+          --fail-under-lines 85
+
+      - name: Show the per-file table
+        run: >-
+          cargo llvm-cov report --summary-only
+          --ignore-filename-regex '(tests?/|benches/|fuzz/)'
+
+      # `!cancelled()` rather than the default success condition: the artifact is
+      # most needed on the run that failed the gate, which is exactly when the
+      # default would skip it.
+      - name: Upload coverage report
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage-summary.json
+          if-no-files-found: warn
+
   publish_dry_run:
     name: Publish Dry Run
     runs-on: ubuntu-latest

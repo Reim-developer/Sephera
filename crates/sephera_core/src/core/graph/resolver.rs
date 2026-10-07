@@ -324,6 +324,33 @@ fn extract_one_file(
 /// the whole base. `--focus . --focus src/core` means "the base, or `src/core`",
 /// and the base contains `src/core` -- answering with `src/core` alone would
 /// undercount dependents and could turn a failing `--fail-on` into a passing one.
+///
+/// # What is and is not normalised
+///
+/// Two branches, and they make different promises.
+///
+/// A **relative** scope is rewritten when it has no root or drive prefix and no
+/// `..` that escapes the front. Those are collapsed, `.` is dropped, and the result
+/// is the spelling a node could have. Anything else -- a rooted but drive-less
+/// `/src/core` on Windows, a `..` that escapes, an `N:` that reads as a drive
+/// prefix -- is returned **exactly as typed**, spelling included. That is
+/// deliberate: an unrecognised scope should look unrecognised rather than be
+/// quietly turned into a different one.
+///
+/// An **absolute** scope has the base stripped lexically, and *that* has no check
+/// for `..`. `<base>/../outside` becomes `../outside` rather than being refused,
+/// which is the one case where the output is neither canonical nor the caller's
+/// own spelling. It matches no node either way, so the answer is the same -- but
+/// a caller reading the set should not assume the output never starts with `..`.
+///
+/// Either way a scope the resolver cannot place narrows the answer to nothing,
+/// which is the silent-wrong-number shape this function exists to avoid. What the
+/// pass-through buys is that the string is recognisable as the caller's own, so
+/// the miss is legible.
+///
+/// This is stated here because it is the part a caller cannot infer from the
+/// signature, and it took a fuzzer to pin down: six wrong assumptions about which
+/// inputs get normalised, every one of them mine.
 #[must_use]
 pub fn build_focus_set(
     base_path: &Path,
@@ -1463,6 +1490,24 @@ mod tests {
         // Order must not matter, or the same flags mean two different things.
         let reversed = vec![PathBuf::from("src/core"), PathBuf::from("./")];
         assert_eq!(build_focus_set(&base, &reversed), BTreeSet::new());
+    }
+
+    #[test]
+    fn an_absolute_scope_can_still_produce_a_leading_parent() {
+        // `strip_prefix` is lexical, so `<base>/../outside` strips to `../outside`
+        // without anything noticing that it now points above the base. Worth pinning
+        // because the obvious reading of "an absolute scope is made relative" is
+        // wrong, and the difference is only visible in the output.
+        let base = std::env::temp_dir().join("repo");
+        let escaping = base.join("..").join("outside");
+
+        let scope = build_focus_set(&base, &[escaping]);
+
+        assert_eq!(
+            scope,
+            known_files(&["../outside"]),
+            "the base is stripped lexically, with no check for `..` in what is left"
+        );
     }
 
     #[test]

@@ -31,6 +31,15 @@ jobs:
             seed_dir: fuzz/seeds/build_context_report
           - target: render_context_markdown
             seed_dir: fuzz/seeds/render_context_markdown
+          # These two assert invariants rather than the absence of a crash. A
+          # codebase without `unsafe` almost never panics, so "did not crash"
+          # says very little about whether the answer is right. These check that
+          # path handling produces a spelling a node could actually have, which
+          # is where every silently wrong answer in this tool has come from.
+          - target: graph_path_utils
+            seed_dir: fuzz/seeds/graph_path_utils
+          - target: resolve_focus_scope
+            seed_dir: fuzz/seeds/resolve_focus_scope
     env:
       FUZZ_MAX_TOTAL_TIME: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.max_total_time || '300' }}
     steps:
@@ -48,18 +57,28 @@ jobs:
 
       - name: Create fuzz log and corpus directories
         # libFuzzer exits with "The required directory ... does not exist" rather
-        # than creating its corpus directory. `fuzz/seeds/` is gitignored, so a
-        # fresh checkout has to make it before the run starts.
-        run: mkdir -p fuzz/logs "${{ matrix.seed_dir }}"
+        # than creating its corpus directory, so both have to exist first.
+        #
+        # The corpus is a *separate* directory from the seeds. `cargo fuzz run
+        # <target> <dir>` uses `dir` as both, so a run drops hundreds of
+        # hash-named finds next to the committed regression seeds -- harmless on an
+        # ephemeral runner, and it fills the index on a laptop.
+        run: mkdir -p fuzz/logs "${{ matrix.seed_dir }}" "fuzz/corpus/${{ matrix.target }}"
 
       - name: Run extended fuzz target
         # `pipefail` is required: without it the pipeline reports `tee`'s exit
         # status, so a build failure or a crash in the fuzz target leaves the
         # step green.
+        #
+        # Two directories, in cargo-fuzz's order: corpus first, then seeds. Seeds
+        # are re-read on every run, so a regression that gets fixed again is still
+        # reachable by the target that found it.
         shell: bash
         run: |
           set -o pipefail
-          cargo +nightly fuzz run "${{ matrix.target }}" "${{ matrix.seed_dir }}" -- "-max_total_time=${FUZZ_MAX_TOTAL_TIME}" \
+          cargo +nightly fuzz run "${{ matrix.target }}" \
+            "fuzz/corpus/${{ matrix.target }}" "${{ matrix.seed_dir }}" \
+            -- "-max_total_time=${FUZZ_MAX_TOTAL_TIME}" \
             | tee "fuzz/logs/${{ matrix.target }}.log"
 
       - name: Upload extended fuzz artifacts

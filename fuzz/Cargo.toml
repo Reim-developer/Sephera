@@ -41,3 +41,17 @@ path = "fuzz_targets/render_context_markdown.rs"
 test = false
 doc = false
 bench = false
+
+[[bin]]
+name = "graph_path_utils"
+path = "fuzz_targets/graph_path_utils.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "resolve_focus_scope"
+path = "fuzz_targets/resolve_focus_scope.rs"
+test = false
+doc = false
+bench = false
