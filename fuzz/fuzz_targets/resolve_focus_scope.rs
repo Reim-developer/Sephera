@@ -162,11 +162,13 @@ fuzz_target!(|data: &[u8]| {
     // nothing, and reports a radius of zero with no warning.
     let inside = absolute_base.join(&component);
     if inside.starts_with(&absolute_base) {
+        let normalised = build_focus_set(&base, std::slice::from_ref(&inside));
+
         assert!(
-            build_focus_set(&base, &[inside.clone()])
+            normalised
                 .iter()
                 .all(|scope| !Path::new(scope).is_absolute()),
-            "{inside:?} is inside the base but came back absolute"
+            "{inside:?} is inside the base but came back as {normalised:?}"
         );
     }
 
