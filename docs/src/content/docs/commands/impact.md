@@ -78,20 +78,15 @@ sephera impact crates/sephera_core/src/core/code_loc.rs --depth 1
 ```
 
 `--depth 1` reports only files that import the target directly. `2` also reports
-files that import those. Omitting it reports the whole transitive closure.
+files that import those. `0` reports the target with no dependents. Omitting it
+reports the whole transitive closure.
 
 A bounded answer says so, rather than letting a truncated list read as a
 complete one.
 
-:::caution[Counts hops, not levels]
-This command counts **hops**, so `0` is the target alone and `1` is the direct
-importers.
-
-[`graph --depth`](/commands/graph/) counts **levels** instead, with the traversal
-root at level 0, so its `--depth 0` already includes the direct neighbours and
-its `--depth 1` is one hop wider than the same number here. With no depth limit
-the two commands agree; with a depth set, they do not.
-:::
+The number is the number of hops, and
+[`graph --depth`](/commands/graph/) counts them the same way — the same flag
+bounds the same walk on both commands.
 
 ## Narrowing to a subtree
 

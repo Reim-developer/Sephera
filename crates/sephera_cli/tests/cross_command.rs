@@ -184,26 +184,27 @@ fn a_scope_narrows_both_commands_the_same_way() {
 }
 
 #[test]
-fn the_two_commands_count_depth_differently_and_that_is_written_down() {
-    // Not a request for agreement -- the difference is real, deliberate on the
-    // `graph` side, and now stated on both doc pages. What was missing was anyone
-    // writing it down, so it turned up as a "bug" when the cross-command checks
-    // were first run.
+fn the_same_depth_bounds_the_same_walk_on_both_commands() {
+    // They answer the same question, so the same flag has to bound the same walk.
     //
-    // `impact --depth N` counts hops: 0 is the target alone, 1 is direct
-    // importers. `graph --depth N` counts levels with the root at level 0: 0 keeps
-    // the root and its direct neighbours, 1 adds one more hop. So on a chain
-    // c -> b -> a -> target:
+    // It did not. `impact --depth N` counted hops while `graph --depth N` counted
+    // graph levels, so on a chain c -> b -> a -> target:
     //
     //     depth   impact   graph
     //     0          0        1
     //     1          1        2
     //     2          2        3
     //
-    // `graph`'s convention is pinned by four existing tests and stated in
-    // graph.md, so it is not being changed here. Making them agree is a
-    // one-line change plus a decision about `--depth 0` for `--focus`, and is
-    // tracked rather than slipped into a test.
+    // Both conventions were documented and each had tests pinning it, which is why
+    // nothing caught it: a reader who learned "1 means direct importers" from one
+    // command got two hops from the other, and every test still passed. Four PRs
+    // running had been about one side of a measurement being updated and the other
+    // left behind; this is the same shape, and the only reason it survived is that
+    // nothing ran both commands with the same depth.
+    //
+    // Now both count hops. `--depth 0` on a forward query is the focus path alone,
+    // which used to need `--depth 0` to mean "the root and what it reaches" and is
+    // spelled `--depth 1` now.
     let dir = repo();
     write_file(dir.path(), "src/far.rs", "use crate::core::user0;\n");
 
@@ -213,30 +214,29 @@ fn the_two_commands_count_depth_differently_and_that_is_written_down() {
         4,
         "the fixture has one two-hop dependent"
     );
-    assert_eq!(
-        impact_count(dir.path(), "src/target.rs", &["--depth", "1"]),
-        3,
-        "impact counts hops: depth 1 is the direct importers"
-    );
-    assert_eq!(
-        graph_count(dir.path(), "src/target.rs", &["--depth", "0"]),
-        3,
-        "graph counts levels: depth 0 already includes the direct neighbours"
-    );
-    assert_eq!(
-        graph_count(dir.path(), "src/target.rs", &["--depth", "0"]),
-        impact_count(dir.path(), "src/target.rs", &["--depth", "1"]),
-        "the whole relationship in one assertion: graph's depth 0 is impact's \
-         depth 1, so the same flag number gives a wider answer on graph"
-    );
 
-    // Whatever the two commands report, an unbounded run must be the same for
-    // both. That part *is* an agreement, and it is the one that matters for a
-    // reader comparing two reports of the same repository.
+    for depth in ["0", "1", "2", "3"] {
+        assert_eq!(
+            graph_count(dir.path(), "src/target.rs", &["--depth", depth]),
+            impact_count(dir.path(), "src/target.rs", &["--depth", depth]),
+            "`graph` and `impact` disagreed at --depth {depth}"
+        );
+    }
+
     assert_eq!(
-        graph_count(dir.path(), "src/target.rs", &[]),
-        impact_count(dir.path(), "src/target.rs", &[]),
-        "with no depth limit the two commands must agree exactly"
+        impact_count(dir.path(), "src/target.rs", &["--depth", "0"]),
+        0,
+        "depth 0 is the target and no dependents"
+    );
+    assert_eq!(
+        impact_count(dir.path(), "src/target.rs", &["--depth", "1"]),
+        3,
+        "depth 1 is the direct importers"
+    );
+    assert_eq!(
+        impact_count(dir.path(), "src/target.rs", &["--depth", "2"]),
+        4,
+        "depth 2 reaches the two-hop dependent"
     );
 }
 

@@ -852,17 +852,21 @@ fn traverse_graph(
     depth: Option<u32>,
     direction: TraversalDirection,
 ) -> BTreeSet<String> {
-    // Deliberately one more than the number asked for, which is what
-    // `docs/commands/graph.md` documents: `--depth 0` keeps the traversal roots
-    // plus their direct neighbours, and each step adds one more hop.
+    // The requested depth *is* the number of hops. Roots sit at distance 0 and are
+    // always included, so `--depth 0` selects the roots and nothing else.
     //
-    // Worth knowing that this is *not* the same as `impact --depth`, where `1`
-    // means direct importers only. On a chain c -> b -> a -> target, `impact
-    // --depth 1` reports one dependent and `graph --what-depends-on target
-    // --depth 1` reports two. Both are correct for their own command, and the
-    // difference is stated on both pages -- but it is a real trap for someone who
-    // learns the flag from one command and uses it on the other.
-    let max_distance = depth.map(|value| value.saturating_add(1));
+    // This used to add one to whatever was asked for, so the flag counted graph
+    // *levels* while `impact --depth` counted hops, and the two commands answered
+    // the same question with the same flag name and different numbers: on a chain
+    // c -> b -> a -> target, `impact --depth 1` reported one dependent and
+    // `graph --what-depends-on target --depth 1` reported two. A reader who learned
+    // "1 means direct importers" from one command got two hops from the other,
+    // silently.
+    //
+    // One convention across both commands is worth the breaking change. The old
+    // `--depth 0` on a forward query kept the roots and what they reach, which is
+    // spelled `--depth 1` now.
+    let max_distance = depth;
     let mut visited = BTreeSet::new();
     let mut queue: VecDeque<(String, u32)> =
         roots.iter().cloned().map(|path| (path, 0)).collect();
@@ -1537,17 +1541,16 @@ mod tests {
     }
 
     #[test]
-    fn depth_counts_levels_where_the_roots_level_is_zero() {
-        // The documented convention: `--depth 0` keeps the traversal roots plus
-        // their direct neighbours, and each step adds one more hop. Four existing
-        // tests and `docs/commands/graph.md` pin this, one of them named for it,
-        // so it is behaviour rather than an accident.
+    fn depth_counts_hops_from_the_traversal_root() {
+        // One convention across `graph` and `impact`: the number asked for is the
+        // number of hops. It used to be levels, so `--depth 1` was one hop wider
+        // here than there and `--depth 0` kept the roots plus their neighbours
+        // rather than the roots alone.
         //
-        // Pinned here as well because `impact --depth` counts *hops* rather than
-        // levels: the two commands answer the same question with the same flag name
-        // and different numbers. That divergence is real and is now stated on both
-        // doc pages -- what is not acceptable is it being discoverable only by
-        // running both commands and comparing the output.
+        // A chain c -> b -> a -> target, so `a` is one hop from the target and `c`
+        // is three. Pinned on the walk itself because no test compared the two
+        // commands' arithmetic, which is how the extra hop survived: every test
+        // using the flag still passed while it was wrong.
         let reached = |depth: Option<u32>| {
             let (node_map, roots) = chain_fixture();
             traverse_graph(
@@ -1560,29 +1563,11 @@ mod tests {
         };
 
         assert_eq!(reached(None), 4, "unbounded reaches the whole chain");
-        assert_eq!(
-            reached(Some(0)),
-            2,
-            "depth 0 is the root plus its direct neighbours"
-        );
-        assert_eq!(reached(Some(1)), 3, "depth 1 adds one more hop");
-        assert_eq!(reached(Some(2)), 4, "depth 2 reaches the end of the chain");
-        assert_eq!(reached(Some(3)), 4, "already everything; no further hop");
-
-        // The same walk counted in hops, which is the number `impact` reports.
-        // Stated as an assertion so the gap between the two commands is a number
-        // someone reads rather than a surprise they find.
-        let as_hops = |depth: u32| reached(Some(depth)) - 1;
-        assert_eq!(
-            as_hops(0),
-            1,
-            "`impact --depth 0` is the root and nothing else"
-        );
-        assert_eq!(
-            as_hops(1),
-            2,
-            "`impact --depth 1` is the root plus one hop"
-        );
+        assert_eq!(reached(Some(0)), 1, "depth 0 is the root and nothing else");
+        assert_eq!(reached(Some(1)), 2, "depth 1 is the root plus one hop");
+        assert_eq!(reached(Some(2)), 3, "depth 2 adds the second hop");
+        assert_eq!(reached(Some(3)), 4, "depth 3 reaches the end of the chain");
+        assert_eq!(reached(Some(4)), 4, "already everything; no further hop");
     }
 
     /// A node map for `c -> b -> a -> target`, each imported by the one above it.
@@ -2763,7 +2748,7 @@ mod tests {
     }
 
     #[test]
-    fn focus_and_depth_zero_keep_roots_and_direct_dependencies_only() {
+    fn depth_zero_keeps_the_traversal_root_and_nothing_else() {
         let temp_dir = tempdir().unwrap();
         write_file(temp_dir.path(), "src/main.rs", "use crate::middle;\n");
         write_file(temp_dir.path(), "src/middle.rs", "use crate::leaf;\n");
@@ -2784,6 +2769,34 @@ mod tests {
             .iter()
             .map(|node| node.file_path.as_str())
             .collect();
+        assert_eq!(node_paths, BTreeSet::from(["src/main.rs"]));
+        assert_eq!(report.metrics.total_files, 1);
+    }
+
+    #[test]
+    fn depth_one_keeps_the_root_and_what_it_reaches_directly() {
+        // What `--depth 0` used to mean on a forward query, and what a reader
+        // reaching for "the roots and their immediate dependencies" writes now.
+        let temp_dir = tempdir().unwrap();
+        write_file(temp_dir.path(), "src/main.rs", "use crate::middle;\n");
+        write_file(temp_dir.path(), "src/middle.rs", "use crate::leaf;\n");
+        write_file(temp_dir.path(), "src/leaf.rs", "pub fn leaf() {}\n");
+
+        let ignore = IgnoreMatcher::empty();
+        let report = build_graph(
+            temp_dir.path(),
+            &ignore,
+            &[PathBuf::from("src/main.rs")],
+            Some(1),
+            None,
+        )
+        .unwrap();
+
+        let node_paths: BTreeSet<_> = report
+            .nodes
+            .iter()
+            .map(|node| node.file_path.as_str())
+            .collect();
         assert_eq!(
             node_paths,
             BTreeSet::from(["src/main.rs", "src/middle.rs"])
@@ -2794,7 +2807,7 @@ mod tests {
     }
 
     #[test]
-    fn depends_on_query_returns_reverse_impact_subgraph() {
+    fn depends_on_query_at_depth_one_returns_the_direct_importers() {
         let temp_dir = tempdir().unwrap();
         write_file(temp_dir.path(), "src/main.rs", "use crate::service;\n");
         write_file(temp_dir.path(), "src/service.rs", "use crate::util;\n");
@@ -2815,9 +2828,16 @@ mod tests {
             .iter()
             .map(|node| node.file_path.as_str())
             .collect();
+
+        // `main.rs` reaches `util.rs` in two hops, so it is outside depth 1. It
+        // used to be inside: `traverse_graph` added one to the requested depth,
+        // which made `graph --depth 1` a wider answer than `impact --depth 1`
+        // for the same question. The target itself stays in the report even
+        // though nothing reaches it in one hop, so the answer reads as "nothing
+        // directly imports this" rather than as "this does not exist".
         assert_eq!(
             node_paths,
-            BTreeSet::from(["src/main.rs", "src/service.rs", "src/util.rs"])
+            BTreeSet::from(["src/service.rs", "src/util.rs"])
         );
         assert_eq!(
             report.query,

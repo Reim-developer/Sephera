@@ -251,6 +251,31 @@ fn by_file_ranks_the_heaviest_declaration_count_first_in_every_format() {
         markdown.contains("heavy.rs"),
         "the heaviest file should lead: {markdown}"
     );
+
+    // One spelling per count across formats. The JSON keys used to be the
+    // `SymbolKind` enum's snake_case, so the same quantity was `functions` in one
+    // format and a `Functions` column heading in the other, and a reader
+    // translating between them had to know the rule rather than read it.
+    let header = markdown
+        .lines()
+        .find(|line| line.starts_with("| File |"))
+        .unwrap_or_else(|| panic!("no per-file header in {markdown}"));
+
+    for (key, heading) in [
+        ("functions", "Functions"),
+        ("types", "Types"),
+        ("enums", "Enums"),
+        ("constants", "Constants"),
+    ] {
+        assert!(
+            by_file[0].get(key).is_some(),
+            "`{key}` missing from the per-file entry: {report}"
+        );
+        assert!(
+            header.split('|').any(|cell| cell.trim() == heading),
+            "no `{heading}` column beside the JSON key `{key}`: {header}"
+        );
+    }
 }
 
 #[test]
