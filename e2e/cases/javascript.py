@@ -126,6 +126,7 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
 
 
 KNOWN_DEFECTS: Final[dict[str, str]] = {
+
     "javascript/an_empty_file_is_still_a_node":
         "a zero-byte file is not added as a node, while an empty Rust file is, so "
         "the reported file count depends on the language",

@@ -194,6 +194,7 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
 
 
 KNOWN_DEFECTS: Final[dict[str, str]] = {
+
     "java_a_wildcard_import_names_no_single_file":
         "`import com.example.util.*;` resolves to nothing and is filed as "
         "external, so a dependency on an entire package disappears from the graph",

@@ -57,7 +57,7 @@ CASES: Final[tuple[Case, ...]] = (
     Case(
         id="c/a_system_header_is_external",
         source=f"{C}/include/acme.h",
-        import_path="stdio.h",
+        import_path="<stdio.h>",
         why="An angled include names a toolchain header, not a project file. It "
         "is external by form, and reporting it as a gap would put a number in "
         "front of every reader for something they cannot fix.",
@@ -150,21 +150,14 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
 
 
 KNOWN_DEFECTS: Final[dict[str, str]] = {
-    "c/an_empty_header_is_still_a_node":
-        "a zero-byte header is not added as a node, while an empty Rust file is, "
-        "so the reported file count depends on the language",
-    "c/a_quoted_include_that_names_nothing_is_a_gap":
-        "includes inside a header file produce no edges at all, so this and the "
-        "two cases below it cannot be reached -- the graph stops at the top of "
-        "every header tree",
-    "c/a_system_header_is_external":
-        "same cause: `stdio.h` is inside a header rather than a source file",
-    "c/a_quoted_include_beside_the_including_file":
-        "same cause",
-    "c/a_quoted_include_in_a_subdirectory":
-        "same cause",
+    'c/an_empty_header_is_still_a_node':
+        'a zero-byte header is skipped before it reaches the graph, while an empty Rust file is a node, so the reported file count depends on the language',
     "cpp/a_quoted_include_that_names_nothing_is_a_gap":
-        "a quoted include that resolves to nothing is filed as external rather "
-        "than as a gap, so a genuinely missing header is indistinguishable from "
-        "a standard library one",
+        "a quoted include that resolves to nothing is file"
+        "d as external rather than as a gap, so a genuine"
+        "ly missing header is indistinguishable from a standard library one",
+    "c/a_quoted_include_that_names_nothing_is_a_gap":
+        "a quoted include that resolves to nothing is file"
+        "d as external rather than as a gap, so a genuine"
+        "ly missing header is indistinguishable from a standard library one",
 }
