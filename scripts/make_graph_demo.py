@@ -120,9 +120,11 @@ def styled(line: str) -> list[tuple[str, tuple[int, int, int]]]:
     if set(stripped) <= set("|-: "):
         return [(stripped, DIM)]
 
-    # A list item is a dependent file and the names it imports. The file is the
-    # answer, so it gets the accent colour and the import names stay plain --
-    # otherwise the whole list reads as one undifferentiated block of text.
+    # A list item is a dependent file and the names it imports. Only the file
+    # gets the accent colour -- the first backticked run -- because the file is
+    # the answer and the import names are supporting detail. Colouring all of
+    # them gives the reader four equally loud things to look at and no way to
+    # tell which is which.
     #
     # The graph capture has no list items, so this cannot change that GIF.
     if stripped.startswith("- "):
@@ -130,8 +132,7 @@ def styled(line: str) -> list[tuple[str, tuple[int, int, int]]]:
         for index, part in enumerate(stripped[2:].split("`")):
             if index:
                 spans.append(("`", DIM))
-            colour = MAGENTA if index % 2 else FG
-            spans.append((part, colour))
+            spans.append((part, MAGENTA if index == 1 else FG))
         return spans
 
     if stripped.startswith("|"):

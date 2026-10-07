@@ -93,8 +93,10 @@ sephera impact src/parser.rs --path docs/demo/fixture > scripts/fixtures/impact-
 python scripts/make_graph_demo.py impact
 ```
 
-For the full report behind that number — every edge, the cycle list, the resolver's
-own accounting of what it could not place — the same question through `graph`:
+The full report is a separate command. `impact` answers the blast radius and stops;
+`graph` answers it *and* shows every edge, the cycles, and the resolver's own
+accounting of what it could not place. It is a different question on a different
+file — this repository, not the fixture:
 
 ![A reverse dependency query answering which files depend on one file](docs/public/demo/graph.gif)
 
