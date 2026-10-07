@@ -174,6 +174,25 @@ pub fn collapse_relative(path: &str) -> String {
     parts.join("/")
 }
 
+/// Rewrite `\` as `/`, but only where a backslash is actually a separator.
+///
+/// On Unix a backslash is an ordinary character in a file name, so rewriting it
+/// unconditionally turns `crates/cli\src` -- one file -- into `crates/cli/src`, a
+/// directory tree. That is a silently wrong answer to a question about which files
+/// depend on which, or which files are ignored, and it is wrong only on one of the
+/// two platforms the project builds on.
+///
+/// Git reports paths with the platform's separator, so the conversion is still
+/// needed on Windows; it is simply not a conversion at all on Unix.
+#[must_use]
+pub fn forward_slashes(value: &str) -> String {
+    if cfg!(windows) {
+        value.replace('\\', "/")
+    } else {
+        value.to_owned()
+    }
+}
+
 /// Normalises a user-supplied relative path into `/`-separated form.
 ///
 /// `..` beyond the start is reported rather than normalised away, because a

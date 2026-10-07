@@ -107,10 +107,37 @@ fn path(value: &str) -> String {
     value.to_owned()
 }
 
+use super::measure as measure_raw;
 use super::{
-    dependent_count, match_path, measure, measure_all, measure_scoped,
+    BlastRadius, dependent_count, match_path, measure_all,
+    measure_scoped as measure_scoped_raw,
 };
 use crate::core::graph::resolver::build_focus_set;
+
+/// Measure a target that the fixture report definitely describes.
+///
+/// The real functions return `Result` because a query-filtered report cannot
+/// describe a second file, which is one test's subject. Shallowing them here
+/// keeps that check in one place instead of a `?` on every one of the other
+/// twenty-odd assertions, where it would be noise.
+fn measure(
+    report: &GraphReport,
+    target: &str,
+    depth: Option<u32>,
+) -> BlastRadius {
+    measure_raw(report, target, depth)
+        .expect("the fixture report describes this target")
+}
+
+fn measure_scoped(
+    report: &GraphReport,
+    target: &str,
+    depth: Option<u32>,
+    focus: &[String],
+) -> BlastRadius {
+    measure_scoped_raw(report, target, depth, focus)
+        .expect("the fixture report describes this target")
+}
 
 #[test]
 fn the_target_is_never_a_dependent_of_itself() {
@@ -435,15 +462,25 @@ fn an_empty_scope_means_everything() {
 #[test]
 fn a_windows_style_git_path_matches_the_graph() {
     // Git reports `src\a.rs` on Windows; the graph spells it `src/a.rs`.
+    //
+    // Per platform, because a backslash is a separator on one and a legal
+    // file-name character on the other. On Unix the two are different files, and
+    // matching them would report the radius of a file git never named.
     let report = report(
         &["src/a.rs", "src/b.rs"],
         &[("src/b.rs", "src/a.rs", "crate::a")],
     );
 
-    assert_eq!(
-        match_path(&report, "src\\a.rs", "").as_deref(),
-        Some("src/a.rs")
-    );
+    let matched = match_path(&report, "src\\a.rs", "");
+
+    if cfg!(windows) {
+        assert_eq!(matched.as_deref(), Some("src/a.rs"));
+    } else {
+        assert_eq!(
+            matched, None,
+            "on Unix `src\\a.rs` is one file name, not a path into `src`"
+        );
+    }
 }
 
 #[test]
@@ -477,16 +514,24 @@ fn a_leading_dot_slash_does_not_defeat_matching() {
 }
 
 #[test]
-fn a_query_target_is_used_as_the_graph_spells_it() {
-    // A report built for a reverse query already knows the normalised spelling,
-    // so echoing the raw request would put a backslash-separated heading above a
-    // forward-slash list.
-    let report = GraphReport {
+fn measuring_the_query_target_is_not_treated_as_a_different_file() {
+    // The refusal below is about asking for a *different* file. A request that
+    // differs from the query target only in separators is the same file, and
+    // separating the two is the whole difference between a useful check and one
+    // that breaks on Windows.
+    let filtered = GraphReport {
         query: Some(GraphQuery::DependsOn("a.rs".to_owned())),
         ..repo_report()
     };
 
-    assert_eq!(measure(&report, "a\\b\\a.rs", None).target, "a.rs");
+    let same_file = measure_raw(&filtered, "a.rs", None);
+
+    assert_eq!(
+        same_file
+            .expect("the query target itself is measurable")
+            .target,
+        "a.rs"
+    );
 }
 
 #[test]

@@ -299,46 +299,90 @@ fn extract_one_file(
 /// passing focus paths into graph selection -- produces the same set of scoped
 /// paths.
 ///
-/// Two rules, and the order matters:
+/// Three rules, and the order matters:
 ///
-/// * A **relative** focus path is already in the graph's spelling and is left
-///   exactly as written. Resolving it against the working directory would be
-///   wrong -- the graph is spelled relative to the *analysis base*, which is a
-///   different directory whenever `--path` is anything but `.`, and would break
-///   `--path crates/x --focus src/main.rs` outright.
+/// * A **relative** focus path is spelled relative to the *analysis base*, so it
+///   is never resolved against the working directory -- that would break
+///   `--path crates/x --focus src/main.rs` outright. It only loses `.` components
+///   and `x/..` pairs, neither of which the graph ever spells. A `..` that would
+///   escape the front is left alone rather than guessed at.
 /// * An **absolute** focus path is stripped of the absolute base. `--path .`
 ///   leaves the base relative, so an absolute `--focus /repo/crates/x` could not
 ///   otherwise be stripped at all, and the comparison silently matched nothing:
 ///   a scoped blast radius of zero with no explanation. Zero is worse than an
 ///   error here, because zero is a plausible answer.
+/// * A path that normalises away to nothing -- `.`, `./`, `src/..` -- **drops
+///   out of the set**, which both callers read as "no scope", which is what
+///   scoping to the whole analysis base means.
 ///
-/// An absolute path that does not sit under the base is left absolute, since
-/// mangling it would only hide the mismatch.
+/// The last rule is the one that was missing. `--focus .` used to scope to the
+/// literal string `"."`, which matches no node, so `graph --path . --focus .`
+/// reported a repository of zero files and `--focus ./crates/x` reported zero
+/// dependents. Both answers were wrong and neither said so.
+///
+/// Scopes are a union, so one scope naming the whole base makes the whole union
+/// the whole base. `--focus . --focus src/core` means "the base, or `src/core`",
+/// and the base contains `src/core` -- answering with `src/core` alone would
+/// undercount dependents and could turn a failing `--fail-on` into a passing one.
 #[must_use]
 pub fn build_focus_set(
     base_path: &Path,
     focus_paths: &[PathBuf],
 ) -> BTreeSet<String> {
-    // Absolutised lazily, and only for the absolute branch below: a relative
-    // path never needs it, and computing it unconditionally would make the
-    // working directory part of the answer.
+    // Absolutised only for the absolute branch below: a relative path never
+    // needs it, and computing it unconditionally would make the working
+    // directory part of the answer.
     let base = std::path::absolute(base_path)
         .unwrap_or_else(|_| base_path.to_path_buf());
 
-    focus_paths
-        .iter()
-        .map(|focus| {
-            let resolved = if focus.is_absolute() {
-                focus
-                    .strip_prefix(&base)
-                    .unwrap_or(focus.as_path())
-                    .to_path_buf()
-            } else {
-                focus.clone()
-            };
-            resolved.to_string_lossy().replace('\\', "/")
-        })
-        .collect()
+    let mut scopes = BTreeSet::new();
+
+    for focus in focus_paths {
+        let resolved = if focus.is_absolute() {
+            focus
+                .strip_prefix(&base)
+                .unwrap_or(focus.as_path())
+                .to_path_buf()
+        } else {
+            strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
+        };
+
+        let spelled =
+            super::path_utils::forward_slashes(&resolved.to_string_lossy());
+
+        // `""` is how a scope that means "the whole base" spells itself, and
+        // both callers already read an empty set that way.
+        if spelled.is_empty() {
+            return BTreeSet::new();
+        }
+        scopes.insert(spelled);
+    }
+
+    scopes
+}
+
+/// Drop `.` components and resolve `..` within a relative path, keeping it
+/// relative.
+///
+/// Returns `None` for anything this cannot clean without guessing: a `..` that
+/// would escape the front, or a root or drive prefix. Those are left as written,
+/// because a plausible-looking wrong scope is harder to notice than one the
+/// caller can recognise as not understood.
+fn strip_relative_noise(path: &Path) -> Option<PathBuf> {
+    let mut cleaned = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => cleaned.push(part),
+            // The guard is the point: `pop` returns false with nothing to pop,
+            // and `../x` landing on `x` would silently move the scope.
+            Component::ParentDir if cleaned.pop() => {}
+            _ => return None,
+        }
+    }
+
+    Some(cleaned)
 }
 
 #[derive(Debug)]
@@ -1289,6 +1333,151 @@ mod tests {
         assert!(
             normalised.iter().any(|path| path.contains("elsewhere")),
             "expected the outside path to survive, got {normalised:?}"
+        );
+    }
+
+    #[test]
+    fn a_scope_that_spells_the_whole_base_becomes_no_scope_at_all() {
+        // `.`, `./` and `x/../..` all name the analysis base. Scoping to the base
+        // is not a narrower question, and both callers read an empty scope as "no
+        // restriction". Used to be scoped to the literal string `"."`, which
+        // matched no node -- so `graph --path . --focus .` reported a repository of
+        // zero files and `--focus ./crates/x` reported zero dependents. Both
+        // wrong, both silent.
+        let base = std::env::temp_dir().join("repo");
+        // Relative spellings only: an absolute path is stripped against the base
+        // rather than normalised through it, and that is a separate rule.
+        let mut spellings = vec![
+            PathBuf::from("."),
+            PathBuf::from("./"),
+            PathBuf::from("crates/x/../.."),
+        ];
+        spellings.extend(windows_paths(&[".\\"]));
+
+        for spelling in &spellings {
+            assert_eq!(
+                build_focus_set(&base, std::slice::from_ref(spelling)),
+                BTreeSet::new(),
+                "`{}` names the whole base, so it should not restrict anything",
+                spelling.display()
+            );
+        }
+    }
+
+    #[test]
+    fn dot_segments_inside_a_scope_are_resolved_away() {
+        // The graph never spells a `.` or a `..`, so leaving one in the scope makes
+        // it match nothing -- quietly, since an empty answer looks like a finding.
+        for (spelling, resolves_to) in [
+            ("crates/cli/./src", "crates/cli/src"),
+            ("./crates/cli/src", "crates/cli/src"),
+            // One level up, so this resolves to the parent rather than to itself.
+            ("crates/cli/src/..", "crates/cli"),
+            ("crates/cli/./src/../..", "crates"),
+        ] {
+            assert_eq!(
+                build_focus_set(
+                    std::env::temp_dir().join("repo").as_path(),
+                    &[PathBuf::from(spelling)],
+                ),
+                known_files(&[resolves_to]),
+                "`{spelling}` should resolve to {resolves_to}"
+            );
+        }
+
+        // Backslash-separated input only means anything where the separator is a
+        // backslash. On Unix `.\\crates` is an ordinary file name with a backslash
+        // in it, and asserting it resolves to a directory would be asserting that
+        // a legal file name is silently rewritten.
+        for (spelling, resolves_to) in
+            windows_spellings(&[(".\\crates\\cli\\src", "crates/cli/src")])
+        {
+            assert_eq!(
+                build_focus_set(
+                    std::env::temp_dir().join("repo").as_path(),
+                    &[PathBuf::from(spelling)],
+                ),
+                known_files(&[resolves_to]),
+                "`{spelling}` should resolve to {resolves_to}"
+            );
+        }
+    }
+
+    /// Windows-only spellings, as paths.
+    fn windows_paths(raw: &[&str]) -> Vec<PathBuf> {
+        if cfg!(windows) {
+            raw.iter().map(PathBuf::from).collect()
+        } else {
+            Vec::new()
+        }
+    }
+
+    /// Windows-only spellings, as (spelling, expected) pairs.
+    ///
+    /// Guards two mistakes at once: a Unix run failing on a Windows-only input,
+    /// and a Windows run quietly skipping coverage it thought it had.
+    fn windows_spellings<'a>(
+        pairs: &[(&'a str, &'a str)],
+    ) -> Vec<(&'a str, &'a str)> {
+        if cfg!(windows) {
+            pairs.to_vec()
+        } else {
+            Vec::new()
+        }
+    }
+
+    #[test]
+    fn a_backslash_is_a_separator_only_where_it_is_one() {
+        // On Unix a backslash is an ordinary character in a file name, so
+        // rewriting it would silently widen a scope from one file to a directory
+        // tree. Found because a Windows-only test input failed on Linux, where it
+        // is a legal file name rather than a spelling mistake.
+        let spelled =
+            crate::core::graph::path_utils::forward_slashes("crates/cli\\src");
+
+        if cfg!(windows) {
+            assert_eq!(spelled, "crates/cli/src");
+        } else {
+            assert_eq!(
+                spelled, "crates/cli\\src",
+                "a backslash in a Unix file name is part of the name"
+            );
+        }
+    }
+
+    #[test]
+    fn one_scope_naming_the_whole_base_overrides_the_others() {
+        // Scopes are a union. `--focus . --focus src/core` asks for the base *or*
+        // `src/core`, and the base contains `src/core` -- so the answer is the whole
+        // base. Answering with `src/core` alone undercounts dependents, which is how a
+        // `--fail-on` limit stops failing without anyone touching the rule.
+        let base = std::env::temp_dir().join("repo");
+        let scopes = vec![PathBuf::from("."), PathBuf::from("src/core")];
+
+        assert_eq!(
+            build_focus_set(&base, &scopes),
+            BTreeSet::new(),
+            "a scope that is the whole base makes the whole union the whole base"
+        );
+
+        // Order must not matter, or the same flags mean two different things.
+        let reversed = vec![PathBuf::from("src/core"), PathBuf::from("./")];
+        assert_eq!(build_focus_set(&base, &reversed), BTreeSet::new());
+    }
+
+    #[test]
+    fn a_parent_segment_that_escapes_the_front_is_left_alone() {
+        // `../x` cannot be resolved without knowing what the base is relative to,
+        // so it is passed through rather than collapsed onto `x` -- which would
+        // silently move the scope somewhere the caller never asked about.
+        let scope = build_focus_set(
+            std::env::temp_dir().join("repo").as_path(),
+            &[PathBuf::from("../outside")],
+        );
+
+        assert!(
+            scope.iter().any(|path| path.contains("..")),
+            "expected the escaping path to survive, got {scope:?}"
         );
     }
 

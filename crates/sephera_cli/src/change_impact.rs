@@ -13,6 +13,8 @@
 
 use std::fmt::Write as _;
 
+use anyhow::Result;
+
 use sephera_core::core::graph::types::{GraphQuery, GraphReport};
 
 use crate::impact::{self, BlastRadius};
@@ -35,13 +37,21 @@ pub struct ChangeImpact {
 ///
 /// Path matching lives in [`impact`] so this and `sephera impact` cannot drift
 /// on what "the same file" means.
-#[must_use]
+///
+/// # Errors
+///
+/// Propagates the refusal from [`impact::measure`] when the report describes a
+/// different file than the one asked about. `--diff` builds its own
+/// whole-repository report through [`diff_query`], so this cannot fire from the
+/// command today -- it exists so that changing `diff_query` to a real query
+/// surfaces as an error rather than as a report naming one changed file while
+/// describing another.
 pub fn measure_changes(
     report: &GraphReport,
     requested: &[String],
     base_prefix: &str,
     depth: Option<u32>,
-) -> Vec<ChangeImpact> {
+) -> Result<Vec<ChangeImpact>> {
     let mut measured = Vec::new();
 
     for raw in requested {
@@ -50,12 +60,12 @@ pub fn measure_changes(
             continue;
         };
         measured.push(ChangeImpact {
-            radius: impact::measure(report, &canonical, depth),
+            radius: impact::measure(report, &canonical, depth)?,
             file: canonical,
         });
     }
 
-    measured
+    Ok(measured)
 }
 
 /// Render one report per changed file as Markdown.
@@ -217,7 +227,26 @@ mod tests {
 
     use crate::impact::match_path;
 
-    use super::{measure_changes, render_json, render_markdown};
+    use super::{
+        ChangeImpact, measure_changes as measure_changes_raw, render_json,
+        render_markdown,
+    };
+
+    /// Measure changes against a fixture report.
+    ///
+    /// `measure_changes` returns `Result` because a query-filtered report cannot
+    /// describe more than one file. Every fixture here is a whole-repository
+    /// report, so unwrapping once here keeps the twenty-odd assertions below free of
+    /// a `?` that would only ever fire on a fixture bug.
+    fn measure_changes(
+        report: &GraphReport,
+        requested: &[String],
+        base_prefix: &str,
+        depth: Option<u32>,
+    ) -> Vec<ChangeImpact> {
+        measure_changes_raw(report, requested, base_prefix, depth)
+            .expect("the fixture report describes every requested file")
+    }
 
     fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
         GraphEdge {
@@ -317,14 +346,26 @@ mod tests {
     #[test]
     fn a_windows_style_git_path_matches_the_graph() {
         // Git reports `src\a.rs` on Windows; the graph spells it `src/a.rs`.
+        //
+        // Asserted per platform rather than as one expectation, because a
+        // backslash is a separator on one and a legal file-name character on the
+        // other. On Unix `src\a.rs` names one file, and rewriting it to
+        // `src/a.rs` would attach the change to a different file than git
+        // reported -- so the negative half is the half that matters there.
         let mut report = repo_report();
         report.nodes[0].file_path = "src/a.rs".to_owned();
         report.edges[0].to = Some("src/a.rs".to_owned());
 
-        assert_eq!(
-            match_path(&report, "src\\a.rs", "").as_deref(),
-            Some("src/a.rs")
-        );
+        let matched = match_path(&report, "src\\a.rs", "");
+
+        if cfg!(windows) {
+            assert_eq!(matched.as_deref(), Some("src/a.rs"));
+        } else {
+            assert_eq!(
+                matched, None,
+                "on Unix `src\\a.rs` is one file name, not a path into `src`"
+            );
+        }
     }
 
     #[test]

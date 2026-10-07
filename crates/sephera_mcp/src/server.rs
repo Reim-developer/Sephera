@@ -329,6 +329,22 @@ impl SepheraServer {
     ) -> Result<String, rmcp::ErrorData> {
         let ignore_matcher =
             build_ignore_matcher(param.ignore, param.no_gitignore)?;
+        // Refused before anything else, as clap refuses `<FILE>...` on the command
+        // line. An empty report of `{"targets": []}` reads as "nothing depends on
+        // anything", which is not a thing anyone meant to ask, and an agent would
+        // take it as an answer rather than as a mistake.
+        //
+        // Before `resolve_source` deliberately: a URL argument means a clone, and
+        // a clone that fails would otherwise report a source error instead of the
+        // one mistake the caller actually made.
+        if param.files.is_empty() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "impact needs at least one file in `files`; an empty list is \
+                 not a question that has an answer",
+                None,
+            ));
+        }
+
         let source = resolve_source(&SourceRequest {
             path: param.path.map(std::path::PathBuf::from),
             url: param.url,
@@ -445,13 +461,31 @@ impl ImpactReport {
 }
 
 /// Render blast radii as Markdown for an agent's context window.
+///
+/// One `#` title for the document and `##` per target when there are several,
+/// matching `sephera impact`'s own Markdown. Emitting a top-level heading per
+/// target instead would give a three-file answer three document titles, which
+/// reads as three unrelated reports rather than one question with three parts.
 fn impact_markdown(radii: &[blast_radius::BlastRadius]) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
+    let several = radii.len() > 1;
+
+    if several {
+        let _ = writeln!(output, "# Blast radius for {} files\n", radii.len());
+        let _ = writeln!(output, "Widest first.");
+    }
+
     for radius in radii {
         let count = blast_radius::dependent_count(radius);
-        let _ = writeln!(output, "# Blast radius for `{}`\n", radius.target);
+        if several {
+            let _ =
+                writeln!(output, "\n## Blast radius for `{}`\n", radius.target);
+        } else {
+            let _ =
+                writeln!(output, "# Blast radius for `{}`\n", radius.target);
+        }
         let _ = writeln!(
             output,
             "{}",
@@ -467,7 +501,8 @@ fn impact_markdown(radii: &[blast_radius::BlastRadius]) -> String {
         if radius.dependents.is_empty() {
             continue;
         }
-        output.push_str("\n## Dependents\n\n");
+        let sub = if several { "###" } else { "##" };
+        let _ = writeln!(output, "\n{sub} Dependents\n");
         for dependent in &radius.dependents {
             if dependent.imports.is_empty() {
                 let _ = writeln!(output, "- `{}`", dependent.file);

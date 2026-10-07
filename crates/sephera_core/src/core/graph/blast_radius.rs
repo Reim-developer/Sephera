@@ -26,6 +26,7 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
+use super::path_utils;
 use super::resolver::path_matches_focus;
 use super::types::{GraphQuery, GraphReport};
 
@@ -50,12 +51,16 @@ pub struct BlastRadius {
 }
 
 /// Count the files that depend on `target`.
-#[must_use]
+///
+/// # Errors
+///
+/// Errors if `report` was built for a reverse query about a different file; see
+/// [`measure_scoped`].
 pub fn measure(
     report: &GraphReport,
     requested: &str,
     depth: Option<u32>,
-) -> BlastRadius {
+) -> Result<BlastRadius> {
     measure_scoped(report, requested, depth, &[])
 }
 
@@ -70,14 +75,34 @@ pub fn measure(
 /// scope you named is a question, not a mistake -- scoping to one package and
 /// reporting on a file in another is how you ask what that package would break
 /// from a change elsewhere.
-#[must_use]
+///
+/// # Errors
+///
+/// A report built for `GraphQuery::DependsOn(p)` describes `p` only. Asking for
+/// any other file would return the radius of `p` while naming the file asked
+/// about, which is a correct-looking answer to the wrong question -- so it is
+/// refused here rather than in one of the callers, because every caller can
+/// pass a report it did not build.
 pub fn measure_scoped(
     report: &GraphReport,
     requested: &str,
     depth: Option<u32>,
     focus: &[String],
-) -> BlastRadius {
-    let target = canonical_target(report, requested);
+) -> Result<BlastRadius> {
+    let target = target_of(report, requested);
+
+    // Compared after separator normalisation, so that a Windows-spelled request
+    // for the *same* file is not mistaken for a request about a different one.
+    // The distinction matters: refusing `a\b\a.rs` when the query is about
+    // `a.rs` would break the platform this bug was reported from.
+    if target != spelled_as_graph(requested) {
+        bail!(
+            "this report was built for a reverse query on `{target}`, so it \
+             describes that file only and has no edges for `{requested}`. \
+             Build a report over the whole repository to measure it."
+        );
+    }
+
     let reachable = reachable_dependents(report, &target, depth);
 
     // Edges are the only place the imported *name* survives; the node list says
@@ -105,11 +130,11 @@ pub fn measure_scoped(
         })
         .collect();
 
-    BlastRadius {
+    Ok(BlastRadius {
         target,
         dependents,
         depth,
-    }
+    })
 }
 
 /// How many files depend on the target.
@@ -137,26 +162,6 @@ pub fn measure_all(
     depth: Option<u32>,
     focus: &[String],
 ) -> Result<Vec<BlastRadius>> {
-    // A query-filtered report describes exactly one file, and `measure` would
-    // take the target from that query rather than from the request. Asking about
-    // a second file would therefore answer about the first one and say nothing,
-    // which is the worst shape a wrong answer can take. Rejected instead.
-    if let Some(GraphQuery::DependsOn(query_target)) = &report.query {
-        let asked_for_another = requested.iter().any(|raw| {
-            match_path(report, raw, base_prefix)
-                .as_deref()
-                .is_none_or(|matched| matched != query_target)
-                && raw != query_target
-        });
-        if asked_for_another {
-            bail!(
-                "this report was built for a reverse query on `{query_target}`, \
-                 so it describes that file only. Build a report over the whole \
-                 repository to measure a blast radius."
-            );
-        }
-    }
-
     let mut matched = Vec::with_capacity(requested.len());
     let mut unknown = Vec::new();
 
@@ -165,7 +170,10 @@ pub fn measure_all(
             // `measure` reads the target from the query, and a whole-repository
             // report has none, so the canonical spelling is passed explicitly.
             Some(canonical) => {
-                matched.push(measure_scoped(report, &canonical, depth, focus));
+                // `measure_scoped` refuses a report that describes a different
+                // file, so a query-filtered report is caught here by
+                // construction rather than by a second copy of that check.
+                matched.push(measure_scoped(report, &canonical, depth, focus)?);
             }
             None => unknown.push(raw.clone()),
         }
@@ -199,6 +207,18 @@ pub fn measure_all(
     Ok(matched)
 }
 
+/// Rewrite a requested path into the separator convention the graph uses.
+///
+/// Separators only. This is deliberately weaker than [`match_path`], which also
+/// resolves onto an actual node: comparing two spellings of one path needs no
+/// node lookup, and doing one here would make a missing file look like a
+/// different file.
+fn spelled_as_graph(raw: &str) -> String {
+    path_utils::forward_slashes(raw)
+        .trim_start_matches("./")
+        .to_owned()
+}
+
 /// Match a requested path onto a path in the graph.
 ///
 /// Shared with `graph --diff` so both spell "which file did you mean" the same
@@ -216,8 +236,7 @@ pub fn match_path(
     raw: &str,
     base_prefix: &str,
 ) -> Option<String> {
-    let mut normalized = raw.replace('\\', "/");
-    normalized = normalized.trim_start_matches("./").to_owned();
+    let mut normalized = spelled_as_graph(raw);
 
     let prefix = base_prefix.replace('\\', "/");
     let prefix = prefix.trim_matches('/');
@@ -236,14 +255,15 @@ pub fn match_path(
         .map(|node| node.file_path.clone())
 }
 
-/// The target as the graph spells it.
+/// The target as the graph spells it, or the path that was asked for.
 ///
-/// A user on Windows types `crates\core\ignore.rs`; the resolver normalises that
-/// to `crates/core/ignore.rs`, which is how every node and edge in the report is
-/// written. Echoing the raw input back would put a backslash-separated path above
-/// a list of forward-slash ones, so the report would contradict itself about the
-/// file it is about.
-fn canonical_target(report: &GraphReport, requested: &str) -> String {
+/// There used to be a step here that *substituted* the query's target for the
+/// requested one, on the reasoning that a reverse-query report already knows the
+/// canonical spelling. That is where the wrong-file answer came from: a caller
+/// passing a different file got the first file's radius, correctly computed,
+/// under the second file's name. Canonicalising is [`match_path`]'s job and it
+/// runs before this point, so there is nothing left to substitute.
+fn target_of(report: &GraphReport, requested: &str) -> String {
     match &report.query {
         Some(GraphQuery::DependsOn(path)) => path.clone(),
         None => requested.to_owned(),

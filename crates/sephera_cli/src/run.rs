@@ -460,13 +460,31 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // One gate per offending target rather than a single gate for the widest,
     // so the stderr line names the file that broke the rule rather than a count
     // with no owner.
+    //
+    // With `--focus`, the count is of dependents *inside the scope*, not in the
+    // repository. The label says so, because a CI log reading "3 files depend on
+    // X, limit is 40" is indistinguishable from X having three dependents in
+    // total, and those two warrant different decisions.
+    //
+    // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
+    // is spelled as a scope but normalises to the whole analysis base, and
+    // claiming a narrowed count for an unscoped one would be a false statement
+    // in the one line someone reads to decide whether to merge.
+    let scope_note = if focus.is_empty() {
+        String::new()
+    } else {
+        " within the requested scope".to_owned()
+    };
     let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
         radii
             .iter()
             .filter(|radius| impact::dependent_count(radius) >= limit)
             .map(|radius| {
                 Gate::new(
-                    format!("files depending on `{}`", radius.target),
+                    format!(
+                        "files depending on `{}`{scope_note}",
+                        radius.target
+                    ),
                     impact::dependent_count(radius),
                     limit,
                 )
@@ -525,7 +543,7 @@ fn run_graph_diff(
         &requested,
         &base_prefix,
         arguments.depth,
-    );
+    )?;
 
     // A changed path that matched no graph node is either deleted or outside the
     // analysis base. Reporting those separately is the difference between "this
