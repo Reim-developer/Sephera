@@ -121,6 +121,52 @@ jobs:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/measure_accuracy.py --verify
 
+  coverage:
+    name: Coverage
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          components: llvm-tools-preview
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Install cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
+
+      # Gated at 85 while the measured figure is 91.5, which is deliberate. A gate
+      # set at the current number is a gate that fails on the next honest commit
+      # and gets raised under pressure; one set below it measures regression
+      # without inviting filler tests to close the gap. Line coverage is a floor
+      # here, not a target -- the count that matters is how much of the *resolver*
+      # and *extraction* is exercised, and that is what the fuzz targets in
+      # `fuzz.yml` are for.
+      #
+      # Test files themselves are excluded: they are executed by definition, and
+      # including them inflates the number with the tests that check the tests.
+      #
+      # One run produces both: `--json --output-path` writes the machine-readable
+      # report, and the per-file table still goes to the log, so a drop can be seen
+      # without opening an artifact.
+      - name: Measure line coverage
+        run: >-
+          cargo llvm-cov --workspace --json
+          --output-path coverage-summary.json
+          --ignore-filename-regex '(tests?/|benches/|fuzz/)'
+          --fail-under-lines 85
+
+      - name: Upload coverage report
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-summary
+          path: coverage-summary.json
+          if-no-files-found: warn
+
   publish_dry_run:
     name: Publish Dry Run
     runs-on: ubuntu-latest

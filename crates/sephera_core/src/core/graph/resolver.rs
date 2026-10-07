@@ -324,6 +324,28 @@ fn extract_one_file(
 /// the whole base. `--focus . --focus src/core` means "the base, or `src/core`",
 /// and the base contains `src/core` -- answering with `src/core` alone would
 /// undercount dependents and could turn a failing `--fail-on` into a passing one.
+///
+/// # What is and is not normalised
+///
+/// A scope is only rewritten when all of the following hold:
+///
+/// * it is absolute and under the base, or it is relative with no root or drive;
+/// * it contains no `..` that escapes the front of the path.
+///
+/// Anything else is returned **exactly as typed**, spelling included. That is
+/// deliberate -- an unrecognised scope should look unrecognised rather than be
+/// quietly turned into a different one -- but it means the output is not
+/// guaranteed to be canonical. A rooted but drive-less `/src/core` on Windows is
+/// relative enough to reach this function and absolute enough to be passed
+/// through, so it keeps its leading separator, and so does `..//x`.
+///
+/// Callers get the same behaviour either way: neither spelling matches a node, so
+/// a scope the resolver cannot place narrows the answer to nothing. What the
+/// pass-through buys is that the string is recognisable as the caller's own.
+///
+/// This is stated here because it is the part a caller cannot infer from the
+/// signature, and it took a fuzzer to pin down: every assumption about which
+/// inputs get normalised turned out to be wrong in one direction or another.
 #[must_use]
 pub fn build_focus_set(
     base_path: &Path,
