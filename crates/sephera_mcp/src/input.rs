@@ -136,6 +136,42 @@ pub struct GraphInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `impact` tool.
+///
+/// The blast radius of one or more files. Asking this before an edit is the
+/// point of the command, so it gets a first-class tool rather than making an
+/// agent assemble it out of `graph` with `depends_on` and parse the answer out
+/// of a full dependency report.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ImpactInput {
+    /// File or files whose blast radius to report. One or more; several files
+    /// cost about the same as one, because the graph is built once.
+    pub files: Vec<String>,
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Restrict the reported dependents to these paths, matched as directory
+    /// prefixes. Narrows the answer, not the analysis.
+    pub focus: Option<Vec<String>>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Maximum hops from each target. 1 reports only direct importers.
+    pub depth: Option<u32>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

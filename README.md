@@ -298,17 +298,20 @@ The question a reviewer or a pre-commit hook asks before an edit. Answers it
 directly, so you do not have to know that `graph` has a flag for it.
 
 ```bash
-# What transitively imports this file? 6 files do.
+# What transitively imports this file? 8 files do.
 sephera impact crates/sephera_core/src/core/code_loc.rs
 
-# Only direct importers
+# Only the 4 files that import it directly
 sephera impact crates/sephera_core/src/core/code_loc.rs --depth 1
+
+# Several files at once, widest first; the graph is built once
+sephera impact crates/sephera_core/src/core/code_loc.rs crates/sephera_cli/src/run.rs
 
 # Machine-readable, for a script
 sephera impact crates/sephera_core/src/core/ignore.rs --format json
 
-# Fail the build when one file reaches more than 10 dependents
-sephera impact crates/sephera_cli/src/run.rs --fail-on 40
+# Fail the build when one file reaches more than 40 dependents
+sephera impact crates/sephera_core/src/core/ignore.rs --fail-on 40
 ```
 
 `--fail-on` exits **2**, which is deliberately different from the **1** that
@@ -455,7 +458,7 @@ sephera loc --path . --format markdown
 sephera mcp
 ```
 
-Serves `loc`, `context`, and `graph` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client.
+Serves `loc`, `symbols`, `context`, `graph`, and `impact` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
 
 ```json
 {

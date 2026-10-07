@@ -5,7 +5,7 @@ use clap::Parser;
 use sephera_core::core::{
     code_loc::{CodeLoc, IgnoreMatcher},
     graph::{
-        resolver::{EdgeFilters, build_graph_with},
+        resolver::{EdgeFilters, build_focus_set, build_graph_with},
         types::{GraphFormat, GraphQuery},
     },
     runtime::{
@@ -438,8 +438,19 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         },
     )?;
 
-    let radii =
-        impact::measure_all(&report, &arguments.files, "", arguments.depth)?;
+    // Normalised the same way `graph --focus` normalises, so an absolute
+    // `--focus` is compared in the graph's spelling rather than against its own.
+    let focus = build_focus_set(&source.analysis_path, &arguments.focus)
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let radii = impact::measure_all(
+        &report,
+        &arguments.files,
+        "",
+        arguments.depth,
+        &focus,
+    )?;
 
     let rendered = match arguments.format {
         ImpactOutputFormat::Markdown => impact::render_report(&radii),

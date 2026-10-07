@@ -83,6 +83,29 @@ files that import those. Omitting it reports the whole transitive closure.
 A bounded answer says so, rather than letting a truncated list read as a
 complete one.
 
+## Narrowing to a subtree
+
+```bash
+# Only the 9 files that import it directly, of 36 in total
+sephera impact crates/sephera_core/src/core/ignore.rs --depth 1
+
+# Only the dependents inside one package
+sephera impact crates/sephera_core/src/core/ignore.rs --focus crates/sephera_core
+```
+
+`--focus` **narrows the answer**. A path matches exactly or as a directory prefix
+at a `/` boundary, so `crates/two` covers `crates/two/user.rs` but not
+`crates/twone/extra.rs`. Repeat the flag for several scopes.
+
+The target is never filtered by the scope. Scoping to one package and reporting
+on a file in another is a question rather than a mistake — it is how you ask
+*what in this package would break from a change over there*. The report still
+names the file you asked about, so an empty answer reads "nothing in this scope
+depends on it" rather than "nothing at all".
+
+`graph --focus` with a reverse query narrows the same way, and the two agree
+because both use the same path predicate.
+
 ## Machine-readable output
 
 ```bash
@@ -94,7 +117,7 @@ sephera impact crates/sephera_core/src/core/ignore.rs --format json
   "targets": [
     {
       "target": "crates/sephera_core/src/core/ignore.rs",
-      "dependent_count": 34,
+      "dependent_count": 36,
       "depth": null,
       "dependents": [
         { "file": "crates/sephera_core/src/core/code_loc.rs", "imports": [] }

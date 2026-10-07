@@ -1,8 +1,8 @@
 //! MCP (Model Context Protocol) server for Sephera.
 //!
 //! This crate exposes Sephera's core capabilities -- line-of-code analysis,
-//! declaration counts, context pack generation, and dependency graph analysis
-//! -- as MCP tools over a `stdio` transport.
+//! declaration counts, context pack generation, dependency graph analysis, and
+//! blast-radius reporting -- as MCP tools over a `stdio` transport.
 //!
 //! AI agents such as Claude Desktop, Cursor, and other MCP-capable clients can
 //! discover and invoke these tools through the standard Model Context Protocol.
@@ -14,11 +14,19 @@
 //! | `loc`     | Count lines of code per language in a directory    |
 //! | `symbols` | Count declarations per language from parse trees  |
 //! | `context` | Build an LLM-ready context pack                    |
-//! | `graph`   | Map file dependencies and answer blast-radius queries |
+//! | `graph`   | Map file dependencies and answer reverse queries   |
+//! | `impact`  | Report what breaks if one or more files change     |
 //!
 //! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
 //! the CLI exactly: the same arguments produce the same file set, because an
 //! agent and a shell user asking the same question should not get two answers.
+//!
+//! `impact` is the one an agent should reach for before editing a file. It was
+//! missing for a while, and an agent had to assemble the same answer out of
+//! `graph` with `depends_on` and parse a node array to find the count -- which
+//! meant the most actionable question the tool can answer was the hardest one
+//! to ask. The counting lives in `sephera_core::core::graph::blast_radius` and
+//! is shared with the `impact` command, so the two cannot disagree.
 //!
 //! # Quick start
 //!
@@ -90,11 +98,17 @@ mod tests {
     #[test]
     fn the_documented_table_is_not_empty() {
         // Guards the parser above: an empty table would make the equality test
-        // pass for the wrong reason.
-        assert_eq!(
-            documented_tools().len(),
-            4,
-            "expected four tools in the crate doc table"
+        // pass for the wrong reason, comparing nothing against everything.
+        //
+        // Deliberately not the exact count. It was once, and every tool added
+        // since then had to come back here and change it -- which is a nuisance
+        // that teaches people to bump a number without reading what it means,
+        // and the number itself was never the thing being checked. The
+        // equality test above compares against the router, which is the real
+        // contract.
+        assert!(
+            !documented_tools().is_empty(),
+            "the crate doc table must parse to at least one tool"
         );
     }
 

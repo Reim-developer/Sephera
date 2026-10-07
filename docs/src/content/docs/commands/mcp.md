@@ -34,7 +34,7 @@ Because MCP runs over strict JSON-RPC over `stdio`, there is no human-readable o
 
 ## Available Tools
 
-The server exposes `loc`, `symbols`, `context`, and `graph` as tools.
+The server exposes `loc`, `symbols`, `context`, `graph`, and `impact` as tools.
 
 Every tool accepts `ignore` and `no_gitignore`, and resolves them exactly as the CLI does: the same arguments produce the same file set, because an agent and a shell user asking the same question should not get two answers.
 
@@ -104,6 +104,8 @@ Exactly one of `path` or `url` must be provided.
 
 With `format` set to `markdown` and `depends_on` given, the report opens with a **Blast radius** section naming each file that imports the target and which names it takes from it. `depth` bounds the walk, and the section says so rather than presenting a truncated list as complete.
 
+`focus` **narrows** a reverse query rather than widening it: asking `--focus crates/x` together with `depends_on` answers "among the files in `x`, which depend on this one". The target stays in the report even when it falls outside the scope, so an empty answer reads "nothing in this scope depends on it" rather than "nothing at all".
+
 Example `graph` tool call:
 
 ```json
@@ -140,14 +142,50 @@ Example `context` tool call using URL mode:
 }
 ```
 
+### `impact`
+Reports what breaks if one or more files change. This is the tool an agent should reach for **before** editing a file.
+
+- **`files`** (required): One or more files whose blast radius to report. Several files cost about the same as one, because the graph is built once.
+- **`path`** (optional): Absolute or relative path to the repository root.
+- **`url`** (optional): Cloneable repository URL or supported GitHub/GitLab tree URL.
+- **`ref`** (optional): Git ref to check out before analysis. Only valid with repo URLs.
+- **`focus`** (optional): Report only the dependents inside these paths. Narrows the answer, not the analysis.
+- **`ignore`** (optional): List of ignore patterns.
+- **`no_gitignore`** (optional): Skip the repository's own ignore files.
+- **`depth`** (optional): Maximum hops from each target. `1` reports only direct importers.
+- **`format`** (optional): `json` (default) or `markdown`.
+
+Exactly one of `path` or `url` must be provided. Results come back widest first, and `dependent_count` is a plain number so it can be compared against a threshold without walking the list.
+
+The counting shares one implementation with the [`impact` command](/commands/impact/), so the two cannot disagree about what a dependent is.
+
+Example `impact` tool call:
+
+```json
+{
+  "jsonrpc": "2.0",
+  "id": 4,
+  "method": "tools/call",
+  "params": {
+    "name": "impact",
+    "arguments": {
+      "path": ".",
+      "files": [
+        "crates/sephera_core/src/core/code_loc.rs",
+        "crates/sephera_core/src/core/ignore.rs"
+      ]
+    }
+  }
+}
+```
+
 ## Output behavior
 
 - `loc` returns the same formatted terminal table used by the CLI.
 - `graph` always returns pretty-printed JSON.
+- `impact` returns pretty-printed JSON by default and Markdown when `format = "markdown"`.
 - `context` returns pretty-printed JSON by default, Markdown when `format = "markdown"`, and JSON profile data when `list_profiles = true`.
 - In URL mode, user-facing paths in tool output keep the logical URL or tree URL instead of exposing the temporary checkout path.
-
-
 ## How to configure Claude Desktop
 
 Add Sephera to your `claude_desktop_config.json`:

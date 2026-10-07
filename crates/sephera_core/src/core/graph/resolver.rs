@@ -292,17 +292,49 @@ fn extract_one_file(
 }
 
 /// Builds the set of focused normalized paths for filtering.
-fn build_focus_set(
+/// Normalise focus paths into the `/`-separated, base-relative spelling the
+/// graph uses.
+///
+/// Public so a caller that filters the graph *after* it is built -- rather than
+/// passing focus paths into graph selection -- produces the same set of scoped
+/// paths.
+///
+/// Two rules, and the order matters:
+///
+/// * A **relative** focus path is already in the graph's spelling and is left
+///   exactly as written. Resolving it against the working directory would be
+///   wrong -- the graph is spelled relative to the *analysis base*, which is a
+///   different directory whenever `--path` is anything but `.`, and would break
+///   `--path crates/x --focus src/main.rs` outright.
+/// * An **absolute** focus path is stripped of the absolute base. `--path .`
+///   leaves the base relative, so an absolute `--focus /repo/crates/x` could not
+///   otherwise be stripped at all, and the comparison silently matched nothing:
+///   a scoped blast radius of zero with no explanation. Zero is worse than an
+///   error here, because zero is a plausible answer.
+///
+/// An absolute path that does not sit under the base is left absolute, since
+/// mangling it would only hide the mismatch.
+#[must_use]
+pub fn build_focus_set(
     base_path: &Path,
     focus_paths: &[PathBuf],
 ) -> BTreeSet<String> {
+    // Absolutised lazily, and only for the absolute branch below: a relative
+    // path never needs it, and computing it unconditionally would make the
+    // working directory part of the answer.
+    let base = std::path::absolute(base_path)
+        .unwrap_or_else(|_| base_path.to_path_buf());
+
     focus_paths
         .iter()
-        .map(|p| {
-            let resolved = if p.is_absolute() {
-                p.strip_prefix(base_path).unwrap_or(p).to_path_buf()
+        .map(|focus| {
+            let resolved = if focus.is_absolute() {
+                focus
+                    .strip_prefix(&base)
+                    .unwrap_or(focus.as_path())
+                    .to_path_buf()
             } else {
-                p.clone()
+                focus.clone()
             };
             resolved.to_string_lossy().replace('\\', "/")
         })
@@ -662,6 +694,14 @@ fn select_graph(
         if !focus_set.is_empty() {
             let focus_roots = collect_focus_roots(node_map, focus_set);
             reachable.retain(|path| focus_roots.contains(path));
+
+            // The target stays in the report even when the scope excludes it, so
+            // the answer reads "nothing in this scope depends on it" rather than
+            // "nothing at all". A report with no node for the file being asked
+            // about cannot tell those two apart, and they are opposites.
+            for root in &query_roots {
+                reachable.insert(root.clone());
+            }
         }
 
         selected.extend(reachable);
@@ -699,7 +739,19 @@ fn collect_focus_roots(
         .collect()
 }
 
-fn path_matches_focus(path: &str, focus: &str) -> bool {
+/// Whether `path` lies inside the scope named by `focus`.
+///
+/// Public because scoping has to mean one thing across the tool. `graph
+/// --focus` and `impact --focus` both answer "within this scope, which files
+/// depend on this one", and two implementations of "inside the scope" would let
+/// them disagree on the boundary -- one saying a file is in scope and the other
+/// silently dropping it from a blast radius.
+///
+/// `focus` matches a path exactly or as a directory prefix at a `/` boundary, so
+/// `crates/sephera_core` covers `crates/sephera_core/src/lib.rs` but not
+/// `crates/sephera_core_extra/src/lib.rs`.
+#[must_use]
+pub fn path_matches_focus(path: &str, focus: &str) -> bool {
     path == focus
         || path
             .strip_prefix(focus)
@@ -1159,6 +1211,85 @@ mod tests {
             module_depth: 0,
             cfg_gated: false,
         }
+    }
+
+    #[test]
+    fn a_relative_focus_path_is_left_exactly_as_written() {
+        // The graph is spelled relative to the analysis base, not the working
+        // directory. Resolving a relative scope against the working directory
+        // turns `--path crates/x --focus src/main.rs` into a path under the
+        // repository root that names a file nothing else refers to, so the scope
+        // silently matches nothing.
+        let focus = vec![PathBuf::from("src/main.rs")];
+
+        assert_eq!(
+            build_focus_set(Path::new("/anywhere"), &focus),
+            known_files(&["src/main.rs"])
+        );
+        assert_eq!(
+            build_focus_set(Path::new("."), &focus),
+            known_files(&["src/main.rs"]),
+            "a relative base must not change how a relative scope is read"
+        );
+        assert_eq!(
+            build_focus_set(&std::env::temp_dir().join("repo"), &focus),
+            known_files(&["src/main.rs"]),
+            "the working directory must not appear in the answer"
+        );
+    }
+
+    #[test]
+    fn an_absolute_focus_path_is_made_relative_to_an_absolute_base() {
+        let base = std::env::temp_dir().join("repo");
+        let focus = vec![base.join("crates").join("one")];
+
+        assert_eq!(
+            build_focus_set(&base, &focus),
+            known_files(&["crates/one"]),
+            "an absolute scope under the base is base-relative in the graph"
+        );
+    }
+
+    #[test]
+    fn an_absolute_scope_measures_the_same_from_a_relative_base() {
+        // `--path .` is what makes the base relative in practice, and it is why
+        // an absolute `--focus` used to match nothing and report a blast radius
+        // of zero without saying so.
+        //
+        // Built under the working directory rather than the temp directory,
+        // because "inside the base" is the entire claim. A scope pointing
+        // somewhere else is out of scope whichever way the base is spelled, and
+        // pretending otherwise would be testing the wrong thing.
+        let base = std::env::current_dir().expect("a working directory");
+        let focus = vec![base.join("crates").join("one")];
+
+        assert_eq!(
+            build_focus_set(Path::new("."), &focus),
+            known_files(&["crates/one"]),
+            "an absolute scope under `.` must resolve as a relative one does"
+        );
+        assert_eq!(
+            build_focus_set(Path::new("."), &focus),
+            build_focus_set(&base, &focus),
+            "the base's own relativity must not decide whether a scope matches"
+        );
+    }
+
+    #[test]
+    fn an_absolute_scope_outside_the_base_is_left_alone() {
+        // Mangling it into a relative-looking path would hide the mismatch, which
+        // is the one case where saying "I do not recognise this scope" would be
+        // more useful than silently matching nothing.
+        let base = std::env::temp_dir().join("repo");
+        let elsewhere = std::env::temp_dir().join("elsewhere");
+
+        let normalised =
+            build_focus_set(&base, std::slice::from_ref(&elsewhere));
+
+        assert!(
+            normalised.iter().any(|path| path.contains("elsewhere")),
+            "expected the outside path to survive, got {normalised:?}"
+        );
     }
 
     #[test]
