@@ -329,17 +329,14 @@ impl SepheraServer {
     ) -> Result<String, rmcp::ErrorData> {
         let ignore_matcher =
             build_ignore_matcher(param.ignore, param.no_gitignore)?;
-        let source = resolve_source(&SourceRequest {
-            path: param.path.map(std::path::PathBuf::from),
-            url: param.url,
-            git_ref: param.git_ref,
-        })
-        .map_err(map_internal_error("source resolution failed"))?;
-
-        // Refused, as clap refuses `<FILE>...` on the command line. An empty
-        // report of `{"targets": []}` reads as "nothing depends on anything",
-        // which is not a thing anyone meant to ask, and an agent would take it
-        // as an answer rather than as a mistake.
+        // Refused before anything else, as clap refuses `<FILE>...` on the command
+        // line. An empty report of `{"targets": []}` reads as "nothing depends on
+        // anything", which is not a thing anyone meant to ask, and an agent would
+        // take it as an answer rather than as a mistake.
+        //
+        // Before `resolve_source` deliberately: a URL argument means a clone, and
+        // a clone that fails would otherwise report a source error instead of the
+        // one mistake the caller actually made.
         if param.files.is_empty() {
             return Err(rmcp::ErrorData::invalid_params(
                 "impact needs at least one file in `files`; an empty list is \
@@ -347,6 +344,13 @@ impl SepheraServer {
                 None,
             ));
         }
+
+        let source = resolve_source(&SourceRequest {
+            path: param.path.map(std::path::PathBuf::from),
+            url: param.url,
+            git_ref: param.git_ref,
+        })
+        .map_err(map_internal_error("source resolution failed"))?;
 
         // The whole repository, because the radius of one file routinely reaches
         // past any subtree and every target shares this one build.

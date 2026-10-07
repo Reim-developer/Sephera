@@ -176,6 +176,66 @@ fn the_threshold_line_omits_the_scope_note_without_a_scope() {
 }
 
 #[test]
+fn a_whole_base_scope_is_not_described_as_a_narrowed_count() {
+    // `--focus .` is spelled as a scope but normalises to the whole repository, so
+    // the count is unscoped. Saying otherwise would put a false statement in the
+    // one line someone reads to decide whether to merge.
+    let temp_dir = repo_with_two_packages();
+    let output = run_impact(
+        temp_dir.path(),
+        &["src/core/lib_file.rs", "--focus", ".", "--fail-on", "1"],
+    );
+
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        !stderr.contains("within the requested scope"),
+        "the count is unscoped, so the line must not claim otherwise: {stderr}"
+    );
+    assert_eq!(output.status.code(), Some(2));
+}
+
+#[test]
+fn a_scope_naming_the_whole_base_wins_over_a_narrower_one() {
+    // Scopes are a union, so `.` contains `src/other`. Answering with the
+    // narrower scope would undercount, and a `--fail-on` limit could stop firing
+    // without the rule changing.
+    let temp_dir = repo_with_two_packages();
+    let narrow = run_impact(
+        temp_dir.path(),
+        &[
+            "src/core/lib_file.rs",
+            "--focus",
+            "src/other",
+            "--format",
+            "json",
+        ],
+    );
+    let both = run_impact(
+        temp_dir.path(),
+        &[
+            "src/core/lib_file.rs",
+            "--focus",
+            "src/other",
+            "--focus",
+            ".",
+            "--format",
+            "json",
+        ],
+    );
+    let unscoped = run_impact(
+        temp_dir.path(),
+        &["src/core/lib_file.rs", "--format", "json"],
+    );
+
+    assert_eq!(dependent_count(&narrow), 1, "fixture: one in src/other");
+    assert_eq!(
+        dependent_count(&both),
+        dependent_count(&unscoped),
+        "a scope that is the whole base makes the union the whole base"
+    );
+}
+
+#[test]
 fn a_focus_that_excludes_everything_is_distinguishable_from_no_focus() {
     // Both report dependents outside the scope, so both say "no file imports
     // this one" -- but the target is still named, which is what tells a reader

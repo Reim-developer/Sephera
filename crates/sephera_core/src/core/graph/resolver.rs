@@ -319,6 +319,11 @@ fn extract_one_file(
 /// literal string `"."`, which matches no node, so `graph --path . --focus .`
 /// reported a repository of zero files and `--focus ./crates/x` reported zero
 /// dependents. Both answers were wrong and neither said so.
+///
+/// Scopes are a union, so one scope naming the whole base makes the whole union
+/// the whole base. `--focus . --focus src/core` means "the base, or `src/core`",
+/// and the base contains `src/core` -- answering with `src/core` alone would
+/// undercount dependents and could turn a failing `--fail-on` into a passing one.
 #[must_use]
 pub fn build_focus_set(
     base_path: &Path,
@@ -330,25 +335,30 @@ pub fn build_focus_set(
     let base = std::path::absolute(base_path)
         .unwrap_or_else(|_| base_path.to_path_buf());
 
-    focus_paths
-        .iter()
-        .filter_map(|focus| {
-            let resolved = if focus.is_absolute() {
-                focus
-                    .strip_prefix(&base)
-                    .unwrap_or(focus.as_path())
-                    .to_path_buf()
-            } else {
-                strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
-            };
+    let mut scopes = BTreeSet::new();
 
-            let spelled =
-                super::path_utils::forward_slashes(&resolved.to_string_lossy());
-            // `""` is how a scope that means "the whole base" spells itself, and
-            // both callers already read an empty set that way.
-            (!spelled.is_empty()).then_some(spelled)
-        })
-        .collect()
+    for focus in focus_paths {
+        let resolved = if focus.is_absolute() {
+            focus
+                .strip_prefix(&base)
+                .unwrap_or(focus.as_path())
+                .to_path_buf()
+        } else {
+            strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
+        };
+
+        let spelled =
+            super::path_utils::forward_slashes(&resolved.to_string_lossy());
+
+        // `""` is how a scope that means "the whole base" spells itself, and
+        // both callers already read an empty set that way.
+        if spelled.is_empty() {
+            return BTreeSet::new();
+        }
+        scopes.insert(spelled);
+    }
+
+    scopes
 }
 
 /// Drop `.` components and resolve `..` within a relative path, keeping it
@@ -1433,6 +1443,26 @@ mod tests {
                 "a backslash in a Unix file name is part of the name"
             );
         }
+    }
+
+    #[test]
+    fn one_scope_naming_the_whole_base_overrides_the_others() {
+        // Scopes are a union. `--focus . --focus src/core` asks for the base *or*
+        // `src/core`, and the base contains `src/core` -- so the answer is the whole
+        // base. Answering with `src/core` alone undercounts dependents, which is how a
+        // `--fail-on` limit stops failing without anyone touching the rule.
+        let base = std::env::temp_dir().join("repo");
+        let scopes = vec![PathBuf::from("."), PathBuf::from("src/core")];
+
+        assert_eq!(
+            build_focus_set(&base, &scopes),
+            BTreeSet::new(),
+            "a scope that is the whole base makes the whole union the whole base"
+        );
+
+        // Order must not matter, or the same flags mean two different things.
+        let reversed = vec![PathBuf::from("src/core"), PathBuf::from("./")];
+        assert_eq!(build_focus_set(&base, &reversed), BTreeSet::new());
     }
 
     #[test]

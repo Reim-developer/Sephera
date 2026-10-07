@@ -465,7 +465,12 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // repository. The label says so, because a CI log reading "3 files depend on
     // X, limit is 40" is indistinguishable from X having three dependents in
     // total, and those two warrant different decisions.
-    let scope_note = if arguments.focus.is_empty() {
+    //
+    // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
+    // is spelled as a scope but normalises to the whole analysis base, and
+    // claiming a narrowed count for an unscoped one would be a false statement
+    // in the one line someone reads to decide whether to merge.
+    let scope_note = if focus.is_empty() {
         String::new()
     } else {
         " within the requested scope".to_owned()
