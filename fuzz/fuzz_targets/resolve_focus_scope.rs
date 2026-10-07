@@ -148,21 +148,58 @@ fuzz_target!(|data: &[u8]| {
         );
     }
 
-    // An absolute scope inside the base must come out relative, or it is compared
-    // as a whole drive-and-directory string against base-relative node paths,
-    // matches nothing, and reports a radius of zero with no warning.
-    //
-    // Constructed rather than taken from the fuzzer, because an arbitrary
-    // drive-letter prefix is not a thing to let bytes decide.
+    // The absolute branch, which `relative_bytes` cannot reach: it strips the base
+    // lexically and then makes no further checks, so `..` can survive into a
+    // relative-looking scope. Both directions are asserted from fuzz-derived
+    // components, because a fixed path here would exercise one branch shape per
+    // run and give the impression of coverage it does not have.
     let absolute_base =
         std::path::absolute(analysis_base()).expect("an absolute base");
-    let inside = absolute_base.join("crates").join("core");
+    let component = clean_component(data);
 
-    assert!(
-        build_focus_set(&base, &[inside])
-            .iter()
-            .all(|scope| !Path::new(scope).is_absolute()),
-        "a scope inside the base came back absolute, so it will be compared \
-         against base-relative node paths and match nothing"
-    );
+    // Inside the base: must come back relative, or it is compared as a whole
+    // drive-and-directory string against base-relative node paths, matches
+    // nothing, and reports a radius of zero with no warning.
+    let inside = absolute_base.join(&component);
+    if inside.starts_with(&absolute_base) {
+        assert!(
+            build_focus_set(&base, &[inside.clone()])
+                .iter()
+                .all(|scope| !Path::new(scope).is_absolute()),
+            "{inside:?} is inside the base but came back absolute"
+        );
+    }
+
+    // Outside the base: passed through untouched, so the caller can see a scope
+    // was not recognised rather than finding a silently narrower answer.
+    let outside = absolute_base
+        .parent()
+        .unwrap_or(&absolute_base)
+        .join("elsewhere")
+        .join(&component);
+
+    if !outside.starts_with(&absolute_base) {
+        let kept = build_focus_set(&base, &[outside]);
+
+        assert!(
+            kept.iter().any(|scope| Path::new(scope).is_absolute()),
+            "a scope outside the base came back relative, so it reads like a \
+             path the graph could have: {kept:?}"
+        );
+    }
 });
+
+/// A single path component, safe to join onto any directory.
+///
+/// No separators, no `..`, no drive prefix, so joining it cannot change what
+/// directory it lands in -- which is what makes the two branches above
+/// distinguishable.
+fn clean_component(data: &[u8]) -> String {
+    let raw: String = String::from_utf8_lossy(data)
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '_' || *ch == '-')
+        .take(24)
+        .collect();
+
+    if raw.is_empty() { "core".to_owned() } else { raw }
+}
