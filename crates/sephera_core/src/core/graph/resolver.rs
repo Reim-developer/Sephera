@@ -570,14 +570,23 @@ fn build_edges_and_nodes(
                 // A renaming import gets no such leniency: it names one path.
                 && !statement.kind.is_namespace();
 
-            // Every real dependency goes in the adjacency, including a parent naming its
-            // own child. A blast-radius query wants that edge -- "what breaks if
-            // I edit `service.rs`" must answer `main.rs` -- and filtering it here
-            // to satisfy cycle detection silently answered "nothing", which is how
-            // `--what-depends-on` lost a whole level. Structural edges are
-            // excluded from cycle detection instead, in `detect_cycles`.
+            // Every resolved edge goes in the adjacency, including a parent naming its own
+            // child with `mod child;`.
+            //
+            // Filtering module declarations out here was a real bug, and the
+            // comment above this condition used to argue against the very filter
+            // it sat next to. Blast radius wants the edge: editing `ignore.rs`
+            // forces `core.rs` to rebuild, so "changing this breaks that" is
+            // true. Excluding it meant a reverse query could not reach a parent
+            // through its own `mod` declaration -- and because `core.rs` is the
+            // parent of most of this repository, one missing edge hid 17 of
+            // `ignore.rs`'s 34 real dependents.
+            //
+            // Cycle detection does not need the edge excluded here: `detect_cycles`
+            // walks `structural_adjacency`, which drops structural edges by path
+            // shape, and doing it in one place rather than two is what lets both
+            // answers be right at once.
             if let Some(ref target) = target
-                && statement.kind.is_dependency()
                 && *target != file_data.file_path
             {
                 // Update imported_by for the target
@@ -588,11 +597,17 @@ fn build_edges_and_nodes(
                     .push(file_data.file_path.clone());
 
                 // Update imports for the source
-                node_map
-                    .entry(file_data.file_path.clone())
-                    .or_default()
-                    .imports
-                    .push(target.clone());
+                let source_entry =
+                    node_map.entry(file_data.file_path.clone()).or_default();
+                source_entry.imports.push(target.clone());
+
+                // A `mod child;` is recorded by kind on the *source* entry, so
+                // cycle detection can drop exactly this edge while the blast
+                // radius keeps it. Recorded per source because that is the entry
+                // whose `imports` list the declaration appears in.
+                if statement.kind == ImportKind::ModuleDeclaration {
+                    source_entry.declarations.insert(target.clone());
+                }
             }
 
             edges.push(GraphEdge {
@@ -629,23 +644,36 @@ fn select_graph(
 
     let mut selected = BTreeSet::new();
 
-    if !focus_set.is_empty() {
+    if let Some(ref query_mode) = query {
+        let query_roots = roots_for_query(node_map, query_mode)?;
+        let mut reachable = traverse_graph(
+            node_map,
+            &query_roots,
+            depth,
+            TraversalDirection::ImportedBy,
+        );
+
+        // A reverse query is a question about one file, so `--focus` narrows the
+        // answer rather than adding to it. It used to be unioned in, which meant
+        // `--focus crates/sephera_core --what-depends-on <a file in it>` answered
+        // a different question than the one asked: the whole focused subtree plus
+        // the dependents, so 72 files instead of 18. The reading a caller wants
+        // is "among the files in this scope, which depend on this one".
+        if !focus_set.is_empty() {
+            let focus_roots = collect_focus_roots(node_map, focus_set);
+            reachable.retain(|path| focus_roots.contains(path));
+        }
+
+        selected.extend(reachable);
+    } else if !focus_set.is_empty() {
+        // With no query, `--focus` means "start here and follow imports", which
+        // is what a dependency report needs: the subtree plus what it pulls in.
         let focus_roots = collect_focus_roots(node_map, focus_set);
         selected.extend(traverse_graph(
             node_map,
             &focus_roots,
             depth,
             TraversalDirection::Imports,
-        ));
-    }
-
-    if let Some(ref query_mode) = query {
-        let query_roots = roots_for_query(node_map, query_mode)?;
-        selected.extend(traverse_graph(
-            node_map,
-            &query_roots,
-            depth,
-            TraversalDirection::ImportedBy,
         ));
     }
 
@@ -758,6 +786,18 @@ fn filter_node_map(
                             .collect(),
                         imported_by: entry
                             .imported_by
+                            .iter()
+                            .filter(|neighbor| {
+                                selected_paths.contains(*neighbor)
+                            })
+                            .cloned()
+                            .collect(),
+                        // Kept so a filtered report can still tell a
+                        // declaration edge from a `use`, which is what stops
+                        // cycle detection from inventing cycles out of the
+                        // Rust module tree.
+                        declarations: entry
+                            .declarations
                             .iter()
                             .filter(|neighbor| {
                                 selected_paths.contains(*neighbor)
@@ -1015,12 +1055,30 @@ fn structural_adjacency(node_map: &NodeMap) -> NodeMap {
     filtered
 }
 
+/// Drop exactly the edges that are `mod child;` declarations.
+///
+/// A second filter, applied after `structural_adjacency`, and for a different
+/// reason. `structural_adjacency` guesses structural edges from the shape of two
+/// paths, which is how a child pointing back at its ancestor through `super::` or
+/// `crate::` gets caught. It cannot tell a declaration from a `use`: both appear
+/// in `imports` as bare paths. Leaving them in put axum's real cycle count at 23
+/// instead of 18, so the declaration edge is recorded by kind and removed here.
+fn without_declaration_edges(node_map: &NodeMap) -> NodeMap {
+    let mut filtered: NodeMap = node_map.to_owned();
+    for entry in filtered.values_mut() {
+        entry
+            .imports
+            .retain(|target| !entry.declarations.contains(target));
+    }
+    filtered
+}
+
 /// Detect cycles in the dependency graph using iterative DFS.
 ///
 /// Each distinct ring is reported once. Cycles are returned in a deterministic
 /// order so that repeated runs over an unchanged tree produce identical output.
 fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
-    let adjacency = structural_adjacency(node_map);
+    let adjacency = without_declaration_edges(&structural_adjacency(node_map));
     let node_map = &adjacency;
     let mut cycles: Vec<Vec<String>> = Vec::new();
 
@@ -1396,6 +1454,88 @@ mod tests {
             .filter(|edge| edge.from == source && edge.resolved)
             .filter_map(|edge| edge.to.clone())
             .collect()
+    }
+
+    #[test]
+    fn a_reverse_query_reaches_the_whole_transitive_closure() {
+        // `mid` imports `leaf`, `top` imports `mid`, so `leaf`'s blast radius is
+        // both `mid` and `top`. A reverse query that returned only the direct
+        // importer would answer half the question and look complete doing it.
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in [
+            ("src/leaf.rs", "pub fn leaf() {}\n"),
+            ("src/mid.rs", "use crate::leaf;\npub fn mid() {}\n"),
+            ("src/top.rs", "use crate::mid;\npub fn top() {}\n"),
+            ("src/lib.rs", "pub mod leaf;\npub mod mid;\npub mod top;\n"),
+        ] {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+
+        let report = build_graph(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            Some(GraphQuery::DependsOn("src/leaf.rs".to_owned())),
+        )
+        .expect("graph build must succeed");
+
+        let mut paths: Vec<String> = report
+            .nodes
+            .iter()
+            .map(|node| node.file_path.clone())
+            .collect();
+        paths.sort();
+
+        // `src/lib.rs` is in the answer because `pub mod leaf;` is a real edge:
+        // deleting `leaf.rs` breaks the crate root as surely as it breaks `mid`.
+        // It was missing before module declarations were admitted to the
+        // adjacency, which is how `ignore.rs` lost 17 of its 34 real dependents
+        // on this repository.
+        assert_eq!(
+            paths,
+            vec![
+                "src/leaf.rs".to_owned(),
+                "src/lib.rs".to_owned(),
+                "src/mid.rs".to_owned(),
+                "src/top.rs".to_owned(),
+            ],
+            "a reverse query must include transitive dependents and the \
+             parent that declares them, not only direct importers"
+        );
+    }
+
+    #[test]
+    fn a_module_declaration_does_not_close_a_cycle() {
+        // `lib.rs` declares `mod service;` and `service.rs` refers back to its
+        // parent with `crate::`. Both edges are real and the blast radius wants
+        // both, but no edit can break the pair apart, so calling it a cycle would
+        // be a claim the report cannot act on.
+        let temp_dir = tempdir().unwrap();
+        for (relative, contents) in [
+            ("src/lib.rs", "pub mod service;\n"),
+            ("src/service.rs", "use crate::Config;\npub fn run() {}\n"),
+        ] {
+            let absolute = temp_dir.path().join(relative);
+            fs::create_dir_all(absolute.parent().unwrap()).unwrap();
+            fs::write(absolute, contents).unwrap();
+        }
+
+        let report = build_graph(
+            temp_dir.path(),
+            &IgnoreMatcher::empty(),
+            &[],
+            None,
+            None,
+        )
+        .expect("graph build must succeed");
+
+        assert_eq!(
+            report.metrics.circular_dependencies, 0,
+            "a forced module relationship is not a cycle an edit can fix"
+        );
     }
 
     #[test]

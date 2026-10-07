@@ -42,7 +42,16 @@ self_references = 66
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
 # a dependency a default build does not have.
 cfg_gated_edges = 86
-cycles = 18
+# Was 18, and 18 was itself an undercount. The adjacency used to drop every
+# `mod child;` declaration, which was meant to keep the Rust module tree out of
+# cycle detection but also broke the rings those declarations close. Restoring
+# the edge -- because a blast radius genuinely needs it -- and filtering it back
+# out for cycles *by kind* instead of by removing it from the graph recovers 19.
+# The nineteenth is a real ring of plain `use` statements between two sibling
+# modules, e.g. `response/mod.rs` has `use crate::test_helpers::*;` while
+# `test_helpers/mod.rs` has `use crate::{extract::Request, response::Response, serve};`.
+# The other eighteen still hold.
+cycles = 19
 structural_cycles = 0
 
 [[corpus]]

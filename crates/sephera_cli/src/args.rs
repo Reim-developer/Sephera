@@ -759,13 +759,15 @@ const IMPACT_AFTER_LONG_HELP: &str = "Examples:\n  sephera impact src/core/graph
 /// Report the blast radius of one file.
 #[derive(Debug, Args)]
 pub struct ImpactArgs {
-    /// File to report the blast radius of
+    /// Files to report the blast radius of
     #[arg(
         value_name = "FILE",
-        help = "File whose blast radius to report.",
-        long_help = "Path of the file whose blast radius to report, relative to the analysis base. The path must resolve to a file in the analysis; a path that matches nothing is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
+        required = true,
+        num_args = 1..,
+        help = "File whose blast radius to report. Repeat for several.",
+        long_help = "Path of the file whose blast radius to report, relative to the analysis base. Repeat the flag or pass several paths to ask about more than one; the graph is built once and every path is measured against it, so asking about five files costs about the same as asking about one. Paths are listed widest first. A path that matches nothing in the analysis is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
     )]
-    pub file: String,
+    pub files: Vec<String>,
 
     /// Path to the project directory to analyze
     #[arg(
@@ -832,13 +834,13 @@ pub struct ImpactArgs {
     )]
     pub exclude_types: bool,
 
-    /// Fail with exit code 2 when this many or more files depend on the target
+    /// Fail with exit code 2 when this many or more files depend on a target
     #[arg(
         long,
         value_name = "COUNT",
         value_parser = clap::value_parser!(u64).range(1..),
         help = "Fail with exit code 2 at this many dependents.",
-        long_help = "Exit with code 2 when at least this many files depend on the target. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth."
+        long_help = "Exit with code 2 when at least this many files depend on any one of the targets. With several targets, every target at or over the limit is named, because a run that violates three rules should not take three CI runs to discover. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth."
     )]
     pub fail_on: Option<u64>,
 

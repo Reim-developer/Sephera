@@ -32,63 +32,30 @@ pub struct ChangeImpact {
 /// `report` holds paths relative to the analysis base, and `base_prefix` is
 /// what separates the two. A file outside the analysis is skipped rather than
 /// guessed at.
+///
+/// Path matching lives in [`impact`] so this and `sephera impact` cannot drift
+/// on what "the same file" means.
 #[must_use]
 pub fn measure_changes(
     report: &GraphReport,
     requested: &[String],
     base_prefix: &str,
+    depth: Option<u32>,
 ) -> Vec<ChangeImpact> {
     let mut measured = Vec::new();
 
     for raw in requested {
-        let Some(canonical) = match_path(report, raw, base_prefix) else {
+        let Some(canonical) = impact::match_path(report, raw, base_prefix)
+        else {
             continue;
         };
-        // `measure` reads the target from the query, and this report has none,
-        // so the canonical spelling has to be passed explicitly.
         measured.push(ChangeImpact {
-            radius: impact::measure(report, &canonical),
+            radius: impact::measure(report, &canonical, depth),
             file: canonical,
         });
     }
 
     measured
-}
-
-/// Match a git-reported path onto a path in the graph.
-///
-/// Git reports paths with the platform's separator, relative to the repository
-/// root. The graph spells them with `/`, relative to the analysis base. When
-/// `--path` points at a sub-directory -- the common case in a workspace -- the
-/// two differ by exactly `base_prefix`, which is stripped before matching.
-///
-/// Only that prefix is stripped. Trying progressively shorter tails instead also
-/// "works", but it matches a genuinely different file that merely shares a
-/// basename: `elsewhere/a.rs` would attach to `a.rs` and report impact for a
-/// file the change never touched, which is worse than reporting nothing.
-fn match_path(
-    report: &GraphReport,
-    raw: &str,
-    base_prefix: &str,
-) -> Option<String> {
-    let mut normalized = raw.replace('\\', "/");
-    normalized = normalized.trim_start_matches("./").to_owned();
-
-    let prefix = base_prefix.replace('\\', "/");
-    let prefix = prefix.trim_matches('/');
-    if !prefix.is_empty()
-        && let Some(stripped) = normalized
-            .strip_prefix(prefix)
-            .and_then(|rest| rest.strip_prefix('/'))
-    {
-        normalized = stripped.to_owned();
-    }
-
-    report
-        .nodes
-        .iter()
-        .find(|node| node.file_path == normalized)
-        .map(|node| node.file_path.clone())
 }
 
 /// Render one report per changed file as Markdown.
@@ -248,7 +215,9 @@ mod tests {
         GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
     };
 
-    use super::{match_path, measure_changes, render_json, render_markdown};
+    use crate::impact::match_path;
+
+    use super::{measure_changes, render_json, render_markdown};
 
     fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
         GraphEdge {
@@ -310,6 +279,7 @@ mod tests {
             &repo_report(),
             &["a.rs".to_owned(), "b.rs".to_owned()],
             "",
+            None,
         );
 
         assert_eq!(changes.len(), 2);
@@ -334,8 +304,12 @@ mod tests {
         // A file that no longer exists has no blast radius. Reporting it as
         // "0 dependents" would put a line in a review report that reads like a
         // finding when it is actually an absence.
-        let changes =
-            measure_changes(&repo_report(), &["deleted.rs".to_owned()], "");
+        let changes = measure_changes(
+            &repo_report(),
+            &["deleted.rs".to_owned()],
+            "",
+            None,
+        );
 
         assert_eq!(changes.len(), 0);
     }
@@ -398,6 +372,7 @@ mod tests {
             &repo_report(),
             &["b.rs".to_owned(), "a.rs".to_owned()],
             "",
+            None,
         );
 
         let markdown = render_markdown(&changes, "HEAD~1", &[]);
@@ -445,7 +420,8 @@ mod tests {
 
     #[test]
     fn json_reports_one_entry_per_changed_file_with_a_matching_count() {
-        let changes = measure_changes(&repo_report(), &["a.rs".to_owned()], "");
+        let changes =
+            measure_changes(&repo_report(), &["a.rs".to_owned()], "", None);
         let parsed: serde_json::Value =
             serde_json::from_str(&render_json(&changes, "HEAD~1", &[]))
                 .expect("valid JSON");
@@ -460,7 +436,8 @@ mod tests {
     fn a_change_with_no_dependents_is_still_listed() {
         // `d.rs` imports nothing, but it *was* changed, and silently dropping it
         // would make the report disagree with `git status`.
-        let changes = measure_changes(&repo_report(), &["d.rs".to_owned()], "");
+        let changes =
+            measure_changes(&repo_report(), &["d.rs".to_owned()], "", None);
 
         assert_eq!(changes.len(), 1);
         let markdown = render_markdown(&changes, "HEAD~1", &[]);

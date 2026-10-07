@@ -15,6 +15,10 @@ buried behind the one nobody reads the help for.
 
 ## Basic usage
 
+`impact` takes one path or several. Asking about five files costs about the same
+as asking about one, because the graph is built once and every path is measured
+against it.
+
 ```bash
 sephera impact crates/sephera_core/src/core/code_loc.rs
 ```
@@ -22,16 +26,18 @@ sephera impact crates/sephera_core/src/core/code_loc.rs
 ```text
 # Blast radius for `crates/sephera_core/src/core/code_loc.rs`
 
-6 files depend on this.
+8 files depend on this.
 
 ## Dependents
 
-- `crates/sephera_core/src/core/code_loc/tests.rs`
+- `crates/sephera_core/src/core.rs` imports `self::code_loc`
+- `crates/sephera_core/src/core/code_loc/tests.rs` imports `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content`
+- `crates/sephera_core/src/core/runtime.rs`
 - `crates/sephera_core/src/core/runtime/context.rs` imports `crate::core::code_loc::IgnoreMatcher`
 - `crates/sephera_core/src/core/symbols/lookup.rs` imports `crate::core::code_loc::IgnoreMatcher`
+- `crates/sephera_core/src/core/symbols/mod.rs`
+- `crates/sephera_core/src/core/symbols/tests.rs`
 - `crates/sephera_core/src/lib.rs`
-- `crates/sephera_cli/src/run.rs` imports `sephera_core::core::code_loc::{CodeLoc, IgnoreMatcher}`
-- `crates/sephera_mcp/src/server.rs` imports `sephera_core::core::code_loc::CodeLoc`
 ```
 
 Each dependent is listed with the names it imports from the target, because
@@ -51,6 +57,15 @@ The rules matter, because `--fail-on` compares against this number:
 - **Only resolved edges count.** An edge the resolver could not place is a path
   it failed to find, not a coupling. Counting it would claim exactly the
   connection a blast radius exists to be honest about.
+- **`mod child;` counts.** A module declaration is a real dependency: deleting
+  `service.rs` breaks the module that declared it, so "changing this breaks
+  that" is true. It is excluded from *cycle* detection instead, because no edit
+  can break a parent and its own child apart -- but excluding it from the blast
+  radius once hid 17 of `ignore.rs`'s 34 real dependents on this repository,
+  because `core.rs` is the parent of most of the tree.
+
+That last rule is the one worth understanding. A ring is reported only when every
+link in it is something an edit can remove.
 
 An empty answer says *"No file imports this one."* rather than rendering nothing.
 An empty report and a typo are indistinguishable once it is on a screen, so a
@@ -76,17 +91,22 @@ sephera impact crates/sephera_core/src/core/ignore.rs --format json
 
 ```json
 {
-  "target": "crates/sephera_core/src/core/ignore.rs",
-  "dependent_count": 17,
-  "depth": null,
-  "dependents": [
-    { "file": "crates/sephera_core/src/core/code_loc.rs", "imports": [] }
+  "targets": [
+    {
+      "target": "crates/sephera_core/src/core/ignore.rs",
+      "dependent_count": 34,
+      "depth": null,
+      "dependents": [
+        { "file": "crates/sephera_core/src/core/code_loc.rs", "imports": [] }
+      ]
+    }
   ]
 }
 ```
 
-`dependent_count` is always present, so a consumer never has to distinguish
-"zero dependents" from "this field is missing".
+The shape is the same whether you pass one path or five, so a consumer does not
+need two parsers. `dependent_count` is always present, so it never has to
+distinguish "zero dependents" from "this field is missing".
 
 ## Failing a build on a wide radius
 
@@ -97,6 +117,9 @@ sephera impact crates/sephera_cli/src/run.rs --fail-on 40
 Exits **2** when at least 40 files depend on the target. The limit is the first
 *failing* value, so `--fail-on 40` fails on the fortieth dependent and not the
 thirty-ninth.
+
+With several targets, every target at or over the limit is named on stderr, so a
+run that violates three rules does not take three CI runs to discover.
 
 The report is still printed; only the exit code changes.
 
