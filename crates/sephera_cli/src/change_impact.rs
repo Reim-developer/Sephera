@@ -120,23 +120,7 @@ pub fn render_markdown(
         )
         .expect("writing to a String must succeed");
 
-        for dependent in &change.radius.dependents {
-            if dependent.imports.is_empty() {
-                let _ = writeln!(output, "- `{}`", dependent.file);
-            } else {
-                let names: Vec<String> = dependent
-                    .imports
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect();
-                let _ = writeln!(
-                    output,
-                    "- `{}` imports {}",
-                    dependent.file,
-                    names.join(", ")
-                );
-            }
-        }
+        impact::write_dependents(&mut output, &change.radius);
         output.push('\n');
     }
 
