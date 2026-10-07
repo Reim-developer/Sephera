@@ -14,6 +14,158 @@ fn param_for<T>(input: T) -> rmcp::handler::server::wrapper::Parameters<T> {
 }
 
 #[test]
+fn impact_tool_reports_a_blast_radius() {
+    // The question an agent should be able to ask before editing a file, which
+    // it could not until `impact` was a tool in its own right.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(
+        temp_dir.path(),
+        "src/user.rs",
+        b"use crate::a;\nfn b() {}\n",
+    );
+    write_file(temp_dir.path(), "src/other.rs", b"fn c() {}\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/lib.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        format: None,
+    }));
+
+    let output = result.expect("impact tool should succeed for a temp dir");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("impact output must be JSON");
+
+    assert_eq!(parsed["targets"][0]["target"], "src/lib.rs");
+    assert_eq!(
+        parsed["targets"][0]["dependent_count"], 1,
+        "only src/user.rs imports it: {output}"
+    );
+    let dependent = &parsed["targets"][0]["dependents"][0];
+    assert_eq!(dependent["file"], "src/user.rs");
+    assert_eq!(dependent["imports"][0], "crate::a");
+}
+
+#[test]
+fn impact_tool_accepts_several_files_at_once() {
+    // Asking about a change rather than a single file is the common case, and
+    // it has to stay one graph build rather than one per file.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/wide.rs", b"pub fn w() {}\n");
+    write_file(temp_dir.path(), "src/narrow.rs", b"pub fn n() {}\n");
+    for index in 0..3 {
+        write_file(
+            temp_dir.path(),
+            &format!("src/u{index}.rs"),
+            b"use crate::wide;\n",
+        );
+    }
+    write_file(
+        temp_dir.path(),
+        "src/uses_narrow.rs",
+        b"use crate::narrow;\n",
+    );
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        format: None,
+    }));
+
+    let parsed: serde_json::Value = serde_json::from_str(
+        &result.expect("impact tool should succeed for a temp dir"),
+    )
+    .expect("impact output must be JSON");
+
+    let targets = parsed["targets"]
+        .as_array()
+        .expect("targets must be an array");
+    assert_eq!(targets.len(), 2);
+    assert_eq!(
+        targets[0]["target"], "src/wide.rs",
+        "the wider radius must come first: {parsed}"
+    );
+    assert_eq!(targets[0]["dependent_count"], 3);
+    assert_eq!(targets[1]["dependent_count"], 1);
+}
+
+#[test]
+fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
+    // A typo and a genuine zero must not look the same to an agent.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/missing.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        format: None,
+    }));
+
+    let error = result.expect_err("an unknown path must be an error");
+    let message = error.to_string();
+    assert!(
+        message.contains("src/missing.rs"),
+        "the error must name the path it could not find: {message}"
+    );
+}
+
+#[test]
+fn impact_tool_renders_markdown_for_an_agents_context() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(temp_dir.path(), "src/user.rs", b"use crate::a;\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/lib.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: Some(1),
+        format: Some("markdown".to_owned()),
+    }));
+
+    let output = result.expect("impact tool should succeed for a temp dir");
+
+    assert!(
+        output.starts_with("# Blast radius for `src/lib.rs`"),
+        "{output}"
+    );
+    assert!(
+        output.contains("Limited to 1 hop(s) away."),
+        "a bounded answer must say so: {output}"
+    );
+    assert!(
+        output.contains("`src/user.rs` imports `crate::a`"),
+        "{output}"
+    );
+}
+
+#[test]
 fn symbols_tool_counts_declarations_per_language() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();

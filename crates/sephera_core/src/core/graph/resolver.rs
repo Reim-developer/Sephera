@@ -662,6 +662,14 @@ fn select_graph(
         if !focus_set.is_empty() {
             let focus_roots = collect_focus_roots(node_map, focus_set);
             reachable.retain(|path| focus_roots.contains(path));
+
+            // The target stays in the report even when the scope excludes it, so
+            // the answer reads "nothing in this scope depends on it" rather than
+            // "nothing at all". A report with no node for the file being asked
+            // about cannot tell those two apart, and they are opposites.
+            for root in &query_roots {
+                reachable.insert(root.clone());
+            }
         }
 
         selected.extend(reachable);
@@ -699,7 +707,19 @@ fn collect_focus_roots(
         .collect()
 }
 
-fn path_matches_focus(path: &str, focus: &str) -> bool {
+/// Whether `path` lies inside the scope named by `focus`.
+///
+/// Public because scoping has to mean one thing across the tool. `graph
+/// --focus` and `impact --focus` both answer "within this scope, which files
+/// depend on this one", and two implementations of "inside the scope" would let
+/// them disagree on the boundary -- one saying a file is in scope and the other
+/// silently dropping it from a blast radius.
+///
+/// `focus` matches a path exactly or as a directory prefix at a `/` boundary, so
+/// `crates/sephera_core` covers `crates/sephera_core/src/lib.rs` but not
+/// `crates/sephera_core_extra/src/lib.rs`.
+#[must_use]
+pub fn path_matches_focus(path: &str, focus: &str) -> bool {
     path == focus
         || path
             .strip_prefix(focus)

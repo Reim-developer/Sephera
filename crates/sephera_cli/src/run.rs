@@ -438,8 +438,13 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         },
     )?;
 
-    let radii =
-        impact::measure_all(&report, &arguments.files, "", arguments.depth)?;
+    let radii = impact::measure_all(
+        &report,
+        &arguments.files,
+        "",
+        arguments.depth,
+        &arguments.focus,
+    )?;
 
     let rendered = match arguments.format {
         ImpactOutputFormat::Markdown => impact::render_report(&radii),

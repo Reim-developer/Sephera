@@ -677,6 +677,15 @@ pub struct ImpactArgs {
     )]
     pub depth: Option<u32>,
 
+    /// Restrict the reported dependents to a subtree
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Report only the dependents inside this path. Repeat for several.",
+        long_help = "Report only the dependents inside this path, which matches a path exactly or as a directory prefix at a `/` boundary. Repeat the flag to accept several scopes. This narrows the answer, not the analysis: the target itself is reported wherever it lives, so `--focus crates/x` against a file in `crates/y` answers what in `x` would break from a change in `y`. Without this flag every dependent in the repository is reported."
+    )]
+    pub focus: Vec<PathBuf>,
+
     /// Drop imports that describe types rather than runtime dependencies
     #[arg(
         long,

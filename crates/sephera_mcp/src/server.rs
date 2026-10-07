@@ -22,6 +22,7 @@ use rmcp::{
 use sephera_core::core::{
     code_loc::CodeLoc,
     graph::{
+        blast_radius,
         render::render_graph,
         resolver::build_graph,
         types::{GraphFormat, GraphQuery},
@@ -35,7 +36,7 @@ use sephera_core::core::{
 
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
-    input::{ContextInput, GraphInput, LocInput, SymbolsInput},
+    input::{ContextInput, GraphInput, ImpactInput, LocInput, SymbolsInput},
     render::render_context_markdown,
 };
 
@@ -307,6 +308,170 @@ impl SepheraServer {
             other => Ok(render_graph(&report, other)),
         }
     }
+
+    /// Report what breaks if one or more files change.
+    ///
+    /// A first-class tool rather than something an agent assembles from `graph`
+    /// with `depends_on`. The blast radius is the number a person acts on before
+    /// an edit, and pulling it out of a full dependency report means parsing a
+    /// node array to find a count.
+    #[tool(
+        name = "impact",
+        description = "Report the blast radius of one or more files: every file that transitively imports each one, with the names they import. Run this BEFORE editing a file to find out what else breaks. Accepts one or more files plus exactly one of path or url, and an optional ref for repo URLs. Several files cost about the same as one because the graph is built once, and results come back widest first. Use depth to limit how far the reach travels, focus to report only dependents inside a subtree, and format=markdown for a compact summary that fits an agent's context or json for dependent_count as a number."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    fn impact(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ImpactInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+        let source = resolve_source(&SourceRequest {
+            path: param.path.map(std::path::PathBuf::from),
+            url: param.url,
+            git_ref: param.git_ref,
+        })
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // The whole repository, because the radius of one file routinely reaches
+        // past any subtree and every target shares this one build.
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let focus: Vec<std::path::PathBuf> = param
+            .focus
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+
+        let radii = blast_radius::measure_all(
+            &report,
+            &param.files,
+            &base_prefix,
+            param.depth,
+            &focus,
+        )
+        .map_err(map_internal_error("blast radius measurement failed"))?;
+
+        match param.format.as_deref() {
+            Some("markdown") => Ok(impact_markdown(&radii)),
+            _ => serialize_json(&ImpactReport::new(&radii)),
+        }
+    }
+}
+
+/// The JSON shape the `impact` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ImpactReport {
+    /// One entry per file asked about, widest blast radius first.
+    pub targets: Vec<ImpactEntry>,
+}
+
+/// One file's blast radius.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ImpactEntry {
+    /// The file the radius was measured from, spelled as the graph spells it.
+    pub target: String,
+    /// How many files depend on it. The number worth comparing against a
+    /// threshold without walking the dependent list.
+    pub dependent_count: u64,
+    /// The depth limit applied, if any.
+    pub depth: Option<u32>,
+    /// The dependents, each with the names it imports from the target.
+    pub dependents: Vec<ImpactDependent>,
+}
+
+/// One dependent of a target.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ImpactDependent {
+    /// Path of the file that imports the target.
+    pub file: String,
+    /// Import paths naming the target. Empty for a file that reaches the target
+    /// transitively rather than naming it.
+    pub imports: Vec<String>,
+}
+
+impl ImpactReport {
+    fn new(radii: &[blast_radius::BlastRadius]) -> Self {
+        Self {
+            targets: radii
+                .iter()
+                .map(|radius| ImpactEntry {
+                    target: radius.target.clone(),
+                    dependent_count: blast_radius::dependent_count(radius),
+                    depth: radius.depth,
+                    dependents: radius
+                        .dependents
+                        .iter()
+                        .map(|dependent| ImpactDependent {
+                            file: dependent.file.clone(),
+                            imports: dependent.imports.clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render blast radii as Markdown for an agent's context window.
+fn impact_markdown(radii: &[blast_radius::BlastRadius]) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    for radius in radii {
+        let count = blast_radius::dependent_count(radius);
+        let _ = writeln!(output, "# Blast radius for `{}`\n", radius.target);
+        let _ = writeln!(
+            output,
+            "{}",
+            match count {
+                0 => "No file imports this one.".to_owned(),
+                1 => "1 file depends on this.".to_owned(),
+                other => format!("{other} files depend on this."),
+            }
+        );
+        if let Some(depth) = radius.depth {
+            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
+        }
+        if radius.dependents.is_empty() {
+            continue;
+        }
+        output.push_str("\n## Dependents\n\n");
+        for dependent in &radius.dependents {
+            if dependent.imports.is_empty() {
+                let _ = writeln!(output, "- `{}`", dependent.file);
+            } else {
+                let names: Vec<String> = dependent
+                    .imports
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect();
+                let _ = writeln!(
+                    output,
+                    "- `{}` imports {}",
+                    dependent.file,
+                    names.join(", ")
+                );
+            }
+        }
+        output.push('\n');
+    }
+    output
 }
 
 /// Server identity advertised during MCP initialization.
