@@ -29,15 +29,22 @@
 [[corpus]]
 name = "axum"
 language = "Rust"
-# What is left is a pair of `#[macro_export]` macros, a `pub use` re-export the
-# declaration index reads as local, and names reached only from an inline
-# module. A floor of gaps is expected here; it was 66 before declaration lookup
-# resolved the re-export and crate-root cases, and 13 once a `pub use http;` of an
-# external crate stopped being counted as a missing file.
-unresolved_local = 8
+# What is left is a pair of `#[macro_export]` macros and a `pub use` re-export the
+# declaration index reads as local. A floor of gaps is expected here; it was 66
+# before declaration lookup resolved the re-export and crate-root cases, 13 once
+# a `pub use http;` of an external crate stopped being counted as a missing
+# file, and 3 once grouped re-exports were recorded at all.
+#
+# Grouping is how crates re-export in practice -- `pub use axum_core::extract::{...}`
+# -- and the collector used to record none of them, because walking into the
+# group re-checked whether the node it had reached was itself a public use, and a
+# `use_list` is not. So six internal edges were missing and five resolver gaps
+# were reported against names the crate does re-export. Both numbers moved for
+# the same reason and neither is a behaviour change.
+unresolved_local = 3
 files = 307
-internal_edges = 640
-self_references = 66
+internal_edges = 646
+self_references = 65
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
 # a dependency a default build does not have.

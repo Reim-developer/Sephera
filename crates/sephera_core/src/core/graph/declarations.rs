@@ -237,9 +237,37 @@ fn collect_reexported_names(
     if !is_public_use(source, node) {
         return;
     }
+    collect_use_leaves(source, node, names);
+}
 
+/// Record every leaf name under a `use` statement.
+///
+/// Deliberately separate from [`collect_reexported_names`], and not re-checking
+/// visibility as it descends. The two used to be one function, so walking into
+/// the `use_list` of a `pub use a::{B, C};` asked whether a `use_list` was a
+/// public use, found it was not, and returned before reading anything -- no
+/// grouped re-export was recorded at all.
+///
+/// That mattered more than it looks: grouping is the commonest way crates
+/// re-export, and a name reachable only through one was reported as unresolvable.
+/// `axum-core/src/response/mod.rs` reaches `IntoResponse` only through
+/// `pub use into_response_parts::{IntoResponseParts, ...}`, so every reference to
+/// it from a sibling module missed.
+fn collect_use_leaves(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+    names: &mut BTreeSet<String>,
+) {
     let mut cursor = node.walk();
-    for child in node.named_children(&mut cursor) {
+    let children: Vec<_> = node.named_children(&mut cursor).collect();
+
+    // A `use_list` means the names are in the group and the identifier beside it
+    // is the module they all come from: `pub use a::{B, C};` makes `B` and `C`
+    // reachable, and recording `a` as well would let a later `crate::a` match
+    // this file on the strength of a path prefix rather than a name.
+    let grouped = children.iter().any(|child| child.kind() == "use_list");
+
+    for child in children {
         match child.kind() {
             // `scoped_identifier` carries its final segment in `name`, which is
             // the part a later path will reference. Confirmed by probing the
@@ -249,8 +277,10 @@ fn collect_reexported_names(
                     names.insert(node_text(source, name).to_owned());
                 }
             }
-            // `pub use tracing;` names the crate itself.
-            "identifier" => {
+            // `pub use tracing;` names the crate itself. Skipped when the
+            // statement also has a group, where the same kind of node is the
+            // path every name in the group is read from.
+            "identifier" if !grouped => {
                 let text = node_text(source, child);
                 if !text.is_empty() {
                     names.insert(text.to_owned());
@@ -262,9 +292,9 @@ fn collect_reexported_names(
                     names.insert(node_text(source, alias).to_owned());
                 }
             }
-            // A group or a star: the leaves are nodes of their own kind and are
-            // reached by recursing.
-            _ => collect_reexported_names(source, child, names),
+            // A group, a star, or a path with no recognised kind: its leaves are
+            // nodes of their own kind, further down.
+            _ => collect_use_leaves(source, child, names),
         }
     }
 }
@@ -324,6 +354,89 @@ mod tests {
         let tree = parser.parse(source.as_bytes(), None).expect("parses");
         let declared = collect_declared_names(source.as_bytes(), &tree);
         declared.into_sorted_vec()
+    }
+
+    /// What one `use` makes reachable, without the names it declares.
+    ///
+    /// Separate from `names_of` because the two must not be mixed when asking
+    /// this question: a name that is both declared and re-exported belongs to
+    /// both answers, and a test that only saw the union could not tell which
+    /// route a resolver found.
+    fn reexports_of(source: &str) -> Vec<String> {
+        let mut parser =
+            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let names = collect_declared_names(source.as_bytes(), &tree);
+        names.reexported.into_iter().collect()
+    }
+
+    #[test]
+    fn a_grouped_reexport_records_every_leaf() {
+        // The commonest shape there is. `pub use a::{B, C};` nests a `use_list`
+        // inside the `use_declaration`, and the walk into that list used to
+        // re-check whether the node it had reached was itself a public use --
+        // which a `use_list` is not -- so the branch returned before reading
+        // anything. The result was that no grouped re-export was recorded at
+        // all, which is what made `response::IntoResponse` look unresolvable:
+        // `response/mod.rs` reaches it only through
+        // `pub use into_response_parts::{IntoResponseParts, ...}`.
+        let found = reexports_of("pub use a::{B, C};\n");
+
+        assert_eq!(found, vec!["B".to_owned(), "C".to_owned()]);
+    }
+
+    #[test]
+    fn a_reexport_nested_inside_a_group_is_reached() {
+        // One level deeper: `pub use {a::B, c::D};` puts the path inside the
+        // same nesting as the group above, and `pub use a::{b::C, D};` puts it
+        // below it. Both are written by real code and neither used to record.
+        let found = reexports_of("pub use {a::B, c::D};\n");
+        assert_eq!(found, vec!["B".to_owned(), "D".to_owned()]);
+
+        let nested = reexports_of("pub use a::{b::C, D};\n");
+        assert_eq!(nested, vec!["C".to_owned(), "D".to_owned()]);
+    }
+
+    #[test]
+    fn a_reexport_under_a_crate_visibility_counts() {
+        // `pub(crate)` is visible to everything a `crate::` path can reach, so
+        // a resolver looking up a name has to treat it as present.
+        let found = reexports_of("pub(crate) use a::{B, C};\n");
+
+        assert_eq!(found, vec!["B".to_owned(), "C".to_owned()]);
+    }
+
+    #[test]
+    fn an_alias_in_a_group_records_the_alias_not_the_original() {
+        // `use a::{B as Bee}` makes `Bee` reachable. Recording `B` instead would
+        // point a later `use crate::Bee;` at nothing and a later
+        // `use crate::B;` at a name that is not in this module's namespace.
+        let found = reexports_of("pub use a::{B as Bee};\n");
+
+        assert_eq!(found, vec!["Bee".to_owned()]);
+    }
+
+    #[test]
+    fn a_private_grouped_import_is_not_a_reexport() {
+        // The other half of the rule, and the reason the recursion must not skip
+        // the check on the way *down*: a plain `use` binds inside this file only.
+        // Treating it as a re-export made `use crate::service;` in `main.rs`
+        // resolve to `main.rs`.
+        assert_eq!(reexports_of("use a::{B, C};\n"), Vec::<String>::new());
+        assert_eq!(reexports_of("use a::B;\n"), Vec::<String>::new());
+    }
+
+    #[test]
+    fn a_star_reexport_records_the_module_it_reaches_through() {
+        // `pub use a::*;` makes everything in `a` reachable but names none of
+        // them. The path is recorded so a later reference has something to
+        // resolve against; the individual names are not knowable here.
+        let found = reexports_of("pub use a::*;\n");
+
+        assert!(
+            found.iter().all(|name| name == "a"),
+            "expected only the module, got {found:?}"
+        );
     }
 
     #[test]
