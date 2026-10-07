@@ -462,15 +462,25 @@ fn an_empty_scope_means_everything() {
 #[test]
 fn a_windows_style_git_path_matches_the_graph() {
     // Git reports `src\a.rs` on Windows; the graph spells it `src/a.rs`.
+    //
+    // Per platform, because a backslash is a separator on one and a legal
+    // file-name character on the other. On Unix the two are different files, and
+    // matching them would report the radius of a file git never named.
     let report = report(
         &["src/a.rs", "src/b.rs"],
         &[("src/b.rs", "src/a.rs", "crate::a")],
     );
 
-    assert_eq!(
-        match_path(&report, "src\\a.rs", "").as_deref(),
-        Some("src/a.rs")
-    );
+    let matched = match_path(&report, "src\\a.rs", "");
+
+    if cfg!(windows) {
+        assert_eq!(matched.as_deref(), Some("src/a.rs"));
+    } else {
+        assert_eq!(
+            matched, None,
+            "on Unix `src\\a.rs` is one file name, not a path into `src`"
+        );
+    }
 }
 
 #[test]

@@ -292,22 +292,6 @@ fn extract_one_file(
 }
 
 /// Builds the set of focused normalized paths for filtering.
-/// The given path, spelled with forward slashes.
-///
-/// Only where a backslash actually separates components. On Unix `\` is an
-/// ordinary character in a file name, so rewriting it would turn a scope naming
-/// one file into one naming a whole directory tree -- silently, and to something
-/// the caller never wrote.
-#[must_use]
-pub fn use_forward_slashes(path: &Path) -> String {
-    let spelled = path.to_string_lossy();
-    if cfg!(windows) {
-        spelled.replace('\\', "/")
-    } else {
-        spelled.into_owned()
-    }
-}
-
 /// Normalise focus paths into the `/`-separated, base-relative spelling the
 /// graph uses.
 ///
@@ -358,7 +342,8 @@ pub fn build_focus_set(
                 strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
             };
 
-            let spelled = use_forward_slashes(&resolved);
+            let spelled =
+                super::path_utils::forward_slashes(&resolved.to_string_lossy());
             // `""` is how a scope that means "the whole base" spells itself, and
             // both callers already read an empty set that way.
             (!spelled.is_empty()).then_some(spelled)
@@ -1437,7 +1422,8 @@ mod tests {
         // rewriting it would silently widen a scope from one file to a directory
         // tree. Found because a Windows-only test input failed on Linux, where it
         // is a legal file name rather than a spelling mistake.
-        let spelled = use_forward_slashes(Path::new("crates/cli\\src"));
+        let spelled =
+            crate::core::graph::path_utils::forward_slashes("crates/cli\\src");
 
         if cfg!(windows) {
             assert_eq!(spelled, "crates/cli/src");

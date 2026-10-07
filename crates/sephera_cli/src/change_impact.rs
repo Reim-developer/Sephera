@@ -346,14 +346,26 @@ mod tests {
     #[test]
     fn a_windows_style_git_path_matches_the_graph() {
         // Git reports `src\a.rs` on Windows; the graph spells it `src/a.rs`.
+        //
+        // Asserted per platform rather than as one expectation, because a
+        // backslash is a separator on one and a legal file-name character on the
+        // other. On Unix `src\a.rs` names one file, and rewriting it to
+        // `src/a.rs` would attach the change to a different file than git
+        // reported -- so the negative half is the half that matters there.
         let mut report = repo_report();
         report.nodes[0].file_path = "src/a.rs".to_owned();
         report.edges[0].to = Some("src/a.rs".to_owned());
 
-        assert_eq!(
-            match_path(&report, "src\\a.rs", "").as_deref(),
-            Some("src/a.rs")
-        );
+        let matched = match_path(&report, "src\\a.rs", "");
+
+        if cfg!(windows) {
+            assert_eq!(matched.as_deref(), Some("src/a.rs"));
+        } else {
+            assert_eq!(
+                matched, None,
+                "on Unix `src\\a.rs` is one file name, not a path into `src`"
+            );
+        }
     }
 
     #[test]

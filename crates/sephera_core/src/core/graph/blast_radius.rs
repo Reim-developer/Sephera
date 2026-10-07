@@ -26,7 +26,8 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use super::resolver::{path_matches_focus, use_forward_slashes};
+use super::path_utils;
+use super::resolver::path_matches_focus;
 use super::types::{GraphQuery, GraphReport};
 
 /// One dependent file and what it imports from the target.
@@ -213,9 +214,9 @@ pub fn measure_all(
 /// node lookup, and doing one here would make a missing file look like a
 /// different file.
 fn spelled_as_graph(raw: &str) -> String {
-    let separators = use_forward_slashes(Path::new(raw));
-
-    separators.trim_start_matches("./").to_owned()
+    path_utils::forward_slashes(raw)
+        .trim_start_matches("./")
+        .to_owned()
 }
 
 /// Match a requested path onto a path in the graph.
