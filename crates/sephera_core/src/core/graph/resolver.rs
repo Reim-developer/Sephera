@@ -2578,7 +2578,7 @@ mod tests {
         // The index is built by hand rather than parsed, because the struct sits
         // inside a `pin_project! { }` invocation and tree-sitter records no
         // item inside a `token_tree` --
-        // `a_struct_inside_a_macro_invocation_is_still_declared` in
+        // `a_struct_inside_a_macro_invocation_is_not_declared` in
         // `declarations.rs` asserts that limitation rather than a fix. This test
         // is about what resolution does once the index knows the name, which is
         // the half that is the resolver's to answer.

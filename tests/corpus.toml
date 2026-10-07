@@ -35,7 +35,7 @@
 # and used at line 177, so the reference is real -- but the struct sits inside a
 # `pin_project! { }` macro invocation, and tree-sitter does not parse items inside
 # a `token_tree`, so the declaration index has no entry for it and the guard
-# answers "a crate from outside". `a_struct_inside_a_macro_invocation_is_still_
+# answers "a crate from outside". `a_struct_inside_a_macro_invocation_is_not_
 # declared` in `declarations.rs` asserts the limitation rather than the fix.
 # The other two are `super::InvalidFormContentType` and `super::RawFormRejection`
 # in `extract/raw_form.rs`, which name items declared in `extract/rejection.rs`

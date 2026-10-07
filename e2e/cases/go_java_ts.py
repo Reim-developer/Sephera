@@ -28,7 +28,7 @@ CASES: Final[tuple[Case, ...]] = (
         why="A Go import names a package, not a file. The last path segment is "
         "matched against a directory name and any file in that directory "
         "satisfies it, so which file comes back is a walk detail rather than "
-        "the answer. Three statements name this package -- plain, aliased as `st` "
+        "the answer. Two statements name this package -- plain, aliased as `st` "
         "-- so there are two edges, and `store.go` sitting directly in "
         "`internal/` does not count because the package is the directory.",
         resolves_to=f"{GO}/internal/store/memory.go",
@@ -83,7 +83,7 @@ CASES: Final[tuple[Case, ...]] = (
         resolves_to="java/com/example/util/Helper.java",
     ),
     Case(
-        id="java_a_static_member_import_names_the_declaring_type",
+        id="java/a_static_member_import_names_the_declaring_type",
         source="java/com/example/app/Main.java",
         import_path="com.example.util.Helper.CONSTANT",
         why="`import com.example.util.Helper.CONSTANT;` is a static import, and "
@@ -91,7 +91,7 @@ CASES: Final[tuple[Case, ...]] = (
         resolves_to="java/com/example/util/Helper.java",
     ),
     Case(
-        id="java_a_static_import_names_the_declaring_type",
+        id="java/a_static_import_names_the_declaring_type",
         source="java/com/example/app/Main.java",
         import_path="com.example.util.Helper.helper",
         why="`import static ...Helper.helper;` names a method rather than a "
@@ -100,7 +100,7 @@ CASES: Final[tuple[Case, ...]] = (
         resolves_to="java/com/example/util/Helper.java",
     ),
     Case(
-        id="java_a_wildcard_import_names_no_single_file",
+        id="java/a_wildcard_import_names_no_single_file",
         source="java/com/example/app/Main.java",
         import_path="com.example.util.*",
         why="A wildcard names every type in a package and so names no file in "
@@ -175,7 +175,7 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
         "it has to be in the graph.",
     ),
     FileCase(
-        id="java_a_file_of_invalid_syntax_is_still_a_node",
+        id="java/a_file_of_invalid_syntax_is_still_a_node",
         path="java/com/example/util/Broken.java",
         why="A class with no body must not take the Java tree with it.",
     ),
@@ -186,7 +186,7 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
         "the same on both sides of this comparison.",
     ),
     FileCase(
-        id="typescript_a_file_of_invalid_syntax_is_still_a_node",
+        id="typescript/a_file_of_invalid_syntax_is_still_a_node",
         path=f"{TS}/src/broken.ts",
         why="A half-written import must not take the TypeScript tree with it.",
     ),

@@ -216,7 +216,14 @@ def known_defects(modules: Sequence[object]) -> dict[str, str]:
 
 
 def case_ids(modules: Sequence[object]) -> set[str]:
-    """Every case identifier, for the duplicate check."""
+    """Every case identifier, as a set.
+
+    A set because this is what the known-defect check needs: it asks which
+    listed identifiers no case has, and set subtraction answers that. The
+    duplicate check cannot use it -- a set has already forgotten the second
+    occurrence by the time anyone looks -- so `run.py` counts identifiers itself
+    for that, and says so where it does.
+    """
     return {
         case.id
         for case in all_cases(modules)

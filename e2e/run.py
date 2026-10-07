@@ -63,14 +63,24 @@ class RunFailure(Exception):
 
 
 def build_binary() -> Path:
-    """Compile the release binary, or reuse an existing one."""
-    if not BINARY.exists():
-        print(f"building {BINARY.relative_to(REPO_ROOT)} ...", flush=True)
-        subprocess.run(
-            ["cargo", "build", "--release", "--quiet"],
-            cwd=REPO_ROOT,
-            check=True,
-        )
+    """Compile the release binary the run will check.
+
+    Every run, not only when the binary is missing. `if not BINARY.exists()`
+    looks like a cheap optimisation and is the opposite: after a resolver change
+    the suite would keep asserting against the previous binary, so the run could
+    pass or fail for a reason that has nothing to do with the code in the tree --
+    and the failure mode is the flattering one, because the expectations were
+    written against the newer behaviour.
+
+    Cargo is incremental, so an unchanged tree costs a no-op fingerprint check
+    rather than a rebuild.
+    """
+    print(f"building {BINARY.relative_to(REPO_ROOT)} ...", flush=True)
+    subprocess.run(
+        ["cargo", "build", "--release", "--quiet"],
+        cwd=REPO_ROOT,
+        check=True,
+    )
     return BINARY
 
 
@@ -250,19 +260,24 @@ def report_accuracy(
     repositories but never states how many of their imports were expected to
     resolve in the first place.
     """
+    # A case counts only when `check_case` agrees with it, not when an edge
+    # happens to exist for its `(source, import_path)` pair. Those are different
+    # questions, and the second one is the flattering one: an edge pointing at
+    # the wrong file, or recorded with `resolved=False`, is an edge the graph
+    # really has. Asking whether the expectation held is the same question the
+    # pass/fail decision asks, so the published figure cannot drift away from it.
     should_resolve = [case for case in cases if case.resolves_to is not None]
     did_resolve = [
         case
         for case in should_resolve
-        if index.get((case.source, case.import_path))
+        if check_case(case, index) is None
     ]
 
     should_not = [case for case in cases if case.resolves_to is None]
     correctly_external = [
         case
         for case in should_not
-        if not case.local_gap
-        and index.get((case.source, case.import_path))
+        if not case.local_gap and check_case(case, index) is None
     ]
 
     resolved = len(did_resolve)
@@ -333,15 +348,26 @@ def main() -> int:
     index = edge_index(report)
 
     mismatches: list[Mismatch] = []
+    healed: list[str] = []
     for case in cases:
         mismatch = check_case(case, index)
+        if case.id in defects:
+            # A listed defect that now passes is the one result worth stopping
+            # for. Leaving it listed keeps excluding a case the suite is now
+            # enforcing, and its later regressions would be excluded too -- the
+            # note would guard nothing while still reading as coverage.
+            if mismatch is None:
+                healed.append(case.id)
+            continue
         if mismatch is not None:
-            if case.id in defects:
-                continue
             mismatches.append(mismatch)
     for case in file_cases:
         mismatch = check_file_case(case, report)
-        if mismatch is not None and case.id not in defects:
+        if case.id in defects:
+            if mismatch is None:
+                healed.append(case.id)
+            continue
+        if mismatch is not None:
             mismatches.append(mismatch)
     for item in expectations:
         mismatch = check_expectation(item, report)
@@ -350,10 +376,13 @@ def main() -> int:
 
     if arguments.summary:
         print(f"cases={len(cases)} files={len(file_cases)} "
-              f"measurements={len(expectations)} failures={len(mismatches)}")
+              f"measurements={len(expectations)} failures={len(mismatches)} "
+              f"healed={len(healed)}")
         for mismatch in mismatches:
             print(mismatch)
-        return 1 if mismatches else 0
+        for identifier in healed:
+            print(f"HEALED {identifier}")
+        return 1 if mismatches or healed else 0
 
     print(report_accuracy(cases, index))
 
@@ -363,6 +392,17 @@ def main() -> int:
         for case in selected:
             print(f"  {case.id}")
             print(f"    {defects[case.id]}")
+
+    if healed:
+        print(f"\n{len(healed)} known defect(s) now hold:\n")
+        for identifier in healed:
+            print(f"  {identifier}")
+        print(
+            "\nA fix landed, so the case is being enforced again. Remove it\n"
+            "from KNOWN_DEFECTS: while it stays listed it is excluded from the\n"
+            "result, and so is anything it regresses into later."
+        )
+        return 1
 
     if mismatches:
         print(f"\n{len(mismatches)} of "

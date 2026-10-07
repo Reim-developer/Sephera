@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from support import Case, FileCase
+from support import Case, Expectation, FileCase
 
 LANGUAGE: Final = "rust"
 
@@ -113,22 +113,12 @@ CASES: Final[tuple[Case, ...]] = (
         id="rust/deep_path_through_a_re_export_is_external",
         source=f"{R}/external_reexport.rs",
         import_path="http::Request",
-        why="The same crate named through a deeper path. Resolving this to a "
-        "local file would claim the project owns `Request`.",
+        why="The same rule for a second crate: a path whose deepest segment is a "
+        "struct in someone else's package. Resolving this to a local file would "
+        "claim the project owns `Request`.",
         resolves_to=None,
         resolved=False,
         local_gap=False,
-    ),
-    Case(
-        id="rust/re_export_of_a_deep_external_crate",
-        source=f"{R}/external_reexport.rs",
-        import_path="serde::Serialize",
-        why="A path with two external segments. Both halves matter: the "
-        "deepest segment is the enum's name and must not be read as a module.",
-        resolves_to=None,
-        resolved=False,
-        local_gap=False,
-        count=2,
     ),
     # ---- grouped and self forms ---------------------------------------------
     Case(
@@ -311,10 +301,14 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
     FileCase(
         id="rust/a_file_of_invalid_encoding_is_still_a_node",
         path=f"{R}/not_utf8.rs",
-        why="Bytes that are not valid UTF-8 cannot be parsed, so no edge can be "
-        "trusted from this file. It still has to appear as a node, and it must "
-        "not take the rest of the graph with it.",
-        max_edges=1,
+        why="Bytes that are not valid UTF-8 cannot be read as a source file, so "
+        "no edge can be trusted from it. It still has to appear as a node, and "
+        "it must not take the rest of the graph with it. Zero rather than one: "
+        "tree-sitter recovers from the bad bytes rather than failing, so what "
+        "survives the parse is a fragment -- `use crate::` with no name after "
+        "it -- and a fragment that resolves to the file it was written in is a "
+        "coupling no compiler agrees with.",
+        max_edges=0,
     ),
 )
 

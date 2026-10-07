@@ -11,7 +11,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from support import Case, FileCase
+from support import Case, Expectation, FileCase
 
 LANGUAGE: Final = "python"
 
@@ -180,8 +180,11 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
         id="python/a_file_outside_any_package_still_contributes_imports",
         path="python/orphan.py",
         why="Nothing declares `orphan.py`, so nothing imports it as a module -- "
-        "but the statements in it are still references to scan.",
-        max_edges=0,
+        "but the statement in it is still a reference to scan. Exactly one edge, "
+        "and it is the file having been read at all: the fixture carries a real "
+        "import, so a run that skipped the file contributes zero and fails here "
+        "rather than passing on a fixture with nothing in it.",
+        max_edges=1,
     ),
 )
 
