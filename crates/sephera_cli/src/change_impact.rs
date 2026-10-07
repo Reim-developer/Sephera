@@ -13,6 +13,8 @@
 
 use std::fmt::Write as _;
 
+use anyhow::Result;
+
 use sephera_core::core::graph::types::{GraphQuery, GraphReport};
 
 use crate::impact::{self, BlastRadius};
@@ -35,13 +37,21 @@ pub struct ChangeImpact {
 ///
 /// Path matching lives in [`impact`] so this and `sephera impact` cannot drift
 /// on what "the same file" means.
-#[must_use]
+///
+/// # Errors
+///
+/// Propagates the refusal from [`impact::measure`] when the report describes a
+/// different file than the one asked about. `--diff` builds its own
+/// whole-repository report through [`diff_query`], so this cannot fire from the
+/// command today -- it exists so that changing `diff_query` to a real query
+/// surfaces as an error rather than as a report naming one changed file while
+/// describing another.
 pub fn measure_changes(
     report: &GraphReport,
     requested: &[String],
     base_prefix: &str,
     depth: Option<u32>,
-) -> Vec<ChangeImpact> {
+) -> Result<Vec<ChangeImpact>> {
     let mut measured = Vec::new();
 
     for raw in requested {
@@ -50,12 +60,12 @@ pub fn measure_changes(
             continue;
         };
         measured.push(ChangeImpact {
-            radius: impact::measure(report, &canonical, depth),
+            radius: impact::measure(report, &canonical, depth)?,
             file: canonical,
         });
     }
 
-    measured
+    Ok(measured)
 }
 
 /// Render one report per changed file as Markdown.
@@ -217,7 +227,26 @@ mod tests {
 
     use crate::impact::match_path;
 
-    use super::{measure_changes, render_json, render_markdown};
+    use super::{
+        ChangeImpact, measure_changes as measure_changes_raw, render_json,
+        render_markdown,
+    };
+
+    /// Measure changes against a fixture report.
+    ///
+    /// `measure_changes` returns `Result` because a query-filtered report cannot
+    /// describe more than one file. Every fixture here is a whole-repository
+    /// report, so unwrapping once here keeps the twenty-odd assertions below free of
+    /// a `?` that would only ever fire on a fixture bug.
+    fn measure_changes(
+        report: &GraphReport,
+        requested: &[String],
+        base_prefix: &str,
+        depth: Option<u32>,
+    ) -> Vec<ChangeImpact> {
+        measure_changes_raw(report, requested, base_prefix, depth)
+            .expect("the fixture report describes every requested file")
+    }
 
     fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
         GraphEdge {

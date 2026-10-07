@@ -299,46 +299,79 @@ fn extract_one_file(
 /// passing focus paths into graph selection -- produces the same set of scoped
 /// paths.
 ///
-/// Two rules, and the order matters:
+/// Three rules, and the order matters:
 ///
-/// * A **relative** focus path is already in the graph's spelling and is left
-///   exactly as written. Resolving it against the working directory would be
-///   wrong -- the graph is spelled relative to the *analysis base*, which is a
-///   different directory whenever `--path` is anything but `.`, and would break
-///   `--path crates/x --focus src/main.rs` outright.
+/// * A **relative** focus path is spelled relative to the *analysis base*, so it
+///   is never resolved against the working directory -- that would break
+///   `--path crates/x --focus src/main.rs` outright. It only loses `.` components
+///   and `x/..` pairs, neither of which the graph ever spells. A `..` that would
+///   escape the front is left alone rather than guessed at.
 /// * An **absolute** focus path is stripped of the absolute base. `--path .`
 ///   leaves the base relative, so an absolute `--focus /repo/crates/x` could not
 ///   otherwise be stripped at all, and the comparison silently matched nothing:
 ///   a scoped blast radius of zero with no explanation. Zero is worse than an
 ///   error here, because zero is a plausible answer.
+/// * A path that normalises away to nothing -- `.`, `./`, `src/..` -- **drops
+///   out of the set**, which both callers read as "no scope", which is what
+///   scoping to the whole analysis base means.
 ///
-/// An absolute path that does not sit under the base is left absolute, since
-/// mangling it would only hide the mismatch.
+/// The last rule is the one that was missing. `--focus .` used to scope to the
+/// literal string `"."`, which matches no node, so `graph --path . --focus .`
+/// reported a repository of zero files and `--focus ./crates/x` reported zero
+/// dependents. Both answers were wrong and neither said so.
 #[must_use]
 pub fn build_focus_set(
     base_path: &Path,
     focus_paths: &[PathBuf],
 ) -> BTreeSet<String> {
-    // Absolutised lazily, and only for the absolute branch below: a relative
-    // path never needs it, and computing it unconditionally would make the
-    // working directory part of the answer.
+    // Absolutised only for the absolute branch below: a relative path never
+    // needs it, and computing it unconditionally would make the working
+    // directory part of the answer.
     let base = std::path::absolute(base_path)
         .unwrap_or_else(|_| base_path.to_path_buf());
 
     focus_paths
         .iter()
-        .map(|focus| {
+        .filter_map(|focus| {
             let resolved = if focus.is_absolute() {
                 focus
                     .strip_prefix(&base)
                     .unwrap_or(focus.as_path())
                     .to_path_buf()
             } else {
-                focus.clone()
+                strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
             };
-            resolved.to_string_lossy().replace('\\', "/")
+
+            let spelled = resolved.to_string_lossy().replace('\\', "/");
+            // `""` is how a scope that means "the whole base" spells itself, and
+            // both callers already read an empty set that way.
+            (!spelled.is_empty()).then_some(spelled)
         })
         .collect()
+}
+
+/// Drop `.` components and resolve `..` within a relative path, keeping it
+/// relative.
+///
+/// Returns `None` for anything this cannot clean without guessing: a `..` that
+/// would escape the front, or a root or drive prefix. Those are left as written,
+/// because a plausible-looking wrong scope is harder to notice than one the
+/// caller can recognise as not understood.
+fn strip_relative_noise(path: &Path) -> Option<PathBuf> {
+    let mut cleaned = PathBuf::new();
+
+    for component in path.components() {
+        match component {
+            Component::CurDir => {}
+            Component::Normal(part) => cleaned.push(part),
+            // The guard is the point: `pop` returns false with nothing to pop,
+            // and `../x` landing on `x` would silently move the scope.
+            Component::ParentDir if cleaned.pop() => {}
+            _ => return None,
+        }
+    }
+
+    Some(cleaned)
 }
 
 #[derive(Debug)]
@@ -1289,6 +1322,73 @@ mod tests {
         assert!(
             normalised.iter().any(|path| path.contains("elsewhere")),
             "expected the outside path to survive, got {normalised:?}"
+        );
+    }
+
+    #[test]
+    fn a_scope_that_spells_the_whole_base_becomes_no_scope_at_all() {
+        // `.`, `./` and `x/../..` all name the analysis base. Scoping to the base
+        // is not a narrower question, and both callers read an empty scope as "no
+        // restriction". Used to be scoped to the literal string `"."`, which
+        // matched no node -- so `graph --path . --focus .` reported a repository of
+        // zero files and `--focus ./crates/x` reported zero dependents. Both
+        // wrong, both silent.
+        let base = std::env::temp_dir().join("repo");
+        // Relative spellings only: an absolute path is stripped against the base
+        // rather than normalised through it, and that is a separate rule.
+        let spellings = [
+            PathBuf::from("."),
+            PathBuf::from("./"),
+            PathBuf::from(".\\"),
+            PathBuf::from("crates/x/../.."),
+        ];
+
+        for spelling in &spellings {
+            assert_eq!(
+                build_focus_set(&base, std::slice::from_ref(spelling)),
+                BTreeSet::new(),
+                "`{}` names the whole base, so it should not restrict anything",
+                spelling.display()
+            );
+        }
+    }
+
+    #[test]
+    fn dot_segments_inside_a_scope_are_resolved_away() {
+        // The graph never spells a `.` or a `..`, so leaving one in the scope makes
+        // it match nothing -- quietly, since an empty answer looks like a finding.
+        for (spelling, resolves_to) in [
+            ("crates/cli/./src", "crates/cli/src"),
+            ("./crates/cli/src", "crates/cli/src"),
+            (".\\crates\\cli\\src", "crates/cli/src"),
+            // One level up, so this resolves to the parent rather than to itself.
+            ("crates/cli/src/..", "crates/cli"),
+            ("crates/cli/./src/../..", "crates"),
+        ] {
+            assert_eq!(
+                build_focus_set(
+                    std::env::temp_dir().join("repo").as_path(),
+                    &[PathBuf::from(spelling)],
+                ),
+                known_files(&[resolves_to]),
+                "`{spelling}` should resolve to {resolves_to}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_parent_segment_that_escapes_the_front_is_left_alone() {
+        // `../x` cannot be resolved without knowing what the base is relative to,
+        // so it is passed through rather than collapsed onto `x` -- which would
+        // silently move the scope somewhere the caller never asked about.
+        let scope = build_focus_set(
+            std::env::temp_dir().join("repo").as_path(),
+            &[PathBuf::from("../outside")],
+        );
+
+        assert!(
+            scope.iter().any(|path| path.contains("..")),
+            "expected the escaping path to survive, got {scope:?}"
         );
     }
 

@@ -131,6 +131,105 @@ fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
 }
 
 #[test]
+fn impact_tool_refuses_an_empty_file_list() {
+    // The CLI requires at least one `<FILE>`. Returning `{"targets": []}` instead
+    // would read as "nothing depends on anything", which is an answer to a
+    // question nobody asked, and an agent would take it as a result.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec![],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        format: None,
+    }));
+
+    let error = result.expect_err("an empty list is not a question");
+    assert!(error.to_string().contains("at least one file"), "{error}");
+}
+
+#[test]
+fn impact_tool_rejects_an_unknown_format_instead_of_returning_json() {
+    // `graph` rejects an unknown format. Falling back to JSON here means an agent
+    // asking for Markdown parses the wrong shape and has no idea why.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/lib.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        format: Some("md".to_owned()),
+    }));
+
+    let error = result.expect_err("`md` is not a format this tool has");
+    assert!(
+        error.to_string().contains("unsupported impact format"),
+        "{error}"
+    );
+}
+
+#[test]
+fn impact_tool_markdown_has_one_title_for_several_targets() {
+    // A `#` per target would give a three-file answer three document titles,
+    // reading as three unrelated reports instead of one question with three parts.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/wide.rs", b"pub fn w() {}\n");
+    write_file(temp_dir.path(), "src/narrow.rs", b"pub fn n() {}\n");
+    for index in 0..2 {
+        write_file(
+            temp_dir.path(),
+            &format!("src/u{index}.rs"),
+            b"use crate::wide;\n",
+        );
+    }
+    write_file(
+        temp_dir.path(),
+        "src/uses_narrow.rs",
+        b"use crate::narrow;\n",
+    );
+
+    let result = server.impact(param_for(ImpactInput {
+        files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        format: Some("markdown".to_owned()),
+    }));
+
+    let output = result.expect("impact tool should succeed for a temp dir");
+    let titles = output.lines().filter(|line| line.starts_with("# ")).count();
+
+    assert_eq!(titles, 1, "one document title expected in:\n{output}");
+    assert!(
+        output.contains("## Blast radius for `src/wide.rs`"),
+        "{output}"
+    );
+    assert!(
+        output.contains("### Dependents"),
+        "sections under several targets need a third level:\n{output}"
+    );
+}
+
+#[test]
 fn impact_tool_renders_markdown_for_an_agents_context() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
