@@ -83,53 +83,13 @@ pub enum Commands {
 
 #[derive(Debug, Args)]
 pub struct LocArgs {
-    /// Path to the project directory to analyze
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with = "url",
-        help = "Path to the project directory to analyze.",
-        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
-    )]
-    pub path: Option<PathBuf>,
+    /// Where to read from
+    #[command(flatten)]
+    pub source: SourceArgs,
 
-    /// Git repository URL to analyze directly
-    #[arg(
-        long,
-        value_name = "URL",
-        conflicts_with = "path",
-        help = "Git repository URL to analyze directly.",
-        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
-    )]
-    pub url: Option<String>,
-
-    /// Git ref to check out before analysis
-    #[arg(
-        long = "ref",
-        value_name = "REF",
-        requires = "url",
-        conflicts_with = "path",
-        help = "Git ref to check out before analysis.",
-        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
-    )]
-    pub git_ref: Option<String>,
-
-    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(
-        long,
-        value_name = "PATTERN",
-        help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
-    )]
-    pub ignore: Vec<String>,
-
-    /// Analyse without reading `.gitignore` or `.sepheraignore`
-    #[arg(
-        long = "no-gitignore",
-        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
-        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
-    )]
-    pub no_gitignore: bool,
+    /// How to decide which files to leave out
+    #[command(flatten)]
+    pub ignore_args: IgnoreArgs,
 
     /// Output format for the line-count report
     #[arg(
@@ -142,13 +102,9 @@ pub struct LocArgs {
     )]
     pub format: LocOutputFormat,
 
-    /// Write the report to a file instead of standard output
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Write the report to a file instead of standard output."
-    )]
-    pub output: Option<PathBuf>,
+    /// Where the rendered report goes
+    #[command(flatten)]
+    pub output_args: OutputArgs,
 
     /// Shared settings source
     #[command(flatten)]
@@ -161,24 +117,48 @@ pub struct LocArgs {
 /// `--no-config` cannot mean one thing for `context` and another for `graph`.
 /// Sharing the struct rather than repeating the two fields is what keeps the
 /// discovery rule identical across commands.
-#[derive(Debug, Args)]
+///
+/// The layering rules live here rather than on each flag that participates in
+/// them. `--ignore` on `context` used to carry a sentence about `.sephera.toml`
+/// and profile precedence that the same flag on `loc` did not, so the
+/// precedence model was documented on one command and invisible on five.
+#[derive(Debug, Clone, Default, Args)]
 pub struct ConfigArgs {
     /// Read shared settings from this file instead of discovering one
     #[arg(
         long,
         value_name = "FILE",
-        help = "Read shared settings from this file instead of discovering one.",
-        long_help = "Read shared settings from this file instead of searching upward from the analysis base for a `.sephera.toml`. Only the `[project]` table applies to this command; per-command sections are still ignored."
+        help = "Explicit `.sephera.toml` path.",
+        long_help = "Explicit `.sephera.toml` path, resolved from the current working directory. When present, Sephera skips auto-discovery and loads only this file. The `[project]` table applies to every command; per-command tables such as `[context]` apply only to the commands that read them."
     )]
     pub config: Option<PathBuf>,
 
-    /// Ignore `.sephera.toml` and its `[project]` settings
+    /// Disable `.sephera.toml` loading for this invocation
     #[arg(
         long,
-        help = "Ignore `.sephera.toml` and its `[project]` settings.",
-        long_help = "Do not read `.sephera.toml`. Patterns configured under `[project]` are not applied, which widens the analysis to whatever `.gitignore` and the always-skipped generated trees leave behind. `.gitignore` and `.sepheraignore` are unaffected; use `--no-gitignore` for those."
+        conflicts_with = "config",
+        help = "Disable `.sephera.toml` loading for this invocation.",
+        long_help = "Disable `.sephera.toml` loading for this invocation. Both auto-discovery and an explicit `--config` are skipped, and Sephera falls back to built-in defaults plus CLI flags. `[project]` patterns are not applied, which widens the analysis. `.gitignore` and `.sepheraignore` are unaffected; use `--no-gitignore` for those."
     )]
     pub no_config: bool,
+}
+
+/// Where a rendered report goes when it is not going to the terminal.
+///
+/// Flattened into every command that can render text. `graph` and `context`
+/// each carried their own wording for the same flag, so the one command whose
+/// output is a file rather than a table had a differently-worded `--output`
+/// from the rest.
+#[derive(Debug, Clone, Default, Args)]
+pub struct OutputArgs {
+    /// Write the report to a file instead of standard output
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Write the report to a file instead of standard output.",
+        long_help = "Write the report to a file instead of standard output. Parent directories are created automatically when needed. Omitting this writes to standard output, which is what a pipe or a redirect expects."
+    )]
+    pub output: Option<PathBuf>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -203,27 +183,15 @@ pub enum LocOutputFormat {
     Csv,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum SymbolOutputFormat {
-    /// Human-readable terminal table.
-    #[value(
-        name = "table",
-        help = "Render a terminal table of declaration counts."
-    )]
-    Table,
-    /// Markdown summary with a table and, in detail mode, every declaration.
-    #[value(
-        name = "markdown",
-        help = "Render Markdown with a per-language table and listed declarations."
-    )]
-    Markdown,
-    /// Structured JSON.
-    #[value(name = "json", help = "Render structured JSON.")]
-    Json,
-}
-
-#[derive(Debug, Args)]
-pub struct SymbolsArgs {
+/// Where an analysis reads from: a local directory, or a repository URL.
+///
+/// Flattened into every command that can analyse a tree. These three flags were
+/// previously written out five times, which meant a change to one copy's wording
+/// reached four of the five users and left the fifth describing the old
+/// behaviour. A flag's help text is part of the tool's contract, so it belongs in
+/// one place.
+#[derive(Debug, Clone, Default, Args)]
+pub struct SourceArgs {
     /// Path to the project directory to analyze
     #[arg(
         long,
@@ -254,6 +222,59 @@ pub struct SymbolsArgs {
         long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
     )]
     pub git_ref: Option<String>,
+}
+
+/// How an analysis decides which files to leave out.
+///
+/// Flattened into every command that walks a tree, including `watch`. The
+/// `--ignore` wording used to differ on `context`, which appended a sentence
+/// about `.sephera.toml` layering that the other five commands did not have --
+/// so the same flag read differently depending on which command printed it. The
+/// layering is documented once on [`ConfigArgs`] instead.
+#[derive(Debug, Clone, Default, Args)]
+pub struct IgnoreArgs {
+    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
+    #[arg(
+        long,
+        value_name = "PATTERN",
+        help = "Ignore pattern for files or directories.",
+        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns. Patterns from `.sephera.toml` are applied first and flags are appended, so a pattern you typed is never undone by the config file."
+    )]
+    pub ignore: Vec<String>,
+
+    /// Analyse without reading `.gitignore` or `.sepheraignore`
+    #[arg(
+        long = "no-gitignore",
+        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
+        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
+    )]
+    pub no_gitignore: bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SymbolOutputFormat {
+    /// Human-readable terminal table.
+    #[value(
+        name = "table",
+        help = "Render a terminal table of declaration counts."
+    )]
+    Table,
+    /// Markdown summary with a table and, in detail mode, every declaration.
+    #[value(
+        name = "markdown",
+        help = "Render Markdown with a per-language table and listed declarations."
+    )]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render structured JSON.")]
+    Json,
+}
+
+#[derive(Debug, Args)]
+pub struct SymbolsArgs {
+    /// Where to read from
+    #[command(flatten)]
+    pub source: SourceArgs,
 
     /// Output format for the symbol report
     #[arg(
@@ -265,13 +286,9 @@ pub struct SymbolsArgs {
     )]
     pub format: SymbolOutputFormat,
 
-    /// Write the report to a file instead of standard output
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Write the report to a file instead of standard output."
-    )]
-    pub output: Option<PathBuf>,
+    /// Where the rendered report goes
+    #[command(flatten)]
+    pub output_args: OutputArgs,
 
     /// List every declaration instead of only per-language totals
     #[arg(
@@ -293,22 +310,9 @@ pub struct SymbolsArgs {
     #[command(flatten)]
     pub config_args: ConfigArgs,
 
-    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(
-        long,
-        value_name = "PATTERN",
-        help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
-    )]
-    pub ignore: Vec<String>,
-
-    /// Analyse without reading `.gitignore` or `.sepheraignore`
-    #[arg(
-        long = "no-gitignore",
-        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
-        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
-    )]
-    pub no_gitignore: bool,
+    /// How to decide which files to leave out
+    #[command(flatten)]
+    pub ignore_args: IgnoreArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -373,75 +377,24 @@ pub struct WatchArgs {
     )]
     pub once: bool,
 
-    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(
-        long,
-        value_name = "PATTERN",
-        help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
-    )]
-    pub ignore: Vec<String>,
+    /// How to decide which files to leave out
+    #[command(flatten)]
+    pub ignore_args: IgnoreArgs,
 
-    /// Analyse without reading `.gitignore` or `.sepheraignore`
-    #[arg(
-        long = "no-gitignore",
-        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
-        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
-    )]
-    pub no_gitignore: bool,
+    /// Which `.sephera.toml` to read
+    #[command(flatten)]
+    pub config_args: ConfigArgs,
 }
 
 #[derive(Debug, Args)]
 pub struct ContextArgs {
-    /// Path to the project directory to analyze
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with = "url",
-        help = "Path to the project directory to analyze.",
-        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
-    )]
-    pub path: Option<PathBuf>,
+    /// Where to read from
+    #[command(flatten)]
+    pub source: SourceArgs,
 
-    /// Git repository URL to analyze directly
-    #[arg(
-        long,
-        value_name = "URL",
-        conflicts_with = "path",
-        help = "Git repository URL to analyze directly.",
-        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
-    )]
-    pub url: Option<String>,
-
-    /// Git ref to check out before analysis
-    #[arg(
-        long = "ref",
-        value_name = "REF",
-        requires = "url",
-        conflicts_with = "path",
-        help = "Git ref to check out before analysis.",
-        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
-    )]
-    pub git_ref: Option<String>,
-
-    /// Explicit Sephera config file. When provided, auto-discovery is skipped.
-    #[arg(
-        long,
-        value_name = "FILE",
-        conflicts_with = "no_config",
-        help = "Explicit `.sephera.toml` path for the context command.",
-        long_help = "Explicit `.sephera.toml` path for the context command. Relative paths are resolved from the current working directory. When this flag is present, Sephera skips auto-discovery and only loads the specified file."
-    )]
-    pub config: Option<PathBuf>,
-
-    /// Disable `.sephera.toml` loading for this invocation.
-    #[arg(
-        long,
-        conflicts_with = "config",
-        help = "Disable `.sephera.toml` loading for this invocation.",
-        long_help = "Disable `.sephera.toml` loading for this invocation. When set, Sephera skips both auto-discovery and explicit config loading, and falls back to built-in defaults plus CLI flags."
-    )]
-    pub no_config: bool,
+    /// Which `.sephera.toml` to read
+    #[command(flatten)]
+    pub config_args: ConfigArgs,
 
     /// Named profile from `.sephera.toml` under `[profiles.<name>.context]`.
     #[arg(
@@ -469,22 +422,9 @@ pub struct ContextArgs {
     )]
     pub list_profiles: bool,
 
-    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(
-        long,
-        value_name = "PATTERN",
-        help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Values from `.sephera.toml` are loaded first, then profile values are appended, then repeated CLI flags are appended."
-    )]
-    pub ignore: Vec<String>,
-
-    /// Analyse without reading `.gitignore` or `.sepheraignore`
-    #[arg(
-        long = "no-gitignore",
-        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
-        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
-    )]
-    pub no_gitignore: bool,
+    /// How to decide which files to leave out
+    #[command(flatten)]
+    pub ignore_args: IgnoreArgs,
 
     /// Focus path inside the base path. Repeat to prioritize multiple files or directories.
     #[arg(
@@ -543,14 +483,9 @@ pub struct ContextArgs {
     )]
     pub format: Option<ContextFormat>,
 
-    /// Optional file path for exporting the rendered context pack
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Optional file path for exporting the rendered context pack.",
-        long_help = "Optional file path for exporting the rendered context pack. Parent directories are created automatically when needed. When omitted, Sephera uses a selected profile if present, otherwise `.sephera.toml`, otherwise writes the result to standard output."
-    )]
-    pub output: Option<PathBuf>,
+    /// Where the rendered report goes
+    #[command(flatten)]
+    pub output_args: OutputArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
@@ -615,53 +550,13 @@ pub enum GraphOutputFormat {
 
 #[derive(Debug, Args)]
 pub struct GraphArgs {
-    /// Path to the project directory to analyze
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with = "url",
-        help = "Path to the project directory to analyze.",
-        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
-    )]
-    pub path: Option<PathBuf>,
+    /// Where to read from
+    #[command(flatten)]
+    pub source: SourceArgs,
 
-    /// Git repository URL to analyze directly
-    #[arg(
-        long,
-        value_name = "URL",
-        conflicts_with = "path",
-        help = "Git repository URL to analyze directly.",
-        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
-    )]
-    pub url: Option<String>,
-
-    /// Git ref to check out before analysis
-    #[arg(
-        long = "ref",
-        value_name = "REF",
-        requires = "url",
-        conflicts_with = "path",
-        help = "Git ref to check out before analysis.",
-        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
-    )]
-    pub git_ref: Option<String>,
-
-    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(
-        long,
-        value_name = "PATTERN",
-        help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
-    )]
-    pub ignore: Vec<String>,
-
-    /// Analyse without reading `.gitignore` or `.sepheraignore`
-    #[arg(
-        long = "no-gitignore",
-        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
-        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
-    )]
-    pub no_gitignore: bool,
+    /// How to decide which files to leave out
+    #[command(flatten)]
+    pub ignore_args: IgnoreArgs,
 
     /// Focus path inside the base path. Repeat to analyze only specific files or directories.
     #[arg(
@@ -743,13 +638,9 @@ pub struct GraphArgs {
     )]
     pub exclude_types: bool,
 
-    /// Optional file path for exporting the rendered graph
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Optional file path for exporting the rendered graph."
-    )]
-    pub output: Option<PathBuf>,
+    /// Where the rendered report goes
+    #[command(flatten)]
+    pub output_args: OutputArgs,
 }
 
 const IMPACT_LONG_ABOUT: &str = "Report what breaks if one file changes.\n\nAnswers the question a reviewer, a pre-commit hook, or a nervous contributor asks before editing: if I touch this file, what else stops working? The answer is the file's blast radius -- every file that imports it, directly or through however many hops, along with the name each one imports.\n\nThis is `graph --what-depends-on` as its own command. The same analysis, but reachable without reading `graph --help`, composable in a script, and with `--fail-on` so a pipeline can refuse a change whose blast radius is too wide.";
@@ -769,53 +660,13 @@ pub struct ImpactArgs {
     )]
     pub files: Vec<String>,
 
-    /// Path to the project directory to analyze
-    #[arg(
-        long,
-        value_name = "PATH",
-        conflicts_with = "url",
-        help = "Path to the project directory to analyze.",
-        long_help = "Path to the project directory to analyze. Relative paths are resolved from the current working directory."
-    )]
-    pub path: Option<PathBuf>,
+    /// Where to read from
+    #[command(flatten)]
+    pub source: SourceArgs,
 
-    /// Git repository URL to analyze directly
-    #[arg(
-        long,
-        value_name = "URL",
-        conflicts_with = "path",
-        help = "Git repository URL to analyze directly.",
-        long_help = "Git repository URL to analyze directly. Supports cloneable repo URLs plus GitHub/GitLab tree URLs."
-    )]
-    pub url: Option<String>,
-
-    /// Git ref to check out before analysis
-    #[arg(
-        long = "ref",
-        value_name = "REF",
-        requires = "url",
-        conflicts_with = "path",
-        help = "Git ref to check out before analysis.",
-        long_help = "Git ref to check out before analysis. This flag only applies to repo URLs and cannot be combined with tree URLs."
-    )]
-    pub git_ref: Option<String>,
-
-    /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
-    #[arg(
-        long,
-        value_name = "PATTERN",
-        help = "Ignore pattern for files or directories.",
-        long_help = "Ignore pattern for files or directories. Patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base, so `--ignore \"dist/**\"` and `--ignore \"**/node_modules/**\"` both exclude a whole tree. All other patterns are compiled as regular expressions and matched against the relative path, where an unanchored pattern such as `target` matches anywhere in it. Repeat this flag to combine multiple patterns."
-    )]
-    pub ignore: Vec<String>,
-
-    /// Analyse without reading `.gitignore` or `.sepheraignore`
-    #[arg(
-        long = "no-gitignore",
-        help = "Ignore the repository's own .gitignore and .sepheraignore files.",
-        long_help = "Do not apply the repository's own ignore rules. Patterns written in `.gitignore` and `.sepheraignore` are skipped, which counts vendored and generated files that are normally excluded. Explicit `--ignore` patterns and the always-skipped generated trees (`target`, `node_modules`, `dist`, `vendor`, and the rest) still apply, so this widens the analysis rather than disabling exclusion."
-    )]
-    pub no_gitignore: bool,
+    /// How to decide which files to leave out
+    #[command(flatten)]
+    pub ignore_args: IgnoreArgs,
 
     /// Maximum distance from the file whose dependents are reported
     #[arg(
@@ -855,13 +706,9 @@ pub struct ImpactArgs {
     )]
     pub format: ImpactOutputFormat,
 
-    /// Write the report to a file instead of standard output
-    #[arg(
-        long,
-        value_name = "FILE",
-        help = "Write the report to a file instead of standard output."
-    )]
-    pub output: Option<PathBuf>,
+    /// Where the rendered report goes
+    #[command(flatten)]
+    pub output_args: OutputArgs,
 
     /// Shared settings source
     #[command(flatten)]
@@ -884,6 +731,169 @@ mod tests {
 
     use super::{Cli, Commands, ContextFormat};
 
+    /// Commands that walk a tree, and so must accept the shared groups.
+    const TREE_COMMANDS: [&str; 6] =
+        ["loc", "symbols", "context", "graph", "impact", "watch"];
+
+    /// Flags every tree-walking command must accept.
+    ///
+    /// These were spelled out per command, six times over, and drifted: `context`
+    /// described `--ignore` differently from `loc`, and `watch` silently skipped
+    /// `.sephera.toml` while every other command read it. A test is the only
+    /// thing that keeps the flattened groups actually flattened -- someone
+    /// forgetting one `#[command(flatten)]` gets a compile error, but someone
+    /// *choosing* to drop a flag from one command would not.
+    #[test]
+    fn every_tree_command_accepts_the_shared_flags() {
+        for name in TREE_COMMANDS {
+            let flags = flag_names(name);
+            assert!(
+                !flags.is_empty(),
+                "`sephera {name}` declares no flags, so this test would pass \
+                 vacuously"
+            );
+            for expected in [
+                "--path",
+                "--ignore",
+                "--no-gitignore",
+                "--config",
+                "--no-config",
+            ] {
+                assert!(
+                    flags.iter().any(|flag| flag == expected),
+                    "`sephera {name}` must accept `{expected}`"
+                );
+            }
+        }
+    }
+
+    /// Whether a command accepts an argument vector.
+    ///
+    /// Parsing real argv rather than introspecting the clap `Command`. Flattened
+    /// argument groups are only materialised by clap's recursive build, and the
+    /// introspection route needs an internal API to reach them -- so every
+    /// assertion taken that way passed vacuously, twice, before this was replaced.
+    /// Asking the parser the question a user asks cannot pass by not looking.
+    fn accepts(command: &str, argv: &[&str]) -> bool {
+        let mut full = vec!["sephera", command];
+        full.extend_from_slice(argv);
+        Cli::try_parse_from(&full).is_ok()
+    }
+
+    /// A command's `--help` output, rendered the way a user sees it.
+    fn help_text(command: &str) -> String {
+        let mut root = Cli::command();
+        let subcommand = root
+            .find_subcommand_mut(command)
+            .unwrap_or_else(|| panic!("`{command}` must be a subcommand"));
+        subcommand.render_long_help().to_string()
+    }
+
+    /// Every printed flag must be followed by a description.
+    ///
+    /// A flag with no description is a flag nobody can use correctly, and the
+    /// descriptions are the one thing the shared groups exist to keep identical.
+    /// Checked against rendered help rather than the argument list, because what
+    /// the reader sees is the contract.
+    #[test]
+    fn every_printed_flag_has_a_description() {
+        for name in TREE_COMMANDS {
+            let help = help_text(name);
+            let lines: Vec<&str> = help.lines().collect();
+            assert!(
+                lines.len() > 10,
+                "`sephera {name} --help` rendered almost nothing, so this \
+                 check would pass without looking"
+            );
+
+            let mut undocumented: Vec<String> = Vec::new();
+            for (index, line) in lines.iter().enumerate() {
+                let Some(marker) = line.find("--") else {
+                    continue;
+                };
+                if !line[..marker].trim().is_empty() {
+                    continue;
+                }
+                let flag = line[marker..]
+                    .split_whitespace()
+                    .next()
+                    .unwrap_or_default()
+                    .to_owned();
+
+                let inline = line[marker + flag.len()..].trim();
+                let below = lines
+                    .get(index + 1)
+                    .map(|next| next.trim())
+                    .unwrap_or_default();
+
+                if inline.is_empty() && below.is_empty() {
+                    undocumented.push(flag);
+                }
+            }
+
+            assert!(
+                undocumented.is_empty(),
+                "`sephera {name}` prints flags with no description: \
+                 {undocumented:?}"
+            );
+        }
+    }
+
+    /// `--url` and `--ref` cannot mean the same thing on two commands.
+    #[test]
+    fn url_and_ref_appear_where_url_mode_is_supported() {
+        for name in ["loc", "symbols", "context", "graph", "impact"] {
+            // `impact` takes the file to report on positionally, so its argv has
+            // to name one or the parse fails on the missing argument before the
+            // flags are ever considered.
+            let positional: &[&str] = if name == "impact" {
+                &["src/lib.rs"]
+            } else {
+                &[]
+            };
+
+            let mut with_url = positional.to_vec();
+            with_url.extend(["--url", "https://example.invalid/r"]);
+            assert!(
+                accepts(name, &with_url),
+                "`sephera {name}` supports URL mode and must accept --url"
+            );
+
+            let mut with_ref = with_url.clone();
+            with_ref.extend(["--ref", "main"]);
+            assert!(
+                accepts(name, &with_ref),
+                "`sephera {name}` supports URL mode and must accept --ref"
+            );
+        }
+
+        // `watch` deliberately has neither: watching a temporary checkout of a
+        // remote repository is not a thing anyone wants, and accepting the flags
+        // only to ignore them would be worse than not offering them.
+        assert!(
+            !accepts("watch", &["--url", "https://example.invalid/r"]),
+            "`watch` must not advertise URL mode"
+        );
+    }
+
+    /// The long flag names one command accepts.
+    fn flag_names(command: &str) -> Vec<String> {
+        let help = help_text(command);
+        let mut flags = Vec::new();
+        for line in help.lines() {
+            let Some(marker) = line.find("--") else {
+                continue;
+            };
+            if !line[..marker].trim().is_empty() {
+                continue;
+            }
+            if let Some(flag) = line[marker..].split_whitespace().next() {
+                flags.push(flag.to_owned());
+            }
+        }
+        flags
+    }
+
     #[test]
     fn parses_loc_command_with_repeated_ignores() {
         let cli = Cli::try_parse_from([
@@ -895,12 +905,15 @@ mod tests {
         match cli.command {
             Commands::Loc(arguments) => {
                 assert_eq!(
-                    arguments.path,
+                    arguments.source.path,
                     Some(std::path::PathBuf::from("demo"))
                 );
-                assert_eq!(arguments.url, None);
-                assert_eq!(arguments.git_ref, None);
-                assert_eq!(arguments.ignore, vec!["*.rs", "target"]);
+                assert_eq!(arguments.source.url, None);
+                assert_eq!(arguments.source.git_ref, None);
+                assert_eq!(
+                    arguments.ignore_args.ignore,
+                    vec!["*.rs", "target"]
+                );
             }
             _ => panic!("expected loc command"),
         }
@@ -933,13 +946,13 @@ mod tests {
         match cli.command {
             Commands::Context(arguments) => {
                 assert_eq!(
-                    arguments.path,
+                    arguments.source.path,
                     Some(std::path::PathBuf::from("demo"))
                 );
-                assert_eq!(arguments.url, None);
-                assert_eq!(arguments.git_ref, None);
+                assert_eq!(arguments.source.url, None);
+                assert_eq!(arguments.source.git_ref, None);
                 assert_eq!(
-                    arguments.config,
+                    arguments.config_args.config,
                     Some(std::path::PathBuf::from(".sephera.toml"))
                 );
                 assert_eq!(arguments.profile.as_deref(), Some("review"));
@@ -951,7 +964,7 @@ mod tests {
                 assert_eq!(arguments.budget, Some(32_000));
                 assert_eq!(arguments.format, Some(ContextFormat::Json));
                 assert_eq!(
-                    arguments.output,
+                    arguments.output_args.output,
                     Some(std::path::PathBuf::from("reports/context.json"))
                 );
             }
