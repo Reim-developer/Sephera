@@ -70,6 +70,14 @@ class Case:
     #: The edge kind, when the kind is part of what is being tested.
     kind: str | None = None
 
+    #: Whether the edge must be flagged as conditional.
+    #:
+    #: Per-edge rather than a report total on purpose. `cfg_gated_edges` counts
+    #: every language in the tree at once, so an expectation phrased that way can
+    #: only ever be true or false for the whole corpus -- it cannot say that
+    #: *these three* imports are the conditional ones.
+    cfg_gated: bool | None = None
+
     #: How many edges this `(source, import_path)` pair produces.
     #:
     #: One per occurrence in the source. Two for an import repeated inside an

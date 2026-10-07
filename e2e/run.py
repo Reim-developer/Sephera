@@ -166,6 +166,13 @@ def check_case(
                 actual=f"kind={edge['kind']}",
                 why=case.why,
             )
+        if case.cfg_gated is not None and edge["cfg_gated"] != case.cfg_gated:
+            return Mismatch(
+                id=case.id,
+                expected=f"cfg_gated={case.cfg_gated}",
+                actual=f"cfg_gated={edge['cfg_gated']}",
+                why=case.why,
+            )
     return None
 
 
@@ -334,7 +341,7 @@ def main() -> int:
             mismatches.append(mismatch)
     for case in file_cases:
         mismatch = check_file_case(case, report)
-        if mismatch is not None:
+        if mismatch is not None and case.id not in defects:
             mismatches.append(mismatch)
     for item in expectations:
         mismatch = check_expectation(item, report)
@@ -350,7 +357,7 @@ def main() -> int:
 
     print(report_accuracy(cases, index))
 
-    selected = [case for case in cases if case.id in defects]
+    selected = [case for case in [*cases, *file_cases] if case.id in defects]
     if selected:
         print(f"\n{len(selected)} known defect(s), excluded from the result:")
         for case in selected:
@@ -392,10 +399,20 @@ def _duplicate_ids() -> set[str]:
     seen: set[str] = set()
     repeated: set[str] = set()
 
-    for identifier in case_ids(ALL_MODULES):
-        if identifier in seen:
-            repeated.add(identifier)
-        seen.add(identifier)
+    # Counted per item rather than through `case_ids`, which builds a set and so
+    # cannot report a duplicate -- the one thing it is here to report.
+    for case in all_cases(ALL_MODULES):
+        if case.id in seen:
+            repeated.add(case.id)
+        seen.add(case.id)
+    for case in all_file_cases(ALL_MODULES):
+        if case.id in seen:
+            repeated.add(case.id)
+        seen.add(case.id)
+    for item in all_expectations(ALL_MODULES):
+        if item.id in seen:
+            repeated.add(item.id)
+        seen.add(item.id)
 
     return repeated
 

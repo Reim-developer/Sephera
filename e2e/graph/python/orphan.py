@@ -1,0 +1,2 @@
+def orphan(): pass
+

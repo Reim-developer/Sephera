@@ -10,6 +10,6 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from . import rust
+from . import python, rust
 
-LANGUAGE_MODULES: tuple[ModuleType, ...] = (rust,)
+LANGUAGE_MODULES: tuple[ModuleType, ...] = (rust, python)

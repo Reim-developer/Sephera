@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from typing import Final
 
-from support import Case, Expectation, FileCase
+from support import Case, FileCase
 
 LANGUAGE: Final = "rust"
 
@@ -195,6 +195,7 @@ CASES: Final[tuple[Case, ...]] = (
         "would claim a dependency the default build does not have, so it is "
         "resolved and flagged rather than dropped.",
         resolves_to=f"{R}/facade.rs",
+        cfg_gated=True,
     ),
     Case(
         id="rust/cfg_not_gated_import_is_also_marked",
@@ -203,6 +204,17 @@ CASES: Final[tuple[Case, ...]] = (
         why="`#[cfg(not(...))]` is a gate like any other: the reference exists in "
         "the source and is conditional on the same build.",
         resolves_to=f"{R}/inline_tests.rs",
+        cfg_gated=True,
+    ),
+    Case(
+        id="rust/an_ungated_import_is_not_flagged",
+        source=f"{R}/cfg_gated.rs",
+        import_path="crate::core::user::User",
+        why="The same file holds an unconditional import. Flagging that too would "
+        "make the flag mean nothing -- a report in which every edge is "
+        "conditional says nothing about which ones are.",
+        resolves_to=f"{R}/core/user/mod.rs",
+        cfg_gated=False,
     ),
     # ---- inline modules ------------------------------------------------------
     Case(
@@ -312,16 +324,7 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
 )
 
 
-EXPECTATIONS: Final[tuple[Expectation, ...]] = (
-    Expectation(
-        id="rust/no_cfg_gated_edges_beyond_the_fixture",
-        why="The fixture has three gated imports and the count has to say so: a "
-        "gate that is not reported is a dependency claimed without the "
-        "qualifier that makes it conditional.",
-        metric="cfg_gated_edges",
-        equals=3,
-    ),
-)
+EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 
 
 # ---------------------------------------------------------------------------
