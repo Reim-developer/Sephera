@@ -336,8 +336,15 @@ fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
             }
             None
         }
-        SymbolOutputFormat::Json => Some(render_symbol_json(&detail)),
-        SymbolOutputFormat::Markdown => Some(render_symbol_markdown(&detail)),
+        // `by_file` reaches every format, not just the table. It used to be
+        // honoured only here, so `--by-file --format json` produced a
+        // well-formed report with no per-file breakdown in it and nothing said so.
+        SymbolOutputFormat::Json => {
+            Some(render_symbol_json(&detail, arguments.by_file))
+        }
+        SymbolOutputFormat::Markdown => {
+            Some(render_symbol_markdown(&detail, arguments.by_file))
+        }
     };
 
     if let Some(rendered) = rendered {
