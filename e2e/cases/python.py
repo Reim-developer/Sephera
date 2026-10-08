@@ -123,6 +123,56 @@ CASES: Final[tuple[Case, ...]] = (
         resolved=False,
         local_gap=True,
     ),
+    Case(
+        id="python/a_class_the_module_declares_is_not_a_gap",
+        source=f"{P}/__init__.py",
+        import_path=".sibling.Sibling",
+        why="`from .sibling import Sibling` reaches for `pkg/sibling/Sibling.py`, "
+        "which does not exist, and then for the attribute `Sibling`, which does. "
+        "Reporting the second half as a path that meant to name a project file "
+        "and could not was 162 of them on flask, against 185 edges the resolver "
+        "had placed.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=False,
+    ),
+    Case(
+        id="python/a_module_level_assignment_is_not_a_gap",
+        source=f"{P}/sibling.py",
+        import_path=".helper.NAME",
+        why="`NAME = \"helper\"` binds a module-level name just as a class does, "
+        "and `from .helper import NAME` imports it. Half the names on flask are "
+        "of this shape -- `request = LocalProxy(...)` in `globals.py` -- so a "
+        "rule reading only `def` and `class` would have left half of them "
+        "counted as missing modules.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=False,
+    ),
+    Case(
+        id="python/a_name_nothing_declares_is_still_a_gap",
+        source=f"{P}/__init__.py",
+        import_path=".helper.Helper",
+        why="The other direction, and the one that matters most: `helper.py` "
+        "declares `use`, `NAME` and no `Helper`, so the import really is broken "
+        "and has to stay in the count. A fix that removed every unresolved "
+        "submodule path would pass the two cases above and fail this one.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=True,
+    ),
+    Case(
+        id="python/a_local_variable_is_not_a_name_the_module_declares",
+        source=f"{P}/sub/deep.py",
+        import_path="..sibling.local_only",
+        why="`sibling.py` assigns `local_only` inside a function. `from "
+        "..sibling import local_only` cannot reach it, so collecting assignment "
+        "targets at any depth rather than at module level would have hidden a "
+        "broken import behind a local variable.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=True,
+    ),
     # ---- known resolver defects ---------------------------------------------
     # Written the way the correct answer reads, and failing today. See
     # `KNOWN_DEFECTS` below.

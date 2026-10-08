@@ -22,6 +22,23 @@ impl ImportPlugin for PythonPlugin {
         SupportedLanguage::Python
     }
 
+    /// Python's imports can name something other than a module.
+    ///
+    /// `from .app import Flask` names a class, and `from .globals import request`
+    /// names a module-level assignment. Neither has a file to resolve to, and
+    /// without this the resolver reported every one of them as a path that meant
+    /// to name a project file and could not -- 162 on flask, against 185 edges it
+    /// had resolved. The dependency was already recorded by the sibling import
+    /// (`.app`), so these were pure false alarms in the one metric the corpus
+    /// says should only ever go down.
+    fn collect_declarations(
+        &self,
+        source: &[u8],
+        tree: &tree_sitter::Tree,
+    ) -> Option<crate::core::graph::declarations::DeclaredNames> {
+        Some(extract::declared_names(source, tree))
+    }
+
     fn extract_from_node(
         &self,
         source: &[u8],

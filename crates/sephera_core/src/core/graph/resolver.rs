@@ -754,7 +754,8 @@ fn build_edges_and_nodes(
                 // wildcard names a *package*, which is the broadest dependency a
                 // language has, and there is no file for it to bind to.
                 && (statement.kind.is_namespace()
-                    == statement.raw_path.ends_with('*'));
+                    == statement.raw_path.ends_with('*'))
+                && !names_a_declared_symbol(statement, file_data, project);
 
             // Every resolved edge goes in the adjacency, including a parent naming its own
             // child with `mod child;`.
@@ -1248,6 +1249,71 @@ fn is_self_edge(edge: &GraphEdge) -> bool {
 /// the project, and it answered "no" for every one of those. Asking a Rust
 /// qualifier list a second time therefore re-decided something the resolver had
 /// already settled, using rules from one language.
+/// Whether an unresolved path ends in a name the project already declares.
+///
+/// `from .app import Flask` produces two edges. `.app` resolves to `app.py` and
+/// carries the dependency. `.app.Flask` resolves to nothing, because `Flask` is
+/// a class inside `app.py` and not a module beside it -- so it was reported as a
+/// path that meant to name a project file and could not, which is the one thing
+/// `unresolved_local` is documented to mean. On flask that was 162 of them,
+/// against 185 edges the resolver had actually placed.
+///
+/// The dependency was never at risk, so this removes a false alarm rather than
+/// fixing a missed edge. That distinction is the whole reason the check is
+/// here and not in the extractor: an extractor that dropped the name would lose
+/// the ability to report `from pkg import absent`, where nothing declares the
+/// name and the import really is broken.
+///
+/// Split on the last separator, then ask the file the parent names. A path with
+/// no parent -- `from . import Flask`, which binds the name straight against the
+/// package -- has nothing to split and stays a gap.
+fn names_a_declared_symbol(
+    statement: &ImportStatement,
+    file_data: &FileImportData,
+    project: &ResolutionInputs,
+) -> bool {
+    let Some((parent, name)) = split_trailing_name(&statement.raw_path) else {
+        return false;
+    };
+
+    let Resolution::File(parent_file) = resolve_import_with(
+        &parent,
+        &file_data.file_path,
+        statement.module_depth,
+        statement.kind,
+        file_data.ts_language,
+        project,
+    ) else {
+        return false;
+    };
+
+    project.declarations.file_reaches(&parent_file, &name)
+}
+
+/// Split a dotted path into everything before the last separator and the last
+/// segment, keeping the leading dots on the parent.
+///
+/// The separator has to be the last one rather than the first: `.sansio.app.App`
+/// names the `App` class in the module `.sansio.app`, so the name is what is
+/// missing and the parent is what resolves.
+///
+/// A trailing `*` needs no handling here. A wildcard names a package, which the
+/// gap rule already counts on its own account, and no declaration index holds a
+/// name spelled `*` -- every one of them is read out of a grammar's `name`
+/// field, so the lookup finds nothing and the answer was false anyway.
+fn split_trailing_name(import_path: &str) -> Option<(String, String)> {
+    let separator = import_path.rfind(['.', '/', ':'])?;
+    let name = &import_path[separator + 1..];
+    let parent = &import_path[..separator];
+
+    if name.is_empty() || parent.is_empty() || parent.ends_with(['.', '/', ':'])
+    {
+        return None;
+    }
+
+    Some((parent.to_owned(), name.to_owned()))
+}
+
 fn looks_local(import_path: &str, language: SupportedLanguage) -> bool {
     if import_path.ends_with('*') {
         // A wildcard names a package rather than a module, and there is no file
@@ -1926,6 +1992,168 @@ mod tests {
             report.metrics.unresolved_local_samples.is_empty(),
             "nothing should be listed when nothing is unresolved"
         );
+    }
+
+    /// The four cases below are one behaviour seen from both sides, and the two
+    /// halves are what keep it honest. `from .app import Flask` leaves two edges:
+    /// `.app`, which resolves to `app.py` and carries the dependency, and
+    /// `.app.Flask`, which resolves to nothing because `Flask` is a class inside
+    /// `app.py` rather than a module beside it. Counting the second as a gap is
+    /// what reported 162 of them on flask against 185 edges the resolver had
+    /// actually placed -- a false alarm in the one metric the corpus says should
+    /// only ever go down.
+    ///
+    /// Each fixture is a Python package because the shape is Python's: the
+    /// extractor emits a submodule edge for every name in a `from X import` list
+    /// so that `from pkg import absent` can still be reported.
+    fn flask_package(extra_imports: &str) -> GraphReport {
+        graph_for(&[
+            (
+                "pkg/__init__.py",
+                &format!("from .app import Flask{extra_imports}"),
+            ),
+            (
+                "pkg/app.py",
+                "class Flask:\n    pass\n\n\ndef helper() -> int:\n    return 1\n",
+            ),
+        ])
+    }
+
+    #[test]
+    fn a_name_the_module_declares_is_not_an_unresolved_local_path() {
+        let report = flask_package("");
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 0,
+            "a class `app.py` declares is a name, not a missing module: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+        assert_eq!(
+            imports_of(&report, "pkg/__init__.py"),
+            vec!["pkg/app.py".to_owned()],
+            "the dependency itself must still be there -- only the false alarm \
+             is removed, not the edge"
+        );
+    }
+
+    #[test]
+    fn a_module_level_assignment_is_a_name_the_module_declares() {
+        // Half the names on flask are this shape: `request = LocalProxy(...)` in
+        // `globals.py`, `message_flashed = signals.signal(...)` in `signals.py`.
+        // A rule reading only `def` and `class` would have left all 47 of them
+        // counted as missing modules.
+        let report = graph_for(&[
+            ("pkg/__init__.py", "from .globals import request, missing\n"),
+            ("pkg/globals.py", "request = object()\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 1,
+            "only `missing`, which nothing declares: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+        assert_eq!(
+            imports_of(&report, "pkg/__init__.py"),
+            vec!["pkg/globals.py".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_name_nothing_declares_is_still_an_unresolved_local_path() {
+        // The other direction, and the one that matters most. A fix that stopped
+        // counting every unresolved submodule path would pass the two tests above
+        // and fail this one, and `unresolved_local` would then mean "nothing",
+        // which is worse than the false positives were.
+        let report = flask_package(", Absent");
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 1,
+            "`app.py` declares `Flask` and `helper`, and no `Absent`"
+        );
+        assert_eq!(
+            report.metrics.unresolved_local_samples,
+            vec!["pkg/__init__.py: .app.Absent".to_owned()]
+        );
+    }
+
+    #[test]
+    fn a_local_variable_is_not_a_name_the_module_declares() {
+        // `from module import name` reaches module scope and nothing below it, so
+        // collecting assignment targets at any depth -- rather than at module
+        // level only -- would hide a broken import behind a local variable.
+        let report = graph_for(&[
+            ("pkg/__init__.py", "from .app import config\n"),
+            (
+                "pkg/app.py",
+                "def build() -> int:\n    config = 1\n    return config\n",
+            ),
+        ]);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 1,
+            "`config` is assigned inside a function, so the import cannot succeed"
+        );
+    }
+
+    #[test]
+    fn a_decorated_definition_is_still_a_declaration() {
+        // The grammar wraps `@cache` around a definition in a
+        // `decorated_definition`, so flask's `_split_blueprint_path` is a
+        // function two levels down rather than one. A collector that counted
+        // definitions at module level only would miss it.
+        let report = graph_for(&[
+            ("pkg/__init__.py", "from .app import cached\n"),
+            (
+                "pkg/app.py",
+                "from functools import cache\n\n\n@cache\ndef cached() -> int:\n    return 1\n",
+            ),
+        ]);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 0,
+            "{:?}",
+            report.metrics.unresolved_local_samples
+        );
+    }
+
+    #[test]
+    fn a_climbing_name_the_module_declares_is_not_an_unresolved_local_path() {
+        // Flask's own shape: `from ..helpers import _split_blueprint_path` in
+        // `pkg/sansio/app.py` reaches up two levels, so the parent of the name is
+        // `..helpers` rather than `.helpers`. Splitting on the wrong separator
+        // would leave the parent holding a dangling dot and resolve nothing, and
+        // every one of these would go back to being a gap.
+        let report = graph_for(&[
+            ("pkg/sansio/app.py", "from ..helpers import split_path\n"),
+            (
+                "pkg/helpers.py",
+                "def split_path(name: str) -> list[str]:\n    return [name]\n",
+            ),
+        ]);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 0,
+            "{:?}",
+            report.metrics.unresolved_local_samples
+        );
+        assert_eq!(
+            imports_of(&report, "pkg/sansio/app.py"),
+            vec!["pkg/helpers.py".to_owned()],
+            "climbing up two levels must still land on the module"
+        );
+    }
+
+    #[test]
+    fn a_name_against_the_package_itself_is_still_an_unresolved_local_path() {
+        // `from . import Flask` binds the name straight against the package, so
+        // the path has no parent to split and nothing to ask. It stays a gap,
+        // which is the two edges flask still reports after this fix.
+        let report = graph_for(&[
+            ("pkg/__init__.py", "class Flask:\n    pass\n"),
+            ("pkg/cli.py", "from . import Flask\n"),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
     }
 
     #[test]

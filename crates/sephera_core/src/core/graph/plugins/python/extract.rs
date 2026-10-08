@@ -15,9 +15,107 @@
 
 use tree_sitter::Node;
 
-use crate::core::graph::{ImportKind, types::ImportStatement};
+use crate::core::graph::{
+    ImportKind,
+    declarations::{
+        DeclarationRules, DeclaredNames, collect_declared_names_with,
+    },
+    types::ImportStatement,
+};
 
 use super::super::walk::{line_of, node_text};
+
+/// The grammar's names for what a Python module declares.
+///
+/// `def` and `class` only. A module-level assignment binds a name too, and
+/// `request = LocalProxy(...)` in flask's `globals.py` is one -- but its target
+/// sits in a child of the `assignment` rather than in a `name` field, so no
+/// grammar rule reaches it and it is collected separately below.
+const PYTHON_DECLARATION_KINDS: &[&str] =
+    &["function_definition", "class_definition"];
+
+/// What a Python module binds, read from the tree in one parse.
+///
+/// The shared walk covers `def` and `class` at any depth, including a decorated
+/// one: the grammar wraps `@cache` around the definition in a
+/// `decorated_definition`, so flask's `_split_blueprint_path` is a function two
+/// levels down rather than one. Assignments are added here because recognising
+/// them needs Python's own shape -- and only at module level, since a local
+/// variable inside a function is not something `from module import name` can
+/// reach.
+pub(super) fn declared_names(
+    source: &[u8],
+    tree: &tree_sitter::Tree,
+) -> DeclaredNames {
+    let mut declared = collect_declared_names_with(
+        source,
+        tree,
+        DeclarationRules {
+            declaration_kinds: PYTHON_DECLARATION_KINDS,
+            // Every top-level name in a Python module is importable, so there is
+            // no re-export construct to look for: they are all declared.
+            reexport_kinds: &[],
+        },
+    );
+    collect_module_level_assignments(source, tree.root_node(), &mut declared);
+    declared
+}
+
+/// Record every name assigned at module level.
+///
+/// Only the module's own statements are visited, which is what makes these
+/// names reachable by an import: a `block` below it holds a function's locals,
+/// and `from module import name` does not reach into one. Reading the depth
+/// instead would take the same two levels for a statement and for a local and
+/// have no way to tell them apart.
+fn collect_module_level_assignments(
+    source: &[u8],
+    module: Node<'_>,
+    declared: &mut DeclaredNames,
+) {
+    let mut cursor = module.walk();
+
+    for statement in module.named_children(&mut cursor) {
+        if statement.kind() != "expression_statement" {
+            continue;
+        }
+
+        // Only the statement's first child is the assignment itself. Anything
+        // after it belongs to the value.
+        let Some(assignment) = statement.named_child(0) else {
+            continue;
+        };
+        if assignment.kind() != "assignment" {
+            continue;
+        }
+
+        for target in assignment_targets(assignment) {
+            declared.declare(node_text(source, &target));
+        }
+    }
+}
+
+/// The identifiers an assignment binds, on its left-hand side.
+///
+/// A single name, or every name in a tuple or list on the left. Anything else --
+/// an attribute, a subscript, a starred target -- binds no name this module can
+/// be asked for by `from module import name`, so it yields nothing rather than
+/// yielding the whole expression's text.
+fn assignment_targets(assignment: Node<'_>) -> Vec<Node<'_>> {
+    let mut cursor = assignment.walk();
+    let Some(left) = assignment.named_children(&mut cursor).next() else {
+        return Vec::new();
+    };
+
+    match left.kind() {
+        "identifier" => vec![left],
+        "pattern_list" | "tuple_pattern" => left
+            .named_children(&mut cursor)
+            .filter(|element| element.kind() == "identifier")
+            .collect(),
+        _ => Vec::new(),
+    }
+}
 
 /// Read the imports out of one node.
 pub(super) fn extract_from_node(
