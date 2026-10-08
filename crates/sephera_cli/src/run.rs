@@ -9,8 +9,9 @@ use sephera_core::core::{
         types::{GraphFormat, GraphQuery},
     },
     runtime::{
-        Interrupted, ResolvedSource, SourceRequest, build_context_report,
-        load_project_settings, resolve_changed_files, resolve_source,
+        INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
+        build_context_report, load_project_settings, resolve_changed_files,
+        resolve_source,
     },
     symbols::{SymbolAnalyzer, SymbolDetail},
 };
@@ -60,11 +61,6 @@ fn exit_code_for(error: &anyhow::Error) -> ExitCode {
     eprintln!("error: {error:#}");
     ExitCode::FAILURE
 }
-
-/// The exit code for a run stopped at the user's request.
-///
-/// 130 is what a shell reports for a program killed by SIGINT.
-const INTERRUPTED_EXIT_CODE: u8 = 130;
 
 /// # Errors
 ///
@@ -776,11 +772,11 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use sephera_core::core::runtime::Interrupted;
+    use sephera_core::core::runtime::{INTERRUPTED_EXIT_CODE, Interrupted};
 
     use std::process::ExitCode;
 
-    use super::{INTERRUPTED_EXIT_CODE, exit_code_for};
+    use super::exit_code_for;
 
     #[test]
     fn a_stopped_clone_reports_that_it_was_stopped() {
