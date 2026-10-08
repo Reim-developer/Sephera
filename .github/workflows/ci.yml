@@ -339,3 +339,94 @@ jobs:
             fuzz/logs/${{ matrix.target }}.log
             fuzz/artifacts/${{ matrix.target }}/
           if-no-files-found: warn
+
+  # Renders the coverage and benchmark artifacts onto the pull request, so the
+  # two numbers a change moves are visible before it is approved rather than
+  # after.
+  #
+  # `!cancelled()` on the download because a job that failed is exactly the run
+  # whose coverage a reviewer needs. Posting a comment saying nothing arrived is
+  # still better than posting nothing, and `pr_report.py` renders a missing
+  # artifact as `not available` instead of failing -- otherwise a flaky
+  # benchmark upload would take the measurement that *did* succeed down with it.
+  pr_report:
+    name: PR Report
+    runs-on: ubuntu-latest
+    needs: [coverage, benchmark]
+    # A push to `dev` has no pull request, and this job is only meaningful for
+    # one. Skipping is what keeps it from failing every direct push.
+    if: github.event_name == 'pull_request'
+    permissions:
+      # Only enough to comment. The job checks out the repository and downloads
+      # artifacts; it pushes nothing, so it does not get write access to
+      # contents.
+      contents: read
+      pull-requests: write
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Download coverage artifact
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: coverage-summary
+          path: artifacts
+          continue-on-error: true
+
+      - name: Download benchmark artifact
+        if: ${{ !cancelled() }}
+        uses: actions/download-artifact@v4
+        with:
+          name: benchmark-reports
+          path: artifacts/benchmark-reports
+          continue-on-error: true
+
+      - name: Render the report
+        run: python scripts/pr_report.py --artifacts artifacts --output report.md
+
+      # Read back rather than piping the command into the action: the marker is
+      # what makes the comment replace itself, and a script that printed the
+      # marker twice would make this comment grow a duplicate on every push.
+      - name: Comment on the pull request
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const body = fs.readFileSync('report.md', 'utf8');
+            const marker = '<!-- sephera-ci-report -->';
+
+            // Replace this workflow's own previous comment rather than adding a
+            // new one per push. Filtering on the marker is what makes the PR show
+            // one current measurement instead of a pile of stale ones.
+            const { data: comments } = await github.rest.issues.listComments({
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              issue_number: context.issue.number,
+              per_page: 100,
+            });
+
+            const previous = comments.find(
+              (comment) => comment.body && comment.body.includes(marker)
+            );
+
+            if (previous) {
+              await github.rest.issues.updateComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                comment_id: previous.id,
+                body: body,
+              });
+            } else {
+              await github.rest.issues.createComment({
+                owner: context.repo.owner,
+                repo: context.repo.repo,
+                issue_number: context.issue.number,
+                body: body,
+              });
+            }

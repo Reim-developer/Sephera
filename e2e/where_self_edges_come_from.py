@@ -18,7 +18,16 @@ from collections import Counter
 from pathlib import Path
 
 REPO = Path(__file__).resolve().parent.parent
-AXUM = Path(os.environ.get("SEPHERA_CORPUS_DIR", Path.home() / "AppData/Local/sephera/corpus")) / "axum"
+# Reuse `scripts/fetch_corpus.py`'s platform-aware default rather than a
+# second literal here. The old code used `~/AppData/Local/...` which only
+# exists on Windows: on Linux and macOS the fetch script puts the corpus under
+# `XDG_CACHE_HOME` or `~/.cache`, so the documented fetch-then-diagnose workflow
+# reported `corpus missing` at a path that cannot exist. `SEPHERA_CORPUS_DIR`
+# still overrides it.
+sys.path.insert(0, str(REPO / "scripts"))
+from fetch_corpus import corpus_dir
+
+AXUM = corpus_dir() / "axum"
 BINARY = REPO / "target" / "release" / "sephera"
 
 

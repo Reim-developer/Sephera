@@ -9,18 +9,18 @@ expectation about what resolving it should produce, and checked against a real
 ```
 accuracy over local imports: 40/44 resolved (90.9%)
 external imports left alone: 17/28
-72 import cases, 16 file cases, 6 known defects
+70 import cases, 16 file cases, 6 known defects
 ```
 
 All eight bundled languages are covered.
 
 | language | cases | known defects |
 |---|---:|---:|
-| Rust | 27 | 3 |
-| Python | 12 | 2 |
-| JavaScript | 8 | 2 |
-| Go, Java, TypeScript | 14 | 1 |
-| C, C++ | 11 | 2 |
+| Rust | 24 | 0 |
+| Python | 13 | 5 |
+| JavaScript | 8 | 1 |
+| Go, Java, TypeScript | 15 | 0 |
+| C, C++ | 10 | 0 |
 
 Every known defect is listed with the measurement or the observation that bounds
 it. None of them is a file a user is likely to open and find wrong; they are

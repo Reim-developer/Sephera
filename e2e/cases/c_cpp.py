@@ -117,9 +117,9 @@ CASES: Final[tuple[Case, ...]] = (
         id="cpp/a_header_include_is_counted_once_per_file",
         source=f"{CPP}/src/main.cpp",
         import_path="shape.hpp",
-        why="Included directly here and again from `acme.hpp`. The second "
-        "occurrence is not visible in this run, which is the point of the next "
-        "group of cases: includes inside a header produce no edges at all.",
+        why="Included directly here and again from `acme.hpp`. The edge from "
+        "`acme.hpp` belongs to that header, so this file holds exactly one, and "
+        "a header's own includes are real edges counted against the header.",
         resolves_to=f"{CPP}/include/shape.hpp",
         count=1,
     ),

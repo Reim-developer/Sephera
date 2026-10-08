@@ -6,6 +6,7 @@
 		"benchmarks/benchmark_model.py",
 		"benchmarks/benchmark_render.py",
 		"scripts/make_graph_demo.py",
+		"scripts/pr_report.py",
 		"scripts/probe_symbol_node_kinds.py",
 		"scripts/verify_mcp_graph_formats.py",
 		"scripts/verify_mcp_symbols.py"

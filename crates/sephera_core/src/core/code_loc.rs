@@ -1,6 +1,8 @@
 #![allow(clippy::module_name_repetitions)]
 
 mod analyzer;
+#[cfg(test)]
+mod differential_tests;
 mod reader;
 mod scanner;
 #[cfg(test)]

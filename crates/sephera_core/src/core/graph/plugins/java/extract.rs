@@ -18,7 +18,7 @@ use tree_sitter::Node;
 
 use crate::core::graph::{ImportKind, types::ImportStatement};
 
-use super::super::walk::node_text;
+use super::super::walk::{line_of, node_text};
 
 /// Read the imports out of one node.
 pub(super) fn extract_from_node(
@@ -29,7 +29,7 @@ pub(super) fn extract_from_node(
         return None;
     }
 
-    let line = u64::try_from(node.start_position().row + 1).ok()?;
+    let line = line_of(node)?;
     let text = node_text(source, node);
 
     let body = text.strip_prefix("import ").unwrap_or(&text).trim();
@@ -56,46 +56,23 @@ pub(super) fn extract_from_node(
         ImportKind::Dependency
     };
 
-    Some(vec![ImportStatement {
-        kind,
-        module_depth: 0,
-        raw_path: path.to_owned(),
-        line,
-        cfg_gated: false,
-    }])
+    Some(vec![ImportStatement::new(path, line).with_kind(kind)])
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::compression::SupportedLanguage;
-    use crate::core::compression::new_parser;
+
+    use crate::core::graph::plugins::walk::imports_found_by;
 
     /// Every import one Java file declares.
     fn imports(source: &[u8]) -> Vec<ImportStatement> {
-        let mut parser = new_parser(SupportedLanguage::Java).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found
-    }
-
-    fn descend(
-        source: &[u8],
-        node: &Node<'_>,
-        depth: u8,
-        out: &mut Vec<ImportStatement>,
-    ) {
-        if let Some(mut found) = extract_from_node(source, node) {
-            for statement in &mut found {
-                statement.module_depth = depth;
-            }
-            out.extend(found);
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            descend(source, &child, depth, out);
-        }
+        imports_found_by(
+            source,
+            SupportedLanguage::Java,
+            &super::super::JavaPlugin,
+        )
     }
 
     #[test]

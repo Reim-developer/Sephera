@@ -279,14 +279,43 @@ fn collect_use_leaves(
     let mut cursor = node.walk();
     let children: Vec<_> = node.named_children(&mut cursor).collect();
 
-    // A `use_list` means the names are in the group and the identifier beside it
-    // is the module they all come from: `pub use a::{B, C};` makes `B` and `C`
+    // A `use_list` means the names are in the group and the path beside it is
+    // the module they all come from: `pub use a::{B, C};` makes `B` and `C`
     // reachable, and recording `a` as well would let a later `crate::a` match
     // this file on the strength of a path prefix rather than a name.
+    //
+    // The path is excluded whether the grammar spells it `a` or `a::b`, because
+    // the two forms produce different node kinds for the same position and only
+    // the first was being skipped. `pub use a::b::{C, D};` recorded `b` as a
+    // re-exported name -- a segment this statement does not export at all, and
+    // one that a later `use crate::b::Thing;` could then resolve to this file on
+    // the strength of a path prefix. Confirmed by probing the walk rather than
+    // by reading the grammar: that statement yielded `{b, C, D}`.
+    //
+    // `use_as_clause` is in the list only because the grammar admits it there,
+    // not because code that compiles can produce it: `pub use a::b as c::{D,
+    // E};` is a syntax error, so the aliased group path does not exist outside a
+    // file that already fails to parse.
     let grouped = children.iter().any(|child| child.kind() == "use_list");
+    let group_path = grouped
+        .then(|| {
+            children
+                .iter()
+                .find(|child| {
+                    matches!(
+                        child.kind(),
+                        "identifier" | "scoped_identifier" | "use_as_clause"
+                    )
+                })
+                .map(tree_sitter::Node::id)
+        })
+        .flatten();
 
     for child in children {
         match child.kind() {
+            // The module a group reads from, not a name it exports.
+            _ if Some(child.id()) == group_path => {}
+
             // `scoped_identifier` carries its final segment in `name`, which is
             // the part a later path will reference. Confirmed by probing the
             // grammar rather than assumed.
@@ -295,9 +324,7 @@ fn collect_use_leaves(
                     names.insert(node_text(source, name).to_owned());
                 }
             }
-            // `pub use tracing;` names the crate itself. Skipped when the
-            // statement also has a group, where the same kind of node is the
-            // path every name in the group is read from.
+            // `pub use tracing;` names the crate itself.
             "identifier" if !grouped => {
                 let text = node_text(source, child);
                 if !text.is_empty() {
@@ -404,6 +431,48 @@ mod tests {
     }
 
     #[test]
+    fn a_group_prefix_is_not_itself_a_reexport() {
+        // `pub use a::b::{C, D};` exports `C` and `D`. It does not export `b`:
+        // `b` names the module the two are read from, and nothing about this
+        // statement makes `b` reachable through this file.
+        //
+        // It used to be recorded anyway. The grammar spells the group path
+        // `a::b` as a `scoped_identifier`, while the `a` in `pub use a::{B, C}`
+        // is a bare `identifier`, and only the bare form was being skipped -- so
+        // the deeper spelling fell through to the branch that reads a
+        // `scoped_identifier`'s final segment as a name. The walk returned
+        // `{b, C, D}`.
+        //
+        // That is a false edge waiting to happen: a later `use crate::b::Thing;`
+        // would resolve to this file on the strength of a path prefix, which is
+        // the same mistake the bare `a` case was fixed for.
+        let found = reexports_of("pub use a::b::{C, D};\n");
+
+        assert_eq!(
+            found,
+            vec!["C".to_owned(), "D".to_owned()],
+            "the group prefix is where the names come from, not one of them"
+        );
+    }
+
+    #[test]
+    fn a_group_prefix_is_not_a_reexport_whatever_the_spelling() {
+        // Both spellings the grammar gives that position, so a fix handling only
+        // one of them fails here rather than in a real crate. Verified with
+        // `rustc` that there is no third one: an aliased group
+        // (`pub use a::b as c::{D, E};`) is a syntax error, so `use_as_clause`
+        // cannot be the group path in code that compiles.
+        assert_eq!(
+            reexports_of("pub use a::{B, C};\n"),
+            vec!["B".to_owned(), "C".to_owned()]
+        );
+        assert_eq!(
+            reexports_of("pub use a::b::{C, D};\n"),
+            vec!["C".to_owned(), "D".to_owned()]
+        );
+    }
+
+    #[test]
     fn a_reexport_nested_inside_a_group_is_reached() {
         // One level deeper: `pub use {a::B, c::D};` puts the path inside the
         // same nesting as the group above, and `pub use a::{b::C, D};` puts it
@@ -458,7 +527,7 @@ mod tests {
     }
 
     #[test]
-    fn a_struct_inside_a_macro_invocation_is_still_declared() {
+    fn a_struct_inside_a_macro_invocation_is_not_declared() {
         // `pin_project! { pub struct JsonLines<S, T = AsExtractor> { .. } }` in
         // `axum-extra/src/json_lines.rs`. The struct is inside the macro, and
         // the declaration walk did not record it -- so a `use super::JsonLines`
@@ -469,7 +538,8 @@ mod tests {
         //
         // This is a tree-sitter limitation, not a walk bug: items inside a
         // `token_tree` are tokens, not nodes, so there is no `struct_item` to
-        // find. The test asserts the limitation rather than the fix, because
+        // find. `a_struct_inside_a_macro_invocation_is_not_declared` in
+        // `declarations.rs` asserts the limitation rather than the fix, because
         // the fix is a text-level scan that would record `struct` keywords in
         // macro input that is not Rust.
         let source = "\

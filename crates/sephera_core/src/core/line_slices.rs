@@ -1,3 +1,5 @@
+use memchr::memchr2;
+
 pub(super) struct LineSlices<'a> {
     bytes: &'a [u8],
     cursor: usize,
@@ -19,31 +21,30 @@ impl<'a> Iterator for LineSlices<'a> {
         }
 
         let start = self.cursor;
-        let mut end = self.cursor;
+        let rest = &self.bytes[start..];
 
-        while end < self.bytes.len() {
-            match self.bytes[end] {
-                b'\n' => {
-                    self.cursor = end + 1;
-                    return Some(&self.bytes[start..end]);
-                }
-                b'\r' => {
-                    self.cursor = if end + 1 < self.bytes.len()
-                        && self.bytes[end + 1] == b'\n'
-                    {
-                        end + 2
-                    } else {
-                        end + 1
-                    };
-                    return Some(&self.bytes[start..end]);
-                }
-                _ => {
-                    end += 1;
-                }
-            }
-        }
+        // `memchr2` over the remaining bytes rather than a byte-at-a-time loop.
+        // Splitting lines is the first thing every scanner does with a file, and
+        // at one comparison per byte it set the floor for everything after it:
+        // the comment classifier was measured at a fraction of the speed of the
+        // one that does no classification at all, for no reason other than how
+        // the line boundaries were found.
+        let Some(offset) = memchr2(b'\n', b'\r', rest) else {
+            self.cursor = self.bytes.len();
+            return Some(rest);
+        };
 
-        self.cursor = self.bytes.len();
+        let end = start + offset;
+        // A `\r` that is not followed by `\n` ends the line on its own, and a
+        // `\r\n` pair is one terminator rather than an empty line between two.
+        self.cursor = if self.bytes[end] == b'\n' {
+            end + 1
+        } else if end + 1 < self.bytes.len() && self.bytes[end + 1] == b'\n' {
+            end + 2
+        } else {
+            end + 1
+        };
+
         Some(&self.bytes[start..end])
     }
 }

@@ -1,5 +1,7 @@
 use crate::core::config::CommentStyle;
 
+use memchr::memmem;
+
 use crate::core::line_slices::LineSlices;
 
 use super::types::LocMetrics;
@@ -57,46 +59,130 @@ pub fn scan_content(bytes: &[u8], style: &CommentStyle) -> LocMetrics {
     metrics
 }
 
+/// The nearest block-comment delimiter at or after the cursor, as
+/// `(offset, token length, opens a nested block)`.
+///
+/// Inside a block comment the only things that matter are the two delimiters;
+/// everything between them is comment text whose sole effect is deciding whether
+/// this line has any comment in it at all. Finding the nearer delimiter in one
+/// step is what replaces testing two tokens at every byte.
+///
+/// Returns `None` when the rest of the line holds no delimiter at all, which is
+/// the only case where the skipped text still has to be examined.
+fn next_block_delimiter(
+    rest: &[u8],
+    tokens: CommentTokens<'_>,
+) -> Option<(usize, usize, bool)> {
+    let identical = tokens.multi_line_start == tokens.multi_line_end;
+    let open =
+        tokens
+            .multi_line_start
+            .filter(|_| !identical)
+            .and_then(|token| {
+                memmem::find(rest, token).map(|offset| (offset, token.len()))
+            });
+    let close = tokens.multi_line_end.and_then(|token| {
+        memmem::find(rest, token).map(|offset| (offset, token.len()))
+    });
+
+    // A close wins a tie, because the byte-at-a-time version tested for it
+    // first.
+    match (open, close) {
+        (Some((open_offset, open_length)), Some((close_offset, _)))
+            if open_offset < close_offset =>
+        {
+            Some((open_offset, open_length, true))
+        }
+        (_, Some((close_offset, close_length))) => {
+            Some((close_offset, close_length, false))
+        }
+        (Some((open_offset, open_length)), None) => {
+            Some((open_offset, open_length, true))
+        }
+        (None, None) => None,
+    }
+}
+
 fn classify_line(
     line: &[u8],
     tokens: CommentTokens<'_>,
     block_comment_depth: &mut usize,
     metrics: &mut LocMetrics,
 ) {
-    let identical_block_delimiters =
-        tokens.multi_line_start == tokens.multi_line_end;
     let mut has_code = false;
     let mut has_comment = false;
     let mut index = 0_usize;
 
     while index < line.len() {
         if *block_comment_depth > 0 {
-            if let Some(multi_line_end) = tokens.multi_line_end
-                && line[index..].starts_with(multi_line_end)
-            {
-                *block_comment_depth -= 1;
-                has_comment = true;
-                index += multi_line_end.len();
-                continue;
-            }
+            let rest = &line[index..];
+            let Some((offset, length, opens)) =
+                next_block_delimiter(rest, tokens)
+            else {
+                // A run of whitespace still leaves the line empty, which is a
+                // real case rather than a theoretical one: a blank line between
+                // the `/*` and the `*/` of a doc comment is counted as empty
+                // today, and this has to keep counting it that way.
+                if rest.iter().any(|byte| !byte.is_ascii_whitespace()) {
+                    has_comment = true;
+                }
+                break;
+            };
 
-            if let Some(multi_line_start) = tokens.multi_line_start
-                && !identical_block_delimiters
-                && line[index..].starts_with(multi_line_start)
-            {
+            if opens {
                 *block_comment_depth += 1;
-                has_comment = true;
-                index += multi_line_start.len();
-                continue;
+            } else {
+                *block_comment_depth -= 1;
             }
-
-            if line[index].is_ascii_whitespace() {
-                index += 1;
-                continue;
-            }
-
+            index += offset + length;
+            // Matching a delimiter is itself enough to make this a comment line,
+            // whatever sits in the run that was skipped.
             has_comment = true;
-            index += 1;
+            continue;
+        }
+
+        // Past the first byte of code, nothing on this line can change how it is
+        // counted except a block comment opening, because that is the only thing
+        // still owed to the *next* line. A single-line comment cannot: it ends
+        // with the line. So instead of testing two delimiters at every byte, one
+        // substring search jumps to the next delimiter of either kind.
+        //
+        // Both tokens have to be searched for, not just the block opener. In
+        // `x//*` the `//` comes first and claims the line, so the `/*` one byte
+        // later is comment text rather than an opener; searching only for `/*`
+        // opens a block comment that the byte-at-a-time version never opened,
+        // and the next line is then counted as comment when it is code.
+        //
+        // The decision at the found position is delegated to
+        // `match_comment_start` rather than reimplemented here, because the rule
+        // for two tokens matching at one position -- longer wins -- is the same
+        // rule that has to hold at the first byte of a line, and a second copy of
+        // it is a second thing to forget to update.
+        if has_code {
+            let rest = &line[index..];
+            let single_at = tokens
+                .single_line
+                .and_then(|token| memmem::find(rest, token));
+            let multi_at = tokens
+                .multi_line_start
+                .and_then(|token| memmem::find(rest, token));
+            let Some(offset) = single_at.into_iter().chain(multi_at).min()
+            else {
+                break;
+            };
+
+            match match_comment_start(&rest[offset..], tokens) {
+                Some(CommentStartMatch::SingleLine) => {
+                    has_comment = true;
+                    break;
+                }
+                Some(CommentStartMatch::MultiLine(length)) => {
+                    *block_comment_depth = 1;
+                    has_comment = true;
+                    index += offset + length;
+                }
+                None => break,
+            }
             continue;
         }
 

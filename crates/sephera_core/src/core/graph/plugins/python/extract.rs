@@ -17,14 +17,14 @@ use tree_sitter::Node;
 
 use crate::core::graph::{ImportKind, types::ImportStatement};
 
-use super::super::walk::node_text;
+use super::super::walk::{line_of, node_text};
 
 /// Read the imports out of one node.
 pub(super) fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
-    let line = u64::try_from(node.start_position().row + 1).ok()?;
+    let line = line_of(node)?;
 
     match node.kind() {
         "import_statement" => plain_imports(source, node, line),
@@ -55,7 +55,7 @@ fn plain_imports(
         if raw.is_empty() {
             continue;
         }
-        statements.push(statement(raw, ImportKind::Dependency, line));
+        statements.push(ImportStatement::new(raw, line));
     }
 
     (!statements.is_empty()).then_some(statements)
@@ -73,99 +73,76 @@ fn from_imports(
         return None;
     }
 
-    let mut statements =
-        vec![statement(raw.clone(), ImportKind::Dependency, line)];
+    let mut statements = vec![ImportStatement::new(raw.clone(), line)];
 
     // `from . import helper` puts only the dots in `module_name`. Reporting the
     // dots pointed the edge at the package's `__init__.py` instead of at the
     // module the import actually reaches.
     let dots_only = raw.chars().all(|character| character == '.');
-    if dots_only {
-        let mut cursor = node.walk();
-        let mut names = node.named_children(&mut cursor);
-        let _ = names.next(); // the module itself
-        for name in names {
-            // `from . import typing as ft` imports the module `typing`; the
-            // child's text is `typing as ft`, so the alias has to be dropped or
-            // the path names something that does not exist.
-            let module = name.child_by_field_name("name").map_or_else(
-                || node_text(source, &name),
-                |field| node_text(source, &field),
-            );
-            if module.is_empty() {
-                continue;
-            }
-            // A name imported from a package may be a submodule or an attribute
-            // the package re-exports — `from . import Flask` in flask's `cli.py`
-            // names the class, and no `Flask.py` exists. Marking it a namespace
-            // keeps the edge when a submodule does exist without reporting a gap
-            // when one does not.
-            statements.push(statement(
-                format!("{raw}{module}"),
-                ImportKind::Namespace,
-                line,
-            ));
+
+    // For all `from` imports, extract the imported names as submodules.
+    // `from pkg import absent` should also extract `pkg.absent` so the resolver
+    // can report a gap when the submodule doesn't exist.
+    let mut cursor = node.walk();
+    let mut names = node.named_children(&mut cursor);
+    let _ = names.next(); // the module itself
+    for name in names {
+        // `from . import typing as ft` imports the module `typing`; the
+        // child's text is `typing as ft`, so the alias has to be dropped or
+        // the path names something that does not exist.
+        let module_name = name.child_by_field_name("name").map_or_else(
+            || node_text(source, &name),
+            |field| node_text(source, &field),
+        );
+        if module_name.is_empty() {
+            continue;
         }
+        // A module path is followed by a separator, except when the module half was
+        // nothing but dots: `from . import helper` has no module name to put a
+        // `.` after, and `..helper` is the path it means. Every other shape --
+        // `from ..pkg import mod`, `from pkg import absent` -- is one dotted
+        // segment appended to another, which is why those two share a branch
+        // rather than carrying one each.
+        let full_path = if dots_only {
+            format!("{raw}{module_name}")
+        } else {
+            format!("{raw}.{module_name}")
+        };
+        // Wildcard imports (`from . import *`) are namespaces — they name a
+        // whole package rather than a single module. Other relative imports
+        // (`from . import helper`) and all absolute imports target a specific
+        // module, so they are dependencies. This ensures missing submodules
+        // are reported as resolver gaps rather than silently dropped.
+        let kind = if dots_only && module_name == "*" {
+            ImportKind::Namespace
+        } else {
+            ImportKind::Dependency
+        };
+        statements.push(ImportStatement::new(full_path, line).with_kind(kind));
     }
 
     Some(statements)
-}
-
-/// One Python import.
-const fn statement(
-    raw_path: String,
-    kind: ImportKind,
-    line: u64,
-) -> ImportStatement {
-    ImportStatement {
-        kind,
-        module_depth: 0,
-        raw_path,
-        line,
-        cfg_gated: false,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::compression::SupportedLanguage;
-    use crate::core::compression::new_parser;
 
-    /// Every path one Python file imports, in order.
-    fn paths(source: &[u8]) -> Vec<String> {
-        let mut parser = new_parser(SupportedLanguage::Python).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found.into_iter().map(|s| s.raw_path).collect()
-    }
+    use crate::core::graph::plugins::walk::imports_found_by;
 
     /// Every import with its kind, for the assertions that care about it.
     fn imports(source: &[u8]) -> Vec<ImportStatement> {
-        let mut parser = new_parser(SupportedLanguage::Python).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found
+        imports_found_by(
+            source,
+            SupportedLanguage::Python,
+            &super::super::PythonPlugin,
+        )
     }
 
-    fn descend(
-        source: &[u8],
-        node: &Node<'_>,
-        depth: u8,
-        out: &mut Vec<ImportStatement>,
-    ) {
-        if let Some(mut found) = extract_from_node(source, node) {
-            for statement in &mut found {
-                statement.module_depth = depth;
-            }
-            out.extend(found);
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            descend(source, &child, depth, out);
-        }
+    /// Every path one Python file imports, in order.
+    fn paths(source: &[u8]) -> Vec<String> {
+        imports(source).into_iter().map(|s| s.raw_path).collect()
     }
 
     #[test]
@@ -186,19 +163,29 @@ mod tests {
 
     #[test]
     fn a_from_import_reports_the_module_half() {
-        assert_eq!(paths(b"from a.b.c import d\n"), vec!["a.b.c".to_owned()]);
+        // Now also extracts the imported name as a submodule.
+        assert_eq!(
+            paths(b"from a.b.c import d\n"),
+            vec!["a.b.c".to_owned(), "a.b.c.d".to_owned()]
+        );
     }
 
     #[test]
     fn a_relative_import_keeps_its_dots() {
         for (source, expected) in [
-            (&b"from .mod import thing\n"[..], ".mod"),
-            (&b"from ..pkg import other\n"[..], "..pkg"),
+            (
+                &b"from .mod import thing\n"[..],
+                vec![".mod".to_owned(), ".mod.thing".to_owned()],
+            ),
+            (
+                &b"from ..pkg import other\n"[..],
+                vec!["..pkg".to_owned(), "..pkg.other".to_owned()],
+            ),
         ] {
             assert_eq!(
                 paths(source),
-                vec![expected.to_owned()],
-                "{expected} lost its leading dots"
+                expected,
+                "lost leading dots or submodule"
             );
         }
     }
@@ -229,10 +216,13 @@ mod tests {
     }
 
     #[test]
-    fn a_submodule_import_is_tagged_as_a_namespace() {
-        // `from . import Flask` may name a submodule or a class the package
-        // re-exports, and only the source can say which. Tagging it keeps the
-        // edge when a submodule exists without inventing a gap when one does not.
+    fn a_relative_submodule_import_is_a_dependency() {
+        // `from . import helper` imports a submodule. Previously this was
+        // tagged as a namespace to avoid gaps for re-exported attributes like
+        // `from . import Flask`, but that caused real missing submodules to be
+        // silently dropped. Now it is a dependency so missing submodules are
+        // reported as resolver gaps. Wildcard imports (`from . import *`) remain
+        // namespaces because they name a whole package.
         let found = imports(b"from . import helper\n");
 
         let submodule = found
@@ -240,7 +230,19 @@ mod tests {
             .find(|statement| statement.raw_path == ".helper")
             .expect("the submodule must be present");
 
-        assert_eq!(submodule.kind, ImportKind::Namespace);
+        assert_eq!(submodule.kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn a_wildcard_import_is_a_namespace() {
+        let found = imports(b"from . import *\n");
+
+        let wildcard = found
+            .iter()
+            .find(|statement| statement.raw_path == ".*")
+            .expect("the wildcard must be present");
+
+        assert_eq!(wildcard.kind, ImportKind::Namespace);
     }
 
     #[test]

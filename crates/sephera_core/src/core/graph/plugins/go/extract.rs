@@ -7,9 +7,10 @@
 
 use tree_sitter::Node;
 
-use crate::core::graph::{ImportKind, types::ImportStatement};
+use crate::core::graph::types::ImportStatement;
 
 use super::super::walk::node_text;
+use super::super::walk::{line_of, line_of_or};
 
 /// Read the imports out of one node.
 ///
@@ -25,7 +26,7 @@ pub(super) fn extract_from_node(
         return None;
     }
 
-    let line = u64::try_from(node.start_position().row + 1).ok()?;
+    let line = line_of(node)?;
     let mut imports = Vec::new();
     let mut cursor = node.walk();
 
@@ -47,7 +48,7 @@ pub(super) fn extract_from_node(
                 let path = node_text(source, &child);
                 let path = path.trim_matches('"');
                 if !path.is_empty() {
-                    imports.push(statement(path.to_owned(), line));
+                    imports.push(ImportStatement::new(path, line));
                 }
             }
             _ => {}
@@ -72,64 +73,27 @@ fn push_spec(
         let path = node_text(source, &child);
         let path = path.trim_matches('"');
         if !path.is_empty() {
-            out.push(statement(
-                path.to_owned(),
-                line_of(&child, fallback_line),
+            out.push(ImportStatement::new(
+                path,
+                line_of_or(&child, fallback_line),
             ));
         }
         return;
     }
 }
 
-/// The 1-based line an import sits on.
-fn line_of(node: &Node<'_>, fallback: u64) -> u64 {
-    u64::try_from(node.start_position().row + 1).unwrap_or(fallback)
-}
-
-/// One Go import.
-const fn statement(raw_path: String, line: u64) -> ImportStatement {
-    ImportStatement {
-        kind: ImportKind::Dependency,
-        module_depth: 0,
-        raw_path,
-        line,
-        cfg_gated: false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::core::compression::SupportedLanguage;
-    use crate::core::compression::new_parser;
+
+    use crate::core::graph::plugins::walk::imports_found_by;
 
     /// Every path one Go file imports, in order.
     fn paths(source: &[u8]) -> Vec<String> {
-        let mut parser = new_parser(SupportedLanguage::Go).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found.into_iter().map(|s| s.raw_path).collect()
-    }
-
-    /// The same recursive walk the shared walker performs, so the test exercises
-    /// the real traversal rather than one call at the root.
-    fn descend(
-        source: &[u8],
-        node: &Node<'_>,
-        depth: u8,
-        out: &mut Vec<ImportStatement>,
-    ) {
-        if let Some(mut found) = extract_from_node(source, node) {
-            for statement in &mut found {
-                statement.module_depth = depth;
-            }
-            out.extend(found);
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            descend(source, &child, depth, out);
-        }
+        imports_found_by(source, SupportedLanguage::Go, &super::super::GoPlugin)
+            .into_iter()
+            .map(|s| s.raw_path)
+            .collect()
     }
 
     #[test]
@@ -154,10 +118,11 @@ mod tests {
     fn a_group_keeps_each_import_on_its_own_line() {
         let source = b"package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n";
 
-        let mut parser = new_parser(SupportedLanguage::Go).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
+        let found = imports_found_by(
+            source,
+            SupportedLanguage::Go,
+            &super::super::GoPlugin,
+        );
 
         assert_eq!(
             found.iter().map(|s| s.line).collect::<Vec<_>>(),

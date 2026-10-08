@@ -1241,6 +1241,7 @@ version = "0.6.0"
 dependencies = [
  "anyhow",
  "globset",
+ "memchr",
  "memmap2",
  "phf",
  "rayon",
