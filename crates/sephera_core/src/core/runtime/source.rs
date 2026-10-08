@@ -8,6 +8,7 @@ use tempfile::TempDir;
 use url::Url;
 
 use super::git::{GitOutcome, git_stdout_string, run_git, run_git_streaming};
+use super::interrupt::interrupt;
 
 /// A long git command was stopped at the user's request rather than finishing.
 ///
@@ -155,7 +156,10 @@ async fn resolve_remote_source(
         ParsedRemoteSource::Tree { .. } => BranchScope::AllAtDepthOne,
     };
 
-    match run_git_streaming(
+    // Held across the clone and released once the `?` below has unwound, so the
+    // listener knows a deletion is under way and must not exit out from under it.
+    let cleanup = interrupt().cleanup_guard();
+    let outcome = run_git_streaming(
         None,
         clone_arguments(
             clone_url,
@@ -165,8 +169,14 @@ async fn resolve_remote_source(
         ),
         &format!("clone `{clone_url}`"),
     )
-    .await?
-    {
+    .await;
+    // Dropped here rather than at the end of the function: `ResolvedSource` takes
+    // the `TempDir` and keeps the checkout on disk for the rest of the run, so a
+    // guard held until then would answer "is a deletion in flight" with yes long
+    // after the only deletion that needed watching was done.
+    drop(cleanup);
+
+    match outcome? {
         GitOutcome::Finished => {}
         // The checkout is removed by the guard on the way out, so interrupting a
         // clone leaves nothing behind rather than a partial repository.
