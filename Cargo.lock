@@ -1378,6 +1378,7 @@ dependencies = [
  "serde",
  "serde_json",
  "tempfile",
+ "tokio",
  "toml",
  "tree-sitter",
  "tree-sitter-c",

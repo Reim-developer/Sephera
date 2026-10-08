@@ -43,6 +43,12 @@ tree-sitter-cpp = "0.23"
 tree-sitter-c = "0.23"
 url = "2.5.7"
 walkdir = "2.5.0"
+# Only for the one long git command a `--url` analysis runs. `process` and
+# `signal` are what the clone needs to be interruptible; the scheduler features are
+# deliberately absent, because this crate starts no runtime of its own -- the CLI
+# and the MCP server both already have one, and a second would be two schedulers
+# arguing over the same cores.
+tokio = { version = "1", features = ["macros", "process", "rt", "signal"] }
 
 [dev-dependencies]
 criterion = { workspace = true }

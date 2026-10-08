@@ -15,5 +15,6 @@ pub use settings::{
     ProjectSource, load_config_file,
 };
 pub use source::{
-    ResolvedSource, SourceRequest, TreeHostingStyle, resolve_source,
+    Interrupted, ResolvedSource, SourceRequest, TreeHostingStyle,
+    resolve_source,
 };

@@ -102,7 +102,7 @@ impl SepheraServer {
         clippy::unused_self,
         reason = "the tool_router macro requires a &self receiver"
     )]
-    fn loc(
+    async fn loc(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<LocInput>,
     ) -> Result<String, rmcp::ErrorData> {
@@ -118,6 +118,7 @@ impl SepheraServer {
             },
             false,
         )
+        .await
         .map_err(map_internal_error("source resolution failed"))?;
 
         let report = CodeLoc::new(&source.analysis_path, ignore_matcher)
@@ -170,7 +171,7 @@ impl SepheraServer {
         clippy::unused_self,
         reason = "the tool_router macro requires a &self receiver"
     )]
-    fn context(
+    async fn context(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ContextInput>,
     ) -> Result<String, rmcp::ErrorData> {
@@ -199,6 +200,7 @@ impl SepheraServer {
             format: param.format,
             output: None,
         })
+        .await
         .map_err(map_internal_error("context resolution failed"))?;
 
         match resolved {
@@ -231,7 +233,7 @@ impl SepheraServer {
         clippy::unused_self,
         reason = "the tool_router macro requires a &self receiver"
     )]
-    fn symbols(
+    async fn symbols(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SymbolsInput>,
     ) -> Result<String, rmcp::ErrorData> {
@@ -244,6 +246,7 @@ impl SepheraServer {
             },
             false,
         )
+        .await
         .map_err(map_internal_error("source resolution failed"))?;
 
         let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
@@ -276,7 +279,7 @@ impl SepheraServer {
         clippy::unused_self,
         reason = "the tool_router macro requires a &self receiver"
     )]
-    fn graph(
+    async fn graph(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<GraphInput>,
     ) -> Result<String, rmcp::ErrorData> {
@@ -290,6 +293,7 @@ impl SepheraServer {
             },
             false,
         )
+        .await
         .map_err(map_internal_error("source resolution failed"))?;
         let focus_paths: Vec<std::path::PathBuf> = param
             .focus
@@ -332,7 +336,7 @@ impl SepheraServer {
         clippy::unused_self,
         reason = "the tool_router macro requires a &self receiver"
     )]
-    fn impact(
+    async fn impact(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ImpactInput>,
     ) -> Result<String, rmcp::ErrorData> {
@@ -362,6 +366,7 @@ impl SepheraServer {
             },
             false,
         )
+        .await
         .map_err(map_internal_error("source resolution failed"))?;
 
         // The whole repository, because the radius of one file routinely reaches

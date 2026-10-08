@@ -158,6 +158,8 @@ sephera loc --url https://github.com/Reim-developer/Sephera --ref v0.5.0
 
 The checkout is temporary and **shallow**: `--url` clones the branch tip only, because counting lines reads the working tree rather than the history. On the Linux kernel that is roughly 1.3 GB instead of 6 GB, and most of the difference is download time. Naming a ref other than the branch tip needs the history to resolve it, so `--ref` clones in full.
 
+git streams its own progress while it clones, so a large repository shows byte counts and a rate rather than appearing to hang. Press **Ctrl+C** to stop: the clone is killed, the temporary checkout is removed, and the process exits **130** with nothing on stderr -- the same code a shell reports for a program it stopped, so a script can tell "the user cancelled" from "it failed".
+
 ## Notes on correctness
 
 Sephera's scanner is byte-oriented and comment-token aware. It is designed to be fast, stable, and portable across newline styles, rather than to fully parse each language grammar.

@@ -5,7 +5,7 @@ use sephera_core::core::runtime::{
 
 use crate::args::{ContextArgs, ContextCompress, ContextFormat};
 
-pub fn resolve_context_options(
+pub async fn resolve_context_options(
     arguments: ContextArgs,
     profile: Option<String>,
 ) -> Result<ResolvedContextCommand> {
@@ -33,6 +33,7 @@ pub fn resolve_context_options(
         format: arguments.format.map(context_format_name),
         output: arguments.output_args.output,
     })
+    .await
 }
 
 fn context_compress_name(compress: ContextCompress) -> String {
