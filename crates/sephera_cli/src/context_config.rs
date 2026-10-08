@@ -15,8 +15,8 @@ pub fn resolve_context_options(
             url: arguments.source.url,
             git_ref: arguments.source.git_ref,
         },
-        config: arguments.config_args.config,
-        no_config: arguments.config_args.no_config,
+        config: arguments.settings.config,
+        no_config: arguments.settings.no_config,
         // The flag is global, so it arrives from `Cli` rather than from
         // `ContextArgs`. Context is the one command that still resolves its own
         // config internally -- it is the one with a token budget -- so it needs

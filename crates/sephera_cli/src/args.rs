@@ -5,33 +5,66 @@ use serde::Deserialize;
 
 use crate::budget::parse_token_budget;
 
-const CLI_LONG_ABOUT: &str = "Sephera analyzes source trees for line counts, builds LLM-ready context packs, and maps dependency graphs.\n\nUse `loc` to inspect language-level line metrics, `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows, and `graph` to analyze and visualize the dependency structure of your codebase. The `context` command can also load defaults and named profiles from `.sephera.toml`, let explicit CLI flags override them, and build packs centered on Git changes via `--diff`.";
+/// Generates a command's argument struct with the shared groups already in it.
+///
+/// Five groups -- where to read from, what to skip, where the report goes, which
+/// config to read, and which profile within it -- were written out once per
+/// command, twenty-five times in all, and they had already drifted: `watch` called
+/// `--config` "Which `.sephera.toml` to read" while every other command called it
+/// "Shared settings source", and `symbols` listed `--ignore` last where `loc`
+/// listed it second, so the same `--help` ordered the same flags differently per
+/// command for no reason a reader could infer.
+///
+/// One struct holding all five would not do it either, because the commands do
+/// not all take all five: `watch` watches a local directory and writes no file,
+/// so [`WatchArgs`] declares its own. What is left to share is the field
+/// declarations, and the only construct that can share them is a macro emitting
+/// the whole struct. A `macro_rules!` invocation cannot go where an enum variant
+/// goes, nor where a struct field goes, and a field-generating macro cannot be
+/// reached even as nested expansion from a struct-generating one -- so
+/// `flatten_source!()` inside a struct body is rejected, and so is the same call
+/// written inside this macro's expansion. Writing the shared fields once *here*,
+/// as part of one struct item, is what gets past the limit.
+///
+/// A command's own flags come third, between `ignore` and `output`. That ordering
+/// is a choice, not a behaviour: the previous per-command orders differed from
+/// each other and no test pinned any of them.
+macro_rules! tree_command_args {
+    (
+        $(#[$meta:meta])*
+        $name:ident { $( $own:tt )* }
+    ) => {
+        $(#[$meta])*
+        #[derive(Debug, Args)]
+        pub struct $name {
+            /// Where to read from
+            #[command(flatten)]
+            pub source: SourceArgs,
 
-const CLI_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json\n  sephera graph --path . --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format dot --output deps.dot";
+            /// How to decide which files to leave out
+            #[command(flatten)]
+            pub ignore_args: IgnoreArgs,
 
-const LOC_LONG_ABOUT: &str = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Ignore patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base. All other ignore patterns are compiled as regular expressions and matched against that same relative path.";
+            $( $own )*
 
-const LOC_AFTER_LONG_HELP: &str = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera loc --url https://github.com/reim-developer/Sephera/tree/master/crates";
+            /// Where the rendered report goes
+            #[command(flatten)]
+            pub output_args: OutputArgs,
 
-const CONTEXT_LONG_ABOUT: &str = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.";
-
-const WATCH_LONG_ABOUT: &str = "Re-run an analysis whenever the watched directory changes.\n\nChoose what to re-run with `--target`: `graph` for the dependency report, `symbols` for declaration counts, `loc` for line metrics, or `depends-on` to keep a reverse dependency query live. Writes are debounced, so a burst of editor or build activity produces a single run rather than one per file.\n\nBuild output and dependency trees such as `target`, `node_modules`, and `.git` are never watched. Press Ctrl+C to stop.";
-
-const WATCH_AFTER_LONG_HELP: &str = "Examples:\n  sephera watch --target graph --path .\n  sephera watch --target symbols\n  sephera watch --target depends-on --on src/core/graph.rs\n  sephera watch --target graph --path crates --ignore \"*.snap\"\n  sephera watch --target loc --once";
-
-const SYMBOLS_LONG_ABOUT: &str = "Count declarations per language: functions, types, enums, and constants.\n\nCounts come from Tree-sitter parse trees rather than text matching, so a keyword inside a comment or string is not counted and a function nested inside an impl block or class body is attributed correctly. Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.\n\nUnlike `loc`, which measures how much code exists, this reports what is declared in it. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs.";
-
-const SYMBOLS_AFTER_LONG_HELP: &str = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\"";
-
-const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json";
+            /// Shared settings source and named profile
+            #[command(flatten)]
+            pub settings: SettingsArgs,
+        }
+    };
+}
 
 #[derive(Debug, Parser)]
 #[command(
     name = "sephera",
     version,
     about = "Analyze project structure and line counts",
-    long_about = CLI_LONG_ABOUT,
-    after_long_help = CLI_AFTER_LONG_HELP,
+    long_about = "Sephera analyzes source trees for line counts, builds LLM-ready context packs, and maps dependency graphs.\n\nUse `loc` to inspect language-level line metrics, `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows, and `graph` to analyze and visualize the dependency structure of your codebase. The `context` command can also load defaults and named profiles from `.sephera.toml`, let explicit CLI flags override them, and build packs centered on Git changes via `--diff`.",
+    after_long_help = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json\n  sephera graph --path . --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format dot --output deps.dot",
     arg_required_else_help = true
 )]
 pub struct Cli {
@@ -75,24 +108,27 @@ pub enum ProgressMode {
 )]
 pub enum Commands {
     /// Count lines of code for supported languages in a directory tree
-    #[command(long_about = LOC_LONG_ABOUT, after_long_help = LOC_AFTER_LONG_HELP)]
+    #[command(
+        long_about = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Ignore patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base. All other ignore patterns are compiled as regular expressions and matched against that same relative path.",
+        after_long_help = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera loc --url https://github.com/reim-developer/Sephera/tree/master/crates"
+    )]
     Loc(LocArgs),
     /// Count declarations per language
     #[command(
-        long_about = SYMBOLS_LONG_ABOUT,
-        after_long_help = SYMBOLS_AFTER_LONG_HELP
+        long_about = "Count declarations per language: functions, types, enums, and constants.\n\nCounts come from Tree-sitter parse trees rather than text matching, so a keyword inside a comment or string is not counted and a function nested inside an impl block or class body is attributed correctly. Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.\n\nUnlike `loc`, which measures how much code exists, this reports what is declared in it. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs.",
+        after_long_help = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\""
     )]
     Symbols(SymbolsArgs),
     /// Build an LLM-ready context pack for a repository or focused sub-paths
     #[command(
-        long_about = CONTEXT_LONG_ABOUT,
-        after_long_help = CONTEXT_AFTER_LONG_HELP
+        long_about = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.",
+        after_long_help = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json"
     )]
     Context(ContextArgs),
     /// Re-run an analysis whenever the tree changes
     #[command(
-        long_about = WATCH_LONG_ABOUT,
-        after_long_help = WATCH_AFTER_LONG_HELP
+        long_about = "Re-run an analysis whenever the watched directory changes.\n\nChoose what to re-run with `--target`: `graph` for the dependency report, `symbols` for declaration counts, `loc` for line metrics, or `depends-on` to keep a reverse dependency query live. Writes are debounced, so a burst of editor or build activity produces a single run rather than one per file.\n\nBuild output and dependency trees such as `target`, `node_modules`, and `.git` are never watched. Press Ctrl+C to stop.",
+        after_long_help = "Examples:\n  sephera watch --target graph --path .\n  sephera watch --target symbols\n  sephera watch --target depends-on --on src/core/graph.rs\n  sephera watch --target graph --path crates --ignore \"*.snap\"\n  sephera watch --target loc --once"
     )]
     Watch(WatchArgs),
     /// Start an MCP (Model Context Protocol) server over stdio
@@ -108,23 +144,15 @@ pub enum Commands {
     Graph(GraphArgs),
     /// Report what breaks if one file changes
     #[command(
-        long_about = IMPACT_LONG_ABOUT,
-        after_long_help = IMPACT_AFTER_LONG_HELP
+        long_about = "Report what breaks if one file changes.\n\nAnswers the question a reviewer, a pre-commit hook, or a nervous contributor asks before editing: if I touch this file, what else stops working? The answer is the file's blast radius -- every file that imports it, directly or through however many hops, along with the name each one imports.\n\nThis is `graph --what-depends-on` as its own command. The same analysis, but reachable without reading `graph --help`, composable in a script, and with `--fail-on` so a pipeline can refuse a change whose blast radius is too wide.",
+        after_long_help = "Examples:\n  sephera impact src/core/graph/resolver.rs\n  sephera impact src/lib.rs --depth 1\n  sephera impact src/core/ignore.rs --format json\n  sephera impact src/lib.rs --fail-on 40\n  sephera impact crates/sephera_core/src/core/graph.rs --fail-on 10 --output impact.md"
     )]
     Impact(ImpactArgs),
 }
 
-#[derive(Debug, Args)]
-pub struct LocArgs {
-    /// Where to read from
-    #[command(flatten)]
-    pub source: SourceArgs,
-
-    /// How to decide which files to leave out
-    #[command(flatten)]
-    pub ignore_args: IgnoreArgs,
-
-    /// Output format for the line-count report
+tree_command_args!(
+    LocArgs {
+        /// Output format for the line-count report
     #[arg(
         long,
         value_enum,
@@ -135,32 +163,29 @@ pub struct LocArgs {
     )]
     pub format: LocOutputFormat,
 
-    /// Where the rendered report goes
-    #[command(flatten)]
-    pub output_args: OutputArgs,
+    }
+);
 
-    /// Shared settings source
-    #[command(flatten)]
-    pub config_args: ConfigArgs,
-
-    /// Named profile to apply on top of the config
-    #[command(flatten)]
-    pub profile_args: ProfileArgs,
-}
-
-/// Which `.sephera.toml` a command reads, and whether to read one at all.
+/// Which `.sephera.toml` a command reads, whether to read one at all, and which
+/// profile inside it to apply.
 ///
-/// Mixed into every command's argument struct so that `--config` and
-/// `--no-config` cannot mean one thing for `context` and another for `graph`.
-/// Sharing the struct rather than repeating the two fields is what keeps the
-/// discovery rule identical across commands.
+/// One struct rather than two. `--config`, `--no-config` and `--profile` are a
+/// single question -- which settings apply -- and every command that read config
+/// read all three: five of six carried the two as adjacent
+/// fields, and `watch` carried them too. Splitting them bought nothing a reader
+/// could act on, and it was one more group for [`tree_command_args`] to keep
+/// consistent across commands.
+///
+/// Mixed into every command's argument struct so that these flags cannot mean
+/// one thing for `context` and another for `graph`. Sharing the struct rather
+/// than repeating the fields is what keeps the discovery rule identical.
 ///
 /// The layering rules live here rather than on each flag that participates in
 /// them. `--ignore` on `context` used to carry a sentence about `.sephera.toml`
 /// and profile precedence that the same flag on `loc` did not, so the
 /// precedence model was documented on one command and invisible on five.
 #[derive(Debug, Clone, Default, Args)]
-pub struct ConfigArgs {
+pub struct SettingsArgs {
     /// Read shared settings from this file instead of discovering one
     #[arg(
         long,
@@ -178,6 +203,23 @@ pub struct ConfigArgs {
         long_help = "Disable `.sephera.toml` loading for this invocation. Both auto-discovery and an explicit `--config` are skipped, and Sephera falls back to built-in defaults plus CLI flags. `[project]` patterns are not applied, which widens the analysis. `.gitignore` and `.sepheraignore` are unaffected; use `--no-gitignore` for those."
     )]
     pub no_config: bool,
+
+    /// Named profile to apply on top of the config
+    ///
+    /// Flattened into each command rather than declared once as a global
+    /// argument, because a global flag disappears from `sephera loc --help` --
+    /// and `--profile` is a flag someone has to discover before they can use it.
+    /// Declaring it per command keeps it in each command's help, and keeps the
+    /// description accurate: what a profile contains depends on the command it is
+    /// applied to.
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "no_config",
+        help = "Apply a named profile from `.sephera.toml`.",
+        long_help = "Apply `[profiles.<name>.<command>]` from `.sephera.toml`, layered on top of that command's own table and the shared `[project]` values. For `context` that is `[profiles.<name>.context]`, for `graph` it is `[profiles.<name>.graph]`, and so on for every command. Explicit flags still win over a profile. This flag requires config loading to stay enabled."
+    )]
+    pub profile: Option<String>,
 }
 
 /// Where a rendered report goes when it is not going to the terminal.
@@ -267,27 +309,7 @@ pub struct SourceArgs {
 /// `--ignore` wording used to differ on `context`, which appended a sentence
 /// about `.sephera.toml` layering that the other five commands did not have --
 /// so the same flag read differently depending on which command printed it. The
-/// layering is documented once on [`ConfigArgs`] instead.
-/// The named profile to apply, shared by every command that reads config.
-///
-/// Flattened into each command rather than declared once as a global argument,
-/// because a global flag disappears from `sephera loc --help` -- and `--profile`
-/// is a flag someone has to discover before they can use it. Declaring it per
-/// command keeps it in each command's help, and keeps the description accurate:
-/// what a profile contains depends on the command it is applied to.
-#[derive(Debug, Clone, Default, Args)]
-pub struct ProfileArgs {
-    /// Named configuration profile from `.sephera.toml`
-    #[arg(
-        long,
-        value_name = "NAME",
-        conflicts_with = "no_config",
-        help = "Apply a named profile from `.sephera.toml`.",
-        long_help = "Apply `[profiles.<name>.<command>]` from `.sephera.toml`, layered on top of that command's own table and the shared `[project]` values. For `context` that is `[profiles.<name>.context]`, for `graph` it is `[profiles.<name>.graph]`, and so on for every command. Explicit flags still win over a profile. This flag requires config loading to stay enabled."
-    )]
-    pub profile: Option<String>,
-}
-
+/// layering is documented once on [`SettingsArgs`] instead.
 #[derive(Debug, Clone, Default, Args)]
 pub struct IgnoreArgs {
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
@@ -327,13 +349,9 @@ pub enum SymbolOutputFormat {
     Json,
 }
 
-#[derive(Debug, Args)]
-pub struct SymbolsArgs {
-    /// Where to read from
-    #[command(flatten)]
-    pub source: SourceArgs,
-
-    /// Output format for the symbol report
+tree_command_args!(
+    SymbolsArgs {
+        /// Output format for the symbol report
     #[arg(
         long,
         value_enum,
@@ -342,10 +360,6 @@ pub struct SymbolsArgs {
         help = "Output format for the symbol report. Supports table, markdown, and json."
     )]
     pub format: SymbolOutputFormat,
-
-    /// Where the rendered report goes
-    #[command(flatten)]
-    pub output_args: OutputArgs,
 
     /// List every declaration instead of only per-language totals
     #[arg(
@@ -363,18 +377,8 @@ pub struct SymbolsArgs {
     )]
     pub by_file: bool,
 
-    /// Shared settings source
-    #[command(flatten)]
-    pub config_args: ConfigArgs,
-
-    /// Named profile to apply on top of the config
-    #[command(flatten)]
-    pub profile_args: ProfileArgs,
-
-    /// How to decide which files to leave out
-    #[command(flatten)]
-    pub ignore_args: IgnoreArgs,
-}
+    }
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum WatchTarget {
@@ -398,6 +402,12 @@ pub enum WatchTarget {
     DependsOn,
 }
 
+/// `watch` is the one tree command that does not use [`tree_command_args`].
+///
+/// It watches a local directory, so it has no `--url` and no
+/// [`SourceArgs`]; and it renders to the terminal on every change, so it has no
+/// [`OutputArgs`]. That leaves two of the four shared groups, which is not enough
+/// repetition to justify a second macro and its own way of drifting.
 #[derive(Debug, Args)]
 pub struct WatchArgs {
     /// What to re-run on change
@@ -442,30 +452,14 @@ pub struct WatchArgs {
     #[command(flatten)]
     pub ignore_args: IgnoreArgs,
 
-    /// Which `.sephera.toml` to read
+    /// Shared settings source and named profile
     #[command(flatten)]
-    pub config_args: ConfigArgs,
-
-    /// Named profile to apply on top of the config
-    #[command(flatten)]
-    pub profile_args: ProfileArgs,
+    pub settings: SettingsArgs,
 }
 
-#[derive(Debug, Args)]
-pub struct ContextArgs {
-    /// Where to read from
-    #[command(flatten)]
-    pub source: SourceArgs,
-
-    /// Which `.sephera.toml` to read
-    #[command(flatten)]
-    pub config_args: ConfigArgs,
-
-    /// Named profile to apply on top of the config
-    #[command(flatten)]
-    pub profile_args: ProfileArgs,
-
-    /// List available context profiles from the resolved `.sephera.toml` file and exit.
+tree_command_args!(
+    ContextArgs {
+        /// List available context profiles from the resolved `.sephera.toml` file and exit.
     #[arg(
         long,
         conflicts_with = "no_config",
@@ -479,10 +473,6 @@ pub struct ContextArgs {
         long_help = "List available context profiles from the resolved `.sephera.toml` file and exit. Sephera uses either `--config <FILE>` or the normal auto-discovery rules. This mode does not build a context pack."
     )]
     pub list_profiles: bool,
-
-    /// How to decide which files to leave out
-    #[command(flatten)]
-    pub ignore_args: IgnoreArgs,
 
     /// Focus path inside the base path. Repeat to prioritize multiple files or directories.
     #[arg(
@@ -541,10 +531,8 @@ pub struct ContextArgs {
     )]
     pub format: Option<ContextFormat>,
 
-    /// Where the rendered report goes
-    #[command(flatten)]
-    pub output_args: OutputArgs,
-}
+    }
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Deserialize)]
 pub enum ContextCompress {
@@ -606,17 +594,9 @@ pub enum GraphOutputFormat {
     Dot,
 }
 
-#[derive(Debug, Args)]
-pub struct GraphArgs {
-    /// Where to read from
-    #[command(flatten)]
-    pub source: SourceArgs,
-
-    /// How to decide which files to leave out
-    #[command(flatten)]
-    pub ignore_args: IgnoreArgs,
-
-    /// Focus path inside the base path. Repeat to analyze only specific files or directories.
+tree_command_args!(
+    GraphArgs {
+        /// Focus path inside the base path. Repeat to analyze only specific files or directories.
     #[arg(
         long,
         value_name = "PATH",
@@ -684,14 +664,6 @@ pub struct GraphArgs {
     )]
     pub diff: Option<String>,
 
-    /// Shared settings source
-    #[command(flatten)]
-    pub config_args: ConfigArgs,
-
-    /// Named profile to apply on top of the config
-    #[command(flatten)]
-    pub profile_args: ProfileArgs,
-
     /// Drop imports that describe types rather than runtime dependencies
     #[arg(
         long,
@@ -700,19 +672,13 @@ pub struct GraphArgs {
     )]
     pub exclude_types: bool,
 
-    /// Where the rendered report goes
-    #[command(flatten)]
-    pub output_args: OutputArgs,
-}
+    }
+);
 
-const IMPACT_LONG_ABOUT: &str = "Report what breaks if one file changes.\n\nAnswers the question a reviewer, a pre-commit hook, or a nervous contributor asks before editing: if I touch this file, what else stops working? The answer is the file's blast radius -- every file that imports it, directly or through however many hops, along with the name each one imports.\n\nThis is `graph --what-depends-on` as its own command. The same analysis, but reachable without reading `graph --help`, composable in a script, and with `--fail-on` so a pipeline can refuse a change whose blast radius is too wide.";
-
-const IMPACT_AFTER_LONG_HELP: &str = "Examples:\n  sephera impact src/core/graph/resolver.rs\n  sephera impact src/lib.rs --depth 1\n  sephera impact src/core/ignore.rs --format json\n  sephera impact src/lib.rs --fail-on 40\n  sephera impact crates/sephera_core/src/core/graph.rs --fail-on 10 --output impact.md";
-
-/// Report the blast radius of one file.
-#[derive(Debug, Args)]
-pub struct ImpactArgs {
-    /// Files to report the blast radius of
+tree_command_args!(
+    #[doc = "Report the blast radius of one file."]
+    ImpactArgs {
+        /// Files to report the blast radius of
     #[arg(
         value_name = "FILE",
         required = true,
@@ -721,14 +687,6 @@ pub struct ImpactArgs {
         long_help = "Path of the file whose blast radius to report, relative to the analysis base. Repeat the flag or pass several paths to ask about more than one; the graph is built once and every path is measured against it, so asking about five files costs about the same as asking about one. Paths are listed widest first. A path that matches nothing in the analysis is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
     )]
     pub files: Vec<String>,
-
-    /// Where to read from
-    #[command(flatten)]
-    pub source: SourceArgs,
-
-    /// How to decide which files to leave out
-    #[command(flatten)]
-    pub ignore_args: IgnoreArgs,
 
     /// Maximum distance from the file whose dependents are reported
     #[arg(
@@ -777,18 +735,8 @@ pub struct ImpactArgs {
     )]
     pub format: ImpactOutputFormat,
 
-    /// Where the rendered report goes
-    #[command(flatten)]
-    pub output_args: OutputArgs,
-
-    /// Shared settings source
-    #[command(flatten)]
-    pub config_args: ConfigArgs,
-
-    /// Named profile to apply on top of the config
-    #[command(flatten)]
-    pub profile_args: ProfileArgs,
-}
+    }
+);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ImpactOutputFormat {
@@ -833,6 +781,11 @@ mod tests {
                 "--no-gitignore",
                 "--config",
                 "--no-config",
+                // `--profile` is the flag the shared groups exist to guarantee,
+                // and it is the one most easily lost by choosing not to flatten a
+                // group: a command that silently stopped reading `.sephera.toml`
+                // would still pass a test checking the other five.
+                "--profile",
             ] {
                 assert!(
                     flags.iter().any(|flag| flag == expected),
@@ -1027,16 +980,16 @@ mod tests {
                 assert_eq!(arguments.source.url, None);
                 assert_eq!(arguments.source.git_ref, None);
                 assert_eq!(
-                    arguments.config_args.config,
+                    arguments.settings.config,
                     Some(std::path::PathBuf::from(".sephera.toml"))
                 );
                 // `--profile` is flattened into the command rather than declared once on
-                // `Cli`, so it lands on `ContextArgs::profile_args`. Asserted
+                // `Cli`, so it lands on `ContextArgs::settings`. Asserted
                 // here because a global flag would vanish from this command's
                 // help, and a flag that vanishes from help is a flag nobody
                 // finds.
                 assert_eq!(
-                    arguments.profile_args.profile.as_deref(),
+                    arguments.settings.profile.as_deref(),
                     Some("review")
                 );
                 assert_eq!(
