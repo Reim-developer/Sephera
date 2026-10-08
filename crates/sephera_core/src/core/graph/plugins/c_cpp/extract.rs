@@ -10,9 +10,9 @@
 
 use tree_sitter::Node;
 
-use crate::core::graph::{ImportKind, types::ImportStatement};
+use crate::core::graph::types::ImportStatement;
 
-use super::super::walk::node_text;
+use super::super::walk::{line_of, node_text};
 
 /// Read the includes out of one node.
 pub(super) fn extract_from_node(
@@ -23,7 +23,7 @@ pub(super) fn extract_from_node(
         return None;
     }
 
-    let line = u64::try_from(node.start_position().row + 1).ok()?;
+    let line = line_of(node)?;
     let mut cursor = node.walk();
 
     for child in node.children(&mut cursor) {
@@ -35,7 +35,7 @@ pub(super) fn extract_from_node(
             "string_literal" => {
                 let path = raw.trim_matches('"');
                 if !path.is_empty() {
-                    return Some(vec![statement(path.to_owned(), line)]);
+                    return Some(vec![ImportStatement::new(path, line)]);
                 }
             }
             // `<stdio.h>` — a system header. The angle brackets are kept so
@@ -44,7 +44,10 @@ pub(super) fn extract_from_node(
             "system_lib_string" => {
                 let path = raw.trim_start_matches('<').trim_end_matches('>');
                 if !path.is_empty() {
-                    return Some(vec![statement(format!("<{path}>"), line)]);
+                    return Some(vec![ImportStatement::new(
+                        format!("<{path}>"),
+                        line,
+                    )]);
                 }
             }
             _ => {}
@@ -55,48 +58,26 @@ pub(super) fn extract_from_node(
     None
 }
 
-/// One include directive.
-const fn statement(raw_path: String, line: u64) -> ImportStatement {
-    ImportStatement {
-        kind: ImportKind::Dependency,
-        module_depth: 0,
-        raw_path,
-        line,
-        cfg_gated: false,
-    }
-}
-
 #[cfg(test)]
 mod tests {
-    use super::*;
     use crate::core::compression::SupportedLanguage;
-    use crate::core::compression::new_parser;
+
+    use crate::core::graph::plugins::walk::imports_found_by;
 
     /// Every path one file includes, in order.
+    ///
+    /// The plugin carries the language because one plugin serves both C and C++
+    /// and only the grammar differs, so the test reads the same field the
+    /// registry does rather than picking a language of its own.
     fn paths(source: &[u8], language: SupportedLanguage) -> Vec<String> {
-        let mut parser = new_parser(language).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found.into_iter().map(|s| s.raw_path).collect()
-    }
-
-    fn descend(
-        source: &[u8],
-        node: &Node<'_>,
-        depth: u8,
-        out: &mut Vec<ImportStatement>,
-    ) {
-        if let Some(mut found) = extract_from_node(source, node) {
-            for statement in &mut found {
-                statement.module_depth = depth;
-            }
-            out.extend(found);
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            descend(source, &child, depth, out);
-        }
+        imports_found_by(
+            source,
+            language,
+            &super::super::CCppPlugin { language },
+        )
+        .into_iter()
+        .map(|s| s.raw_path)
+        .collect()
     }
 
     #[test]

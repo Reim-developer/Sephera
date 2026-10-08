@@ -24,7 +24,7 @@ use tree_sitter::Node;
 
 use crate::core::graph::{ImportKind, types::ImportStatement};
 
-use super::super::walk::node_text;
+use super::super::walk::{line_of, node_text};
 
 /// Read the references out of one node.
 pub(super) fn extract_from_node(
@@ -59,15 +59,15 @@ fn extract_mod(source: &[u8], node: &Node<'_>) -> Option<Vec<ImportStatement>> {
         return None;
     }
 
-    Some(vec![ImportStatement {
-        // `self::` anchors to the containing module, so `pub mod types;` in
-        // `src/graph/mod.rs` resolves to `src/graph/types.rs`.
-        raw_path: format!("self::{module_name}"),
-        line: u64::try_from(node.start_position().row + 1).ok()?,
-        kind: ImportKind::ModuleDeclaration,
-        module_depth: 0,
-        cfg_gated: false,
-    }])
+    Some(vec![
+        ImportStatement::new(
+            // `self::` anchors to the containing module, so `pub mod types;` in
+            // `src/graph/mod.rs` resolves to `src/graph/types.rs`.
+            format!("self::{module_name}"),
+            line_of(node)?,
+        )
+        .with_kind(ImportKind::ModuleDeclaration),
+    ])
 }
 
 /// Whether a `mod` declaration carries a `#[path = "..."]` attribute.
@@ -96,44 +96,34 @@ fn has_path_attribute(source: &[u8], node: &Node<'_>) -> bool {
 
 /// `use ...;` — every path a `use` tree names.
 fn extract_use(source: &[u8], node: &Node<'_>) -> Option<Vec<ImportStatement>> {
-    let line = u64::try_from(node.start_position().row + 1).ok()?;
+    let line = line_of(node)?;
     let argument = node.child_by_field_name("argument")?;
     let mut paths = Vec::new();
-    collect_use_paths(source, &argument, None, &mut paths);
+    collect_use_paths(source, &argument, None, line, &mut paths);
 
-    Some(
-        paths
-            .into_iter()
-            .map(|use_path| ImportStatement {
-                raw_path: use_path.path,
-                line,
-                kind: use_path.kind,
-                module_depth: 0,
-                cfg_gated: false,
-            })
-            .collect(),
-    )
-}
-
-/// One path named by a `use` tree.
-struct UsePath {
-    path: String,
-    kind: ImportKind,
+    Some(paths)
 }
 
 /// Flatten a `use` tree into the full paths it names.
 ///
 /// `prefix` is the path accumulated from enclosing groups, or `None` at the top.
+///
+/// Statements are built here rather than collected as a path-and-kind pair and
+/// converted at the end. The pair held exactly the two fields
+/// [`ImportStatement`] already has, so the conversion was a field-by-field copy
+/// of every statement a `use` tree names -- and `use a::{b, c}` is the commonest
+/// statement there is.
 fn collect_use_paths(
     source: &[u8],
     node: &Node<'_>,
     prefix: Option<&str>,
-    out: &mut Vec<UsePath>,
+    line: u64,
+    out: &mut Vec<ImportStatement>,
 ) {
     match node.kind() {
         "use_list" => {
             for child in node.named_children(&mut node.walk()) {
-                collect_use_paths(source, &child, prefix, out);
+                collect_use_paths(source, &child, prefix, line, out);
             }
         }
         "scoped_use_list" => {
@@ -144,7 +134,7 @@ fn collect_use_paths(
                 return;
             };
             let base = join_use_path(prefix, &node_text(source, &path));
-            collect_use_paths(source, &list, Some(&base), out);
+            collect_use_paths(source, &list, Some(&base), line, out);
         }
         // `use foo::bar as baz;` names `foo::bar`; the alias is a local binding,
         // and the kind records that so it can be filtered.
@@ -155,6 +145,7 @@ fn collect_use_paths(
                     &path,
                     prefix,
                     ImportKind::TypeAlias,
+                    line,
                     out,
                 );
             }
@@ -169,18 +160,26 @@ fn collect_use_paths(
                     &path,
                     prefix,
                     ImportKind::Namespace,
+                    line,
                     out,
                 );
             }
         }
         "use_declaration" => {
             if let Some(argument) = node.child_by_field_name("argument") {
-                collect_use_paths(source, &argument, prefix, out);
+                collect_use_paths(source, &argument, prefix, line, out);
             }
         }
         _ => {
             // `scoped_identifier`, `identifier`, `crate`, `self`, `super`.
-            push_use_path(source, node, prefix, ImportKind::Dependency, out);
+            push_use_path(
+                source,
+                node,
+                prefix,
+                ImportKind::Dependency,
+                line,
+                out,
+            );
         }
     }
 }
@@ -191,16 +190,17 @@ fn push_use_path(
     node: &Node<'_>,
     prefix: Option<&str>,
     kind: ImportKind,
-    out: &mut Vec<UsePath>,
+    line: u64,
+    out: &mut Vec<ImportStatement>,
 ) {
     let text = node_text(source, node);
     if text.is_empty() {
         return;
     }
-    out.push(UsePath {
-        path: join_use_path(prefix, &text),
-        kind,
-    });
+    out.push(
+        ImportStatement::new(join_use_path(prefix, &text), line)
+            .with_kind(kind),
+    );
 }
 
 /// Join a group prefix and a leaf into one path.
@@ -242,42 +242,19 @@ pub(super) fn is_cfg_gated(source: &[u8], node: &Node<'_>) -> bool {
 
 /// Drives the walk for the tests, so they exercise the real traversal.
 ///
-/// The shared walker is not reachable from here without a plugin, and the depth
-/// and `cfg` behaviour under test comes from that walk rather than from
-/// extraction.
+/// The depth and `cfg` behaviour under test comes from the shared walker rather
+/// than from extraction, so the test goes through the plugin: that is the only
+/// way the traversal can reach `child_depth_step` and `is_cfg_gated`, and a test
+/// that reached `extract_from_node` directly was testing the extractor against a
+/// traversal the graph does not use.
 #[cfg(test)]
 fn walk(source: &[u8]) -> Vec<ImportStatement> {
-    use crate::core::compression::{SupportedLanguage, new_parser};
+    use crate::core::compression::SupportedLanguage;
+    use crate::core::graph::plugins::walk::imports_found_by;
 
-    let mut parser =
-        new_parser(SupportedLanguage::Rust).expect("a Rust parser exists");
-    let tree = parser.parse(source, None).expect("a parse tree");
-    let mut found = Vec::new();
-    descend(source, &tree.root_node(), 0, &mut found);
-    found
-}
-
-#[cfg(test)]
-fn descend(
-    source: &[u8],
-    node: &Node<'_>,
-    depth: u8,
-    out: &mut Vec<ImportStatement>,
-) {
-    if let Some(mut found) = extract_from_node(source, node) {
-        let gated = is_cfg_gated(source, node);
-        for statement in &mut found {
-            statement.module_depth = depth;
-            statement.cfg_gated = gated;
-        }
-        out.extend(found);
-    }
-
-    let next = depth.saturating_add(u8::from(opens_inline_module(node)));
-    let mut cursor = node.walk();
-    for child in node.children(&mut cursor) {
-        descend(source, &child, next, out);
-    }
+    // `super` rather than `super::super`: this sits one level out from the test
+    // module, so the plugin is already in the parent.
+    imports_found_by(source, SupportedLanguage::Rust, &super::RustPlugin)
 }
 
 #[cfg(test)]

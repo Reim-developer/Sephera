@@ -103,6 +103,54 @@ pub struct ImportStatement {
     pub cfg_gated: bool,
 }
 
+impl ImportStatement {
+    /// An ordinary dependency at one line of a source file.
+    ///
+    /// Every extractor builds its statements here rather than writing the struct
+    /// literal, because three of the five fields have only one sensible value at
+    /// extraction time: `kind` defaults to [`ImportKind::Dependency`], and
+    /// `module_depth` and `cfg_gated` are answers the *walker* has, not the
+    /// extractor -- it is the one that descends into inline modules and reads
+    /// preceding attributes. An extractor that set them would be guessing.
+    ///
+    /// Taking `line` as `impl Into<u64>` is what lets the common case pass the
+    /// result of [`walk::line_of`](crate::core::graph::plugins::walk::line_of)
+    /// straight through.
+    #[must_use]
+    pub fn new(raw_path: impl Into<String>, line: impl Into<u64>) -> Self {
+        Self {
+            raw_path: raw_path.into(),
+            line: line.into(),
+            kind: ImportKind::Dependency,
+            module_depth: 0,
+            cfg_gated: false,
+        }
+    }
+
+    /// The same statement, reclassified.
+    ///
+    /// A rename, a namespace or a module declaration is an ordinary reference
+    /// that the grammar says more about than its shape does, so each extractor
+    /// reads the distinguishing token and asks for it here rather than
+    /// constructing the struct itself.
+    #[must_use]
+    pub const fn with_kind(mut self, kind: ImportKind) -> Self {
+        self.kind = kind;
+        self
+    }
+
+    /// The same statement, on a line that overrides the node's own.
+    ///
+    /// A grouped `use` reports the line of each import rather than the line the
+    /// statement started on, and a `#[cfg]`-decorated import is attributed to
+    /// the reference it decorates.
+    #[must_use]
+    pub const fn at_line(mut self, line: u64) -> Self {
+        self.line = line;
+        self
+    }
+}
+
 /// Imports extracted from a single source file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileImports {

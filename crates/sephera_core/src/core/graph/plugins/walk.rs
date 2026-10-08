@@ -96,6 +96,28 @@ pub(super) fn node_text(source: &[u8], node: &Node<'_>) -> String {
         .to_owned()
 }
 
+/// The 1-based line a node sits on.
+///
+/// Tree-sitter rows are 0-based and every report here is 1-based, so the
+/// conversion is not optional, and doing it in one place is what stops two
+/// extractors disagreeing about the same import's line.
+///
+/// Returns `None` rather than clamping: a row that cannot be converted means the
+/// position is not a line number, and an extractor reporting a guess would put a
+/// reader on the wrong line with no way to tell.
+pub(super) fn line_of(node: &Node<'_>) -> Option<u64> {
+    u64::try_from(node.start_position().row + 1).ok()
+}
+
+/// The 1-based line a node sits on, falling back when the row is unusable.
+///
+/// For the extractors that report a line *per import* rather than per statement:
+/// a grouped `import (...)` is one node for the whole block, so the statement's
+/// line is the right answer for any import in it whose own line cannot be read.
+pub(super) fn line_of_or(node: &Node<'_>, fallback: u64) -> u64 {
+    line_of(node).unwrap_or(fallback)
+}
+
 /// The value a string literal holds, without its quotes.
 ///
 /// Prefers the grammar's own `string_fragment`, which is the unescaped content,
@@ -113,4 +135,28 @@ pub(super) fn string_value(source: &[u8], node: &Node<'_>) -> String {
         .trim_matches(['\'', '"', '`', ';'])
         .trim()
         .to_owned()
+}
+
+/// Every import a plugin finds in one source, for an extractor's own tests.
+///
+/// This is [`walk_with_declarations`] under a name that says what a test wants.
+/// It exists because that traversal was reimplemented in each extractor's test
+/// module -- six copies of the same recursion, each one reaching for the
+/// extractor's free `extract_from_node` because it had no plugin to hand. That
+/// was the extractor tested and not the walk: a statement the walker reached at
+/// the wrong depth, or marked `cfg_gated` when the extractor cannot see an
+/// attribute, passed in the copy and failed in production.
+///
+/// Taking the plugin rather than a function pointer is what closes that. The
+/// plugin is the thing that knows the language, and going through it is what
+/// makes the test agree with the walk the graph actually uses.
+#[cfg(test)]
+pub(super) fn imports_found_by(
+    source: &[u8],
+    language: SupportedLanguage,
+    plugin: &dyn ImportPlugin,
+) -> Vec<ImportStatement> {
+    walk_with_declarations(source, language, plugin)
+        .expect("a parser exists for every language this crate bundles")
+        .imports
 }

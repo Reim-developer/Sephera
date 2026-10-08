@@ -17,14 +17,14 @@ use tree_sitter::Node;
 
 use crate::core::graph::{ImportKind, types::ImportStatement};
 
-use super::super::walk::node_text;
+use super::super::walk::{line_of, node_text};
 
 /// Read the imports out of one node.
 pub(super) fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
-    let line = u64::try_from(node.start_position().row + 1).ok()?;
+    let line = line_of(node)?;
 
     match node.kind() {
         "import_statement" => plain_imports(source, node, line),
@@ -55,7 +55,7 @@ fn plain_imports(
         if raw.is_empty() {
             continue;
         }
-        statements.push(statement(raw, ImportKind::Dependency, line));
+        statements.push(ImportStatement::new(raw, line));
     }
 
     (!statements.is_empty()).then_some(statements)
@@ -73,8 +73,7 @@ fn from_imports(
         return None;
     }
 
-    let mut statements =
-        vec![statement(raw.clone(), ImportKind::Dependency, line)];
+    let mut statements = vec![ImportStatement::new(raw.clone(), line)];
 
     // `from . import helper` puts only the dots in `module_name`. Reporting the
     // dots pointed the edge at the package's `__init__.py` instead of at the
@@ -98,15 +97,15 @@ fn from_imports(
         if module_name.is_empty() {
             continue;
         }
+        // A module path is followed by a separator, except when the module half was
+        // nothing but dots: `from . import helper` has no module name to put a
+        // `.` after, and `..helper` is the path it means. Every other shape --
+        // `from ..pkg import mod`, `from pkg import absent` -- is one dotted
+        // segment appended to another, which is why those two share a branch
+        // rather than carrying one each.
         let full_path = if dots_only {
-            // For relative imports like `from . import helper`, the raw is just
-            // dots (`.` or `..`). The imported name is the submodule.
             format!("{raw}{module_name}")
-        } else if raw.starts_with('.') {
-            // Relative import with module path: `from ..pkg import mod`
-            format!("{raw}.{module_name}")
         } else {
-            // Absolute import: `from pkg import absent` -> `pkg.absent`
             format!("{raw}.{module_name}")
         };
         // Wildcard imports (`from . import *`) are namespaces — they name a
@@ -119,67 +118,31 @@ fn from_imports(
         } else {
             ImportKind::Dependency
         };
-        statements.push(statement(full_path, kind, line));
+        statements.push(ImportStatement::new(full_path, line).with_kind(kind));
     }
 
     Some(statements)
-}
-
-/// One Python import.
-const fn statement(
-    raw_path: String,
-    kind: ImportKind,
-    line: u64,
-) -> ImportStatement {
-    ImportStatement {
-        kind,
-        module_depth: 0,
-        raw_path,
-        line,
-        cfg_gated: false,
-    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::core::compression::SupportedLanguage;
-    use crate::core::compression::new_parser;
 
-    /// Every path one Python file imports, in order.
-    fn paths(source: &[u8]) -> Vec<String> {
-        let mut parser = new_parser(SupportedLanguage::Python).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found.into_iter().map(|s| s.raw_path).collect()
-    }
+    use crate::core::graph::plugins::walk::imports_found_by;
 
     /// Every import with its kind, for the assertions that care about it.
     fn imports(source: &[u8]) -> Vec<ImportStatement> {
-        let mut parser = new_parser(SupportedLanguage::Python).unwrap();
-        let tree = parser.parse(source, None).unwrap();
-        let mut found = Vec::new();
-        descend(source, &tree.root_node(), 0, &mut found);
-        found
+        imports_found_by(
+            source,
+            SupportedLanguage::Python,
+            &super::super::PythonPlugin,
+        )
     }
 
-    fn descend(
-        source: &[u8],
-        node: &Node<'_>,
-        depth: u8,
-        out: &mut Vec<ImportStatement>,
-    ) {
-        if let Some(mut found) = extract_from_node(source, node) {
-            for statement in &mut found {
-                statement.module_depth = depth;
-            }
-            out.extend(found);
-        }
-        let mut cursor = node.walk();
-        for child in node.children(&mut cursor) {
-            descend(source, &child, depth, out);
-        }
+    /// Every path one Python file imports, in order.
+    fn paths(source: &[u8]) -> Vec<String> {
+        imports(source).into_iter().map(|s| s.raw_path).collect()
     }
 
     #[test]
