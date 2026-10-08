@@ -56,8 +56,15 @@ impl ResolverPlugin for PythonPlugin {
             if let Some(found) = first_existing(context, &relative) {
                 return Some(found);
             }
+            // Relative import that doesn't resolve: it's a local gap, not
+            // external. The import names something that should exist in the
+            // project's package structure but doesn't.
+            return None;
         }
 
+        // Absolute import (no leading dots): resolve from the project root.
+        // The project root is the directory containing the analysis base.
+        // We try the module path as-is from the known files.
         first_existing(context, &module_path)
     }
 }
@@ -192,5 +199,34 @@ mod tests {
         assert_eq!(ascend("a/b/c", 2), "a");
         // Climbing past the top must not loop or panic.
         assert_eq!(ascend("a", 5), "");
+    }
+
+    #[test]
+    fn resolve_missing_absolute_submodule_is_local_gap() {
+        // `from pkg import absent` where `absent` doesn't exist.
+        // The import `pkg.absent` should be a local gap (unresolved but local).
+        let files = ["pkg/__init__.py", "main.py"];
+        let known: BTreeSet<String> =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let context = super::super::test_context("main.py", &known);
+        let plugin = PythonPlugin;
+
+        // The module `pkg` resolves, but `pkg.absent` should not.
+        // The resolver is called with the full path `pkg.absent`.
+        let resolved = plugin.resolve("pkg.absent", context);
+        assert_eq!(resolved, None, "missing submodule should not resolve");
+    }
+
+    #[test]
+    fn resolve_relative_import_with_too_many_dots_is_local_gap() {
+        // `from ... import outside` from `pkg/sub/deep.py` climbs past the root.
+        let files = ["pkg/sub/deep.py", "pkg/__init__.py", "main.py"];
+        let known: BTreeSet<String> =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let context = super::super::test_context("pkg/sub/deep.py", &known);
+        let plugin = PythonPlugin;
+
+        let resolved = plugin.resolve("...outside", context);
+        assert_eq!(resolved, None, "climbing past root should not resolve");
     }
 }

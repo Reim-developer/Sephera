@@ -80,32 +80,46 @@ fn from_imports(
     // dots pointed the edge at the package's `__init__.py` instead of at the
     // module the import actually reaches.
     let dots_only = raw.chars().all(|character| character == '.');
-    if dots_only {
-        let mut cursor = node.walk();
-        let mut names = node.named_children(&mut cursor);
-        let _ = names.next(); // the module itself
-        for name in names {
-            // `from . import typing as ft` imports the module `typing`; the
-            // child's text is `typing as ft`, so the alias has to be dropped or
-            // the path names something that does not exist.
-            let module = name.child_by_field_name("name").map_or_else(
-                || node_text(source, &name),
-                |field| node_text(source, &field),
-            );
-            if module.is_empty() {
-                continue;
-            }
-            // A name imported from a package may be a submodule or an attribute
-            // the package re-exports — `from . import Flask` in flask's `cli.py`
-            // names the class, and no `Flask.py` exists. Marking it a namespace
-            // keeps the edge when a submodule does exist without reporting a gap
-            // when one does not.
-            statements.push(statement(
-                format!("{raw}{module}"),
-                ImportKind::Namespace,
-                line,
-            ));
+
+    // For all `from` imports, extract the imported names as submodules.
+    // `from pkg import absent` should also extract `pkg.absent` so the resolver
+    // can report a gap when the submodule doesn't exist.
+    let mut cursor = node.walk();
+    let mut names = node.named_children(&mut cursor);
+    let _ = names.next(); // the module itself
+    for name in names {
+        // `from . import typing as ft` imports the module `typing`; the
+        // child's text is `typing as ft`, so the alias has to be dropped or
+        // the path names something that does not exist.
+        let module_name = name.child_by_field_name("name").map_or_else(
+            || node_text(source, &name),
+            |field| node_text(source, &field),
+        );
+        if module_name.is_empty() {
+            continue;
         }
+        let full_path = if dots_only {
+            // For relative imports like `from . import helper`, the raw is just
+            // dots (`.` or `..`). The imported name is the submodule.
+            format!("{raw}{module_name}")
+        } else if raw.starts_with('.') {
+            // Relative import with module path: `from ..pkg import mod`
+            format!("{raw}.{module_name}")
+        } else {
+            // Absolute import: `from pkg import absent` -> `pkg.absent`
+            format!("{raw}.{module_name}")
+        };
+        // Wildcard imports (`from . import *`) are namespaces — they name a
+        // whole package rather than a single module. Other relative imports
+        // (`from . import helper`) and all absolute imports target a specific
+        // module, so they are dependencies. This ensures missing submodules
+        // are reported as resolver gaps rather than silently dropped.
+        let kind = if dots_only && module_name == "*" {
+            ImportKind::Namespace
+        } else {
+            ImportKind::Dependency
+        };
+        statements.push(statement(full_path, kind, line));
     }
 
     Some(statements)
@@ -186,19 +200,29 @@ mod tests {
 
     #[test]
     fn a_from_import_reports_the_module_half() {
-        assert_eq!(paths(b"from a.b.c import d\n"), vec!["a.b.c".to_owned()]);
+        // Now also extracts the imported name as a submodule.
+        assert_eq!(
+            paths(b"from a.b.c import d\n"),
+            vec!["a.b.c".to_owned(), "a.b.c.d".to_owned()]
+        );
     }
 
     #[test]
     fn a_relative_import_keeps_its_dots() {
         for (source, expected) in [
-            (&b"from .mod import thing\n"[..], ".mod"),
-            (&b"from ..pkg import other\n"[..], "..pkg"),
+            (
+                &b"from .mod import thing\n"[..],
+                vec![".mod".to_owned(), ".mod.thing".to_owned()],
+            ),
+            (
+                &b"from ..pkg import other\n"[..],
+                vec!["..pkg".to_owned(), "..pkg.other".to_owned()],
+            ),
         ] {
             assert_eq!(
                 paths(source),
-                vec![expected.to_owned()],
-                "{expected} lost its leading dots"
+                expected,
+                "lost leading dots or submodule"
             );
         }
     }
@@ -229,10 +253,13 @@ mod tests {
     }
 
     #[test]
-    fn a_submodule_import_is_tagged_as_a_namespace() {
-        // `from . import Flask` may name a submodule or a class the package
-        // re-exports, and only the source can say which. Tagging it keeps the
-        // edge when a submodule exists without inventing a gap when one does not.
+    fn a_relative_submodule_import_is_a_dependency() {
+        // `from . import helper` imports a submodule. Previously this was
+        // tagged as a namespace to avoid gaps for re-exported attributes like
+        // `from . import Flask`, but that caused real missing submodules to be
+        // silently dropped. Now it is a dependency so missing submodules are
+        // reported as resolver gaps. Wildcard imports (`from . import *`) remain
+        // namespaces because they name a whole package.
         let found = imports(b"from . import helper\n");
 
         let submodule = found
@@ -240,7 +267,19 @@ mod tests {
             .find(|statement| statement.raw_path == ".helper")
             .expect("the submodule must be present");
 
-        assert_eq!(submodule.kind, ImportKind::Namespace);
+        assert_eq!(submodule.kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn a_wildcard_import_is_a_namespace() {
+        let found = imports(b"from . import *\n");
+
+        let wildcard = found
+            .iter()
+            .find(|statement| statement.raw_path == ".*")
+            .expect("the wildcard must be present");
+
+        assert_eq!(wildcard.kind, ImportKind::Namespace);
     }
 
     #[test]

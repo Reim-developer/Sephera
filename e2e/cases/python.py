@@ -129,11 +129,10 @@ CASES: Final[tuple[Case, ...]] = (
     Case(
         id="python/a_missing_submodule_of_an_absolute_import_is_dropped",
         source=f"{P}/__init__.py",
-        import_path="pkg",
+        import_path="pkg.absent",
         why="`from pkg import absent` reaches for a submodule named `absent`, "
         "which does not exist. The package resolves, so the statement leaves one "
-        "edge pointing at the package and nothing at all for the missing name -- "
-        "a dependency the tool cannot see.",
+        "edge pointing at the package and the missing submodule is a local gap.",
         resolves_to=None,
         resolved=False,
         local_gap=True,
@@ -152,9 +151,9 @@ CASES: Final[tuple[Case, ...]] = (
     Case(
         id="python/absolute_module_import",
         source=f"{P}/sub/deep.py",
-        import_path="python.pkg.sub.value",
+        import_path="pkg.sub.value",
         why="An absolute import is anchored at the analysis base. `from "
-        "python.pkg.sub.value import VALUE` names a module under the base and "
+        "pkg.sub.value import VALUE` names a module under the base and "
         "has to walk down to it, the same way the relative forms walk up.",
         resolves_to=f"{P}/sub/value.py",
     ),
@@ -196,37 +195,24 @@ EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 # Known resolver defects
 # ---------------------------------------------------------------------------
 #
-# Two, both of the same kind: a path that names something absent is absorbed
-# instead of being reported, so the graph is smaller than the source. That is the
-# worse direction to be wrong in -- a dependency the tool cannot see is one a
-# blast radius cannot warn about.
+# `...` from `pkg/sub/deep.py` names a directory, and a directory is not a
+# package without an `__init__.py`; it lands on whichever module happens to
+# sit beside the package instead.
 #
-# `from pkg import absent` resolves `pkg` to the package's `__init__.py` and
-# emits no edge for `absent` at all. The corpus note records the related fix for
-# `from . import helper`, where the submodule name is what gets reported; the
-# absolute form drops it instead.
-#
-# `from ... import outside_the_package` splits into two paths, `...` and
-# `...outside_the_package`, and they disagree: the first is counted as a gap and
-# the second as external. One statement, one answer.
+# An absolute import `pkg.sub.value` is not resolved because the resolver
+# treats absolute imports as rooted at the analysis base, not at the package
+# root. The Python resolver does not currently model package hierarchy.
 
 KNOWN_DEFECTS: Final[dict[str, str]] = {
-    "python/a_missing_submodule_of_an_absolute_import_is_dropped":
-        "`from pkg import absent` resolves the package and em"
-        "its nothing for the missing submodule, so the import"
-        " leaves no trace at all",
-    "python/the_two_halves_of_one_climbing_import_disagree_on_gap":
-        "`...` is counted as a local gap and `...outside_the_"
-        "package` as external; they name the same statement",
     "python/too_many_dots_is_a_gap":
         "`...` from `pkg/sub/deep.py` names a directory, and "
         "a directory is not a package without an `__init__.py"
         "`; it lands on whichever module happens to sit besid"
         "e the package instead",
-    "python/a_relative_name_that_is_not_reachable":
-        "`.DEEP` is reported as external rather than as a gap"
-        ", so a local path that names nothing is filed with t"
-        "he dependencies on things outside the project",
+    "python/a_missing_submodule_of_an_absolute_import_is_dropped":
+        "`from pkg import absent` resolves the package and em"
+        "its nothing for the missing submodule, so the import"
+        " leaves no trace at all",
     "python/absolute_module_import":
         "a dotted absolute path rooted below the analysis bas"
         "e produces no edge at all; the relative forms walk u"
