@@ -132,12 +132,19 @@ fn resolve_remote_source(
         | ParsedRemoteSource::Tree { clone_url, .. } => clone_url,
     };
 
+    // A tree URL carries its own branch, and it is rarely the default one.
+    let scope = match &parsed_source {
+        ParsedRemoteSource::Repo { .. } => BranchScope::Default,
+        ParsedRemoteSource::Tree { .. } => BranchScope::AllAtDepthOne,
+    };
+
     run_git_streaming(
         None,
         clone_arguments(
             clone_url,
             repo_root.as_os_str(),
             git_ref.is_some() || requires_history,
+            scope,
         ),
         &format!("clone `{clone_url}`"),
     )?;
@@ -209,6 +216,25 @@ fn resolve_remote_source(
     })
 }
 
+/// Which branches a shallow clone has to carry.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum BranchScope {
+    /// Only the branch the remote's HEAD points at.
+    ///
+    /// Right for a repo URL, which analyses whatever the default branch is.
+    Default,
+    /// Every branch, one commit deep.
+    ///
+    /// A tree URL names its own branch in the path, and that branch is usually
+    /// not the default: `https://github.com/o/r/tree/feature/docs` on a
+    /// repository whose default is `main`. `--single-branch` would fetch `main`,
+    /// the named branch would never arrive, and the checkout would fail on a
+    /// repository that has it. One commit per branch is still a fraction of a
+    /// full history, so this buys correctness at a small price rather than
+    /// dropping the shallow clone.
+    AllAtDepthOne,
+}
+
 /// The `git clone` arguments for one analysis, shallow unless history is asked for.
 ///
 /// A clone that fetches every commit downloads a repository's entire history to
@@ -219,9 +245,7 @@ fn resolve_remote_source(
 /// Two cases cannot be shallow, and both are about naming something other than
 /// the tip. `--ref` may name any commit, and a `--diff` base ref is resolved by
 /// walking back from the tip -- `HEAD~1` does not exist in a clone one commit
-/// deep. `--depth 1` also cannot pick the right branch on a repository whose
-/// default is not `master`, so `--single-branch` is paired with it to say "the
-/// one this URL points at" rather than "all of them".
+/// deep.
 ///
 /// The checkout is temporary either way, so there is no cache to keep warm and
 /// nothing about a shallow clone survives the command. That is the argument for
@@ -231,12 +255,15 @@ fn clone_arguments(
     clone_url: &str,
     destination: &OsStr,
     requires_history: bool,
+    scope: BranchScope,
 ) -> Vec<OsString> {
     let mut arguments = vec![OsString::from("clone")];
 
     if !requires_history {
         arguments.push(OsString::from("--depth=1"));
-        arguments.push(OsString::from("--single-branch"));
+        if scope == BranchScope::Default {
+            arguments.push(OsString::from("--single-branch"));
+        }
     }
 
     arguments.push(OsString::from(clone_url));
@@ -485,6 +512,7 @@ mod tests {
             "https://example.invalid/r",
             OsStr::new("/tmp/repo"),
             false,
+            BranchScope::Default,
         )
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -513,6 +541,7 @@ mod tests {
             "https://example.invalid/r",
             OsStr::new("/tmp/repo"),
             true,
+            BranchScope::Default,
         )
         .iter()
         .map(|argument| argument.to_string_lossy().into_owned())
@@ -535,12 +564,88 @@ mod tests {
             "https://example.invalid/r",
             OsStr::new("d"),
             false,
+            BranchScope::Default,
         );
 
         assert!(
             !arguments.iter().any(|argument| argument == "--quiet"),
             "the clone must be allowed to report its progress"
         );
+    }
+
+    #[test]
+    fn a_tree_url_takes_every_branch_at_depth_one() {
+        // A tree URL names its branch in the path, and that branch is usually not
+        // the default: `.../tree/feature/docs` on a repository whose default is
+        // `main`. `--single-branch` fetches `main`, the named branch never
+        // arrives, and the checkout fails on a repository that has it. The depth
+        // stays at one, so this costs one commit per branch rather than a
+        // history.
+        let arguments = clone_arguments(
+            "https://example.invalid/r",
+            OsStr::new("/tmp/repo"),
+            false,
+            BranchScope::AllAtDepthOne,
+        )
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            arguments,
+            vec![
+                "clone",
+                "--depth=1",
+                "https://example.invalid/r",
+                "/tmp/repo",
+            ],
+            "no `--single-branch`: the branch the URL names is not the default"
+        );
+    }
+
+    #[test]
+    fn a_repo_url_takes_only_the_default_branch() {
+        // The common case, and the one the performance measurement is about: a
+        // repository's thousands of branches are not what the analysis reads.
+        let arguments = clone_arguments(
+            "https://example.invalid/r",
+            OsStr::new("/tmp/repo"),
+            false,
+            BranchScope::Default,
+        )
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert!(
+            arguments
+                .iter()
+                .any(|argument| argument == "--single-branch")
+        );
+    }
+
+    #[test]
+    fn history_needed_overrides_both_branch_scopes() {
+        // Whichever branches a clone would carry, asking for history means
+        // fetching all of it, so `--depth` and `--single-branch` are both wrong.
+        for scope in [BranchScope::Default, BranchScope::AllAtDepthOne] {
+            let arguments = clone_arguments(
+                "https://example.invalid/r",
+                OsStr::new("d"),
+                true,
+                scope,
+            );
+            let rendered = arguments
+                .iter()
+                .map(|argument| argument.to_string_lossy().into_owned())
+                .collect::<Vec<_>>();
+
+            assert_eq!(
+                rendered,
+                vec!["clone", "https://example.invalid/r", "d"],
+                "a full clone carries every branch at every depth, {scope:?}"
+            );
+        }
     }
 
     fn run_git(repo_root: &Path, args: &[&str]) {
