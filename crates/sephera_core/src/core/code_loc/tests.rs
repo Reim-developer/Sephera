@@ -28,6 +28,28 @@ fn assert_metrics(
 }
 
 #[test]
+fn a_divider_before_a_comment_does_not_hide_the_comment() {
+    // The `/` in `total / count` starts no comment. The `/*` a few bytes later
+    // does, and it runs into the next line, so a search that took the first `/` it
+    // found and stopped would leave the block unopened and count that next line as
+    // code.
+    //
+    // This is the case that tells a *verified* delimiter search apart from one that
+    // only checks the shared byte, and it has to run the block comment past the
+    // end of its line to do it: a block that opens and closes on one line counts as
+    // code either way, so the two mistakes cancel and the test passes against
+    // broken code. That is what the first version of this test did, and it is why
+    // the corpus pins were green with `find_delimiter` skipping its check.
+    let metrics = scan_content(
+        b"let ratio = total / count; /* note\nlet after = 2;\n",
+        &C_STYLE,
+    );
+
+    // One code line, and one line inside the block.
+    assert_metrics(metrics, 1, 1, 0, 0);
+}
+
+#[test]
 fn counts_c_style_comment_only_lines() {
     let metrics = scan_content(b"/* comment */\n", &C_STYLE);
     assert_metrics(metrics, 0, 1, 0, 0);
