@@ -62,6 +62,17 @@ pub enum ProgressMode {
 }
 
 #[derive(Debug, Subcommand)]
+#[command(
+    // Last occurrence of a repeated flag wins, rather than "cannot be used
+    // multiple times".
+    //
+    // `.sephera.toml` is applied by inserting its values as arguments ahead of
+    // the user's, so a config-supplied `--format markdown` and a typed
+    // `--format json` meet on the same command line by design. Rejecting that as
+    // a duplicate would make config unusable for every scalar flag, and ignoring
+    // one of them would make which one wins depend on which parser looked first.
+    args_override_self = true
+)]
 pub enum Commands {
     /// Count lines of code for supported languages in a directory tree
     #[command(long_about = LOC_LONG_ABOUT, after_long_help = LOC_AFTER_LONG_HELP)]
@@ -131,6 +142,10 @@ pub struct LocArgs {
     /// Shared settings source
     #[command(flatten)]
     pub config_args: ConfigArgs,
+
+    /// Named profile to apply on top of the config
+    #[command(flatten)]
+    pub profile_args: ProfileArgs,
 }
 
 /// Which `.sephera.toml` a command reads, and whether to read one at all.
@@ -253,6 +268,26 @@ pub struct SourceArgs {
 /// about `.sephera.toml` layering that the other five commands did not have --
 /// so the same flag read differently depending on which command printed it. The
 /// layering is documented once on [`ConfigArgs`] instead.
+/// The named profile to apply, shared by every command that reads config.
+///
+/// Flattened into each command rather than declared once as a global argument,
+/// because a global flag disappears from `sephera loc --help` -- and `--profile`
+/// is a flag someone has to discover before they can use it. Declaring it per
+/// command keeps it in each command's help, and keeps the description accurate:
+/// what a profile contains depends on the command it is applied to.
+#[derive(Debug, Clone, Default, Args)]
+pub struct ProfileArgs {
+    /// Named configuration profile from `.sephera.toml`
+    #[arg(
+        long,
+        value_name = "NAME",
+        conflicts_with = "no_config",
+        help = "Apply a named profile from `.sephera.toml`.",
+        long_help = "Apply `[profiles.<name>.<command>]` from `.sephera.toml`, layered on top of that command's own table and the shared `[project]` values. For `context` that is `[profiles.<name>.context]`, for `graph` it is `[profiles.<name>.graph]`, and so on for every command. Explicit flags still win over a profile. This flag requires config loading to stay enabled."
+    )]
+    pub profile: Option<String>,
+}
+
 #[derive(Debug, Clone, Default, Args)]
 pub struct IgnoreArgs {
     /// Ignore pattern. Patterns containing `*`, `?`, or `[` are treated as globs; otherwise they are compiled as regexes.
@@ -332,6 +367,10 @@ pub struct SymbolsArgs {
     #[command(flatten)]
     pub config_args: ConfigArgs,
 
+    /// Named profile to apply on top of the config
+    #[command(flatten)]
+    pub profile_args: ProfileArgs,
+
     /// How to decide which files to leave out
     #[command(flatten)]
     pub ignore_args: IgnoreArgs,
@@ -406,6 +445,10 @@ pub struct WatchArgs {
     /// Which `.sephera.toml` to read
     #[command(flatten)]
     pub config_args: ConfigArgs,
+
+    /// Named profile to apply on top of the config
+    #[command(flatten)]
+    pub profile_args: ProfileArgs,
 }
 
 #[derive(Debug, Args)]
@@ -418,21 +461,14 @@ pub struct ContextArgs {
     #[command(flatten)]
     pub config_args: ConfigArgs,
 
-    /// Named profile from `.sephera.toml` under `[profiles.<name>.context]`.
-    #[arg(
-        long,
-        value_name = "NAME",
-        conflicts_with = "no_config",
-        help = "Named context profile from `.sephera.toml`.",
-        long_help = "Named context profile from `.sephera.toml`, resolved under `[profiles.<name>.context]`. Profile values layer on top of `[context]`, then explicit CLI flags still win. This flag requires config loading to stay enabled."
-    )]
-    pub profile: Option<String>,
+    /// Named profile to apply on top of the config
+    #[command(flatten)]
+    pub profile_args: ProfileArgs,
 
     /// List available context profiles from the resolved `.sephera.toml` file and exit.
     #[arg(
         long,
         conflicts_with = "no_config",
-        conflicts_with = "profile",
         conflicts_with = "ignore",
         conflicts_with = "focus",
         conflicts_with = "diff",
@@ -652,6 +688,10 @@ pub struct GraphArgs {
     #[command(flatten)]
     pub config_args: ConfigArgs,
 
+    /// Named profile to apply on top of the config
+    #[command(flatten)]
+    pub profile_args: ProfileArgs,
+
     /// Drop imports that describe types rather than runtime dependencies
     #[arg(
         long,
@@ -744,6 +784,10 @@ pub struct ImpactArgs {
     /// Shared settings source
     #[command(flatten)]
     pub config_args: ConfigArgs,
+
+    /// Named profile to apply on top of the config
+    #[command(flatten)]
+    pub profile_args: ProfileArgs,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
@@ -986,7 +1030,15 @@ mod tests {
                     arguments.config_args.config,
                     Some(std::path::PathBuf::from(".sephera.toml"))
                 );
-                assert_eq!(arguments.profile.as_deref(), Some("review"));
+                // `--profile` is flattened into the command rather than declared once on
+                // `Cli`, so it lands on `ContextArgs::profile_args`. Asserted
+                // here because a global flag would vanish from this command's
+                // help, and a flag that vanishes from help is a flag nobody
+                // finds.
+                assert_eq!(
+                    arguments.profile_args.profile.as_deref(),
+                    Some("review")
+                );
                 assert_eq!(
                     arguments.focus,
                     vec![std::path::PathBuf::from("crates/sephera_core")]

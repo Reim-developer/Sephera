@@ -7,6 +7,7 @@ use crate::args::{ContextArgs, ContextCompress, ContextFormat};
 
 pub fn resolve_context_options(
     arguments: ContextArgs,
+    profile: Option<String>,
 ) -> Result<ResolvedContextCommand> {
     resolve_context_command(ContextCommandInput {
         source: SourceRequest {
@@ -16,7 +17,11 @@ pub fn resolve_context_options(
         },
         config: arguments.config_args.config,
         no_config: arguments.config_args.no_config,
-        profile: arguments.profile,
+        // The flag is global, so it arrives from `Cli` rather than from
+        // `ContextArgs`. Context is the one command that still resolves its own
+        // config internally -- it is the one with a token budget -- so it needs
+        // the selected name passed down to it.
+        profile,
         list_profiles: arguments.list_profiles,
         ignore: arguments.ignore_args.ignore,
         no_gitignore: arguments.ignore_args.no_gitignore,
