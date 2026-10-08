@@ -705,7 +705,8 @@ fn build_edges_and_nodes(
             // dependency whatever its prefix says.
             let local_gap = matches!(resolved, Resolution::Unresolved)
                 && looks_local(&statement.raw_path, file_data.ts_language)
-                && (statement.kind.is_namespace() == statement.raw_path.ends_with('*'));
+                && (statement.kind.is_namespace()
+                    == statement.raw_path.ends_with('*'));
 
             // Every resolved edge goes in the adjacency, including a parent naming its own
             // child with `mod child;`.
