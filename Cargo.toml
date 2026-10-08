@@ -22,13 +22,25 @@ criterion = { version = "0.7", default-features = false }
 
 [profile.release]
 opt-level = 3
-lto = "thin"
+# `fat`, not `thin`. Every hot loop here is a small function called across a
+# crate boundary -- a language plugin's extractor called from the graph resolver
+# called from the report -- and thin LTO only inlines what the optimiser can see
+# through a thin slice of the program.
+#
+# Measured on this repository, best of five runs each: `symbols` 64.2 ms -> 55.0
+# and `graph` 90.5 ms -> 82.0, against a clean release build going from 105 s to
+# 243 s. `panic = "abort"` was measured beside it and is *slower* to run
+# (57.9 ms) while giving up the message a panic would have printed, so it is
+# deliberately not set.
+lto = "fat"
 codegen-units = 1
 strip = "symbols"
 
 # Benchmarks measure the code under a comment, so they get the same optimisation
 # settings as release. Without this they would be timed at `opt-level = 0` in
-# debug and every number would describe the wrong build.
+# debug and every number would describe the wrong build. `thin` rather than `fat`
+# only because criterion runs the whole set several times over and the numbers it
+# compares are between runs, not against a previous release.
 [profile.bench]
 opt-level = 3
 lto = "thin"
