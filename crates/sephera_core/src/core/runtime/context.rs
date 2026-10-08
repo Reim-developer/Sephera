@@ -1,10 +1,13 @@
 use std::{
     collections::BTreeMap,
-    fs,
     path::{Path, PathBuf},
 };
 
 use anyhow::{Context, Result, bail};
+
+use super::settings::{
+    ContextToml, SepheraToml, TokenBudgetValue, load_config_file,
+};
 
 use crate::core::{
     code_loc::IgnoreMatcher,
@@ -98,69 +101,6 @@ struct LoadedContextSection {
     compress: Option<String>,
     format: Option<String>,
     output: Option<PathBuf>,
-}
-
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct SepheraToml {
-    /// Settings every command reads, not just `context`.
-    #[serde(default)]
-    project: ProjectToml,
-    #[serde(default)]
-    context: ContextToml,
-    #[serde(default)]
-    profiles: BTreeMap<String, ProfileToml>,
-}
-
-/// Settings shared by every command.
-///
-/// Separate from `[context]` because a project that wants `target` excluded
-/// from `graph` wants it excluded from `loc` too, and making every command
-/// re-state it is how a repository ends up with three different ignore lists.
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProjectToml {
-    /// Ignore patterns applied to every command unless a flag overrides them.
-    #[serde(default)]
-    ignore: Vec<String>,
-}
-
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ContextToml {
-    #[serde(default)]
-    ignore: Vec<String>,
-    #[serde(default)]
-    focus: Vec<PathBuf>,
-    diff: Option<String>,
-    budget: Option<TokenBudgetValue>,
-    compress: Option<String>,
-    format: Option<String>,
-    output: Option<PathBuf>,
-}
-
-#[derive(Debug, Default, serde::Deserialize)]
-#[serde(deny_unknown_fields)]
-struct ProfileToml {
-    #[serde(default)]
-    context: ContextToml,
-}
-
-#[derive(Debug, Clone, serde::Deserialize)]
-#[serde(untagged)]
-enum TokenBudgetValue {
-    Integer(u64),
-    String(String),
-}
-
-impl TokenBudgetValue {
-    fn parse(self) -> Result<u64> {
-        match self {
-            Self::Integer(value) if value > 0 => Ok(value),
-            Self::Integer(_) => bail!("token budget must be greater than zero"),
-            Self::String(value) => parse_token_budget(&value),
-        }
-    }
 }
 
 /// Resolves config, source selection, and CLI-compatible defaults for a
@@ -530,17 +470,14 @@ pub fn load_project_settings(
         return Ok(ProjectSettings::default());
     };
 
-    let raw_config =
-        std::fs::read_to_string(&source_path).with_context(|| {
-            format!("failed to read `{}`", source_path.display())
-        })?;
-    let parsed: SepheraToml =
-        toml::from_str(&raw_config).with_context(|| {
-            format!("failed to parse `{}`", source_path.display())
-        })?;
+    // Parsed by the same loader every other command uses. Two parsers for one file
+    // is how a config ends up with sections that work for `graph` and are rejected
+    // for `loc` -- the `loc` reader never heard of `[graph]`, and reported a file
+    // it had just accepted as malformed.
+    let loaded = load_config_file(&source_path)?;
 
     Ok(ProjectSettings {
-        ignore: parsed.project.ignore,
+        ignore: loaded.parsed.project.ignore,
         source_path: Some(source_path),
     })
 }
@@ -581,15 +518,9 @@ fn discovery_anchor(base_path: &Path) -> Result<PathBuf> {
 }
 
 fn load_context_config(config_path: &Path) -> Result<LoadedSepheraConfig> {
-    let raw_config = fs::read_to_string(config_path).with_context(|| {
-        format!("failed to read config file `{}`", config_path.display())
-    })?;
-    let parsed =
-        toml::from_str::<SepheraToml>(&raw_config).with_context(|| {
-            format!("failed to parse config file `{}`", config_path.display())
-        })?;
+    let loaded = load_config_file(config_path)?;
 
-    convert_context_config(config_path, parsed)
+    convert_context_config(config_path, loaded.parsed)
 }
 
 fn convert_context_config(
@@ -631,7 +562,9 @@ fn convert_context_section(
     field_prefix: &str,
     context: ContextToml,
 ) -> Result<LoadedContextSection> {
-    let budget = context
+    let ContextToml { command } = context;
+
+    let budget = command
         .budget
         .map(TokenBudgetValue::parse)
         .transpose()
@@ -641,7 +574,7 @@ fn convert_context_section(
                 config_path.display()
             )
         })?;
-    let compress = context
+    let compress = command
         .compress
         .map(validate_compression_mode)
         .transpose()
@@ -651,7 +584,7 @@ fn convert_context_section(
                 config_path.display()
             )
         })?;
-    let format = context
+    let format = command
         .format
         .map(validate_context_format)
         .transpose()
@@ -663,16 +596,28 @@ fn convert_context_section(
         })?;
 
     Ok(LoadedContextSection {
-        ignore: context.ignore,
-        focus: resolve_relative_paths(config_directory, context.focus),
-        diff: context.diff,
+        ignore: command.ignore,
+        focus: resolve_relative_paths(config_directory, command.focus),
+        diff: command.diff,
         budget,
         compress,
         format,
-        output: context
+        output: command
             .output
             .map(|path| resolve_relative_path(config_directory, path)),
     })
+}
+
+/// The budget shorthand parser lives with the rest of `context`, but the type it
+/// belongs to now lives with the schema.
+impl TokenBudgetValue {
+    fn parse(self) -> Result<u64> {
+        match self {
+            Self::Integer(value) if value > 0 => Ok(value),
+            Self::Integer(_) => bail!("token budget must be greater than zero"),
+            Self::String(value) => parse_token_budget(&value),
+        }
+    }
 }
 
 fn resolve_relative_paths(
