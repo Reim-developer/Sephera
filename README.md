@@ -105,7 +105,6 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 ```
 
 ````markdown
-
 # Dependency Graph Report
 
 **Base path:** `.`
@@ -116,8 +115,8 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 
 | Metric | Value |
 |--------|-------|
-| Files analyzed | 9 |
-| Internal edges | 40 |
+| Files analyzed | 10 |
+| Internal edges | 43 |
 | External edges | 21 |
 | Self-references (excluded above) | 2 |
 | Declared dependencies | 9 |
@@ -127,11 +126,12 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 
 ## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
 
-**4 files import it directly.**
+**5 files import it directly.**
 
 | File | Imports from it |
 |------|------------------|
 | `crates/sephera_core/src/core.rs` | `self::code_loc` |
+| `crates/sephera_core/src/core/code_loc/differential_tests.rs` | `super::LocMetrics`, `super::scan_content` |
 | `crates/sephera_core/src/core/code_loc/tests.rs` | `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content` |
 | `crates/sephera_core/src/core/runtime/context.rs` | `crate::core::code_loc::IgnoreMatcher` |
 | `crates/sephera_core/src/core/symbols/lookup.rs` | `crate::core::code_loc::IgnoreMatcher` |
@@ -152,10 +152,11 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 |------|-------------|
 | `crates/sephera_core/src/core/symbols/mod.rs` | 11 |
 | `crates/sephera_core/src/core/runtime/context.rs` | 10 |
-| `crates/sephera_core/src/core/code_loc.rs` | 7 |
+| `crates/sephera_core/src/core/code_loc.rs` | 9 |
 | `crates/sephera_core/src/core/symbols/lookup.rs` | 5 |
 | `crates/sephera_core/src/core/runtime.rs` | 4 |
 | `crates/sephera_core/src/core.rs` | 1 |
+| `crates/sephera_core/src/core/code_loc/differential_tests.rs` | 1 |
 | `crates/sephera_core/src/core/code_loc/tests.rs` | 1 |
 | `crates/sephera_core/src/core/symbols/tests.rs` | 1 |
 
@@ -170,7 +171,8 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 | `crates/sephera_core/src/core/code_loc/tests.rs` | 4 |
 | `crates/sephera_core/src/core.rs` | 3 |
 | `crates/sephera_core/src/core/symbols/tests.rs` | 3 |
-| `crates/sephera_core/src/core/code_loc.rs` | 1 |
+| `crates/sephera_core/src/core/code_loc.rs` | 2 |
+| `crates/sephera_core/src/core/code_loc/differential_tests.rs` | 2 |
 | `crates/sephera_core/src/lib.rs` | 1 |
 
 ## Dependency Diagram
@@ -179,34 +181,37 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 graph LR
     n0["core.rs"]
     n1["code_loc.rs"]
-    n2["tests.rs"]
-    n3["runtime.rs"]
-    n4["context.rs"]
-    n5["lookup.rs"]
-    n6["mod.rs"]
-    n7["tests.rs"]
-    n8["lib.rs"]
+    n2["differential_tests.rs"]
+    n3["tests.rs"]
+    n4["runtime.rs"]
+    n5["context.rs"]
+    n6["lookup.rs"]
+    n7["mod.rs"]
+    n8["tests.rs"]
+    n9["lib.rs"]
     n0 --> n1
-    n0 --> n3
-    n0 --> n6
+    n0 --> n4
+    n0 --> n7
     n1 --> n2
+    n1 --> n3
     n2 --> n1
-    n3 --> n4
-    n4 --> n1
-    n4 --> n6
-    n4 --> n3
-    n5 --> n6
+    n3 --> n1
+    n4 --> n5
     n5 --> n1
-    n6 --> n5
+    n5 --> n7
+    n5 --> n4
     n6 --> n7
+    n6 --> n1
     n7 --> n6
-    n8 --> n0
+    n7 --> n8
+    n8 --> n7
+    n9 --> n0
 ```
 ````
 
-**Eight files reach `code_loc.rs`, four of them importing it directly.** You now know your blast radius before opening the file - not after CI turns red.
+**Nine files reach `code_loc.rs`, five of them importing it directly.** You now know your blast radius before opening the file - not after CI turns red.
 
-The query filters to the blast radius, which is why the report above shows nine files rather than the whole repository. `core.rs` is among them because `mod code_loc;` is a real edge: delete the file and the crate root stops building.
+The query filters to the blast radius, which is why the report above shows ten files rather than the whole repository. `core.rs` is among them because `mod code_loc;` is a real edge: delete the file and the crate root stops building.
 
 ---
 
@@ -229,28 +234,28 @@ Real output:
 
 | Metric                | Value |
 |-----------------------|-------|
-| Files analyzed        | 132   |
-| Internal edges        | 478   |
-| External edges        | 514   |
-| Unresolved local paths| 2     |
-| Declared dependencies | 177   |
-| Local crate edges     | 114   |
-| Standard library edges| 179   |
+| Files analyzed        | 174   |
+| Internal edges        | 613   |
+| External edges        | 780   |
+| Self-references (excluded above) | 74 |
+| Declared dependencies | 202   |
+| Local crate edges     | 149   |
+| Standard library edges| 199   |
 | Circular dependencies | 0     |
 
 ## Dependencies
 
 | Package            | Kind     | Version   | Import paths |
 |--------------------|----------|-----------|--------------|
-| `std`              | stdlib   | unknown   | 169 |
-| `sepheracore`      | workspace| unknown   | 107 |
-| `anyhow`           | declared | 1.0.102   | 65  |
-| `tempfile`         | declared | 3.27.0    | 30  |
-| `comfytable`       | declared | 7.2.2     | 11  |
+| `std`              | stdlib   | unknown   | 199 |
+| `sepheracore`      | workspace| unknown   | 142 |
+| `anyhow`           | declared | 1.0.102   | 61  |
+| `tempfile`         | declared | 3.27.0    | 36  |
+| `comfytable`       | declared | 7.2.2     | 12  |
 | `clap`             | declared | 4.6.0     | 10  |
 ````
 
-The three numbers that used to be one are now three: 114 edges reach a crate in this workspace and 179 reach the standard library, so the 514 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
+The three numbers that used to be one are now three: 149 edges reach a crate in this workspace and 199 reach the standard library, so the 780 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
 
 Cycles are found by iterative DFS over the resolved import graph, with back-edge
 detection and deduplication so each cycle is reported once. This repository
@@ -313,10 +318,10 @@ The question a reviewer or a pre-commit hook asks before an edit. Answers it
 directly, so you do not have to know that `graph` has a flag for it.
 
 ```bash
-# What transitively imports this file? 8 files do.
+# What transitively imports this file? 9 files do.
 sephera impact crates/sephera_core/src/core/code_loc.rs
 
-# Only the 4 files that import it directly
+# Only the 5 files that import it directly
 sephera impact crates/sephera_core/src/core/code_loc.rs --depth 1
 
 # Several files at once, widest first; the graph is built once
