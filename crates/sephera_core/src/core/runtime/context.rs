@@ -111,7 +111,7 @@ struct LoadedContextSection {
 /// Returns an error when source resolution fails, config loading fails, the
 /// selected profile is invalid, or any requested format/compression option is
 /// not supported.
-pub fn resolve_context_command(
+pub async fn resolve_context_command(
     mut request: ContextCommandInput,
 ) -> Result<ResolvedContextCommand> {
     request.compress = request
@@ -124,7 +124,8 @@ pub fn resolve_context_command(
     // naming one means the checkout needs its history. `HEAD~1` does not exist in
     // a clone one commit deep, and the failure reads as a missing commit rather
     // than as a shallow clone.
-    let source = resolve_source(&request.source, request.diff.is_some())?;
+    let source =
+        resolve_source(&request.source, request.diff.is_some()).await?;
     let config = load_selected_config(&request, &source)?;
 
     if request.list_profiles {
@@ -1275,10 +1276,10 @@ mod tests {
             analysis_path: PathBuf::from("/tmp/clone/docs"),
             repo_root: PathBuf::from("/tmp/clone"),
             display_path: Some(String::from(
-                "https://github.com/reim/sephera/tree/main/docs",
+                "https://github.com/Reim-developer/Sephera/tree/main/docs",
             )),
             display_repo_root: Some(String::from(
-                "https://github.com/reim/sephera@main",
+                "https://github.com/Reim-developer/Sephera@main",
             )),
             checkout_guard: None,
         };
@@ -1287,12 +1288,17 @@ mod tests {
             display_config_path(Path::new("/tmp/clone/.sephera.toml"), &source);
         assert_eq!(
             rendered,
-            PathBuf::from("https://github.com/reim/sephera@main/.sephera.toml")
+            PathBuf::from(
+                "https://github.com/Reim-developer/Sephera@main/.sephera.toml"
+            )
         );
     }
 
-    #[test]
-    fn build_context_report_rewrites_remote_display_paths() {
+    // `tokio::test` rather than `test` because the command clones a `file://`
+    // repository, and the interrupt branch inside that clone registers a signal
+    // handler, which needs a runtime with `enable_all`.
+    #[tokio::test]
+    async fn build_context_report_rewrites_remote_display_paths() {
         let temp_dir = tempdir().unwrap();
         init_repo(temp_dir.path());
         write_file(temp_dir.path(), ".sephera.toml", "[context]\n");
@@ -1323,6 +1329,7 @@ mod tests {
             output: None,
             focus_symbol: Vec::new(),
         })
+        .await
         .unwrap();
 
         let ResolvedContextCommand::Execute(options) = resolved else {

@@ -64,7 +64,7 @@ macro_rules! tree_command_args {
     version,
     about = "Analyze project structure and line counts",
     long_about = "Sephera analyzes source trees for line counts, builds LLM-ready context packs, and maps dependency graphs.\n\nUse `loc` to inspect language-level line metrics, `context` to export a curated Markdown or JSON context pack for downstream review, debugging, or prompting workflows, and `graph` to analyze and visualize the dependency structure of your codebase. The `context` command can also load defaults and named profiles from `.sephera.toml`, let explicit CLI flags override them, and build packs centered on Git changes via `--diff`.",
-    after_long_help = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json\n  sephera graph --path . --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format dot --output deps.dot",
+    after_long_help = "Examples:\n  sephera loc --path . --ignore target --ignore \"*.min.js\"\n  sephera loc --url https://github.com/Reim-developer/Sephera\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --url https://github.com/Reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --no-config --format json --output reports/context.json\n  sephera graph --path . --format markdown\n  sephera graph --url https://github.com/Reim-developer/Sephera/tree/master/crates/sephera_core --format dot --output deps.dot",
     arg_required_else_help = true
 )]
 pub struct Cli {
@@ -110,19 +110,19 @@ pub enum Commands {
     /// Count lines of code for supported languages in a directory tree
     #[command(
         long_about = "Count lines of code, comment lines, empty lines, and file sizes for supported languages inside a directory tree.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Ignore patterns containing `*`, `?`, or `[` are treated as globs and matched against both the file name and the path relative to the base. All other ignore patterns are compiled as regular expressions and matched against that same relative path.",
-        after_long_help = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"\n  sephera loc --url https://github.com/reim-developer/Sephera\n  sephera loc --url https://github.com/reim-developer/Sephera/tree/master/crates"
+        after_long_help = "Examples:\n  sephera loc --path .\n  sephera loc --path crates --ignore target --ignore \"*.snap\"\n  sephera loc --url https://github.com/Reim-developer/Sephera\n  sephera loc --url https://github.com/Reim-developer/Sephera/tree/master/crates"
     )]
     Loc(LocArgs),
     /// Count declarations per language
     #[command(
         long_about = "Count declarations per language: functions, types, enums, and constants.\n\nCounts come from Tree-sitter parse trees rather than text matching, so a keyword inside a comment or string is not counted and a function nested inside an impl block or class body is attributed correctly. Supported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.\n\nUnlike `loc`, which measures how much code exists, this reports what is declared in it. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs.",
-        after_long_help = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\""
+        after_long_help = "Examples:\n  sephera symbols --path .\n  sephera symbols --path . --format markdown\n  sephera symbols --path . --detail\n  sephera symbols --path . --format json --output reports/symbols.json\n  sephera symbols --url https://github.com/Reim-developer/Sephera\n  sephera symbols --path crates --ignore \"*.snap\""
     )]
     Symbols(SymbolsArgs),
     /// Build an LLM-ready context pack for a repository or focused sub-paths
     #[command(
         long_about = "Build a deterministic context pack for a repository or a focused sub-tree.\n\nThe command ranks useful files, enforces an approximate token budget, and renders either Markdown for direct copy-paste into LLM tools or JSON for automation pipelines. Configuration precedence is: built-in defaults, then `[context]` in `.sephera.toml`, then an optional named profile, then explicit CLI flags. Use `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. Use `--diff` to center the pack on Git changes from a base ref or working-tree mode; URL mode supports base refs but rejects working-tree keywords.",
-        after_long_help = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json"
+        after_long_help = "Examples:\n  sephera context --path .\n  sephera context --path . --profile review\n  sephera context --path . --list-profiles\n  sephera context --path . --config .sephera.toml\n  sephera context --path . --focus crates/sephera_core --budget 32k\n  sephera context --path . --diff origin/master\n  sephera context --path . --diff HEAD~1\n  sephera context --path . --diff working-tree\n  sephera context --path . --diff staged\n  sephera context --url https://github.com/Reim-developer/Sephera --ref master --diff HEAD~1\n  sephera context --url https://github.com/Reim-developer/Sephera/tree/master/crates/sephera_core --format json\n  sephera context --path . --no-config --format markdown --output reports/context.md\n  sephera context --path . --format json --output reports/context.json"
     )]
     Context(ContextArgs),
     /// Re-run an analysis whenever the tree changes
@@ -139,7 +139,7 @@ pub enum Commands {
     /// Analyze dependency graph via Tree-sitter import extraction
     #[command(
         long_about = "Analyze the dependency graph of a project by extracting import statements using Tree-sitter AST parsing.\n\nSupported languages: Rust, Python, TypeScript, JavaScript, Go, Java, C++, C.\n\nUse `--path` for local analysis or `--url` for direct analysis of cloneable repo URLs and supported GitHub/GitLab tree URLs. The graph command identifies internal file dependencies, detects circular dependencies, and computes metrics such as most-imported and most-importing files.",
-        after_long_help = "Examples:\n  sephera graph --path .\n  sephera graph --path . --format dot --output deps.dot\n  sephera graph --path . --focus crates/sephera_core --format markdown\n  sephera graph --url https://github.com/reim-developer/Sephera/tree/master/crates/sephera_core --format xml --output graph.xml\n  sephera graph --path . --what-depends-on src/core/context/builder.rs"
+        after_long_help = "Examples:\n  sephera graph --path .\n  sephera graph --path . --format dot --output deps.dot\n  sephera graph --path . --focus crates/sephera_core --format markdown\n  sephera graph --url https://github.com/Reim-developer/Sephera/tree/master/crates/sephera_core --format xml --output graph.xml\n  sephera graph --path . --what-depends-on src/core/context/builder.rs"
     )]
     Graph(GraphArgs),
     /// Report what breaks if one file changes
@@ -1090,7 +1090,7 @@ mod tests {
             "--path",
             "demo",
             "--url",
-            "https://github.com/reim-developer/Sephera",
+            "https://github.com/Reim-developer/Sephera",
         ])
         .unwrap_err();
 

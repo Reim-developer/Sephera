@@ -7,7 +7,23 @@ use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 use url::Url;
 
-use super::git::{git_stdout_string, run_git, run_git_streaming};
+use super::git::{GitOutcome, git_stdout_string, run_git, run_git_streaming};
+
+/// A long git command was stopped at the user's request rather than finishing.
+///
+/// Its own type because the exit code is different and because "you pressed
+/// Ctrl+C" is not a failure worth an `error:` line. A clone of a large repository
+/// runs for minutes; interrupting one should read as a decision, not as a fault.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct Interrupted;
+
+impl std::fmt::Display for Interrupted {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str("interrupted")
+    }
+}
+
+impl std::error::Error for Interrupted {}
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SourceRequest {
@@ -67,7 +83,7 @@ enum ParsedRemoteSource {
 /// property of the source: it describes what the caller intends to do next, and
 /// the twenty-odd places that name a `path`, a `url` and a `ref` should not each
 /// have to answer a question about a later step.
-pub fn resolve_source(
+pub async fn resolve_source(
     request: &SourceRequest,
     requires_history: bool,
 ) -> Result<ResolvedSource> {
@@ -114,11 +130,12 @@ pub fn resolve_source(
                 request.git_ref.as_deref(),
                 requires_history,
             )
+            .await
         }
     }
 }
 
-fn resolve_remote_source(
+async fn resolve_remote_source(
     parsed_source: ParsedRemoteSource,
     git_ref: Option<&str>,
     requires_history: bool,
@@ -138,7 +155,7 @@ fn resolve_remote_source(
         ParsedRemoteSource::Tree { .. } => BranchScope::AllAtDepthOne,
     };
 
-    run_git_streaming(
+    match run_git_streaming(
         None,
         clone_arguments(
             clone_url,
@@ -147,7 +164,14 @@ fn resolve_remote_source(
             scope,
         ),
         &format!("clone `{clone_url}`"),
-    )?;
+    )
+    .await?
+    {
+        GitOutcome::Finished => {}
+        // The checkout is removed by the guard on the way out, so interrupting a
+        // clone leaves nothing behind rather than a partial repository.
+        GitOutcome::Interrupted => return Err(Interrupted.into()),
+    }
 
     let (analysis_path, display_path, display_repo_root) = match parsed_source {
         ParsedRemoteSource::Repo {
@@ -687,16 +711,18 @@ mod tests {
     #[test]
     fn parses_github_tree_url() {
         let parsed_source = parse_remote_source(
-            "https://github.com/reim/sephera/tree/main/docs/src",
+            "https://github.com/Reim-developer/Sephera/tree/main/docs/src",
         )
         .unwrap();
 
         assert_eq!(
             parsed_source,
             ParsedRemoteSource::Tree {
-                clone_url: String::from("https://github.com/reim/sephera"),
+                clone_url: String::from(
+                    "https://github.com/Reim-developer/Sephera"
+                ),
                 display_repo_root: String::from(
-                    "https://github.com/reim/sephera"
+                    "https://github.com/Reim-developer/Sephera"
                 ),
                 style: TreeHostingStyle::GitHub,
                 tail_segments: vec![
@@ -733,7 +759,7 @@ mod tests {
     #[test]
     fn rejects_blob_urls() {
         let error = parse_remote_source(
-            "https://github.com/reim/sephera/blob/main/README.md",
+            "https://github.com/Reim-developer/Sephera/blob/main/README.md",
         )
         .unwrap_err();
 
@@ -743,19 +769,26 @@ mod tests {
     #[test]
     fn parses_scp_style_repo_url() {
         let parsed_source =
-            parse_remote_source("git@github.com:reim/sephera.git").unwrap();
+            parse_remote_source("git@github.com:Reim-developer/Sephera.git")
+                .unwrap();
 
         assert_eq!(
             parsed_source,
             ParsedRemoteSource::Repo {
-                clone_url: String::from("git@github.com:reim/sephera.git"),
-                display_repo_root: String::from("git@github.com:reim/sephera"),
+                clone_url: String::from(
+                    "git@github.com:Reim-developer/Sephera.git"
+                ),
+                display_repo_root: String::from(
+                    "git@github.com:Reim-developer/Sephera"
+                ),
             }
         );
     }
 
-    #[test]
-    fn resolves_file_repo_url_and_selected_ref() {
+    // `tokio::test` rather than `test` because the clone registers a signal handler
+    // for the interrupt branch, which needs a runtime with `enable_all`.
+    #[tokio::test]
+    async fn resolves_file_repo_url_and_selected_ref() {
         let temp_dir = tempdir().unwrap();
         init_repo(temp_dir.path());
         write_file(temp_dir.path(), "README.md", "# main\n");
@@ -770,6 +803,7 @@ mod tests {
             },
             false,
         )
+        .await
         .unwrap();
 
         assert!(source.is_remote());
@@ -782,8 +816,8 @@ mod tests {
         );
     }
 
-    #[test]
-    fn resolves_tree_url_with_branch_names_that_contain_slashes() {
+    #[tokio::test]
+    async fn resolves_tree_url_with_branch_names_that_contain_slashes() {
         let temp_dir = tempdir().unwrap();
         init_repo(temp_dir.path());
         write_file(temp_dir.path(), "src/lib.rs", "pub fn main() {}\n");
@@ -796,13 +830,14 @@ mod tests {
             &SourceRequest {
                 path: None,
                 url: Some(
-                    "https://github.com/reim/sephera/tree/feature/docs/docs"
+                    "https://github.com/Reim-developer/Sephera/tree/feature/docs/docs"
                         .to_string(),
                 ),
                 git_ref: None,
             },
             false,
-        );
+        )
+        .await;
 
         assert!(source.is_err());
 
@@ -810,7 +845,7 @@ mod tests {
             ParsedRemoteSource::Tree {
                 clone_url: format!("file://{}", temp_dir.path().display()),
                 display_repo_root: String::from(
-                    "https://github.com/reim/sephera",
+                    "https://github.com/Reim-developer/Sephera",
                 ),
                 style: TreeHostingStyle::GitHub,
                 tail_segments: vec![
@@ -822,6 +857,7 @@ mod tests {
             None,
             false,
         )
+        .await
         .unwrap();
 
         assert!(
@@ -830,16 +866,18 @@ mod tests {
         );
         assert_eq!(
             source.display_path.as_deref(),
-            Some("https://github.com/reim/sephera/tree/feature/docs/docs")
+            Some(
+                "https://github.com/Reim-developer/Sephera/tree/feature/docs/docs"
+            )
         );
         assert_eq!(
             source.display_repo_root.as_deref(),
-            Some("https://github.com/reim/sephera@feature/docs")
+            Some("https://github.com/Reim-developer/Sephera@feature/docs")
         );
     }
 
-    #[test]
-    fn rejects_ref_without_url() {
+    #[tokio::test]
+    async fn rejects_ref_without_url() {
         let error = resolve_source(
             &SourceRequest {
                 path: Some(PathBuf::from(".")),
@@ -848,6 +886,7 @@ mod tests {
             },
             false,
         )
+        .await
         .unwrap_err();
 
         assert!(error.to_string().contains("`ref` requires `url`"));
