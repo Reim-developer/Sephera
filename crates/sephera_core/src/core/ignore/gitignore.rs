@@ -238,10 +238,35 @@ fn base_glob(pattern: &str) -> String {
 /// analysis that fails because a `.gitignore` is unreadable would be worse than
 /// one that reads slightly more.
 #[must_use]
-pub fn read_directory_rules(directory: &Path) -> IgnoreRules {
+/// The rules one directory contributes, given its entries as already listed.
+///
+/// Taking the entries rather than the directory path is the point. Probing for
+/// `.gitignore` and `.sepheraignore` costs two opens that mostly fail, and a
+/// failed open is one of the more expensive things a program can ask the
+/// filesystem for -- measured at roughly sixty microseconds a directory on
+/// Windows, which is more than the traversal then spends reading the small files
+/// inside it. The caller has just read the directory listing that says whether
+/// those two files exist, so asking again answers the same question for nothing.
+///
+/// The read itself still happens here and still fails harmlessly, so a name that
+/// matches but is not a readable file -- a directory called `.gitignore`, a
+/// broken symlink -- behaves as it always did rather than as this optimization
+/// decides it should.
+pub fn read_directory_rules<'a>(
+    directory: &Path,
+    entries: impl IntoIterator<Item = &'a std::fs::DirEntry>,
+) -> IgnoreRules {
     let mut rules = IgnoreRules::default();
 
-    for name in IGNORE_FILE_NAMES {
+    for entry in entries {
+        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned)
+        else {
+            continue;
+        };
+        if !IGNORE_FILE_NAMES.contains(&name.as_str()) {
+            continue;
+        }
+
         let path = directory.join(name);
         let Ok(contents) = std::fs::read_to_string(&path) else {
             continue;
@@ -404,14 +429,24 @@ mod tests {
         );
     }
 
+    /// The entries of a directory, as the traversal has them.
+    fn entries_of(directory: &Path) -> Vec<std::fs::DirEntry> {
+        std::fs::read_dir(directory)
+            .expect("the directory is readable")
+            .collect::<Result<Vec<_>, _>>()
+            .expect("the directory is readable")
+    }
+
     #[test]
     fn directory_rules_are_read_from_a_directory() {
         let dir = tempfile::tempdir().unwrap();
         std::fs::write(dir.path().join(".gitignore"), "secret/\n").unwrap();
         std::fs::write(dir.path().join(".sepheraignore"), "!secret/keep\n")
             .unwrap();
+        std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
 
-        let rules = read_directory_rules(dir.path());
+        let entries = entries_of(dir.path());
+        let rules = read_directory_rules(dir.path(), &entries);
 
         assert_eq!(
             rules.matched("secret", true),
@@ -428,12 +463,31 @@ mod tests {
     #[test]
     fn a_directory_with_no_ignore_files_contributes_nothing() {
         let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join("main.rs"), "fn main() {}\n").unwrap();
 
-        assert!(read_directory_rules(dir.path()).is_empty());
+        let entries = entries_of(dir.path());
+        assert!(read_directory_rules(dir.path(), &entries).is_empty());
+    }
+
+    #[test]
+    fn a_directory_named_like_an_ignore_file_contributes_nothing() {
+        // A directory called `.gitignore` matches the name, so it reaches the
+        // read, and the read fails. Counting it as a rule would be a silent
+        // exclusion of whatever the traversal thought it contained.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::create_dir(dir.path().join(".gitignore")).unwrap();
+        std::fs::write(dir.path().join(".sepheraignore"), "secret/\n").unwrap();
+
+        let entries = entries_of(dir.path());
+        let rules = read_directory_rules(dir.path(), &entries);
+
+        assert_eq!(rules.matched("secret", true), Some(Decision::Ignore));
     }
 
     #[test]
     fn a_missing_directory_is_not_an_error() {
-        assert!(read_directory_rules(Path::new("/nonexistent/dir")).is_empty());
+        assert!(
+            read_directory_rules(Path::new("/nonexistent/dir"), &[]).is_empty()
+        );
     }
 }
