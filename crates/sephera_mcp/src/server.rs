@@ -110,11 +110,14 @@ impl SepheraServer {
 
         let ignore_matcher =
             build_ignore_matcher(param.ignore, param.no_gitignore)?;
-        let source = resolve_source(&SourceRequest {
-            path: param.path.map(std::path::PathBuf::from),
-            url: param.url,
-            git_ref: param.git_ref,
-        })
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
         .map_err(map_internal_error("source resolution failed"))?;
 
         let report = CodeLoc::new(&source.analysis_path, ignore_matcher)
@@ -233,11 +236,14 @@ impl SepheraServer {
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SymbolsInput>,
     ) -> Result<String, rmcp::ErrorData> {
         let ignore = build_ignore_matcher(param.ignore, param.no_gitignore)?;
-        let source = resolve_source(&SourceRequest {
-            path: param.path.map(std::path::PathBuf::from),
-            url: param.url,
-            git_ref: param.git_ref,
-        })
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
         .map_err(map_internal_error("source resolution failed"))?;
 
         let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
@@ -276,11 +282,14 @@ impl SepheraServer {
     ) -> Result<String, rmcp::ErrorData> {
         let ignore_matcher =
             build_ignore_matcher(param.ignore, param.no_gitignore)?;
-        let source = resolve_source(&SourceRequest {
-            path: param.path.map(std::path::PathBuf::from),
-            url: param.url,
-            git_ref: param.git_ref,
-        })
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
         .map_err(map_internal_error("source resolution failed"))?;
         let focus_paths: Vec<std::path::PathBuf> = param
             .focus
@@ -345,11 +354,14 @@ impl SepheraServer {
             ));
         }
 
-        let source = resolve_source(&SourceRequest {
-            path: param.path.map(std::path::PathBuf::from),
-            url: param.url,
-            git_ref: param.git_ref,
-        })
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
         .map_err(map_internal_error("source resolution failed"))?;
 
         // The whole repository, because the radius of one file routinely reaches

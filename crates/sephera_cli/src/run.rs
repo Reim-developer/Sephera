@@ -17,10 +17,10 @@ use sephera_core::core::{
 
 use crate::{
     args::{
-        Cli, Commands, ConfigArgs, ContextArgs, GraphArgs, GraphOutputFormat,
-        IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
-        OutputArgs, ProfileArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
-        WatchArgs, WatchTarget,
+        Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, IgnoreArgs,
+        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
+        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs, WatchArgs,
+        WatchTarget,
     },
     change_impact, configure,
     context_config::{
@@ -72,7 +72,7 @@ fn dispatch(cli: Cli) -> Result<ExitCode> {
         Commands::Loc(arguments) => run_loc(&arguments),
         Commands::Symbols(arguments) => run_symbols(&arguments),
         Commands::Context(arguments) => {
-            let profile = arguments.profile_args.profile.clone();
+            let profile = arguments.settings.profile.clone();
             run_context(arguments, profile)
         }
         Commands::Mcp => run_mcp(),
@@ -112,7 +112,7 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
             arguments.on.as_deref(),
             &root,
             &ignore,
-            &arguments.config_args,
+            &arguments.settings,
         );
     }
 
@@ -131,7 +131,7 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
             arguments.on.as_deref(),
             &root,
             &ignore,
-            &arguments.config_args,
+            &arguments.settings,
         )?;
         report_gates(&gates);
         Ok(())
@@ -158,7 +158,7 @@ fn run_watch_target(
     on: Option<&str>,
     root: &std::path::Path,
     ignore: &[String],
-    config: &ConfigArgs,
+    config: &SettingsArgs,
 ) -> Result<Vec<Gate>> {
     // The shared groups are built once and cloned into each arm, so a value is
     // never spelled differently in one arm than in another. Flattening the
@@ -177,16 +177,14 @@ fn run_watch_target(
         WatchTarget::Loc => run_loc(&LocArgs {
             source: source(),
             ignore_args: ignore_args(),
-            config_args: config.to_owned(),
-            profile_args: ProfileArgs::default(),
+            settings: config.to_owned(),
             format: LocOutputFormat::Table,
             output_args: OutputArgs::default(),
         }),
         WatchTarget::Symbols => run_symbols(&SymbolsArgs {
             source: source(),
             ignore_args: ignore_args(),
-            config_args: config.to_owned(),
-            profile_args: ProfileArgs::default(),
+            settings: config.to_owned(),
             format: SymbolOutputFormat::Table,
             output_args: OutputArgs::default(),
             detail: false,
@@ -195,8 +193,7 @@ fn run_watch_target(
         WatchTarget::Graph => run_graph(&GraphArgs {
             source: source(),
             ignore_args: ignore_args(),
-            config_args: config.to_owned(),
-            profile_args: ProfileArgs::default(),
+            settings: config.to_owned(),
             focus: Vec::new(),
             depth: None,
             what_depends_on: None,
@@ -216,8 +213,7 @@ fn run_watch_target(
             run_graph(&GraphArgs {
                 source: source(),
                 ignore_args: ignore_args(),
-                config_args: config.to_owned(),
-                profile_args: ProfileArgs::default(),
+                settings: config.to_owned(),
                 focus: Vec::new(),
                 depth: None,
                 what_depends_on: Some(target_path.to_owned()),
@@ -248,7 +244,7 @@ fn run_mcp() -> Result<Vec<Gate>> {
 /// so a repository states its exclusions once instead of on every command line.
 fn build_ignore_matcher(
     base_path: &std::path::Path,
-    config: &ConfigArgs,
+    config: &SettingsArgs,
     patterns: &[String],
     no_gitignore: bool,
 ) -> Result<IgnoreMatcher> {
@@ -267,15 +263,18 @@ fn build_ignore_matcher(
 }
 
 fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )?;
     let progress = CliProgress::start("Analyzing line counts...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -310,15 +309,18 @@ fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
 }
 
 fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )?;
     let progress = CliProgress::start("Counting declarations...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -434,15 +436,18 @@ fn report_unresolved_symbols(names: &[String]) {
 /// five targets cost 2,874 ms that way against 663 ms for the single build that
 /// answers all five questions.
 fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )?;
     let progress = CliProgress::start("Computing blast radius...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -617,15 +622,22 @@ fn run_graph_diff(
 }
 
 fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
+    // `--diff` resolves its base ref by walking back from the tip, so a shallow
+    // clone could not answer `HEAD~1`. Naming a base ref is the same request as
+    // naming a ref to check out: both mean "something other than where the branch
+    // points".
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        arguments.diff.is_some(),
+    )?;
     let progress = CliProgress::start("Analyzing dependency graph...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;

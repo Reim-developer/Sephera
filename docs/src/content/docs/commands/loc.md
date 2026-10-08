@@ -156,6 +156,8 @@ sephera loc --url https://github.com/Reim-developer/Sephera --ref v0.5.0
 
 `--ref` applies to repo URLs only. Tree URLs already encode the ref in the URL itself.
 
+The checkout is temporary and **shallow**: `--url` clones the branch tip only, because counting lines reads the working tree rather than the history. On the Linux kernel that is roughly 1.3 GB instead of 6 GB, and most of the difference is download time. Naming a ref other than the branch tip needs the history to resolve it, so `--ref` clones in full.
+
 ## Notes on correctness
 
 Sephera's scanner is byte-oriented and comment-token aware. It is designed to be fast, stable, and portable across newline styles, rather than to fully parse each language grammar.

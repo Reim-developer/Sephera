@@ -1,5 +1,5 @@
 use std::{
-    ffi::OsString,
+    ffi::{OsStr, OsString},
     path::{Path, PathBuf},
 };
 
@@ -7,7 +7,7 @@ use anyhow::{Context, Result, bail};
 use tempfile::TempDir;
 use url::Url;
 
-use super::git::{git_stdout_string, run_git};
+use super::git::{git_stdout_string, run_git, run_git_streaming};
 
 #[derive(Debug, Clone, PartialEq, Eq, Default)]
 pub struct SourceRequest {
@@ -60,7 +60,17 @@ enum ParsedRemoteSource {
 /// Returns an error when the request is invalid, the URL cannot be parsed,
 /// cloning or checkout fails, or a tree URL cannot be resolved to a valid
 /// directory in the temporary checkout.
-pub fn resolve_source(request: &SourceRequest) -> Result<ResolvedSource> {
+///
+/// `requires_history` says the caller will compare the checkout against
+/// something other than its tip -- a Git base ref behind `--diff`. It is a
+/// parameter rather than a field on [`SourceRequest`] because it is not a
+/// property of the source: it describes what the caller intends to do next, and
+/// the twenty-odd places that name a `path`, a `url` and a `ref` should not each
+/// have to answer a question about a later step.
+pub fn resolve_source(
+    request: &SourceRequest,
+    requires_history: bool,
+) -> Result<ResolvedSource> {
     match (&request.path, &request.url) {
         (Some(_), Some(_)) => {
             bail!("`path` and `url` are mutually exclusive");
@@ -99,7 +109,11 @@ pub fn resolve_source(request: &SourceRequest) -> Result<ResolvedSource> {
                 bail!("`ref` cannot be combined with a tree URL");
             }
 
-            resolve_remote_source(parsed_source, request.git_ref.as_deref())
+            resolve_remote_source(
+                parsed_source,
+                request.git_ref.as_deref(),
+                requires_history,
+            )
         }
     }
 }
@@ -107,6 +121,7 @@ pub fn resolve_source(request: &SourceRequest) -> Result<ResolvedSource> {
 fn resolve_remote_source(
     parsed_source: ParsedRemoteSource,
     git_ref: Option<&str>,
+    requires_history: bool,
 ) -> Result<ResolvedSource> {
     let checkout_root =
         TempDir::new().context("failed to create temp checkout")?;
@@ -117,13 +132,13 @@ fn resolve_remote_source(
         | ParsedRemoteSource::Tree { clone_url, .. } => clone_url,
     };
 
-    run_git(
+    run_git_streaming(
         None,
-        [
-            OsString::from("clone"),
-            OsString::from(clone_url),
-            repo_root.as_os_str().to_os_string(),
-        ],
+        clone_arguments(
+            clone_url,
+            repo_root.as_os_str(),
+            git_ref.is_some() || requires_history,
+        ),
         &format!("clone `{clone_url}`"),
     )?;
 
@@ -192,6 +207,41 @@ fn resolve_remote_source(
         display_repo_root,
         checkout_guard: Some(checkout_root),
     })
+}
+
+/// The `git clone` arguments for one analysis, shallow unless history is asked for.
+///
+/// A clone that fetches every commit downloads a repository's entire history to
+/// read the one commit at its tip. On the kernel that measured 792 seconds against
+/// 201 for the shallow clone of the same repository, with byte-identical line
+/// counts, so the history was bought and thrown away.
+///
+/// Two cases cannot be shallow, and both are about naming something other than
+/// the tip. `--ref` may name any commit, and a `--diff` base ref is resolved by
+/// walking back from the tip -- `HEAD~1` does not exist in a clone one commit
+/// deep. `--depth 1` also cannot pick the right branch on a repository whose
+/// default is not `master`, so `--single-branch` is paired with it to say "the
+/// one this URL points at" rather than "all of them".
+///
+/// The checkout is temporary either way, so there is no cache to keep warm and
+/// nothing about a shallow clone survives the command. That is the argument for
+/// it: the cost is paid once, inside one command, and only for the files that are
+/// actually read.
+fn clone_arguments(
+    clone_url: &str,
+    destination: &OsStr,
+    requires_history: bool,
+) -> Vec<OsString> {
+    let mut arguments = vec![OsString::from("clone")];
+
+    if !requires_history {
+        arguments.push(OsString::from("--depth=1"));
+        arguments.push(OsString::from("--single-branch"));
+    }
+
+    arguments.push(OsString::from(clone_url));
+    arguments.push(OsString::from(destination));
+    arguments
 }
 
 fn resolve_tree_checkout(
@@ -429,6 +479,70 @@ mod tests {
 
     use super::*;
 
+    #[test]
+    fn a_clone_without_a_ref_is_shallow() {
+        let arguments = clone_arguments(
+            "https://example.invalid/r",
+            OsStr::new("/tmp/repo"),
+            false,
+        )
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            arguments,
+            vec![
+                "clone",
+                "--depth=1",
+                "--single-branch",
+                "https://example.invalid/r",
+                "/tmp/repo",
+            ]
+        );
+    }
+
+    #[test]
+    fn a_clone_naming_a_ref_keeps_the_history() {
+        // `--depth 1` only carries the branch tip, so a ref that is not the tip
+        // cannot be resolved from a shallow clone. Cloning in full is the price
+        // of `--ref`, and the alternative -- cloning shallow and then failing to
+        // find the commit -- is worse, because it reports a missing ref for a
+        // repository that has it.
+        let arguments = clone_arguments(
+            "https://example.invalid/r",
+            OsStr::new("/tmp/repo"),
+            true,
+        )
+        .iter()
+        .map(|argument| argument.to_string_lossy().into_owned())
+        .collect::<Vec<_>>();
+
+        assert_eq!(
+            arguments,
+            vec!["clone", "https://example.invalid/r", "/tmp/repo",]
+        );
+    }
+
+    #[test]
+    fn the_clone_is_not_asked_to_be_quiet() {
+        // git's own progress is the only accurate report of a download that takes
+        // minutes, and `run_git_streaming` lets it reach the terminal. Asking for
+        // quiet here would trade a real progress bar for a silent wait, which is
+        // the opposite of the point -- a clone that prints nothing for three
+        // minutes is indistinguishable from a hung process.
+        let arguments = clone_arguments(
+            "https://example.invalid/r",
+            OsStr::new("d"),
+            false,
+        );
+
+        assert!(
+            !arguments.iter().any(|argument| argument == "--quiet"),
+            "the clone must be allowed to report its progress"
+        );
+    }
+
     fn run_git(repo_root: &Path, args: &[&str]) {
         let output = Command::new("git")
             .current_dir(repo_root)
@@ -543,11 +657,14 @@ mod tests {
         commit_all(temp_dir.path(), "main");
         run_git(temp_dir.path(), &["tag", "v1.0.0"]);
 
-        let source = resolve_source(&SourceRequest {
-            path: None,
-            url: Some(format!("file://{}", temp_dir.path().display())),
-            git_ref: Some(String::from("v1.0.0")),
-        })
+        let source = resolve_source(
+            &SourceRequest {
+                path: None,
+                url: Some(format!("file://{}", temp_dir.path().display())),
+                git_ref: Some(String::from("v1.0.0")),
+            },
+            false,
+        )
         .unwrap();
 
         assert!(source.is_remote());
@@ -570,14 +687,17 @@ mod tests {
         write_file(temp_dir.path(), "docs/guide.md", "# guide\n");
         commit_all(temp_dir.path(), "docs");
 
-        let source = resolve_source(&SourceRequest {
-            path: None,
-            url: Some(
-                "https://github.com/reim/sephera/tree/feature/docs/docs"
-                    .to_string(),
-            ),
-            git_ref: None,
-        });
+        let source = resolve_source(
+            &SourceRequest {
+                path: None,
+                url: Some(
+                    "https://github.com/reim/sephera/tree/feature/docs/docs"
+                        .to_string(),
+                ),
+                git_ref: None,
+            },
+            false,
+        );
 
         assert!(source.is_err());
 
@@ -595,6 +715,7 @@ mod tests {
                 ],
             },
             None,
+            false,
         )
         .unwrap();
 
@@ -614,11 +735,14 @@ mod tests {
 
     #[test]
     fn rejects_ref_without_url() {
-        let error = resolve_source(&SourceRequest {
-            path: Some(PathBuf::from(".")),
-            url: None,
-            git_ref: Some(String::from("main")),
-        })
+        let error = resolve_source(
+            &SourceRequest {
+                path: Some(PathBuf::from(".")),
+                url: None,
+                git_ref: Some(String::from("main")),
+            },
+            false,
+        )
         .unwrap_err();
 
         assert!(error.to_string().contains("`ref` requires `url`"));

@@ -120,7 +120,11 @@ pub fn resolve_context_command(
         .transpose()?;
     request.format = request.format.map(validate_context_format).transpose()?;
     validate_symbol_selection(&request)?;
-    let source = resolve_source(&request.source)?;
+    // A `--diff` base ref is resolved by walking back from the branch tip, so
+    // naming one means the checkout needs its history. `HEAD~1` does not exist in
+    // a clone one commit deep, and the failure reads as a missing commit rather
+    // than as a shallow clone.
+    let source = resolve_source(&request.source, request.diff.is_some())?;
     let config = load_selected_config(&request, &source)?;
 
     if request.list_profiles {
