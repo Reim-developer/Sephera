@@ -705,6 +705,15 @@ fn build_edges_and_nodes(
             // dependency whatever its prefix says.
             let local_gap = matches!(resolved, Resolution::Unresolved)
                 && looks_local(&statement.raw_path, file_data.ts_language)
+                // A namespace import binds a name rather than naming a module,
+                // so one that does not resolve is not a gap in the resolver.
+                // `from . import Flask` in flask's `cli.py` names a class the
+                // package re-exports, and there is no `Flask.py` for it to find.
+                // A renaming import gets no such leniency: it names one path.
+                //
+                // A wildcard is the exception, and it is the opposite case: a
+                // wildcard names a *package*, which is the broadest dependency a
+                // language has, and there is no file for it to bind to.
                 && (statement.kind.is_namespace()
                     == statement.raw_path.ends_with('*'));
 
