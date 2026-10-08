@@ -12,6 +12,7 @@ use super::{
     reader::scan_file,
     types::{CodeLocReport, FileJob, LanguageLoc, LocMetrics},
 };
+use crate::core::progress::{NoProgress, Progress};
 
 #[derive(Debug)]
 pub struct CodeLoc {
@@ -36,9 +37,31 @@ impl CodeLoc {
     /// # Panics:
     /// File count exceeded the u64 reporting limit.
     pub fn analyze(&self) -> Result<CodeLocReport> {
+        self.analyze_with(&NoProgress)
+    }
+
+    /// As [`CodeLoc::analyze`], reporting progress as files are scanned.
+    ///
+    /// The total is only known once the traversal has finished, so a progress
+    /// bar spends the walk as indeterminate and becomes a real percentage
+    /// afterwards. That is the honest order: the alternative is to walk twice to
+    /// learn a count the first walk already has.
+    ///
+    /// # Errors
+    ///
+    /// Returns an error when the target path is invalid, traversal fails, or a
+    /// file cannot be read and scanned.
+    ///
+    /// # Panics:
+    /// File count exceeded the u64 reporting limit.
+    pub fn analyze_with(
+        &self,
+        progress: &dyn Progress,
+    ) -> Result<CodeLocReport> {
         let started_at = Instant::now();
         let file_jobs = self.collect_file_jobs()?;
         let language_count = builtin_languages().len();
+        progress.set_total(file_jobs.len() as u64);
         // The buffer rides along in the fold state, so each rayon worker reuses
         // one allocation for every file it sees instead of allocating per file.
         let (aggregated_metrics, _kept_buffers) = file_jobs
@@ -50,6 +73,7 @@ impl CodeLoc {
                     metrics.size_bytes = file_job.size_bytes;
                     metrics_by_language[file_job.language_index]
                         .add_assign(metrics);
+                    progress.advance(1);
                     Ok::<_, anyhow::Error>((metrics_by_language, buffer))
                 },
             )

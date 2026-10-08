@@ -1350,6 +1350,7 @@ dependencies = [
  "anyhow",
  "clap",
  "comfy-table",
+ "console 0.16.3",
  "indicatif",
  "insta",
  "notify",

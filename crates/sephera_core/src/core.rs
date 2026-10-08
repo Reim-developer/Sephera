@@ -21,6 +21,9 @@ mod ignore;
 pub mod language_data;
 
 mod line_slices;
+
+/// Reporting progress through the phases that iterate over a repository.
+pub mod progress;
 pub(crate) mod project_files;
 
 /// Shared runtime helpers for local and remote analysis sources.
