@@ -38,28 +38,34 @@ impl CodeLoc {
     pub fn analyze(&self) -> Result<CodeLocReport> {
         let started_at = Instant::now();
         let file_jobs = self.collect_file_jobs()?;
-        let aggregated_metrics = file_jobs
+        let language_count = builtin_languages().len();
+        // The buffer rides along in the fold state, so each rayon worker reuses
+        // one allocation for every file it sees instead of allocating per file.
+        let (aggregated_metrics, _kept_buffers) = file_jobs
             .par_iter()
             .try_fold(
-                || vec![LocMetrics::zero(); builtin_languages().len()],
-                |mut metrics_by_language, file_job| {
-                    let mut file_metrics = scan_file(file_job)?;
-                    file_metrics.size_bytes = file_job.size_bytes;
+                || (vec![LocMetrics::zero(); language_count], Vec::new()),
+                |(mut metrics_by_language, mut buffer), file_job| {
+                    let mut metrics = scan_file(file_job, &mut buffer)?;
+                    metrics.size_bytes = file_job.size_bytes;
                     metrics_by_language[file_job.language_index]
-                        .add_assign(file_metrics);
-                    Ok::<_, anyhow::Error>(metrics_by_language)
+                        .add_assign(metrics);
+                    Ok::<_, anyhow::Error>((metrics_by_language, buffer))
                 },
             )
             .try_reduce(
-                || vec![LocMetrics::zero(); builtin_languages().len()],
-                |mut left, right| {
+                || (vec![LocMetrics::zero(); language_count], Vec::new()),
+                |(mut left, left_buffer), (right, right_buffer)| {
                     for (left_metrics, right_metrics) in
                         left.iter_mut().zip(right)
                     {
                         left_metrics.add_assign(right_metrics);
                     }
 
-                    Ok::<_, anyhow::Error>(left)
+                    Ok::<_, anyhow::Error>((
+                        left,
+                        left_buffer.max(right_buffer),
+                    ))
                 },
             )?;
 

@@ -1,7 +1,6 @@
 use std::{fs::File, io::Read};
 
 use anyhow::{Context, Result};
-use memmap2::Mmap;
 
 use super::{
     scanner::scan_content,
@@ -11,7 +10,13 @@ use super::{
 /// # Errors
 ///
 /// Returns an error when the file cannot be opened or read.
-pub(super) fn scan_file(file_job: &FileJob) -> Result<LocMetrics> {
+///
+/// `buffer` is grown to the file's size and reused across files by the caller's
+/// fold state, so it keeps whatever capacity the largest file already paid for.
+pub(super) fn scan_file(
+    file_job: &FileJob,
+    buffer: &mut Vec<u8>,
+) -> Result<LocMetrics> {
     if file_job.size_bytes == 0 {
         return Ok(LocMetrics::zero());
     }
@@ -20,26 +25,17 @@ pub(super) fn scan_file(file_job: &FileJob) -> Result<LocMetrics> {
         format!("failed to open `{}`", file_job.path.display())
     })?;
 
-    let metrics = if let Ok(memory_map) = map_file(&file) {
-        scan_content(&memory_map, file_job.language_style)
-    } else {
-        let mut contents = Vec::with_capacity(
-            usize::try_from(file_job.size_bytes).unwrap_or(0),
-        );
-        file.read_to_end(&mut contents).with_context(|| {
-            format!("failed to read `{}`", file_job.path.display())
-        })?;
-        scan_content(&contents, file_job.language_style)
-    };
+    buffer.clear();
+    buffer.resize(usize::try_from(file_job.size_bytes).unwrap_or(0), 0);
 
+    // Read into the front of the buffer and take the length actually read. The
+    // size came from `stat` during traversal; a file that grew or shrank since is
+    // still counted correctly, because a LOC tool has no way to know whether a
+    // file changing under it is a bug or an editor saving.
+    let read = file.read(buffer).with_context(|| {
+        format!("failed to read `{}`", file_job.path.display())
+    })?;
+
+    let metrics = scan_content(&buffer[..read], file_job.language_style);
     Ok(metrics)
-}
-
-/// # Errors
-///
-/// Returns an error when the file cannot be memory mapped.
-fn map_file(file: &File) -> Result<Mmap> {
-    // Safety: the file handle stays alive for the lifetime of the returned memory map, and the
-    // mapping is used read-only for immutable byte scanning.
-    unsafe { Mmap::map(file) }.context("failed to memory-map file")
 }
