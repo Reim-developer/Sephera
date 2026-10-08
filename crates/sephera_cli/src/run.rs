@@ -5,7 +5,7 @@ use clap::Parser;
 use sephera_core::core::{
     code_loc::{CodeLoc, IgnoreMatcher},
     graph::{
-        resolver::{EdgeFilters, build_focus_set, build_graph_with},
+        resolver::{EdgeFilters, build_focus_set, build_graph_with_progress},
         types::{GraphFormat, GraphQuery},
     },
     runtime::{
@@ -34,7 +34,7 @@ use crate::{
         render_context_markdown, render_graph, render_loc_csv, render_loc_json,
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
-    progress::CliProgress,
+    progress::{self, CliProgress, CliReporter},
     watch,
 };
 
@@ -62,6 +62,8 @@ pub fn run() -> Result<ExitCode> {
 }
 
 fn dispatch(cli: Cli) -> Result<ExitCode> {
+    progress::set_mode(cli.progress);
+
     let gate = match cli.command {
         Commands::Loc(arguments) => run_loc(&arguments),
         Commands::Symbols(arguments) => run_symbols(&arguments),
@@ -266,7 +268,8 @@ fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    let mut report = CodeLoc::new(&source.analysis_path, ignore).analyze()?;
+    let mut report = CodeLoc::new(&source.analysis_path, ignore)
+        .analyze_with(&CliReporter(&progress))?;
     if let Some(display_path) = source.display_path {
         report.base_path = display_path.into();
     }
@@ -434,7 +437,7 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // No query: the report must cover the whole repository, because a
     // `DependsOn` query would restrict it to one target's dependents and leave
     // the others with no edges to walk.
-    let report = build_graph_with(
+    let report = build_graph_with_progress(
         &source.analysis_path,
         &ignore,
         &[],
@@ -443,6 +446,7 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         EdgeFilters {
             exclude_type_aliases: arguments.exclude_types,
         },
+        &CliReporter(&progress),
     )?;
 
     // Normalised the same way `graph --focus` normalises, so an absolute
@@ -527,7 +531,7 @@ fn run_graph_diff(
         .collect();
 
     progress.set_message("Extracting imports...");
-    let report = build_graph_with(
+    let report = build_graph_with_progress(
         &source.analysis_path,
         ignore,
         &[],
@@ -536,6 +540,7 @@ fn run_graph_diff(
         EdgeFilters {
             exclude_type_aliases: arguments.exclude_types,
         },
+        &CliReporter(&progress),
     )?;
 
     let base_prefix = source
@@ -620,7 +625,7 @@ fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
         .what_depends_on
         .as_ref()
         .map(|path| GraphQuery::DependsOn(path.clone()));
-    let mut report = build_graph_with(
+    let mut report = build_graph_with_progress(
         &source.analysis_path,
         &ignore,
         &arguments.focus,
@@ -629,6 +634,7 @@ fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
         EdgeFilters {
             exclude_type_aliases: arguments.exclude_types,
         },
+        &CliReporter(&progress),
     )?;
     if let Some(display_path) = source.display_path {
         report.base_path = display_path.into();

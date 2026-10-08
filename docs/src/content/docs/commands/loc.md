@@ -98,6 +98,31 @@ Patterns containing `*`, `?`, or `[` are treated as globs and matched against bo
 
 Every analysis also reads the repository's own `.gitignore` and `.sepheraignore`, applying each one to the directory that holds it. Pass `--no-gitignore` to analyse the tree as it is on disk instead. Explicit `--ignore` patterns outrank the repository's rules, so a pattern you typed is never undone by a `!` line in `.gitignore`.
 
+## Progress
+
+`loc` draws a progress bar while it works, on standard error so that standard
+output carries the report and nothing else:
+
+```text
+Reading files ####>--------------------------- 3,204/8,901 (36%)
+```
+
+The count is real, not an animation. It appears once the walk has finished and
+the file count is known, which is why the bar is a spinner until then — a
+percentage of a total nobody has counted yet would be a decoration.
+
+`--progress` takes three values:
+
+| value | behaviour |
+|---|---|
+| `auto` | the default: draw only when standard error is a terminal |
+| `always` | draw even without a terminal, for a CI log or a screen recording |
+| `never` | never draw |
+
+Nothing needs `--progress never` in a script. Piping or redirecting standard
+error already makes `auto` silent, and every machine-readable format is written
+to standard output, so a captured report is unaffected either way.
+
 ## Remote refs
 
 For repo URLs, use `--ref` to analyze a specific branch, tag, or commit:

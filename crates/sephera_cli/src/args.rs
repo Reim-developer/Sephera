@@ -35,8 +35,30 @@ const CONTEXT_AFTER_LONG_HELP: &str = "Examples:\n  sephera context --path .\n  
     arg_required_else_help = true
 )]
 pub struct Cli {
+    /// When to draw a progress bar
+    ///
+    /// `auto`, the default, draws only when stderr is a terminal: the bar is for
+    /// a person watching, and everything machine-readable goes to stdout, so a
+    /// script that pipes Sephera's output is unaffected either way. `always` is
+    /// for a log or a demo where the bar is wanted in a record that has no
+    /// terminal. `never` is for a terminal-shaped session that should stay still.
+    #[arg(long, value_enum, default_value = "auto", global = true)]
+    pub progress: ProgressMode,
+
     #[command(subcommand)]
     pub command: Commands,
+}
+
+/// When to draw a progress bar.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, ValueEnum)]
+pub enum ProgressMode {
+    /// Draw when stderr is a terminal.
+    #[default]
+    Auto,
+    /// Draw even without a terminal.
+    Always,
+    /// Never draw.
+    Never,
 }
 
 #[derive(Debug, Subcommand)]

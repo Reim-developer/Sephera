@@ -15,6 +15,7 @@ use rayon::prelude::*;
 use crate::core::{
     compression::SupportedLanguage,
     ignore::IgnoreMatcher,
+    progress::{NoProgress, Progress},
     project_files::{ProjectFile, collect_project_files},
 };
 
@@ -117,6 +118,31 @@ pub fn build_graph_with(
     query: Option<GraphQuery>,
     filters: EdgeFilters,
 ) -> Result<GraphReport> {
+    build_graph_with_progress(
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        filters,
+        &NoProgress,
+    )
+}
+
+/// As [`build_graph_with`], reporting progress through the parse phase.
+///
+/// # Errors
+///
+/// Returns an error when project traversal or import extraction fails.
+pub fn build_graph_with_progress(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+    focus_paths: &[PathBuf],
+    depth: Option<u32>,
+    query: Option<GraphQuery>,
+    filters: EdgeFilters,
+    progress: &dyn Progress,
+) -> Result<GraphReport> {
     let project_files = collect_project_files(base_path, ignore)?;
     let focus_set = build_focus_set(base_path, focus_paths);
     let query = query
@@ -125,7 +151,7 @@ pub fn build_graph_with(
 
     // Phase 1: Extract imports from all supported files, and what each declares.
     let (mut all_file_imports, declarations) =
-        extract_all_imports(&project_files)?;
+        extract_all_imports(&project_files, progress)?;
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
             file.imports.retain(|statement| !filters.rejects(statement));
@@ -196,9 +222,20 @@ struct FileImportData {
 /// sequential version it replaced: `collect` preserves input order, and the
 /// declaration index is folded afterwards rather than being mutated from
 /// several workers, so nothing depends on which thread finished first.
+/// Extract every file's imports and declarations, reporting progress.
+///
+/// Progress is advanced over the whole collection rather than per file.
+/// `par_iter` gives no guarantee about which file any given worker reaches
+/// first, so advancing from inside the parallel map would report a count that is
+/// correct and a set of files that is arbitrary -- fine for a percentage, and
+/// wrong for anything that wants to name what is being worked on. Counting what
+/// came back keeps the number honest on both counts.
 fn extract_all_imports(
     project_files: &[ProjectFile],
+    progress: &dyn Progress,
 ) -> Result<(Vec<FileImportData>, declarations::DeclarationIndex)> {
+    progress.set_total(project_files.len() as u64);
+
     let extracted: Vec<ExtractedFile> = project_files
         .par_iter()
         .map(extract_one_file)
@@ -206,6 +243,8 @@ fn extract_all_imports(
         .into_iter()
         .flatten()
         .collect();
+
+    progress.advance(project_files.len() as u64);
 
     let mut results = Vec::with_capacity(extracted.len());
     let mut declarations = declarations::DeclarationIndex::default();

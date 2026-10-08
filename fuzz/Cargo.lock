@@ -1214,6 +1214,7 @@ dependencies = [
  "anyhow",
  "clap",
  "comfy-table",
+ "console",
  "indicatif",
  "notify",
  "sephera_core",

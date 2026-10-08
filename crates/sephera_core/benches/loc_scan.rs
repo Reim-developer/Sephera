@@ -196,6 +196,30 @@ fn write_tree(
     }
 }
 
+/// A tree of small files, which is what a repository is made of.
+///
+/// The generated corpora are 898 files in 16 directories; a real repository is
+/// the other way round. These two shapes hold the file count against the
+/// directory count in opposite directions so the walk and the file reads can be
+/// told apart from `analyze`'s total: one directory per few files makes
+/// `read_dir` and the per-directory rule lookup the cost, many files per
+/// directory makes opening and reading them the cost.
+fn write_small_files(
+    root: &std::path::Path,
+    directories: usize,
+    files_per_directory: usize,
+) {
+    let source = synth(2 << 10, Some(19), "\n");
+    for directory in 0..directories {
+        let path = root.join(format!("module_{directory:04}"));
+        std::fs::create_dir_all(&path).expect("benchmark tree is writable");
+        for file in 0..files_per_directory {
+            std::fs::write(path.join(format!("file_{file:03}.rs")), &source)
+                .expect("benchmark tree is writable");
+        }
+    }
+}
+
 fn bench_analyze(criterion: &mut Criterion) {
     let mut group = criterion.benchmark_group("loc/analyze");
 
@@ -208,6 +232,26 @@ fn bench_analyze(criterion: &mut Criterion) {
         bencher.iter(|| {
             let analyzer =
                 CodeLoc::new(temporary.path(), IgnoreMatcher::default());
+            black_box(analyzer.analyze().expect("the benchmark tree scans"))
+        });
+    });
+
+    let wide = tempfile::tempdir().expect("a temporary directory is available");
+    write_small_files(wide.path(), 500, 8);
+
+    let flat = tempfile::tempdir().expect("a temporary directory is available");
+    write_small_files(flat.path(), 4, 1000);
+
+    group.bench_function("4000_files_500_dirs", |bencher| {
+        bencher.iter(|| {
+            let analyzer = CodeLoc::new(wide.path(), IgnoreMatcher::default());
+            black_box(analyzer.analyze().expect("the benchmark tree scans"))
+        });
+    });
+
+    group.bench_function("4000_files_4_dirs", |bencher| {
+        bencher.iter(|| {
+            let analyzer = CodeLoc::new(flat.path(), IgnoreMatcher::default());
             black_box(analyzer.analyze().expect("the benchmark tree scans"))
         });
     });

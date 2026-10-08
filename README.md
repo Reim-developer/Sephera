@@ -117,11 +117,11 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 |--------|-------|
 | Files analyzed | 10 |
 | Internal edges | 43 |
-| External edges | 21 |
+| External edges | 22 |
 | Self-references (excluded above) | 2 |
 | Declared dependencies | 9 |
 | Local crate edges | 0 |
-| Standard library edges | 12 |
+| Standard library edges | 13 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
@@ -142,7 +142,7 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 12 |
+| `std` | stdlib | unknown | 13 |
 | `anyhow` | declared | 1.0.102 | 5 |
 | `tempfile` | declared | 3.27.0 | 4 |
 
@@ -234,20 +234,20 @@ Real output:
 
 | Metric                | Value |
 |-----------------------|-------|
-| Files analyzed        | 174   |
-| Internal edges        | 613   |
-| External edges        | 780   |
-| Self-references (excluded above) | 74 |
-| Declared dependencies | 202   |
+| Files analyzed        | 176   |
+| Internal edges        | 622   |
+| External edges        | 789   |
+| Self-references (excluded above) | 75 |
+| Declared dependencies | 204   |
 | Local crate edges     | 149   |
-| Standard library edges| 199   |
+| Standard library edges| 206   |
 | Circular dependencies | 0     |
 
 ## Dependencies
 
 | Package            | Kind     | Version   | Import paths |
 |--------------------|----------|-----------|--------------|
-| `std`              | stdlib   | unknown   | 199 |
+| `std`              | stdlib   | unknown   | 206 |
 | `sepheracore`      | workspace| unknown   | 142 |
 | `anyhow`           | declared | 1.0.102   | 61  |
 | `tempfile`         | declared | 3.27.0    | 36  |
@@ -255,7 +255,7 @@ Real output:
 | `clap`             | declared | 4.6.0     | 10  |
 ````
 
-The three numbers that used to be one are now three: 149 edges reach a crate in this workspace and 199 reach the standard library, so the 780 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
+The three numbers that used to be one are now three: 149 edges reach a crate in this workspace and 206 reach the standard library, so the 789 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
 
 Cycles are found by iterative DFS over the resolved import graph, with back-edge
 detection and deduplication so each cycle is reported once. This repository

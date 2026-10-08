@@ -94,6 +94,61 @@ fn prefers_longer_multiline_token_when_it_overlaps_single_line_prefix() {
 }
 
 #[test]
+fn progress_reports_the_file_count_and_finishes_at_it() {
+    use crate::core::progress::Progress;
+    use std::sync::Mutex;
+
+    /// Reports the total once, then counts advances.
+    #[derive(Default)]
+    struct Counting {
+        total: Mutex<u64>,
+        advanced: Mutex<u64>,
+    }
+
+    impl Counting {
+        fn total(&self) -> u64 {
+            *self.total.lock().unwrap()
+        }
+
+        fn advanced(&self) -> u64 {
+            *self.advanced.lock().unwrap()
+        }
+    }
+
+    impl Progress for Counting {
+        fn set_total(&self, total: u64) {
+            *self.total.lock().unwrap() = total;
+        }
+
+        fn advance(&self, by: u64) {
+            *self.advanced.lock().unwrap() += by;
+        }
+    }
+
+    let temp_dir = tempdir().unwrap();
+    for name in ["one.rs", "two.rs", "three.py"] {
+        fs::write(temp_dir.path().join(name), "fn f() {}\n").unwrap();
+    }
+
+    let progress = Counting::default();
+    let report = CodeLoc::new(temp_dir.path(), IgnoreMatcher::empty())
+        .analyze_with(&progress)
+        .unwrap();
+
+    assert_eq!(
+        progress.total(),
+        report.files_scanned,
+        "the total reported must be the files actually scanned"
+    );
+    assert_eq!(
+        progress.advanced(),
+        report.files_scanned,
+        "every file must be counted exactly once, so the bar reaches the end \
+         rather than stopping short or overshooting"
+    );
+}
+
+#[test]
 fn ignore_matcher_supports_glob_and_regex() {
     let patterns = vec!["*.rs".to_owned(), "target|node_modules".to_owned()];
     let matcher = IgnoreMatcher::from_patterns(&patterns).unwrap();

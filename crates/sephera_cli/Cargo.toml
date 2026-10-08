@@ -23,6 +23,12 @@ path = "src/main.rs"
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
 comfy-table = "7.2.1"
+# `indicatif` draws through a `TermLike`, and its own `stderr` target is hidden
+# when stderr is not a terminal. `--progress always` needs a target that writes
+# regardless, and `indicatif` does not re-export the `console::Term` that provides
+# one. `console` is already in the tree through `indicatif`, so naming it adds no
+# new package.
+console = "0.16.3"
 indicatif = "0.18.4"
 notify = "8.2.0"
 sephera_core.workspace = true
