@@ -9,6 +9,11 @@ pub use context::{
     ResolvedContextCommand, ResolvedContextOptions, build_context_report,
     load_project_settings, resolve_changed_files, resolve_context_command,
 };
+pub mod settings;
+pub use settings::{
+    CONFIG_FILE_NAME, ConfigCommand, DeprecatedKey, LoadedConfig,
+    ProjectSource, load_config_file,
+};
 pub use source::{
     ResolvedSource, SourceRequest, TreeHostingStyle, resolve_source,
 };

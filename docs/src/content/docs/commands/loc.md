@@ -86,6 +86,29 @@ Elapsed: 3.909 ms (0.003909 s)
   <img src="/demo/loc.png" alt="Terminal demo of sephera loc showing per-language totals in a table." loading="lazy" />
 </figure>
 
+## Defaults from `.sephera.toml`
+
+`loc` reads `[project]` and `[loc]` from `.sephera.toml`, so the format, the output
+path and the ignore list do not have to be typed every time:
+
+```toml
+[project]
+ignore = ["vendor"]
+
+[loc]
+format = "markdown"
+output = "reports/loc.md"
+```
+
+```bash
+sephera loc --path .            # writes reports/loc.md in markdown
+sephera loc --path . --format json    # a typed flag still wins
+```
+
+An unknown key in that file is an error naming the correction, not a setting that
+quietly does nothing. See [`.sephera.toml`](../configuration/sephera-toml/) for
+profiles and aliases.
+
 ## Ignore patterns
 
 Repeat `--ignore` to combine multiple patterns:

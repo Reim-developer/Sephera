@@ -19,10 +19,10 @@ use crate::{
     args::{
         Cli, Commands, ConfigArgs, ContextArgs, GraphArgs, GraphOutputFormat,
         IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
-        OutputArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs, WatchArgs,
-        WatchTarget,
+        OutputArgs, ProfileArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
+        WatchArgs, WatchTarget,
     },
-    change_impact,
+    change_impact, configure,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
@@ -57,17 +57,24 @@ pub fn main_exit_code() -> ExitCode {
 /// succeed at its job and still have found something the caller asked to fail
 /// on. See [`crate::gate`].
 pub fn run() -> Result<ExitCode> {
-    let cli = Cli::parse();
+    // `.sephera.toml` is folded into the arguments before `clap` parses them,
+    // so a config value is validated by the same parser as a typed flag and a
+    // typed flag still wins. See `configure` for why this is a pre-pass rather
+    // than a second source of defaults.
+    let expanded = configure::expand(std::env::args().collect(), None)?;
+    let cli = Cli::parse_from(&expanded.argv);
     dispatch(cli)
 }
 
 fn dispatch(cli: Cli) -> Result<ExitCode> {
     progress::set_mode(cli.progress);
-
     let gate = match cli.command {
         Commands::Loc(arguments) => run_loc(&arguments),
         Commands::Symbols(arguments) => run_symbols(&arguments),
-        Commands::Context(arguments) => run_context(arguments),
+        Commands::Context(arguments) => {
+            let profile = arguments.profile_args.profile.clone();
+            run_context(arguments, profile)
+        }
         Commands::Mcp => run_mcp(),
         Commands::Graph(arguments) => run_graph(&arguments),
         Commands::Watch(arguments) => run_watch(&arguments),
@@ -171,6 +178,7 @@ fn run_watch_target(
             source: source(),
             ignore_args: ignore_args(),
             config_args: config.to_owned(),
+            profile_args: ProfileArgs::default(),
             format: LocOutputFormat::Table,
             output_args: OutputArgs::default(),
         }),
@@ -178,6 +186,7 @@ fn run_watch_target(
             source: source(),
             ignore_args: ignore_args(),
             config_args: config.to_owned(),
+            profile_args: ProfileArgs::default(),
             format: SymbolOutputFormat::Table,
             output_args: OutputArgs::default(),
             detail: false,
@@ -187,6 +196,7 @@ fn run_watch_target(
             source: source(),
             ignore_args: ignore_args(),
             config_args: config.to_owned(),
+            profile_args: ProfileArgs::default(),
             focus: Vec::new(),
             depth: None,
             what_depends_on: None,
@@ -207,6 +217,7 @@ fn run_watch_target(
                 source: source(),
                 ignore_args: ignore_args(),
                 config_args: config.to_owned(),
+                profile_args: ProfileArgs::default(),
                 focus: Vec::new(),
                 depth: None,
                 what_depends_on: Some(target_path.to_owned()),
@@ -359,8 +370,11 @@ fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
     Ok(no_gates())
 }
 
-fn run_context(arguments: ContextArgs) -> Result<Vec<Gate>> {
-    match resolve_context_options(arguments)? {
+fn run_context(
+    arguments: ContextArgs,
+    profile: Option<String>,
+) -> Result<Vec<Gate>> {
+    match resolve_context_options(arguments, profile)? {
         ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
         ResolvedContextCommand::ListProfiles(profiles) => {
             print_available_profiles(&profiles);

@@ -117,11 +117,11 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 |--------|-------|
 | Files analyzed | 10 |
 | Internal edges | 43 |
-| External edges | 22 |
+| External edges | 21 |
 | Self-references (excluded above) | 2 |
 | Declared dependencies | 9 |
 | Local crate edges | 0 |
-| Standard library edges | 13 |
+| Standard library edges | 12 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
@@ -142,7 +142,7 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 13 |
+| `std` | stdlib | unknown | 12 |
 | `anyhow` | declared | 1.0.102 | 5 |
 | `tempfile` | declared | 3.27.0 | 4 |
 
@@ -234,28 +234,28 @@ Real output:
 
 | Metric                | Value |
 |-----------------------|-------|
-| Files analyzed        | 176   |
-| Internal edges        | 622   |
-| External edges        | 789   |
-| Self-references (excluded above) | 75 |
-| Declared dependencies | 204   |
-| Local crate edges     | 149   |
-| Standard library edges| 206   |
+| Files analyzed        | 179   |
+| Internal edges        | 636   |
+| External edges        | 809   |
+| Self-references (excluded above) | 76 |
+| Declared dependencies | 210   |
+| Local crate edges     | 152   |
+| Standard library edges| 217   |
 | Circular dependencies | 0     |
 
 ## Dependencies
 
 | Package            | Kind     | Version   | Import paths |
 |--------------------|----------|-----------|--------------|
-| `std`              | stdlib   | unknown   | 206 |
-| `sepheracore`      | workspace| unknown   | 142 |
-| `anyhow`           | declared | 1.0.102   | 61  |
-| `tempfile`         | declared | 3.27.0    | 36  |
+| `std`              | stdlib   | unknown   | 217 |
+| `sepheracore`      | workspace| unknown   | 145 |
+| `anyhow`           | declared | 1.0.102   | 65  |
+| `tempfile`         | declared | 3.27.0    | 38  |
 | `comfytable`       | declared | 7.2.2     | 12  |
 | `clap`             | declared | 4.6.0     | 10  |
 ````
 
-The three numbers that used to be one are now three: 149 edges reach a crate in this workspace and 206 reach the standard library, so the 789 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
+The three numbers that used to be one are now three: 152 edges reach a crate in this workspace and 217 reach the standard library, so the 809 "external" edges are mostly other people's code. That is what makes the table answer *"which dependency do I bump"* rather than just *"how many edges are there"*.
 
 Cycles are found by iterative DFS over the resolved import graph, with back-edge
 detection and deduplication so each cycle is reported once. This repository
@@ -495,36 +495,67 @@ Serves `loc`, `symbols`, `context`, `graph`, and `impact` as tools over stdio fo
 
 ## Configuration
 
-Share team defaults in `.sephera.toml`:
+Stop typing the same flags. `.sephera.toml` holds defaults, named profiles, and
+whole commands under one word:
 
 ```toml
-# Read by every command: loc, symbols, context, graph, impact
+# Read by every command: loc, symbols, context, graph, impact, watch
 [project]
 ignore = ["vendor", "benchmarks/**"]
+progress = "never"
 
-# Read by context only
-[context]
-focus = ["crates/sephera_core"]
-budget = "64k"
-compress = "signatures"
+# Each command's own flags
+[loc]
 format = "markdown"
-output = "reports/context.md"
+output = "reports/loc.md"
 
+[graph]
+depth = 2
+exclude_types = true
+
+[impact]
+fail_on = 40
+
+# A second set of defaults, per command
 [profiles.review.context]
 diff = "origin/master"
 budget = "32k"
-output = "reports/review.md"
+
+# A whole long invocation, under one word
+[aliases.who]
+command = "graph"
+what_depends_on = "crates/sephera_core/src/core/code_loc.rs"
+format = "markdown"
 ```
 
-`[project]` is the part that used to be missing. A repository that wants
-`vendor` out of its analysis should say so once, not repeat `--ignore` on every
-command — which is how a project ends up with three different ignore lists and
-no idea which one a number came from.
+```bash
+sephera loc
+```
 
-Explicit flags still win, `--no-config` ignores the file, and `--config <file>`
-reads a specific one. A malformed `.sephera.toml` is an error rather than a
-silent default: a typo that quietly did nothing is invisible, and a message
-naming the file is not.
+With a `[profiles.ci.*]` block in place, a profile is one flag — and a name that
+does not exist is an error rather than a silent no-op:
+
+```console
+$ sephera graph --profile ci
+```
+
+The alias is a word from *your* config file, so neither can be run here:
+
+```console
+$ sephera who                 # graph --what-depends-on src/lib.rs --format markdown
+```
+
+Three things make this predictable. Explicit flags still win, because config is
+applied by rewriting the command line ahead of what you typed. `[project]` exists
+because a repository that wants `vendor` out of its analysis should say so once,
+not repeat `--ignore` on every command — which is how a project ends up with three
+ignore lists and no idea which one a number came from. And a key that no section
+accepts is an error naming the correction, not a setting that quietly does
+nothing: `ignroe` is refused with "did you mean `ignore`?", because a typo that
+did nothing is invisible until a number comes out wrong and you cannot work out
+why.
+
+`--no-config` ignores the file, and `--config <file>` reads a specific one.
 
 ---
 
