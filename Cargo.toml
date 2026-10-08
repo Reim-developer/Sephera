@@ -15,9 +15,21 @@ rust-version = "1.85"
 [workspace.dependencies]
 sephera_core = { path = "crates/sephera_core", version = "0.6.0" }
 sephera_mcp = { path = "crates/sephera_mcp", version = "0.6.0" }
+# `default-features = false` drops the HTML report generator. Criterion still
+# prints the numbers CI needs to compare, and the report site is a local
+# convenience that would otherwise add a template engine to every build.
+criterion = { version = "0.7", default-features = false }
 
 [profile.release]
 opt-level = 3
 lto = "thin"
 codegen-units = 1
 strip = "symbols"
+
+# Benchmarks measure the code under a comment, so they get the same optimisation
+# settings as release. Without this they would be timed at `opt-level = 0` in
+# debug and every number would describe the wrong build.
+[profile.bench]
+opt-level = 3
+lto = "thin"
+codegen-units = 1

@@ -28,15 +28,19 @@ def render_markdown_report(report: BenchmarkReport) -> str:
 		"",
 		"## Summary",
 		"",
-		"| Dataset | Rust min | Rust mean | Rust median | Rust max |",
-		"| --- | ---: | ---: | ---: | ---: |",
+		f"- Cache policy: {report.settings.cache_policy} ({report.settings.warmup_runs} warmup, "
+		f"{report.settings.measured_runs} measured)",
+		"",
+		"| Dataset | Rust min | Rust mean | Rust median | Rust max | spread |",
+		"| --- | ---: | ---: | ---: | ---: | ---: |",
 	]
 
 	for result in report.results:
 		lines.append(
 			"| "
 			f"{result.dataset} | {result.rust.min_seconds:.6f} | {result.rust.mean_seconds:.6f} | "
-			f"{result.rust.median_seconds:.6f} | {result.rust.max_seconds:.6f} |"
+			f"{result.rust.median_seconds:.6f} | {result.rust.max_seconds:.6f} | "
+			f"{result.rust.spread_ratio:.2f}x |"
 		)
 
 	lines.extend(["", "## Dataset Details", ""])
@@ -67,6 +71,7 @@ def render_command_details(stats: CommandStats) -> list[str]:
 		f"- Command: `{stats.command}`",
 		f"- Runs (s): `{format_run_samples(stats.runs)}`",
 		f"- Min/Mean/Median/Max: `{stats.min_seconds:.6f} / {stats.mean_seconds:.6f} / {stats.median_seconds:.6f} / {stats.max_seconds:.6f}`",
+		f"- Spread (max/min): `{stats.spread_ratio:.2f}x`",
 	]
 	if stats.summary is not None:
 		lines.extend(render_summary_lines(stats.summary))
