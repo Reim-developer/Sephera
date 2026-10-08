@@ -39,6 +39,24 @@ pub struct DeclaredNames {
     reexported: BTreeSet<String>,
 }
 
+impl DeclaredNames {
+    /// Record one more name this file binds.
+    ///
+    /// For a language whose names come from more than one grammar construct --
+    /// Python declares them with `def`, `class` *and* a module-level assignment
+    /// -- so the shared walk handles the first two and the plugin adds the rest
+    /// here rather than the shared walk growing a Python-shaped branch.
+    pub fn declare(&mut self, name: impl Into<String>) {
+        self.declared.insert(name.into());
+    }
+
+    /// Whether this file binds `name` at all.
+    #[must_use]
+    pub fn contains(&self, name: &str) -> bool {
+        self.declared.contains(name) || self.reexported.contains(name)
+    }
+}
+
 /// Names declared by every file in an analysis.
 ///
 /// Built in the same pass that extracts imports, so it costs one parse per file
@@ -197,7 +215,7 @@ impl DeclaredNames {
 /// confirmed to carry a `name` field, so an index built from this list is not
 /// quietly empty. A kind guessed wrong would make the whole lookup fail with no
 /// error, which is exactly the failure this module exists to remove.
-const DECLARATION_NODE_KINDS: [&str; 10] = [
+const RUST_DECLARATION_KINDS: [&str; 10] = [
     "struct_item",
     "enum_item",
     "trait_item",
@@ -209,6 +227,10 @@ const DECLARATION_NODE_KINDS: [&str; 10] = [
     "mod_item",
     "macro_definition",
 ];
+
+/// Rust's only re-export construct. Kept beside the declaration kinds because
+/// both are Rust's, and the two are read together when adding a language.
+const RUST_REEXPORT_KINDS: [&str; 1] = ["use_declaration"];
 
 /// Collect every name a Rust source file declares, at any depth.
 ///
@@ -228,9 +250,49 @@ pub fn collect_declared_names(
     source: &[u8],
     tree: &tree_sitter::Tree,
 ) -> DeclaredNames {
+    collect_declared_names_with(
+        source,
+        tree,
+        DeclarationRules {
+            declaration_kinds: &RUST_DECLARATION_KINDS,
+            reexport_kinds: &RUST_REEXPORT_KINDS,
+        },
+    )
+}
+
+/// What a language calls the things it declares, and the statement that
+/// re-exports them.
+///
+/// Parameters rather than a `match language`, because a dispatcher keyed on the
+/// language is a list that has to be edited to add one and can be edited
+/// without being noticed. A plugin supplies its own grammar's node names, and a
+/// language with no re-export construct passes an empty list, which is what
+/// Python does -- every top-level name in a module is importable, so there is
+/// nothing to distinguish.
+#[derive(Debug, Clone, Copy)]
+pub struct DeclarationRules<'rules> {
+    /// Node kinds whose `name` field names something this file declares.
+    pub declaration_kinds: &'rules [&'rules str],
+    /// Node kinds that re-export. Empty for a language with no such construct.
+    pub reexport_kinds: &'rules [&'rules str],
+}
+
+/// Collect what a file declares, under one language's grammar.
+#[must_use]
+pub fn collect_declared_names_with(
+    source: &[u8],
+    tree: &tree_sitter::Tree,
+    rules: DeclarationRules<'_>,
+) -> DeclaredNames {
     let mut declared = BTreeSet::new();
     let mut reexported = BTreeSet::new();
-    walk(source, tree.root_node(), &mut declared, &mut reexported);
+    walk(
+        source,
+        tree.root_node(),
+        &mut declared,
+        &mut reexported,
+        rules,
+    );
     DeclaredNames {
         declared,
         reexported,
@@ -349,24 +411,25 @@ fn walk(
     node: tree_sitter::Node<'_>,
     declared: &mut BTreeSet<String>,
     reexported: &mut BTreeSet<String>,
+    rules: DeclarationRules<'_>,
 ) {
-    if DECLARATION_NODE_KINDS.contains(&node.kind())
+    if rules.declaration_kinds.contains(&node.kind())
         && let Some(name) = node.child_by_field_name("name")
     {
         declared.insert(node_text(source, name).to_owned());
     }
 
-    if node.kind() == "use_declaration" {
+    if rules.reexport_kinds.contains(&node.kind()) {
         collect_reexported_names(source, node, reexported);
-        // A `use` statement's own subtree is fully handled here; recursing would
-        // re-visit the same nodes and record the imported names twice under two
-        // meanings.
+        // A re-export statement's own subtree is fully handled here; recursing
+        // would re-visit the same nodes and record the imported names twice
+        // under two meanings.
         return;
     }
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(source, child, declared, reexported);
+        walk(source, child, declared, reexported, rules);
     }
 }
 
@@ -650,6 +713,55 @@ pub struct JsonLines<S, T = AsExtractor> {
             "`impl` introduces no name; the method is what is declared"
         );
         assert!(found.iter().any(|name| name == "method"));
+    }
+
+    #[test]
+    fn a_second_language_supplies_its_own_grammar_names() {
+        // The whole reason the node kinds are a parameter rather than a constant.
+        // A Rust-only table reads `struct_item`; Python spells the same idea
+        // `class_definition`, and a lookup against the wrong list finds nothing
+        // and reports it as a gap rather than as an error.
+        let mut parser =
+            new_parser(SupportedLanguage::Python).expect("python parser");
+        let source =
+            "class Flask:\n    pass\n\n\ndef helper() -> int:\n    return 1\n";
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+
+        let python = collect_declared_names_with(
+            source.as_bytes(),
+            &tree,
+            DeclarationRules {
+                declaration_kinds: &["class_definition", "function_definition"],
+                reexport_kinds: &[],
+            },
+        );
+        assert_eq!(python.into_sorted_vec(), vec!["Flask", "helper"]);
+
+        // The same source read with Rust's rules declares nothing, which is what
+        // made this a silent failure rather than a loud one.
+        let rust_rules = DeclarationRules {
+            declaration_kinds: &RUST_DECLARATION_KINDS,
+            reexport_kinds: &RUST_REEXPORT_KINDS,
+        };
+        assert!(
+            collect_declared_names_with(source.as_bytes(), &tree, rust_rules)
+                .into_sorted_vec()
+                .is_empty(),
+            "a grammar's node names do not carry across languages"
+        );
+    }
+
+    #[test]
+    fn a_plugin_can_add_a_name_the_shared_walk_cannot_see() {
+        // `NAME = "helper"` is an assignment, and its target sits in a child of
+        // the statement rather than in a `name` field, so no grammar rule reaches
+        // it. Half the names flask imports are of this shape.
+        let mut names = DeclaredNames::default();
+        assert!(!names.contains("request"));
+
+        names.declare("request");
+        assert!(names.contains("request"));
+        assert!(!names.contains("missing"));
     }
 
     #[test]

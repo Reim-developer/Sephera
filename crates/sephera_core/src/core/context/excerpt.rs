@@ -109,17 +109,22 @@ pub(super) fn build_context_file(
 /// Attempts to produce a compressed excerpt via Tree-sitter. Returns `None`
 /// when the language is not supported for compression or when compression
 /// fails (in which case we fall back to normal excerpt logic).
+///
+/// Takes the bytes rather than the path. The caller has just read this file --
+/// it holds them to decide whether the whole file fits, and to cut an excerpt
+/// when it does not -- and this used to open and read it a *second* time. The
+/// parameter was named `_excerpt_bytes`, which is how a file that is already in
+/// memory ends up on disk again.
 fn try_compressed_excerpt(
     candidate: &ContextCandidate,
-    _excerpt_bytes: &[u8],
+    excerpt_bytes: &[u8],
     compression_mode: CompressionMode,
 ) -> Option<crate::core::compression::CompressedOutput> {
     let language_name = candidate.language?;
     let ts_language = SupportedLanguage::from_language_name(language_name)?;
 
-    let full_bytes = std::fs::read(&candidate.absolute_path).ok()?;
     let result =
-        compress_source(&full_bytes, ts_language, compression_mode).ok()?;
+        compress_source(excerpt_bytes, ts_language, compression_mode).ok()?;
 
     // Only use compressed output if it actually extracted something.
     if result.items_extracted > 0 {

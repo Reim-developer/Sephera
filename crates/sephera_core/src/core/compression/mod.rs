@@ -37,7 +37,7 @@ pub mod parser;
 pub mod types;
 
 pub use extractor::extract_compressed;
-pub use parser::{SupportedLanguage, new_parser};
+pub use parser::{SupportedLanguage, new_parser, with_parser};
 pub use types::{CompressedOutput, CompressionMode};
 
 /// Compresses a source file using Tree-sitter AST extraction.
@@ -82,12 +82,15 @@ pub fn compress_source(
         });
     }
 
-    let mut parser = new_parser(language)?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| anyhow::anyhow!("Tree-sitter returned no parse tree"))?;
+    // Borrowed from this thread's cache: a context pack compresses every file it
+    // selects, and each of those was building a parser to use once.
+    with_parser(language, source.len(), |parser| {
+        let tree = parser.parse(source, None).ok_or_else(|| {
+            anyhow::anyhow!("Tree-sitter returned no parse tree")
+        })?;
 
-    Ok(extract_compressed(source, &tree, language, mode))
+        Ok(extract_compressed(source, &tree, language, mode))
+    })
 }
 
 #[cfg(test)]

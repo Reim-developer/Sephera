@@ -23,13 +23,65 @@ impl<'a> From<&'a CommentStyle> for CommentTokens<'a> {
     }
 }
 
-impl CommentTokens<'_> {
+impl<'a> CommentTokens<'a> {
     #[must_use]
     const fn is_commentless(self) -> bool {
         self.single_line.is_none()
             && self.multi_line_start.is_none()
             && self.multi_line_end.is_none()
     }
+
+    /// The delimiters that open a comment, as a set to search for.
+    const fn openers(&self) -> [Option<&'a [u8]>; 2] {
+        [self.single_line, self.multi_line_start]
+    }
+
+    /// The delimiters that end or nest a block comment, as a set to search for.
+    const fn block_delimiters(&self) -> [Option<&'a [u8]>; 2] {
+        [self.multi_line_start, self.multi_line_end]
+    }
+}
+
+/// The byte every one of `delimiters` begins with, when they agree.
+///
+/// `//`, `/*` and `*/` all start with `/`; Python and Ruby write `#`; Haskell
+/// and Lua write `-`. Only the rest of the marker varies, which is what makes a
+/// single-byte search enough to rule out the rest of a line: if the byte is not
+/// there, no delimiter starts here either.
+///
+/// `None` when the set is empty or the delimiters disagree. No bundled language
+/// disagrees, and a caller that assumed a shared byte for one that did would
+/// silently stop finding comments -- so the fallback is not optional.
+fn shared_lead_byte(delimiters: &[Option<&[u8]>]) -> Option<u8> {
+    let mut candidates = delimiters
+        .iter()
+        .copied()
+        .flatten()
+        .filter(|delimiter| !delimiter.is_empty());
+
+    let first = candidates.next()?.first().copied()?;
+    candidates
+        .all(|delimiter| delimiter.first() == Some(&first))
+        .then_some(first)
+}
+
+/// The earliest offset at or after the cursor where one of `delimiters` begins.
+///
+/// `lead` is their shared first byte, from [`shared_lead_byte`]. This is one pass
+/// over the haystack, against one substring search per delimiter -- and it ran
+/// over every line of every file.
+fn find_delimiter(
+    rest: &[u8],
+    lead: u8,
+    delimiters: &[Option<&[u8]>],
+) -> Option<usize> {
+    memchr::memchr_iter(lead, rest).find(|offset| {
+        delimiters
+            .iter()
+            .copied()
+            .flatten()
+            .any(|delimiter| rest[*offset..].starts_with(delimiter))
+    })
 }
 
 #[derive(Clone, Copy)]
@@ -73,32 +125,59 @@ fn next_block_delimiter(
     rest: &[u8],
     tokens: CommentTokens<'_>,
 ) -> Option<(usize, usize, bool)> {
-    let identical = tokens.multi_line_start == tokens.multi_line_end;
-    let open =
-        tokens
-            .multi_line_start
-            .filter(|_| !identical)
-            .and_then(|token| {
-                memmem::find(rest, token).map(|offset| (offset, token.len()))
-            });
-    let close = tokens.multi_line_end.and_then(|token| {
-        memmem::find(rest, token).map(|offset| (offset, token.len()))
-    });
+    let delimiters = tokens.block_delimiters();
 
-    // A close wins a tie, because the byte-at-a-time version tested for it
-    // first.
-    match (open, close) {
-        (Some((open_offset, open_length)), Some((close_offset, _)))
-            if open_offset < close_offset =>
-        {
-            Some((open_offset, open_length, true))
+    // One search for the byte `/*` and `*/` share, against one substring search
+    // each. Only the block markers are considered here: a `//` inside a block
+    // comment is comment text, and letting it end the scan would miss the `*/`
+    // that actually closes the block.
+    let offset = shared_lead_byte(&delimiters).map_or_else(
+        || fallback_delimiter(rest, &delimiters),
+        |lead| find_delimiter(rest, lead, &delimiters),
+    )?;
+    let here = &rest[offset..];
+
+    // A close wins, because the byte-at-a-time version this replaced tested for
+    // it first. Two different delimiters cannot both begin at one position, so
+    // this is only ever the `identical` case -- a language whose block marker
+    // closes with what opens it -- and for it the close is the right reading.
+    if let Some(close) = tokens
+        .multi_line_end
+        .filter(|close| here.starts_with(close))
+    {
+        return Some((offset, close.len(), false));
+    }
+
+    tokens
+        .multi_line_start
+        .filter(|open| here.starts_with(open))
+        .map(|open| (offset, open.len(), true))
+}
+
+/// The same search for a language whose delimiters do not share a first byte.
+///
+/// A close wins a tie, for the reason [`next_block_delimiter`] gives.
+fn fallback_delimiter(
+    rest: &[u8],
+    delimiters: &[Option<&[u8]>],
+) -> Option<usize> {
+    let [first, second] = delimiters else {
+        return None;
+    };
+
+    let first_at = first
+        .filter(|token| !token.is_empty())
+        .and_then(|token| memmem::find(rest, token));
+    let second_at = second
+        .filter(|token| !token.is_empty())
+        .and_then(|token| memmem::find(rest, token));
+
+    match (first_at, second_at) {
+        (Some(first_at), Some(second_at)) if first_at < second_at => {
+            Some(first_at)
         }
-        (_, Some((close_offset, close_length))) => {
-            Some((close_offset, close_length, false))
-        }
-        (Some((open_offset, open_length)), None) => {
-            Some((open_offset, open_length, true))
-        }
+        (_, Some(second_at)) => Some(second_at),
+        (Some(first_at), None) => Some(first_at),
         (None, None) => None,
     }
 }
@@ -145,13 +224,13 @@ fn classify_line(
         // counted except a block comment opening, because that is the only thing
         // still owed to the *next* line. A single-line comment cannot: it ends
         // with the line. So instead of testing two delimiters at every byte, one
-        // substring search jumps to the next delimiter of either kind.
+        // search jumps to the next delimiter of either kind.
         //
-        // Both tokens have to be searched for, not just the block opener. In
-        // `x//*` the `//` comes first and claims the line, so the `/*` one byte
-        // later is comment text rather than an opener; searching only for `/*`
-        // opens a block comment that the byte-at-a-time version never opened,
-        // and the next line is then counted as comment when it is code.
+        // The search is for the byte both markers share rather than for either
+        // marker, which is the same position by one fewer pass: `//` and `/*`
+        // cannot start before the first `/`. That ordering is what keeps `x//*`
+        // correct -- the `//` claims the line and the `/*` a byte later is
+        // comment text, not an opener.
         //
         // The decision at the found position is delegated to
         // `match_comment_start` rather than reimplemented here, because the rule
@@ -160,14 +239,7 @@ fn classify_line(
         // it is a second thing to forget to update.
         if has_code {
             let rest = &line[index..];
-            let single_at = tokens
-                .single_line
-                .and_then(|token| memmem::find(rest, token));
-            let multi_at = tokens
-                .multi_line_start
-                .and_then(|token| memmem::find(rest, token));
-            let Some(offset) = single_at.into_iter().chain(multi_at).min()
-            else {
+            let Some(offset) = find_comment_delimiter(rest, tokens) else {
                 break;
             };
 
@@ -232,6 +304,26 @@ fn scan_commentless_content(bytes: &[u8]) -> LocMetrics {
     }
 
     metrics
+}
+
+/// The earliest offset at or after the cursor where a comment *opener* begins.
+///
+/// The single-byte search is the fast path. The fallback keeps a language whose
+/// markers disagree on their first byte working, at the cost every language used
+/// to pay.
+fn find_comment_delimiter(
+    rest: &[u8],
+    tokens: CommentTokens<'_>,
+) -> Option<usize> {
+    let delimiters = tokens.openers();
+
+    if let Some(lead) = shared_lead_byte(&delimiters) {
+        return find_delimiter(rest, lead, &delimiters);
+    }
+
+    let single_at = delimiters[0].and_then(|token| memmem::find(rest, token));
+    let multi_at = delimiters[1].and_then(|token| memmem::find(rest, token));
+    single_at.into_iter().chain(multi_at).min()
 }
 
 fn match_comment_start(

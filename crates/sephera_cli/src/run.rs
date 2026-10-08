@@ -1,6 +1,6 @@
 use std::process::ExitCode;
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use clap::Parser;
 use sephera_core::core::{
     code_loc::{CodeLoc, IgnoreMatcher},
@@ -9,18 +9,19 @@ use sephera_core::core::{
         types::{GraphFormat, GraphQuery},
     },
     runtime::{
-        ResolvedSource, SourceRequest, build_context_report,
-        load_project_settings, resolve_changed_files, resolve_source,
+        INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
+        build_context_report, load_project_settings, resolve_changed_files,
+        resolve_source,
     },
     symbols::{SymbolAnalyzer, SymbolDetail},
 };
 
 use crate::{
     args::{
-        Cli, Commands, ConfigArgs, ContextArgs, GraphArgs, GraphOutputFormat,
-        IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
-        OutputArgs, ProfileArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
-        WatchArgs, WatchTarget,
+        Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, IgnoreArgs,
+        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
+        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs, WatchArgs,
+        WatchTarget,
     },
     change_impact, configure,
     context_config::{
@@ -42,11 +43,23 @@ use crate::{
 pub fn main_exit_code() -> ExitCode {
     match run() {
         Ok(exit) => exit,
-        Err(error) => {
-            eprintln!("error: {error:#}");
-            ExitCode::FAILURE
-        }
+        Err(error) => exit_code_for(&error),
     }
+}
+
+/// Decide what a failed run means to whatever invoked it.
+///
+/// Pressing Ctrl+C is a decision, not a fault, so it gets its own code and no
+/// `error:` line: a clone of a large repository runs for minutes, and the natural
+/// thing to do about that is stop it. A script that can read 130 knows the
+/// difference between "you stopped this" and "this failed", which a shared 1
+/// cannot express.
+fn exit_code_for(error: &anyhow::Error) -> ExitCode {
+    if error.downcast_ref::<Interrupted>().is_some() {
+        return ExitCode::from(INTERRUPTED_EXIT_CODE);
+    }
+    eprintln!("error: {error:#}");
+    ExitCode::FAILURE
 }
 
 /// # Errors
@@ -63,22 +76,46 @@ pub fn run() -> Result<ExitCode> {
     // than a second source of defaults.
     let expanded = configure::expand(std::env::args().collect(), None)?;
     let cli = Cli::parse_from(&expanded.argv);
-    dispatch(cli)
+    progress::set_mode(cli.progress);
+
+    // `watch` keeps a blocking loop over `notify`'s synchronous receiver, so it
+    // owns a runtime rather than being driven from inside one. `Handle::block_on`
+    // panics when called from a runtime thread, and a watch session started from
+    // within the main runtime would be exactly that.
+    if let Commands::Watch(arguments) = cli.command {
+        return Ok(gate::evaluate(&run_watch(&arguments)?));
+    }
+
+    // Everything else runs on one runtime. `new_multi_thread` rather than
+    // `new_current_thread` for one reason: `block_in_place` panics on a
+    // current-thread runtime, and the MCP server and the file watcher both call
+    // into libraries that may use it. Constructing sixteen worker threads costs
+    // about 240 microseconds on this machine -- measured, not assumed -- against
+    // a single-threaded runtime's 0.4, which is not worth a panic.
+    tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to start the async runtime")?
+        .block_on(dispatch(cli.command))
 }
 
-fn dispatch(cli: Cli) -> Result<ExitCode> {
-    progress::set_mode(cli.progress);
-    let gate = match cli.command {
-        Commands::Loc(arguments) => run_loc(&arguments),
-        Commands::Symbols(arguments) => run_symbols(&arguments),
+async fn dispatch(command: Commands) -> Result<ExitCode> {
+    let gate = match command {
+        Commands::Loc(arguments) => run_loc(&arguments).await,
+        Commands::Symbols(arguments) => run_symbols(&arguments).await,
         Commands::Context(arguments) => {
-            let profile = arguments.profile_args.profile.clone();
-            run_context(arguments, profile)
+            let profile = arguments.settings.profile.clone();
+            run_context(arguments, profile).await
         }
-        Commands::Mcp => run_mcp(),
-        Commands::Graph(arguments) => run_graph(&arguments),
-        Commands::Watch(arguments) => run_watch(&arguments),
-        Commands::Impact(arguments) => run_impact(&arguments),
+        Commands::Mcp => run_mcp().await,
+        Commands::Graph(arguments) => run_graph(&arguments).await,
+        // Dispatched by `run` before the runtime starts, because `run_watch` owns a
+        // runtime of its own. Reaching this arm means a later edit moved that check
+        // inside the `block_on`, which is the nesting the split exists to avoid.
+        Commands::Watch(_) => {
+            unreachable!("`watch` is dispatched before the runtime starts")
+        }
+        Commands::Impact(arguments) => run_impact(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
 }
@@ -106,14 +143,21 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
     let root = watch::resolve_root(arguments.path.as_deref());
     let ignore = arguments.ignore_args.ignore.clone();
 
+    // `watch` runs outside the main runtime and owns this one, so the blocking
+    // `run_watch_target` calls below can `block_on` without nesting runtimes.
+    let runtime = tokio::runtime::Builder::new_multi_thread()
+        .enable_all()
+        .build()
+        .context("failed to start the watch runtime")?;
+
     if arguments.once {
-        return run_watch_target(
+        return runtime.block_on(run_watch_target(
             target,
             arguments.on.as_deref(),
             &root,
             &ignore,
-            &arguments.config_args,
-        );
+            &arguments.settings,
+        ));
     }
 
     println!(
@@ -126,13 +170,13 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
     // success. `watch --once` is the form to use in a pipeline that needs a
     // threshold.
     watch::watch(&root, || {
-        let gates = run_watch_target(
+        let gates = runtime.block_on(run_watch_target(
             target,
             arguments.on.as_deref(),
             &root,
             &ignore,
-            &arguments.config_args,
-        )?;
+            &arguments.settings,
+        ))?;
         report_gates(&gates);
         Ok(())
     })?;
@@ -153,12 +197,12 @@ fn report_gates(gates: &[Gate]) {
 }
 
 /// Run one analysis pass for the watch target.
-fn run_watch_target(
+async fn run_watch_target(
     target: WatchTarget,
     on: Option<&str>,
     root: &std::path::Path,
     ignore: &[String],
-    config: &ConfigArgs,
+    config: &SettingsArgs,
 ) -> Result<Vec<Gate>> {
     // The shared groups are built once and cloned into each arm, so a value is
     // never spelled differently in one arm than in another. Flattening the
@@ -174,39 +218,45 @@ fn run_watch_target(
     };
 
     match target {
-        WatchTarget::Loc => run_loc(&LocArgs {
-            source: source(),
-            ignore_args: ignore_args(),
-            config_args: config.to_owned(),
-            profile_args: ProfileArgs::default(),
-            format: LocOutputFormat::Table,
-            output_args: OutputArgs::default(),
-        }),
-        WatchTarget::Symbols => run_symbols(&SymbolsArgs {
-            source: source(),
-            ignore_args: ignore_args(),
-            config_args: config.to_owned(),
-            profile_args: ProfileArgs::default(),
-            format: SymbolOutputFormat::Table,
-            output_args: OutputArgs::default(),
-            detail: false,
-            by_file: false,
-        }),
-        WatchTarget::Graph => run_graph(&GraphArgs {
-            source: source(),
-            ignore_args: ignore_args(),
-            config_args: config.to_owned(),
-            profile_args: ProfileArgs::default(),
-            focus: Vec::new(),
-            depth: None,
-            what_depends_on: None,
-            exclude_types: false,
-            fail_on_cycles: None,
-            fail_on_unresolved: None,
-            diff: None,
-            format: GraphOutputFormat::Markdown,
-            output_args: OutputArgs::default(),
-        }),
+        WatchTarget::Loc => {
+            run_loc(&LocArgs {
+                source: source(),
+                ignore_args: ignore_args(),
+                settings: config.to_owned(),
+                format: LocOutputFormat::Table,
+                output_args: OutputArgs::default(),
+            })
+            .await
+        }
+        WatchTarget::Symbols => {
+            run_symbols(&SymbolsArgs {
+                source: source(),
+                ignore_args: ignore_args(),
+                settings: config.to_owned(),
+                format: SymbolOutputFormat::Table,
+                output_args: OutputArgs::default(),
+                detail: false,
+                by_file: false,
+            })
+            .await
+        }
+        WatchTarget::Graph => {
+            run_graph(&GraphArgs {
+                source: source(),
+                ignore_args: ignore_args(),
+                settings: config.to_owned(),
+                focus: Vec::new(),
+                depth: None,
+                what_depends_on: None,
+                exclude_types: false,
+                fail_on_cycles: None,
+                fail_on_unresolved: None,
+                diff: None,
+                format: GraphOutputFormat::Markdown,
+                output_args: OutputArgs::default(),
+            })
+            .await
+        }
         WatchTarget::DependsOn => {
             let Some(target_path) = on else {
                 anyhow::bail!(
@@ -216,8 +266,7 @@ fn run_watch_target(
             run_graph(&GraphArgs {
                 source: source(),
                 ignore_args: ignore_args(),
-                config_args: config.to_owned(),
-                profile_args: ProfileArgs::default(),
+                settings: config.to_owned(),
                 focus: Vec::new(),
                 depth: None,
                 what_depends_on: Some(target_path.to_owned()),
@@ -228,13 +277,17 @@ fn run_watch_target(
                 format: GraphOutputFormat::Markdown,
                 output_args: OutputArgs::default(),
             })
+            .await
         }
     }
 }
 
-fn run_mcp() -> Result<Vec<Gate>> {
-    let runtime = tokio::runtime::Runtime::new()?;
-    runtime.block_on(sephera_mcp::run_mcp_server())?;
+/// Serve the MCP protocol.
+///
+/// Awaited rather than driven by a runtime of its own: the command dispatch
+/// already runs on one, and `block_on` from inside a runtime thread panics.
+async fn run_mcp() -> Result<Vec<Gate>> {
+    sephera_mcp::run_mcp_server().await?;
     Ok(no_gates())
 }
 
@@ -248,7 +301,7 @@ fn run_mcp() -> Result<Vec<Gate>> {
 /// so a repository states its exclusions once instead of on every command line.
 fn build_ignore_matcher(
     base_path: &std::path::Path,
-    config: &ConfigArgs,
+    config: &SettingsArgs,
     patterns: &[String],
     no_gitignore: bool,
 ) -> Result<IgnoreMatcher> {
@@ -266,16 +319,20 @@ fn build_ignore_matcher(
     }
 }
 
-fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
+async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
     let progress = CliProgress::start("Analyzing line counts...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -309,16 +366,20 @@ fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
     Ok(no_gates())
 }
 
-fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
+async fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
     let progress = CliProgress::start("Counting declarations...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -370,11 +431,11 @@ fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
     Ok(no_gates())
 }
 
-fn run_context(
+async fn run_context(
     arguments: ContextArgs,
     profile: Option<String>,
 ) -> Result<Vec<Gate>> {
-    match resolve_context_options(arguments, profile)? {
+    match resolve_context_options(arguments, profile).await? {
         ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
         ResolvedContextCommand::ListProfiles(profiles) => {
             print_available_profiles(&profiles);
@@ -433,16 +494,20 @@ fn report_unresolved_symbols(names: &[String]) {
 /// it per target is the obvious implementation and the wrong one: on cargo,
 /// five targets cost 2,874 ms that way against 663 ms for the single build that
 /// answers all five questions.
-fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
+async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
     let progress = CliProgress::start("Computing blast radius...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -530,6 +595,9 @@ fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
 /// Builds the graph once and measures every changed file against it. Building
 /// one blast radius per file would re-parse the repository once per changed
 /// file, which turns the cheapest useful CI check into the most expensive one.
+///
+/// Synchronous despite the caller being async: the source is already resolved by
+/// the time this runs, and a diff against it is file reads rather than a clone.
 fn run_graph_diff(
     source: &ResolvedSource,
     ignore: &IgnoreMatcher,
@@ -616,16 +684,24 @@ fn run_graph_diff(
     Ok(gates)
 }
 
-fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
+async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
+    // `--diff` resolves its base ref by walking back from the tip, so a shallow
+    // clone could not answer `HEAD~1`. Naming a base ref is the same request as
+    // naming a ref to check out: both mean "something other than where the branch
+    // points".
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        arguments.diff.is_some(),
+    )
+    .await?;
     let progress = CliProgress::start("Analyzing dependency graph...");
-    let source = resolve_source(&SourceRequest {
-        path: arguments.source.path.clone(),
-        url: arguments.source.url.clone(),
-        git_ref: arguments.source.git_ref.clone(),
-    })?;
     let ignore = build_ignore_matcher(
         &source.analysis_path,
-        &arguments.config_args,
+        &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
@@ -691,4 +767,41 @@ fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
     }
     emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
     Ok(gates)
+}
+
+#[cfg(test)]
+mod tests {
+    use anyhow::anyhow;
+    use sephera_core::core::runtime::{INTERRUPTED_EXIT_CODE, Interrupted};
+
+    use std::process::ExitCode;
+
+    use super::exit_code_for;
+
+    #[test]
+    fn a_stopped_clone_reports_that_it_was_stopped() {
+        // Wrapped in context on the way out of `resolve_source`, so the downcast
+        // has to see through the chain -- that is the whole mechanism, and it is
+        // the difference between a user who pressed Ctrl+C seeing nothing and
+        // seeing `error:`.
+        let error = anyhow::Error::new(Interrupted).context(
+            "failed to clone `https://github.com/Reim-developer/Sephera`",
+        );
+
+        assert_eq!(
+            exit_code_for(&error),
+            ExitCode::from(INTERRUPTED_EXIT_CODE),
+            "an interrupted clone is a decision, not a fault"
+        );
+    }
+
+    #[test]
+    fn an_ordinary_failure_is_not_mistaken_for_a_stopped_one() {
+        // The failure that matters most is the one that looks similar: git's own
+        // refusal arrives as ordinary context, and must not be reported as the
+        // user having asked to stop.
+        let error = anyhow!("failed to clone `https://example.invalid/x`");
+
+        assert_eq!(exit_code_for(&error), ExitCode::FAILURE);
+    }
 }

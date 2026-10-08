@@ -123,6 +123,56 @@ CASES: Final[tuple[Case, ...]] = (
         resolved=False,
         local_gap=True,
     ),
+    Case(
+        id="python/a_class_the_module_declares_is_not_a_gap",
+        source=f"{P}/__init__.py",
+        import_path=".sibling.Sibling",
+        why="`from .sibling import Sibling` reaches for `pkg/sibling/Sibling.py`, "
+        "which does not exist, and then for the attribute `Sibling`, which does. "
+        "Reporting the second half as a path that meant to name a project file "
+        "and could not was 162 of them on flask, against 185 edges the resolver "
+        "had placed.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=False,
+    ),
+    Case(
+        id="python/a_module_level_assignment_is_not_a_gap",
+        source=f"{P}/sibling.py",
+        import_path=".helper.NAME",
+        why="`NAME = \"helper\"` binds a module-level name just as a class does, "
+        "and `from .helper import NAME` imports it. Half the names on flask are "
+        "of this shape -- `request = LocalProxy(...)` in `globals.py` -- so a "
+        "rule reading only `def` and `class` would have left half of them "
+        "counted as missing modules.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=False,
+    ),
+    Case(
+        id="python/a_name_nothing_declares_is_still_a_gap",
+        source=f"{P}/__init__.py",
+        import_path=".helper.Helper",
+        why="The other direction, and the one that matters most: `helper.py` "
+        "declares `use`, `NAME` and no `Helper`, so the import really is broken "
+        "and has to stay in the count. A fix that removed every unresolved "
+        "submodule path would pass the two cases above and fail this one.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=True,
+    ),
+    Case(
+        id="python/a_local_variable_is_not_a_name_the_module_declares",
+        source=f"{P}/sub/deep.py",
+        import_path="..sibling.local_only",
+        why="`sibling.py` assigns `local_only` inside a function. `from "
+        "..sibling import local_only` cannot reach it, so collecting assignment "
+        "targets at any depth rather than at module level would have hidden a "
+        "broken import behind a local variable.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=True,
+    ),
     # ---- known resolver defects ---------------------------------------------
     # Written the way the correct answer reads, and failing today. See
     # `KNOWN_DEFECTS` below.
@@ -191,30 +241,13 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
 EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 
 
-# ---------------------------------------------------------------------------
-# Known resolver defects
-# ---------------------------------------------------------------------------
+# No known defects. Three used to be listed here and all three are now answered
+# above; the directory that had no name to point at, the absolute path rooted
+# below the analysis base, and the missing submodule that was being reported as
+# an external dependency.
 #
-# `...` from `pkg/sub/deep.py` names a directory, and a directory is not a
-# package without an `__init__.py`; it lands on whichever module happens to
-# sit beside the package instead.
-#
-# An absolute import `pkg.sub.value` is not resolved because the resolver
-# treats absolute imports as rooted at the analysis base, not at the package
-# root. The Python resolver does not currently model package hierarchy.
-
-KNOWN_DEFECTS: Final[dict[str, str]] = {
-    "python/too_many_dots_is_a_gap":
-        "`...` from `pkg/sub/deep.py` names a directory, and "
-        "a directory is not a package without an `__init__.py"
-        "`; it lands on whichever module happens to sit besid"
-        "e the package instead",
-    "python/a_missing_submodule_of_an_absolute_import_is_dropped":
-        "`from pkg import absent` resolves the package and em"
-        "its nothing for the missing submodule, so the import"
-        " leaves no trace at all",
-    "python/absolute_module_import":
-        "a dotted absolute path rooted below the analysis bas"
-        "e produces no edge at all; the relative forms walk u"
-        "p correctly, so the walk works in one direction only",
-}
+# `python.py` used to carry the note that the resolver "does not currently model
+# package hierarchy", which was the root of two of the three. It does now: an
+# absolute import is tried against the directory CPython would put on
+# `sys.path`, found by walking up from the importing file while each directory is
+# a package.

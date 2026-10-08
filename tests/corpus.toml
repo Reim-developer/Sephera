@@ -92,11 +92,20 @@ name = "flask"
 language = "Python"
 # Relative imports resolve fully; the number is a floor to catch regressions,
 # not a target to raise.
-# Updated from 0 to 162: the Python extractor now correctly classifies
-# relative submodule imports (e.g., `from . import helper`) as Dependency
-# rather than Namespace, so missing submodules are correctly reported as
-# local gaps instead of being silently dropped.
-unresolved_local = 162
+# Down from 162, and the fall is a correctness fix rather than a quieter
+# measurement: `from .app import Flask` leaves two edges, and the second one --
+# `.app.Flask` -- was being counted as a path that meant to name a project file
+# and could not, when `Flask` is a class inside `app.py` and no file was ever
+# expected. 110 of them were a `def` or `class` the parent declares, 47 a
+# module-level assignment such as `request = LocalProxy(...)`, which is half of
+# what is left once definitions are counted. The sibling import `.app` already
+# carried the dependency, so `internal_edges` did not move: no edge was lost,
+# only a false alarm removed.
+#
+# The three that remain are `from . import Flask` in `cli.py`, twice -- which
+# binds the name against the package and so has no parent to ask -- and
+# `from . import app` in an example whose `app.py` genuinely is missing.
+unresolved_local = 3
 # Up from 80 when a zero-byte file stopped being dropped from the graph. The
 # three are the empty `__init__.py` files under `tests/`, which are the thing
 # that makes each of those directories a package -- and this resolver already
@@ -107,10 +116,33 @@ unresolved_local = 162
 files = 83
 # Up from 171 when `from . import helper` stopped being reported as pointing at
 # the package's `__init__.py` instead of at the submodule it names.
-internal_edges = 185
-self_references = 5
+#
+# Up from 185 when an absolute Python import learned to look at the directory
+# Python puts on `sys.path`, and not only at the analysis base. flask's packages
+# do not sit at its root, so three dependencies were invisible: `from
+# js_example import views` in an example, and `from blueprintapp.apps.admin` and
+# `...frontend` in that package's `__init__.py`. All three are statements in the
+# source and all three now point at files that exist, so this is a recovery
+# rather than a revision.
+#
+# A fourth statement, `from hello import app` in `tests/test_apps/helloworld`,
+# deliberately does not resolve. `helloworld` has no `__init__.py` and neither
+# does `test_apps`, so there is no package to put the directory on `sys.path`
+# through -- the import works only because flask's test setup puts it there
+# itself, and nothing in the repository says so. `blueprintapp` next to it does
+# have one, and its imports resolve.
+internal_edges = 188
+# Up from 5 for the same reason as the edges above: `from js_example import views`
+# in `js_example/__init__.py` names the package it is already inside, and that
+# statement only became visible once absolute imports found their root.
+self_references = 6
 cfg_gated_edges = 0
-cycles = 43
+# Up from 43, and it is the one cycle through a newly resolved import:
+# `examples/javascript/js_example/__init__.py` imports `js_example.views`, and
+# `views.py` opens with `from . import app`, which depends on the package's
+# `__init__.py` having run. The dependency was there before; the tool could not
+# see either end of it.
+cycles = 44
 # Flask's `__init__.py` is the public API and its modules import back through it,
 # so every cycle here involves a real dependency.
 structural_cycles = 0

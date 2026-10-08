@@ -13,8 +13,8 @@ fn param_for<T>(input: T) -> rmcp::handler::server::wrapper::Parameters<T> {
     rmcp::handler::server::wrapper::Parameters(input)
 }
 
-#[test]
-fn impact_tool_reports_a_blast_radius() {
+#[tokio::test]
+async fn impact_tool_reports_a_blast_radius() {
     // The question an agent should be able to ask before editing a file, which
     // it could not until `impact` was a tool in its own right.
     let server = SepheraServer::new();
@@ -27,18 +27,20 @@ fn impact_tool_reports_a_blast_radius() {
     );
     write_file(temp_dir.path(), "src/other.rs", b"fn c() {}\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/lib.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: None,
+        }))
+        .await;
 
     let output = result.expect("impact tool should succeed for a temp dir");
     let parsed: serde_json::Value =
@@ -54,8 +56,8 @@ fn impact_tool_reports_a_blast_radius() {
     assert_eq!(dependent["imports"][0], "crate::a");
 }
 
-#[test]
-fn impact_tool_accepts_several_files_at_once() {
+#[tokio::test]
+async fn impact_tool_accepts_several_files_at_once() {
     // Asking about a change rather than a single file is the common case, and
     // it has to stay one graph build rather than one per file.
     let server = SepheraServer::new();
@@ -75,18 +77,20 @@ fn impact_tool_accepts_several_files_at_once() {
         b"use crate::narrow;\n",
     );
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: None,
+        }))
+        .await;
 
     let parsed: serde_json::Value = serde_json::from_str(
         &result.expect("impact tool should succeed for a temp dir"),
@@ -105,25 +109,27 @@ fn impact_tool_accepts_several_files_at_once() {
     assert_eq!(targets[1]["dependent_count"], 1);
 }
 
-#[test]
-fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
+#[tokio::test]
+async fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
     // A typo and a genuine zero must not look the same to an agent.
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/missing.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/missing.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: None,
+        }))
+        .await;
 
     let error = result.expect_err("an unknown path must be an error");
     let message = error.to_string();
@@ -133,8 +139,8 @@ fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
     );
 }
 
-#[test]
-fn impact_tool_reports_a_crossed_gate_as_data_not_as_an_error() {
+#[tokio::test]
+async fn impact_tool_reports_a_crossed_gate_as_data_not_as_an_error() {
     // The whole point of the split the CLI makes between exit 1 and exit 2. An MCP
     // tool has no exit code, so a violated threshold returned as a tool error
     // would collapse "the rule was broken" into "the tool broke" -- and would cost
@@ -156,18 +162,20 @@ fn impact_tool_reports_a_crossed_gate_as_data_not_as_an_error() {
         b"use crate::narrow;\n",
     );
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: Some(2),
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: Some(2),
+            format: None,
+        }))
+        .await;
 
     let output = result.expect("a crossed gate is not a tool failure");
     let parsed: serde_json::Value =
@@ -191,25 +199,27 @@ fn impact_tool_reports_a_crossed_gate_as_data_not_as_an_error() {
     assert_eq!(gate["violations"][0]["target"], "src/wide.rs");
 }
 
-#[test]
-fn impact_tool_reports_a_gate_that_held() {
+#[tokio::test]
+async fn impact_tool_reports_a_gate_that_held() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
     write_file(temp_dir.path(), "src/user.rs", b"use crate::a;\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/lib.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: Some(10),
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: Some(10),
+            format: None,
+        }))
+        .await;
 
     let output = result.expect("impact tool should succeed");
     let parsed: serde_json::Value =
@@ -223,8 +233,8 @@ fn impact_tool_reports_a_gate_that_held() {
     );
 }
 
-#[test]
-fn impact_tool_reports_null_for_a_gate_that_was_never_set() {
+#[tokio::test]
+async fn impact_tool_reports_null_for_a_gate_that_was_never_set() {
     // Null rather than `crossed: false`. "No threshold was requested" and "a
     // threshold was met" are different answers, and collapsing them would report
     // a passing gate that nobody set.
@@ -237,18 +247,20 @@ fn impact_tool_reports_null_for_a_gate_that_was_never_set() {
     write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
     write_file(temp_dir.path(), "src/user.rs", b"use crate::a;\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/lib.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: None,
+        }))
+        .await;
 
     let output = result.expect("impact tool should succeed");
     let parsed: serde_json::Value =
@@ -260,8 +272,8 @@ fn impact_tool_reports_null_for_a_gate_that_was_never_set() {
     );
 }
 
-#[test]
-fn impact_tool_states_the_verdict_in_markdown_too() {
+#[tokio::test]
+async fn impact_tool_states_the_verdict_in_markdown_too() {
     // An agent asking for the compact form needs the verdict as much as the
     // numbers -- the numbers are what it already had, and acting on them is the
     // reason for asking for a gate.
@@ -276,18 +288,20 @@ fn impact_tool_states_the_verdict_in_markdown_too() {
         );
     }
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/wide.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: Some(1),
-        format: Some("markdown".to_owned()),
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/wide.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: Some(1),
+            format: Some("markdown".to_owned()),
+        }))
+        .await;
 
     let output = result.expect("a crossed gate is not a tool failure");
 
@@ -300,8 +314,8 @@ fn impact_tool_states_the_verdict_in_markdown_too() {
     );
 }
 
-#[test]
-fn impact_tool_refuses_an_empty_file_list() {
+#[tokio::test]
+async fn impact_tool_refuses_an_empty_file_list() {
     // The CLI requires at least one `<FILE>`. Returning `{"targets": []}` instead
     // would read as "nothing depends on anything", which is an answer to a
     // question nobody asked, and an agent would take it as a result.
@@ -309,43 +323,47 @@ fn impact_tool_refuses_an_empty_file_list() {
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec![],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: None,
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec![],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: None,
+        }))
+        .await;
 
     let error = result.expect_err("an empty list is not a question");
     assert!(error.to_string().contains("at least one file"), "{error}");
 }
 
-#[test]
-fn impact_tool_rejects_an_unknown_format_instead_of_returning_json() {
+#[tokio::test]
+async fn impact_tool_rejects_an_unknown_format_instead_of_returning_json() {
     // `graph` rejects an unknown format. Falling back to JSON here means an agent
     // asking for Markdown parses the wrong shape and has no idea why.
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/lib.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: Some("md".to_owned()),
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: Some("md".to_owned()),
+        }))
+        .await;
 
     let error = result.expect_err("`md` is not a format this tool has");
     assert!(
@@ -354,8 +372,8 @@ fn impact_tool_rejects_an_unknown_format_instead_of_returning_json() {
     );
 }
 
-#[test]
-fn impact_tool_markdown_has_one_title_for_several_targets() {
+#[tokio::test]
+async fn impact_tool_markdown_has_one_title_for_several_targets() {
     // A `#` per target would give a three-file answer three document titles,
     // reading as three unrelated reports instead of one question with three parts.
     let server = SepheraServer::new();
@@ -375,18 +393,20 @@ fn impact_tool_markdown_has_one_title_for_several_targets() {
         b"use crate::narrow;\n",
     );
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: None,
-        fail_on: None,
-        format: Some("markdown".to_owned()),
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/narrow.rs".to_owned(), "src/wide.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            format: Some("markdown".to_owned()),
+        }))
+        .await;
 
     let output = result.expect("impact tool should succeed for a temp dir");
     let titles = output.lines().filter(|line| line.starts_with("# ")).count();
@@ -402,25 +422,27 @@ fn impact_tool_markdown_has_one_title_for_several_targets() {
     );
 }
 
-#[test]
-fn impact_tool_renders_markdown_for_an_agents_context() {
+#[tokio::test]
+async fn impact_tool_renders_markdown_for_an_agents_context() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
     write_file(temp_dir.path(), "src/user.rs", b"use crate::a;\n");
 
-    let result = server.impact(param_for(ImpactInput {
-        files: vec!["src/lib.rs".to_owned()],
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        focus: None,
-        ignore: None,
-        no_gitignore: None,
-        depth: Some(1),
-        fail_on: None,
-        format: Some("markdown".to_owned()),
-    }));
+    let result = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: None,
+            ignore: None,
+            no_gitignore: None,
+            depth: Some(1),
+            fail_on: None,
+            format: Some("markdown".to_owned()),
+        }))
+        .await;
 
     let output = result.expect("impact tool should succeed for a temp dir");
 
@@ -438,21 +460,23 @@ fn impact_tool_renders_markdown_for_an_agents_context() {
     );
 }
 
-#[test]
-fn symbols_tool_counts_declarations_per_language() {
+#[tokio::test]
+async fn symbols_tool_counts_declarations_per_language() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"fn a() {}\nstruct S;\n");
     write_file(temp_dir.path(), "src/main.py", b"def b():\n    pass\n");
 
-    let result = server.symbols(param_for(SymbolsInput {
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        ignore: None,
-        no_gitignore: None,
-        detail: None,
-    }));
+    let result = server
+        .symbols(param_for(SymbolsInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            detail: None,
+        }))
+        .await;
 
     let output = result.expect("symbols tool should succeed for a temp dir");
     let parsed: serde_json::Value =
@@ -470,8 +494,8 @@ fn symbols_tool_counts_declarations_per_language() {
     assert_eq!(parsed["report"]["totals"]["types"], 1);
 }
 
-#[test]
-fn symbols_tool_omits_the_symbol_list_without_detail() {
+#[tokio::test]
+async fn symbols_tool_omits_the_symbol_list_without_detail() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/lib.rs", b"fn a() {}\n");
@@ -485,6 +509,7 @@ fn symbols_tool_omits_the_symbol_list_without_detail() {
             no_gitignore: None,
             detail: None,
         }))
+        .await
         .expect("summary must succeed");
     let summary: serde_json::Value =
         serde_json::from_str(&summary).expect("JSON");
@@ -504,6 +529,7 @@ fn symbols_tool_omits_the_symbol_list_without_detail() {
             no_gitignore: None,
             detail: Some(true),
         }))
+        .await
         .expect("detail mode must succeed");
     let detailed: serde_json::Value =
         serde_json::from_str(&detailed).expect("JSON");
@@ -517,51 +543,57 @@ fn symbols_tool_omits_the_symbol_list_without_detail() {
     assert_eq!(listed[0]["kind"], "functions");
 }
 
-#[test]
-fn symbols_tool_rejects_invalid_ignore_pattern() {
+#[tokio::test]
+async fn symbols_tool_rejects_invalid_ignore_pattern() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
 
-    let result = server.symbols(param_for(SymbolsInput {
-        path: Some(temp_dir.path().to_string_lossy().into_owned()),
-        url: None,
-        git_ref: None,
-        ignore: Some(vec!["(".to_owned()]),
-        no_gitignore: None,
-        detail: None,
-    }));
+    let result = server
+        .symbols(param_for(SymbolsInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: Some(vec!["(".to_owned()]),
+            no_gitignore: None,
+            detail: None,
+        }))
+        .await;
 
     assert!(result.is_err(), "an invalid pattern must be rejected");
 }
 
-#[test]
-fn symbols_tool_rejects_path_and_url_together() {
+#[tokio::test]
+async fn symbols_tool_rejects_path_and_url_together() {
     let server = SepheraServer::new();
 
-    let result = server.symbols(param_for(SymbolsInput {
-        path: Some(".".to_owned()),
-        url: Some("https://github.com/o/r".to_owned()),
-        git_ref: None,
-        ignore: None,
-        no_gitignore: None,
-        detail: None,
-    }));
+    let result = server
+        .symbols(param_for(SymbolsInput {
+            path: Some(".".to_owned()),
+            url: Some("https://github.com/o/r".to_owned()),
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            detail: None,
+        }))
+        .await;
 
     assert!(result.is_err(), "path and url are mutually exclusive");
 }
 
-#[test]
-fn symbols_tool_rejects_ref_without_url() {
+#[tokio::test]
+async fn symbols_tool_rejects_ref_without_url() {
     let server = SepheraServer::new();
 
-    let result = server.symbols(param_for(SymbolsInput {
-        path: None,
-        url: None,
-        git_ref: Some("main".to_owned()),
-        ignore: None,
-        no_gitignore: None,
-        detail: None,
-    }));
+    let result = server
+        .symbols(param_for(SymbolsInput {
+            path: None,
+            url: None,
+            git_ref: Some("main".to_owned()),
+            ignore: None,
+            no_gitignore: None,
+            detail: None,
+        }))
+        .await;
 
     assert!(result.is_err(), "ref requires url");
 }
@@ -569,8 +601,8 @@ fn symbols_tool_rejects_ref_without_url() {
 use super::*;
 use sephera_core::core::graph::types::GraphFormat as CoreGraphFormat;
 
-#[test]
-fn graph_format_defaults_to_json() {
+#[tokio::test]
+async fn graph_format_defaults_to_json() {
     assert!(matches!(
         parse_graph_format(None),
         Ok(CoreGraphFormat::Json)
@@ -581,8 +613,8 @@ fn graph_format_defaults_to_json() {
     ));
 }
 
-#[test]
-fn graph_format_accepts_every_supported_value() {
+#[tokio::test]
+async fn graph_format_accepts_every_supported_value() {
     for (input, expected) in [
         ("markdown", CoreGraphFormat::Markdown),
         ("xml", CoreGraphFormat::Xml),
@@ -595,8 +627,8 @@ fn graph_format_accepts_every_supported_value() {
     }
 }
 
-#[test]
-fn graph_format_rejects_unknown_value_instead_of_defaulting() {
+#[tokio::test]
+async fn graph_format_rejects_unknown_value_instead_of_defaulting() {
     let error = parse_graph_format(Some("yaml")).expect_err(
         "an unsupported format must not silently fall back to JSON",
     );
@@ -650,16 +682,17 @@ fn remote_repo_url(repo_root: &Path) -> String {
     format!("file://{}", repo_root.display())
 }
 
-#[test]
-fn server_info_returns_expected_metadata() {
+#[tokio::test]
+async fn server_info_returns_expected_metadata() {
     let server = SepheraServer::new();
+    // `get_info` is one of the few handlers the router leaves synchronous.
     let info = server.get_info();
     assert_eq!(info.server_info.name, env!("CARGO_PKG_NAME"));
     assert_eq!(info.server_info.version, env!("CARGO_PKG_VERSION"));
 }
 
-#[test]
-fn loc_tool_valid_directory() {
+#[tokio::test]
+async fn loc_tool_valid_directory() {
     let server = SepheraServer::new();
     let current_dir = env!("CARGO_MANIFEST_DIR");
     let param = rmcp::handler::server::wrapper::Parameters(LocInput {
@@ -670,15 +703,15 @@ fn loc_tool_valid_directory() {
         no_gitignore: None,
     });
 
-    let result = server.loc(param);
+    let result = server.loc(param).await;
     assert!(result.is_ok(), "loc tool should succeed for manifest dir");
     let output = result.unwrap();
     assert!(output.contains("Files scanned:"));
     assert!(output.contains("Languages detected:"));
 }
 
-#[test]
-fn loc_tool_invalid_directory() {
+#[tokio::test]
+async fn loc_tool_invalid_directory() {
     let server = SepheraServer::new();
     let param = rmcp::handler::server::wrapper::Parameters(LocInput {
         path: Some("/path/to/nonexistent/dir/for/test/sephera".to_string()),
@@ -688,12 +721,12 @@ fn loc_tool_invalid_directory() {
         no_gitignore: None,
     });
 
-    let result = server.loc(param);
+    let result = server.loc(param).await;
     assert!(result.is_err(), "loc tool should fail for nonexistent dir");
 }
 
-#[test]
-fn context_tool_valid_directory() {
+#[tokio::test]
+async fn context_tool_valid_directory() {
     let server = SepheraServer::new();
     let current_dir = env!("CARGO_MANIFEST_DIR");
     let param = rmcp::handler::server::wrapper::Parameters(ContextInput {
@@ -714,7 +747,7 @@ fn context_tool_valid_directory() {
         format: Some("json".to_string()),
     });
 
-    let result = server.context(param);
+    let result = server.context(param).await;
     assert!(
         result.is_ok(),
         "context tool should succeed for manifest dir"
@@ -724,8 +757,8 @@ fn context_tool_valid_directory() {
     assert!(output.contains("\"budget_tokens\""));
 }
 
-#[test]
-fn graph_tool_valid_directory() {
+#[tokio::test]
+async fn graph_tool_valid_directory() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/main.rs", b"use crate::util;\n");
@@ -743,7 +776,7 @@ fn graph_tool_valid_directory() {
         format: None,
     });
 
-    let result = server.graph(param);
+    let result = server.graph(param).await;
     assert!(result.is_ok(), "graph tool should succeed for temp dir");
     let output = result.unwrap();
     let parsed_json: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -751,8 +784,8 @@ fn graph_tool_valid_directory() {
     assert!(parsed_json["nodes"].is_array());
 }
 
-#[test]
-fn graph_tool_depends_on_query_is_serialized() {
+#[tokio::test]
+async fn graph_tool_depends_on_query_is_serialized() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/main.rs", b"use crate::service;\n");
@@ -771,7 +804,7 @@ fn graph_tool_depends_on_query_is_serialized() {
         format: None,
     });
 
-    let result = server.graph(param);
+    let result = server.graph(param).await;
     assert!(result.is_ok(), "graph query should succeed");
     let output = result.unwrap();
     let parsed_json: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -779,8 +812,8 @@ fn graph_tool_depends_on_query_is_serialized() {
     assert_eq!(parsed_json["depth"], 1);
 }
 
-#[test]
-fn graph_tool_invalid_ignore_pattern_fails() {
+#[tokio::test]
+async fn graph_tool_invalid_ignore_pattern_fails() {
     let server = SepheraServer::new();
     let param = rmcp::handler::server::wrapper::Parameters(GraphInput {
         path: Some(env!("CARGO_MANIFEST_DIR").to_owned()),
@@ -794,12 +827,12 @@ fn graph_tool_invalid_ignore_pattern_fails() {
         format: None,
     });
 
-    let result = server.graph(param);
+    let result = server.graph(param).await;
     assert!(result.is_err(), "graph tool should reject invalid ignore");
 }
 
-#[test]
-fn graph_tool_missing_depends_on_target_fails() {
+#[tokio::test]
+async fn graph_tool_missing_depends_on_target_fails() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     write_file(temp_dir.path(), "src/main.rs", b"fn main() {}\n");
@@ -816,15 +849,15 @@ fn graph_tool_missing_depends_on_target_fails() {
         format: None,
     });
 
-    let result = server.graph(param);
+    let result = server.graph(param).await;
     assert!(
         result.is_err(),
         "graph query should fail for missing target"
     );
 }
 
-#[test]
-fn loc_tool_supports_url_mode() {
+#[tokio::test]
+async fn loc_tool_supports_url_mode() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     init_git_repo(temp_dir.path());
@@ -839,12 +872,12 @@ fn loc_tool_supports_url_mode() {
         no_gitignore: None,
     });
 
-    let result = server.loc(param);
+    let result = server.loc(param).await;
     assert!(result.is_ok(), "loc tool should support URL mode");
 }
 
-#[test]
-fn graph_tool_supports_url_mode() {
+#[tokio::test]
+async fn graph_tool_supports_url_mode() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     init_git_repo(temp_dir.path());
@@ -864,7 +897,7 @@ fn graph_tool_supports_url_mode() {
         format: None,
     });
 
-    let result = server.graph(param);
+    let result = server.graph(param).await;
     assert!(result.is_ok(), "graph tool should support URL mode");
     let output = result.unwrap();
     let parsed_json: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -876,8 +909,8 @@ fn graph_tool_supports_url_mode() {
     );
 }
 
-#[test]
-fn context_tool_supports_url_profiles_diff_and_markdown() {
+#[tokio::test]
+async fn context_tool_supports_url_profiles_diff_and_markdown() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     init_git_repo(temp_dir.path());
@@ -922,7 +955,7 @@ fn context_tool_supports_url_profiles_diff_and_markdown() {
         format: Some("markdown".to_owned()),
     });
 
-    let result = server.context(param);
+    let result = server.context(param).await;
     assert!(result.is_ok(), "context tool should support URL mode");
     let output = result.unwrap();
     assert!(output.starts_with("# Sephera Context Pack"));
@@ -930,8 +963,8 @@ fn context_tool_supports_url_profiles_diff_and_markdown() {
     assert!(output.contains("src/main.rs"));
 }
 
-#[test]
-fn context_tool_list_profiles_with_url_returns_json() {
+#[tokio::test]
+async fn context_tool_list_profiles_with_url_returns_json() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
     init_git_repo(temp_dir.path());
@@ -961,7 +994,7 @@ fn context_tool_list_profiles_with_url_returns_json() {
         format: None,
     });
 
-    let result = server.context(param);
+    let result = server.context(param).await;
     assert!(result.is_ok(), "context list_profiles should succeed");
     let output = result.unwrap();
     let parsed_json: serde_json::Value = serde_json::from_str(&output).unwrap();
@@ -974,8 +1007,8 @@ fn context_tool_list_profiles_with_url_returns_json() {
     );
 }
 
-#[test]
-fn tools_reject_path_and_url_together() {
+#[tokio::test]
+async fn tools_reject_path_and_url_together() {
     let server = SepheraServer::new();
     let param = rmcp::handler::server::wrapper::Parameters(LocInput {
         path: Some(".".to_owned()),
@@ -985,15 +1018,15 @@ fn tools_reject_path_and_url_together() {
         no_gitignore: None,
     });
 
-    let result = server.loc(param);
+    let result = server.loc(param).await;
     assert!(result.is_err(), "path and url together should fail");
 }
 
-#[test]
-fn tools_reject_ref_without_url_and_blob_urls() {
+#[tokio::test]
+async fn tools_reject_ref_without_url_and_blob_urls() {
     let server = SepheraServer::new();
-    let ref_error =
-        server.graph(rmcp::handler::server::wrapper::Parameters(GraphInput {
+    let ref_error = server
+        .graph(rmcp::handler::server::wrapper::Parameters(GraphInput {
             path: Some(".".to_owned()),
             url: None,
             git_ref: Some("main".to_owned()),
@@ -1003,14 +1036,15 @@ fn tools_reject_ref_without_url_and_blob_urls() {
             depth: None,
             depends_on: None,
             format: None,
-        }));
+        }))
+        .await;
     assert!(ref_error.is_err(), "ref without url should fail");
 
-    let blob_error = server.context(
-        rmcp::handler::server::wrapper::Parameters(ContextInput {
+    let blob_error = server
+        .context(rmcp::handler::server::wrapper::Parameters(ContextInput {
             path: None,
             url: Some(
-                "https://github.com/reim/sephera/blob/main/README.md"
+                "https://github.com/Reim-developer/Sephera/blob/main/README.md"
                     .to_owned(),
             ),
             git_ref: None,
@@ -1026,7 +1060,7 @@ fn tools_reject_ref_without_url_and_blob_urls() {
             budget: None,
             compress: None,
             format: Some("json".to_owned()),
-        }),
-    );
+        }))
+        .await;
     assert!(blob_error.is_err(), "blob URLs should fail");
 }

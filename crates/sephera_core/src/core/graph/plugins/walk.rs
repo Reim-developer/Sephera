@@ -15,7 +15,7 @@
 use anyhow::Result;
 use tree_sitter::Node;
 
-use crate::core::compression::{SupportedLanguage, new_parser};
+use crate::core::compression::{SupportedLanguage, with_parser};
 
 use super::{ExtractedSource, ImportPlugin};
 use crate::core::graph::types::ImportStatement;
@@ -35,17 +35,21 @@ pub(super) fn walk_with_declarations(
     language: SupportedLanguage,
     extractor: &dyn ImportPlugin,
 ) -> Result<ExtractedSource> {
-    let mut parser = new_parser(language)?;
-    let tree = parser
-        .parse(source, None)
-        .ok_or_else(|| anyhow::anyhow!("Tree-sitter returned no parse tree"))?;
+    // The parser is borrowed from this thread's cache rather than built here, so
+    // a run over N files sets the language up once per worker instead of N
+    // times. See `with_parser`.
+    with_parser(language, source.len(), |parser| {
+        let tree = parser.parse(source, None).ok_or_else(|| {
+            anyhow::anyhow!("Tree-sitter returned no parse tree")
+        })?;
 
-    let mut imports = Vec::new();
-    descend(source, &tree.root_node(), extractor, 0, &mut imports);
+        let mut imports = Vec::new();
+        descend(source, &tree.root_node(), extractor, 0, &mut imports);
 
-    Ok(ExtractedSource {
-        imports,
-        declared: extractor.collect_declarations(source, &tree),
+        Ok(ExtractedSource {
+            imports,
+            declared: extractor.collect_declarations(source, &tree),
+        })
     })
 }
 

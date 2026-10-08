@@ -279,7 +279,9 @@ Additional patterns to exclude during traversal, applied after the patterns foun
 
 ## URL Mode Notes
 
-- Repo URLs are cloned into a temporary checkout for each invocation.
+- Repo URLs are cloned into a temporary checkout for each invocation, and the checkout is deleted when the command finishes.
+- The clone is **shallow** -- the branch tip only -- because the analysis reads the working tree rather than the history. On the Linux kernel that is roughly 1.3 GB instead of 6 GB. Naming a ref other than the branch tip with `--ref` needs the history to resolve it, so `--ref` clones in full.
+- git streams its own progress during the clone. **Ctrl+C** kills the clone, removes the temporary checkout, and exits **130** without printing an error -- the code a shell uses for a program the user stopped.
 - Report output keeps the logical URL or tree URL as the base path instead of leaking the temp checkout path.
 - Tree URLs analyze only the referenced subdirectory.
 - `graph` URL mode supports repo URLs plus GitHub and GitLab tree URLs. Blob URLs are intentionally rejected.

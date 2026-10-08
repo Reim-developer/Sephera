@@ -1,5 +1,6 @@
 from .. import helper
 from ..helper import format_name
+from ..sibling import local_only
 from ... import outside_the_package
 from . import DEEP
 from pkg.sub.value import VALUE
