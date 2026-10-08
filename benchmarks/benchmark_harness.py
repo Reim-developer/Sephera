@@ -47,10 +47,24 @@ REPO_IGNORE_PATTERNS: Final[tuple[str, ...]] = (
 	"benchmarks/generated_corpus",
 	"benchmarks/reports",
 )
+# `sephera loc` prints its numbers as a table row, not as `key=value`, so these
+# three patterns read the table instead. The separator is matched as "any run of
+# non-digits" rather than as a literal `┆`: the table draws box characters that
+# are a rendering choice, and a regex that hardcodes one of them goes stale the
+# next time the table style changes -- which is exactly how this came to parse
+# nothing at all, since it was still looking for a `Totals:` line that stopped
+# being printed when the table arrived.
 RUST_TOTALS_RE: Final[Pattern[str]] = compile(
-	r"^Totals: code=(?P<code>\d+) comment=(?P<comment>\d+) empty=(?P<empty>\d+) "
-	r"size_bytes=(?P<size_bytes>\d+) files_scanned=(?P<files_scanned>\d+) "
-	r"languages_detected=(?P<languages_detected>\d+)$",
+	r"^[^A-Za-z0-9\n]*Totals[^0-9\n]+(?P<code>\d+)[^0-9]+(?P<comment>\d+)"
+	r"[^0-9]+(?P<empty>\d+)[^0-9]+(?P<size_bytes>\d+)",
+	MULTILINE,
+)
+RUST_FILES_SCANNED_RE: Final[Pattern[str]] = compile(
+	r"^Files scanned:\s*(?P<files_scanned>\d+)",
+	MULTILINE,
+)
+RUST_LANGUAGES_DETECTED_RE: Final[Pattern[str]] = compile(
+	r"^Languages detected:\s*(?P<languages_detected>\d+)",
 	MULTILINE,
 )
 
@@ -256,13 +270,26 @@ def parse_output_summary(stdout: str) -> OutputSummary | None:
 	if totals_match is None:
 		return None
 
+	files_match = RUST_FILES_SCANNED_RE.search(stdout)
+	languages_match = RUST_LANGUAGES_DETECTED_RE.search(stdout)
+
 	return OutputSummary(
 		code_lines = int(totals_match.group("code")),
 		comment_lines = int(totals_match.group("comment")),
 		empty_lines = int(totals_match.group("empty")),
 		size_bytes = int(totals_match.group("size_bytes")),
-		files_scanned = int(totals_match.group("files_scanned")),
-		languages_detected = int(totals_match.group("languages_detected")),
+		# The totals row carries four numbers, not six: the two counts the old
+		# `key=value` format inlined now live on their own lines below the table.
+		# A line that is genuinely absent reads as zero rather than guessing a
+		# total the run never printed.
+		files_scanned = (
+			int(files_match.group("files_scanned")) if files_match is not None else 0
+		),
+		languages_detected = (
+			int(languages_match.group("languages_detected"))
+			if languages_match is not None
+			else 0
+		),
 	)
 
 
