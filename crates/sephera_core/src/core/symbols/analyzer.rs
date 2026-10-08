@@ -11,7 +11,7 @@ use anyhow::{Context, Result};
 use rayon::prelude::*;
 use tree_sitter::Node;
 
-use crate::core::compression::{SupportedLanguage, new_parser};
+use crate::core::compression::{SupportedLanguage, with_parser};
 use crate::core::ignore::IgnoreMatcher;
 use crate::core::project_files::{ProjectFile, collect_project_files};
 
@@ -175,40 +175,51 @@ fn parse_declarations(
     with_entries: bool,
 ) -> Option<FileDeclarations> {
     let rules = symbol_rules(language);
-    let mut parser = new_parser(language).ok()?;
-    let tree = parser.parse(source, None)?;
 
-    let mut counts: BTreeMap<SymbolKind, u64> = BTreeMap::new();
-    let mut entries = Vec::new();
+    // Borrowed from this thread's cache rather than built per file: this runs
+    // inside a `par_iter` over every file in the tree, so a repository of 630
+    // files was setting the language up 630 times. See `with_parser`.
+    with_parser(language, source.len(), |parser| {
+        let tree = parser.parse(source, None).ok_or_else(|| {
+            anyhow::anyhow!("Tree-sitter returned no parse tree")
+        })?;
 
-    walk(tree.root_node(), &rules, &mut |kind, node| {
-        *counts.entry(kind).or_default() += 1;
+        let mut counts: BTreeMap<SymbolKind, u64> = BTreeMap::new();
+        let mut entries = Vec::new();
 
-        if with_entries {
-            entries.push(SymbolEntry {
-                file_path: relative_path.to_owned(),
-                name: node
-                    .child_by_field_name("name")
-                    .map(|name| text(source, name))
-                    .unwrap_or_default(),
-                kind,
-                line: node.start_position().row + 1,
-                // The node's own span, so a caller can slice out one
-                // declaration. A trailing newline is not part of the
-                // declaration itself.
-                end_line: node.end_position().row + 1,
-            });
+        walk(tree.root_node(), &rules, &mut |kind, node| {
+            *counts.entry(kind).or_default() += 1;
+
+            if with_entries {
+                entries.push(SymbolEntry {
+                    file_path: relative_path.to_owned(),
+                    name: node
+                        .child_by_field_name("name")
+                        .map(|name| text(source, name))
+                        .unwrap_or_default(),
+                    kind,
+                    line: node.start_position().row + 1,
+                    // The node's own span, so a caller can slice out one
+                    // declaration. A trailing newline is not part of the
+                    // declaration itself.
+                    end_line: node.end_position().row + 1,
+                });
+            }
+        });
+
+        if counts.is_empty() {
+            // A file that declares nothing is not an error and not a
+            // declaration; the caller wants the same `None` it always got.
+            Ok(None)
+        } else {
+            Ok(Some(FileDeclarations {
+                counts: counts.into_iter().collect(),
+                entries,
+            }))
         }
-    });
-
-    if counts.is_empty() {
-        None
-    } else {
-        Some(FileDeclarations {
-            counts: counts.into_iter().collect(),
-            entries,
-        })
-    }
+    })
+    .ok()
+    .flatten()
 }
 
 /// What one file declares.
