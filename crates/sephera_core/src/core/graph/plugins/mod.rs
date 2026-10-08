@@ -237,6 +237,27 @@ pub trait ImportPlugin: Sync {
 /// `None` means "external", not "failed", so a language with no local imports
 /// still produces a usable graph.
 pub trait ResolverPlugin {
+    /// Whether `name` names a module this analysis can see.
+    ///
+    /// The counterpart to [`ResolverPlugin::leaves_project`], and asked of the
+    /// same thing: a path the resolver could not place. A language whose absolute
+    /// paths are spelled the same whether they leave the project or not has no
+    /// evidence in the shape, and this is where the evidence is. Python's
+    /// `collections.OrderedDict` and a broken `pkg.absent` differ only in whether
+    /// a file of that name is here, and without this the second was filed as an
+    /// external dependency -- a path that meant to name a project file and could
+    /// not, reported as a reference to code outside it.
+    ///
+    /// The default says "cannot tell", which leaves every language that was not
+    /// counting these as gaps continuing not to count them.
+    fn names_a_known_module(
+        &self,
+        _name: &str,
+        _context: ResolveContext<'_>,
+    ) -> bool {
+        false
+    }
+
     /// Whether a path that names `name` provably leaves the project.
     ///
     /// Most languages can answer this from the path's shape, so the default

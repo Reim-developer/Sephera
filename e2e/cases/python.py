@@ -241,30 +241,13 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
 EXPECTATIONS: Final[tuple[Expectation, ...]] = ()
 
 
-# ---------------------------------------------------------------------------
-# Known resolver defects
-# ---------------------------------------------------------------------------
+# No known defects. Three used to be listed here and all three are now answered
+# above; the directory that had no name to point at, the absolute path rooted
+# below the analysis base, and the missing submodule that was being reported as
+# an external dependency.
 #
-# `...` from `pkg/sub/deep.py` names a directory, and a directory is not a
-# package without an `__init__.py`; it lands on whichever module happens to
-# sit beside the package instead.
-#
-# An absolute import `pkg.sub.value` is not resolved because the resolver
-# treats absolute imports as rooted at the analysis base, not at the package
-# root. The Python resolver does not currently model package hierarchy.
-
-KNOWN_DEFECTS: Final[dict[str, str]] = {
-    "python/too_many_dots_is_a_gap":
-        "`...` from `pkg/sub/deep.py` names a directory, and "
-        "a directory is not a package without an `__init__.py"
-        "`; it lands on whichever module happens to sit besid"
-        "e the package instead",
-    "python/a_missing_submodule_of_an_absolute_import_is_dropped":
-        "`from pkg import absent` resolves the package and em"
-        "its nothing for the missing submodule, so the import"
-        " leaves no trace at all",
-    "python/absolute_module_import":
-        "a dotted absolute path rooted below the analysis bas"
-        "e produces no edge at all; the relative forms walk u"
-        "p correctly, so the walk works in one direction only",
-}
+# `python.py` used to carry the note that the resolver "does not currently model
+# package hierarchy", which was the root of two of the three. It does now: an
+# absolute import is tried against the directory CPython would put on
+# `sys.path`, found by walking up from the importing file while each directory is
+# a package.

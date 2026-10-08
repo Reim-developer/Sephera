@@ -742,8 +742,20 @@ fn build_edges_and_nodes(
             // Only a path the resolver could not place, that still looks local,
             // counts as a gap. One it proved leaves the project is an external
             // dependency whatever its prefix says.
+            //
+            // Two ways to look local, because for a language whose absolute paths
+            // are spelled the same either way the shape is not evidence. The
+            // first reads the path; the second asks the resolver whether a
+            // module of that name is in this analysis, which is the only thing
+            // that separates a broken `pkg.absent` from the standard library.
             let local_gap = matches!(resolved, Resolution::Unresolved)
-                && looks_local(&statement.raw_path, file_data.ts_language)
+                && (looks_local(&statement.raw_path, file_data.ts_language)
+                    || names_a_known_module(
+                        file_data.ts_language,
+                        &statement.raw_path,
+                        &file_data.file_path,
+                        project,
+                    ))
                 // A namespace import binds a name rather than naming a module,
                 // so one that does not resolve is not a gap in the resolver.
                 // `from . import Flask` in flask's `cli.py` names a class the
@@ -1312,6 +1324,46 @@ fn split_trailing_name(import_path: &str) -> Option<(String, String)> {
     }
 
     Some((parent.to_owned(), name.to_owned()))
+}
+
+/// Ask a resolver whether the first segment of an unresolved path names a
+/// module this analysis contains.
+///
+/// Asked of the plugin rather than decided here, because which languages can
+/// answer it is the plugin's own business and a `match language` in this file
+/// would be a list to be edited whenever a language is added -- the dispatcher
+/// this repository deleted once already. A plugin that cannot tell answers no,
+/// which is the answer that leaves the count where it was.
+fn names_a_known_module(
+    language: SupportedLanguage,
+    import_path: &str,
+    source_file: &str,
+    project: &ResolutionInputs,
+) -> bool {
+    let Some(plugin) = plugins::builtin_resolver_plugin(language) else {
+        return false;
+    };
+
+    // The first segment, because `pkg.absent` is a claim about `pkg`. A
+    // separator the language does not use would split a name in half, so it is
+    // asked of both and the plugin decides which is real.
+    let name = import_path
+        .split(['.', '/', ':'])
+        .next()
+        .unwrap_or_default();
+
+    plugin.names_a_known_module(
+        name,
+        plugins::ResolveContext {
+            source_file,
+            known_files: &project.known_files,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
+            declarations: Some(&project.declarations),
+            manifests: Some(&project.manifests),
+            base_path: &project.base_path,
+        },
+    )
 }
 
 fn looks_local(import_path: &str, language: SupportedLanguage) -> bool {
