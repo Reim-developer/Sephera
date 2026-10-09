@@ -51,6 +51,42 @@ sephera_graph_cpp = { path = "crates/sephera_graph_cpp", version = "0.7.1" }
 # convenience that would otherwise add a template engine to every build.
 criterion = { version = "0.7", default-features = false }
 
+[profile.dev]
+# No incremental compilation. It was 22 GiB of `target/debug/incremental` -- half
+# of a 44 GiB `target/` directory -- and it buys rebuild speed.
+#
+# The trade is a real one and was made deliberately. A workspace of sixteen crates
+# rebuilds from scratch on a fingerprint change either way, because what usually
+# invalidates it is a shared crate rather than one leaf file, and incremental only
+# pays for the edit-one-file loop. Twenty-two gigabytes of disk to hold a cache
+# that a change to `sephera_core` throws away anyway is the wrong end of the trade
+# for a tree this wide.
+#
+# `incremental` is honoured only on `dev` and `release`; the test profile ignores
+# it, so `cargo test` was never paying for it. Measured after a clean rebuild:
+# `target/debug/incremental` is 0 bytes rather than 22 GiB, and `target/` goes from
+# 44.38 GiB to 3.20 GiB in total -- the remaining 3 GiB is the release tree at
+# 0.69 GiB plus the debug tree's debug info, which is load-bearing for coverage.
+#
+# This cannot reach a shipped binary. `[profile.release]` below is a separate
+# profile with its own settings, and adding this block was verified empirically
+# rather than by argument: with the release tree warm, adding `[profile.dev]`
+# recompiled nothing at all (`cargo build --release` finished in 0.26 s with no
+# `Compiling` lines). Comparing the release binary by hash was tried first and is
+# invalid here -- two clean release builds with an identical `Cargo.toml` produce
+# different hashes, so the method cannot resolve a change this small.
+#
+# `debug` was left at the default, and the measurement that settles it is worth
+# recording. `debug = "line-tables-only"` drops the `.pdb` files from 1.01 GiB to
+# 0.13 GiB while keeping `file:line:column` in a panic -- which is what a test
+# failure needs, and all 796 tests still pass with it set. It also takes line
+# coverage from 92.40% to 35.25%, because `cargo llvm-cov` attributes a source
+# region through the debug info's column data and line tables have none. The
+# coverage job gates at 85 and would fail, so the 900 MiB is cheaper than the
+# gate. If coverage is ever measured without llvm-cov, this is the first thing to
+# revisit: it is 900 MiB for the cost of a number nothing currently reads.
+incremental = false
+
 [profile.release]
 opt-level = 3
 # `fat`, not `thin`. Every hot loop here is a small function called across a
@@ -76,5 +112,3 @@ strip = "symbols"
 opt-level = 3
 lto = "thin"
 codegen-units = 1
-# force rebuild 10/09/2026 05:54:55
-# cache cleared 10/09/2026 06:18:26
