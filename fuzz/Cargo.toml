@@ -11,7 +11,15 @@ cargo-fuzz = true
 arbitrary = { version = "1.4.2", features = ["derive"] }
 libfuzzer-sys = "0.4.10"
 sephera = { path = "../crates/sephera_cli" }
+# No `version` on any of these, matching `sephera` above: this crate is
+# `publish = false` and lives only inside this repository, so a version field
+# would be a second place to keep in step with the workspace for no gain.
+sephera_compression = { path = "../crates/sephera_compression" }
+sephera_context = { path = "../crates/sephera_context" }
 sephera_core = { path = "../crates/sephera_core" }
+sephera_graph = { path = "../crates/sephera_graph" }
+sephera_ignore = { path = "../crates/sephera_ignore" }
+sephera_scan = { path = "../crates/sephera_scan" }
 tempfile = "3.23.0"
 
 [[bin]]

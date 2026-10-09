@@ -13,7 +13,7 @@
 //! tests skip.
 
 use libfuzzer_sys::fuzz_target;
-use sephera_core::core::graph::path_utils::{
+use sephera_core::path_utils::{
     collapse_relative, file_stem, join, parent, segments,
     strip_prefix_if_inside,
 };

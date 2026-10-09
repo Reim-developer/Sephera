@@ -20,24 +20,23 @@ as asking about one, because the graph is built once and every path is measured
 against it.
 
 ```bash
-sephera impact crates/sephera_core/src/core/code_loc.rs
+sephera impact crates/sephera_context/src/types.rs
 ```
 
 ```text
-# Blast radius for `crates/sephera_core/src/core/code_loc.rs`
+# Blast radius for `crates/sephera_context/src/types.rs`
 
-8 files depend on this.
+7 files depend on this.
 
 ## Dependents
 
-- `crates/sephera_core/src/core.rs` imports `self::code_loc`
-- `crates/sephera_core/src/core/code_loc/tests.rs` imports `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content`
-- `crates/sephera_core/src/core/runtime.rs`
-- `crates/sephera_core/src/core/runtime/context.rs` imports `crate::core::code_loc::IgnoreMatcher`
-- `crates/sephera_core/src/core/symbols/lookup.rs` imports `crate::core::code_loc::IgnoreMatcher`
-- `crates/sephera_core/src/core/symbols/mod.rs`
-- `crates/sephera_core/src/core/symbols/tests.rs`
-- `crates/sephera_core/src/lib.rs`
+- `crates/sephera_context/src/builder.rs` imports `super::types::ContextDiffMetadata`, `super::types::ContextDiffSelection`, `super::types::ContextFile`, `super::types::ContextLanguageSummary`, `super::types::ContextMetadata`, `super::types::ContextReport`, `super::types::SelectionClass`
+- `crates/sephera_context/src/candidate.rs` imports `super::types::SelectionClass`
+- `crates/sephera_context/src/excerpt.rs` imports `super::types::ContextExcerpt`, `super::types::ContextFile`, `super::types::SelectionClass`
+- `crates/sephera_context/src/focus.rs` imports `super::types::SelectionClass`
+- `crates/sephera_context/src/grouping.rs` imports `super::types::ContextFile`, `super::types::ContextGroupKind`, `super::types::ContextGroupSummary`
+- `crates/sephera_context/src/lib.rs` imports `self::types`, `types::ContextDiffMetadata`, `types::ContextDiffSelection`, `types::ContextExcerpt`, `types::ContextFile`, `types::ContextGroupKind`, `types::ContextGroupSummary`, `types::ContextLanguageSummary`, `types::ContextMetadata`, `types::ContextReport`, `types::SelectionClass`
+- `crates/sephera_context/src/ranker.rs` imports `super::types::SelectionClass`
 ```
 
 Each dependent is listed with the names it imports from the target, because
@@ -74,7 +73,7 @@ path that matches no analysed file is an **error**, not an empty result.
 ## Limiting the distance
 
 ```bash
-sephera impact crates/sephera_core/src/core/code_loc.rs --depth 1
+sephera impact crates/sephera_context/src/types.rs --depth 1
 ```
 
 `--depth 1` reports only files that import the target directly. `2` also reports
@@ -91,11 +90,11 @@ bounds the same walk on both commands.
 ## Narrowing to a subtree
 
 ```bash
-# Only the 9 files that import it directly, of 36 in total
-sephera impact crates/sephera_core/src/core/ignore.rs --depth 1
+# Only the 7 files that import it directly
+sephera impact crates/sephera_context/src/types.rs --depth 1
 
 # Only the dependents inside one package
-sephera impact crates/sephera_core/src/core/ignore.rs --focus crates/sephera_core
+sephera impact crates/sephera_context/src/types.rs --focus crates/sephera_context
 ```
 
 `--focus` **narrows the answer**. A path matches exactly or as a directory prefix
@@ -114,19 +113,80 @@ because both use the same path predicate.
 ## Machine-readable output
 
 ```bash
-sephera impact crates/sephera_core/src/core/ignore.rs --format json
+sephera impact crates/sephera_context/src/types.rs --format json
 ```
 
 ```json
 {
   "targets": [
     {
-      "target": "crates/sephera_core/src/core/ignore.rs",
-      "dependent_count": 36,
-      "depth": null,
+      "dependent_count": 7,
       "dependents": [
-        { "file": "crates/sephera_core/src/core/code_loc.rs", "imports": [] }
-      ]
+        {
+          "file": "crates/sephera_context/src/builder.rs",
+          "imports": [
+            "super::types::ContextDiffMetadata",
+            "super::types::ContextDiffSelection",
+            "super::types::ContextFile",
+            "super::types::ContextLanguageSummary",
+            "super::types::ContextMetadata",
+            "super::types::ContextReport",
+            "super::types::SelectionClass"
+          ]
+        },
+        {
+          "file": "crates/sephera_context/src/candidate.rs",
+          "imports": [
+            "super::types::SelectionClass"
+          ]
+        },
+        {
+          "file": "crates/sephera_context/src/excerpt.rs",
+          "imports": [
+            "super::types::ContextExcerpt",
+            "super::types::ContextFile",
+            "super::types::SelectionClass"
+          ]
+        },
+        {
+          "file": "crates/sephera_context/src/focus.rs",
+          "imports": [
+            "super::types::SelectionClass"
+          ]
+        },
+        {
+          "file": "crates/sephera_context/src/grouping.rs",
+          "imports": [
+            "super::types::ContextFile",
+            "super::types::ContextGroupKind",
+            "super::types::ContextGroupSummary"
+          ]
+        },
+        {
+          "file": "crates/sephera_context/src/lib.rs",
+          "imports": [
+            "self::types",
+            "types::ContextDiffMetadata",
+            "types::ContextDiffSelection",
+            "types::ContextExcerpt",
+            "types::ContextFile",
+            "types::ContextGroupKind",
+            "types::ContextGroupSummary",
+            "types::ContextLanguageSummary",
+            "types::ContextMetadata",
+            "types::ContextReport",
+            "types::SelectionClass"
+          ]
+        },
+        {
+          "file": "crates/sephera_context/src/ranker.rs",
+          "imports": [
+            "super::types::SelectionClass"
+          ]
+        }
+      ],
+      "depth": null,
+      "target": "crates/sephera_context/src/types.rs"
     }
   ]
 }

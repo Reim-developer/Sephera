@@ -5,12 +5,10 @@ use std::path::PathBuf;
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
 use sephera::render_context_markdown;
-use sephera_core::core::{
-    compression::CompressionMode,
-    context::{
-        ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary,
-        ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
-    },
+use sephera_compression::CompressionMode;
+use sephera_context::{
+    ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary,
+    ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
 };
 
 #[derive(Debug, Arbitrary)]
@@ -92,7 +90,9 @@ fuzz_target!(|data: &[u8]| {
     let groups = group_summaries(&files);
     let report = ContextReport {
         metadata: ContextMetadata {
-            base_path: PathBuf::from(sanitize_relative_path(&fixture.base_path)),
+            base_path: PathBuf::from(sanitize_relative_path(
+                &fixture.base_path,
+            )),
             focus_paths: fixture
                 .focus_paths
                 .into_iter()
@@ -123,8 +123,7 @@ fuzz_target!(|data: &[u8]| {
                 .sum(),
             files_considered: u64::try_from(files.len()).unwrap_or(u64::MAX),
             files_selected: u64::try_from(files.len()).unwrap_or(u64::MAX),
-            truncated_files: u64::try_from(truncated_files)
-                .unwrap_or(u64::MAX),
+            truncated_files: u64::try_from(truncated_files).unwrap_or(u64::MAX),
         },
         dominant_languages,
         groups,

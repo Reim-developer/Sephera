@@ -1,23 +1,42 @@
-//! # Sephera Core
+//! Types and traits shared by every other crate.
 //!
-//! `sephera_core` is the shared analysis engine that drives the Sephera CLI.
-//! It provides robust, language-aware repository traversal and metric gathering,
-//! as well as deterministic context bundle generation for LLM usage.
+//! Nothing here does analysis. What lives in this crate is the vocabulary the
+//! rest of the workspace argues in: the graph's own types, the language table,
+//! the declaration index, the two lookup traits a plugin asks questions through,
+//! and the walk every language shares.
 //!
-//! ## Core Capabilities
+//! # Why the vocabulary is here and not in the crate that uses it
 //!
-//! - **Repository Traversal & Filtering**: Implements rigorous Git-aware ignore rules
-//!   and global exclusion patterns.
-//! - **Language Detection**: Identifies programming languages across the repository
-//!   based on file signatures and naming conventions.
-//! - **Code Metrics (LOC)**: Calculates fast, accurate line-of-code counts across
-//!   different files and languages.
-//! - **AST Compression**: Provides Tree-sitter-based structure extraction for 8
-//!   supported languages, allowing large codebases to be compressed to fit within
-//!   LLM prompt budgets by generating skeletons or API signatures.
-//! - **Context Building**: Generates deterministic Markdown or JSON bundles representing
-//!   a repository or a focused set of paths, including Git diff scoping.
+//! [`plugins::ImportPlugin`] is implemented by six language crates, and
+//! [`plugins::ResolverPlugin`] by the same six. Neither can depend on
+//! `sephera_graph`, because `sephera_graph` holds the registry that names all six
+//! -- so a plugin naming an index, a path helper or a report type would close
+//! that circle. This crate is the one both sides can name, which is what makes it
+//! the only place those items can live.
+//!
+//! That is the whole design rule: **if the six language crates need it, it is
+//! here; if only the graph resolver needs it, it is in `sephera_graph`.**
+//!
+//! # What is deliberately absent
+//!
+//! A language-neutral extraction trait is *not* here. The earlier shape of this
+//! file declared `ExtractionRules`, taking a parsed tree and a file path and
+//! returning statements; nothing implemented it, nothing called it, and the
+//! per-node walk it was shaped around turned out to need to ask the plugin three
+//! separate questions per node. The trait that replaced it --
+//! [`plugins::ImportPlugin`] -- takes one node at a time instead, and a plugin
+//! that has no opinion returns `None`. `AGENTS.md` calls this shape a dead-code
+//! trap, and this was one: 40 lines of authoritative-looking trait that no `mod`
+//! declaration and no caller ever reached.
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
-pub mod core;
+pub mod config;
+pub mod declarations;
+pub mod language_data;
+pub mod line_slices;
+pub mod path_utils;
+pub mod paths;
+pub mod plugins;
+pub mod progress;
+pub mod types;

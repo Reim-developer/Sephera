@@ -25,7 +25,7 @@ REPO_ROOT = Path(__file__).resolve().parent.parent
 README = REPO_ROOT / "README.md"
 
 # The command whose output the README quotes, and the path it is run against.
-QUERY_PATH = "crates/sephera_core/src/core/code_loc.rs"
+QUERY_PATH = "crates/sephera_context/src/types.rs"
 SUMMARY_ROW = re.compile(r"^\|\s*([A-Za-z ]+?)\s*\|\s*(\d+)\s*\|$")
 MERMAID_NODE = re.compile(r'n\d+\["(.+?)"\]')
 BLAST_RADIUS_ROW = re.compile(r"^\|\s*`(.+?)`\s*\|\s*(.+?)\s*\|$")

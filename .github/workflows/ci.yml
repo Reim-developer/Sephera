@@ -121,6 +121,15 @@ jobs:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/measure_accuracy.py --verify
 
+      # The docs are a separate site with its own build, and its content is not
+      # checked by anything above. Two failures live there: an unbalanced code
+      # fence, which renders the rest of a page as prose, and a path quoted in an
+      # example that no longer resolves, which fails when a reader types it.
+      # `graph.md` had the first and several pages had the second, so both are
+      # worth a check rather than a review.
+      - name: Check docs fences and quoted paths
+        run: python scripts/check_docs.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
@@ -195,14 +204,20 @@ jobs:
       - name: Cache Rust artifacts
         uses: Swatinem/rust-cache@v2
 
-      - name: Dry-run publish sephera_core
-        run: cargo publish --dry-run -p sephera_core
-
-      - name: Dry-run publish sephera_mcp with local sephera_core patch
-        run: cargo publish --dry-run -p sephera_mcp --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
-
-      - name: Dry-run publish sephera with local patches
-        run: cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'" --config "patch.crates-io.sephera_mcp.path='crates/sephera_mcp'"
+      # The order and the patches are computed from the manifests rather than
+      # listed here. `cargo publish --dry-run -p X` resolves X's dependencies
+      # from crates.io, so every path dependency needs a
+      # `--config patch.crates-io.Y.path=...`; that is fifteen of them for the CLI
+      # after the split, and a `--config` naming a crate that does not exist is
+      # silently ignored. A hardcoded list is therefore wrong invisibly, and the
+      # error it produces names a *dependency* rather than the crate missing from
+      # the list.
+      #
+      # `sephera_graph_go` is the case that made this necessary. Its tests reached
+      # for `sephera_graph::manifests::ManifestIndex`, which is a dev-dependency
+      # cycle: cargo builds it, `cargo publish` refuses it.
+      - name: Dry-run publish every crate, in dependency order
+        run: python scripts/check_publish_order.py
 
   pyright:
     name: Pyright

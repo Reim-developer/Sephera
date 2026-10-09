@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use sephera_core::core::context::{ContextGroupSummary, ContextReport};
+use sephera_context::{ContextGroupSummary, ContextReport};
 
 use super::{excerpt::write_excerpt, yes_no};
 
@@ -108,7 +108,7 @@ pub(super) fn write_group_section(
 /// Write the per-file summary rows for a group.
 fn write_file_table(
     output: &mut String,
-    files: &[&sephera_core::core::context::ContextFile],
+    files: &[&sephera_context::ContextFile],
 ) {
     for file in files {
         writeln!(

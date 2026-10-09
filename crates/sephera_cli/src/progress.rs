@@ -172,7 +172,7 @@ fn bar_style() -> ProgressStyle {
 /// presentation detail of this crate and the trait is not.
 pub struct CliReporter<'a>(pub &'a CliProgress);
 
-impl sephera_core::core::progress::Progress for CliReporter<'_> {
+impl sephera_core::progress::Progress for CliReporter<'_> {
     fn set_total(&self, total: u64) {
         self.0.set_total(total);
     }

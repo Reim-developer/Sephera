@@ -26,9 +26,7 @@
 use std::path::{Path, PathBuf};
 
 use anyhow::Result;
-use sephera_core::core::runtime::{
-    ConfigCommand, LoadedConfig, load_config_file,
-};
+use sephera_runtime::{ConfigCommand, LoadedConfig, load_config_file};
 
 /// The configuration to apply, and where it came from.
 pub struct ExpandedArgs {
@@ -155,9 +153,9 @@ pub fn expand(
 }
 
 fn profile_section(
-    profile: &sephera_core::core::runtime::settings::ProfileToml,
+    profile: &sephera_runtime::ProfileToml,
     command: ConfigCommand,
-) -> sephera_core::core::runtime::settings::CommandToml {
+) -> sephera_runtime::CommandToml {
     match command {
         ConfigCommand::Loc => profile.loc.command.clone(),
         ConfigCommand::Symbols => profile.symbols.command.clone(),

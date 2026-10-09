@@ -599,7 +599,7 @@ async fn symbols_tool_rejects_ref_without_url() {
 }
 
 use super::*;
-use sephera_core::core::graph::types::GraphFormat as CoreGraphFormat;
+use sephera_graph::types::GraphFormat as CoreGraphFormat;
 
 #[tokio::test]
 async fn graph_format_defaults_to_json() {

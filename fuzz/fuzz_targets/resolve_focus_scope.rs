@@ -15,7 +15,7 @@
 use std::path::{Path, PathBuf};
 
 use libfuzzer_sys::fuzz_target;
-use sephera_core::core::graph::resolver::build_focus_set;
+use sephera_graph::resolver::build_focus_set;
 
 /// Split the input on NUL into at most two scopes.
 ///
@@ -108,8 +108,7 @@ fuzz_target!(|data: &[u8]| {
     // Feeding the result back in is a fixed point. A scope spelled the way the
     // graph spells it must select exactly what selected it the first time, or
     // `--focus` and `impact --focus` cannot both be right.
-    let round_trip: Vec<PathBuf> =
-        combined.iter().map(PathBuf::from).collect();
+    let round_trip: Vec<PathBuf> = combined.iter().map(PathBuf::from).collect();
     assert_eq!(
         combined,
         build_focus_set(&base, &round_trip),
@@ -203,5 +202,9 @@ fn clean_component(data: &[u8]) -> String {
         .take(24)
         .collect();
 
-    if raw.is_empty() { "core".to_owned() } else { raw }
+    if raw.is_empty() {
+        "core".to_owned()
+    } else {
+        raw
+    }
 }

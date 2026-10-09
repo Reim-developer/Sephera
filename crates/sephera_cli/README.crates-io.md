@@ -19,7 +19,7 @@ cargo install sephera
 
 ```bash
 # Which files depend on this one?
-sephera graph --path . --what-depends-on crates/sephera_core/src/core/graph.rs
+sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs
 
 # Cycles, as markdown, mermaid or dot
 sephera graph --path . --format markdown

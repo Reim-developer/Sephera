@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use sephera_core::core::context::{ContextFile, ContextGroupKind};
+use sephera_context::{ContextFile, ContextGroupKind};
 
 use super::yes_no;
 

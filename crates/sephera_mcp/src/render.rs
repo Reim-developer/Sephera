@@ -10,7 +10,7 @@
 
 use std::fmt::Write as _;
 
-use sephera_core::core::context::ContextReport;
+use sephera_context::ContextReport;
 
 mod excerpt;
 mod groups;

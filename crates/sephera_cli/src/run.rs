@@ -2,19 +2,17 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
-use sephera_core::core::{
-    code_loc::{CodeLoc, IgnoreMatcher},
-    graph::{
-        resolver::{EdgeFilters, build_focus_set, build_graph_with_progress},
-        types::{GraphFormat, GraphQuery},
-    },
-    runtime::{
-        INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-        build_context_report, load_project_settings, resolve_changed_files,
-        resolve_source,
-    },
-    symbols::{SymbolAnalyzer, SymbolDetail},
+use sephera_graph::{
+    resolver::{EdgeFilters, build_focus_set, build_graph_with_progress},
+    types::{GraphFormat, GraphQuery},
 };
+use sephera_runtime::{
+    INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
+    build_context_report, load_project_settings, resolve_changed_files,
+    resolve_source,
+};
+use sephera_scan::{CodeLoc, IgnoreMatcher};
+use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
     args::{
@@ -772,7 +770,7 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use sephera_core::core::runtime::{INTERRUPTED_EXIT_CODE, Interrupted};
+    use sephera_runtime::{INTERRUPTED_EXIT_CODE, Interrupted};
 
     use std::process::ExitCode;
 

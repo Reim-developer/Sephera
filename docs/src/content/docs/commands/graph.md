@@ -96,7 +96,7 @@ rule in a log.
 
 ## Sample Output
 
-```markdown
+````markdown
 # Dependency Graph Report
 
 **Base path:** `crates/sephera_cli`
@@ -157,6 +157,7 @@ graph LR
     n2["context_config.rs"]
     %% ... remaining edges and nodes ...
 ```
+````
 
 ## Options
 

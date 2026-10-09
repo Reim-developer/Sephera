@@ -1,5 +1,5 @@
 use anyhow::Result;
-use sephera_core::core::runtime::{
+use sephera_runtime::{
     ContextCommandInput, SourceRequest, resolve_context_command,
 };
 
@@ -50,6 +50,6 @@ fn context_format_name(format: ContextFormat) -> String {
     }
 }
 
-pub use sephera_core::core::runtime::{
+pub use sephera_runtime::{
     AvailableContextProfiles, ResolvedContextCommand, ResolvedContextOptions,
 };

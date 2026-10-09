@@ -101,7 +101,7 @@ file — this repository, not the fixture:
 ![A reverse dependency query answering which files depend on one file](docs/public/demo/graph.gif)
 
 ```bash
-sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --format markdown
+sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --format markdown
 ```
 
 ````markdown
@@ -109,103 +109,103 @@ sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.r
 
 **Base path:** `.`
 
-**Query:** `depends_on:crates/sephera_core/src/core/code_loc.rs`
+**Query:** `depends_on:crates/sephera_context/src/types.rs`
 
 ## Summary
 
 | Metric | Value |
 |--------|-------|
-| Files analyzed | 10 |
-| Internal edges | 43 |
-| External edges | 21 |
-| Self-references (excluded above) | 2 |
-| Declared dependencies | 9 |
-| Local crate edges | 0 |
-| Standard library edges | 12 |
+| Files analyzed | 8 |
+| Internal edges | 48 |
+| External edges | 31 |
+| Declared dependencies | 8 |
+| Local crate edges | 13 |
+| Standard library edges | 10 |
 | Circular dependencies | 0 |
 
-## Blast radius for `crates/sephera_core/src/core/code_loc.rs`
+## Blast radius for `crates/sephera_context/src/types.rs`
 
-**5 files import it directly.**
+**7 files import it directly.**
 
 | File | Imports from it |
 |------|------------------|
-| `crates/sephera_core/src/core.rs` | `self::code_loc` |
-| `crates/sephera_core/src/core/code_loc/differential_tests.rs` | `super::LocMetrics`, `super::scan_content` |
-| `crates/sephera_core/src/core/code_loc/tests.rs` | `super::CodeLoc`, `super::IgnoreMatcher`, `super::LocMetrics`, `super::scan_content` |
-| `crates/sephera_core/src/core/runtime/context.rs` | `crate::core::code_loc::IgnoreMatcher` |
-| `crates/sephera_core/src/core/symbols/lookup.rs` | `crate::core::code_loc::IgnoreMatcher` |
-
-**4 further files reach them indirectly**, through the files above.
+| `crates/sephera_context/src/builder.rs` | `super::types::ContextDiffMetadata`, `super::types::ContextDiffSelection`, `super::types::ContextFile`, `super::types::ContextLanguageSummary`, `super::types::ContextMetadata`, `super::types::ContextReport`, `super::types::SelectionClass` |
+| `crates/sephera_context/src/candidate.rs` | `super::types::SelectionClass` |
+| `crates/sephera_context/src/excerpt.rs` | `super::types::ContextExcerpt`, `super::types::ContextFile`, `super::types::SelectionClass` |
+| `crates/sephera_context/src/focus.rs` | `super::types::SelectionClass` |
+| `crates/sephera_context/src/grouping.rs` | `super::types::ContextFile`, `super::types::ContextGroupKind`, `super::types::ContextGroupSummary` |
+| `crates/sephera_context/src/lib.rs` | `self::types`, `types::ContextDiffMetadata`, `types::ContextDiffSelection`, `types::ContextExcerpt`, `types::ContextFile`, `types::ContextGroupKind`, `types::ContextGroupSummary`, `types::ContextLanguageSummary`, `types::ContextMetadata`, `types::ContextReport`, `types::SelectionClass` |
+| `crates/sephera_context/src/ranker.rs` | `super::types::SelectionClass` |
 
 ## Dependencies
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 12 |
-| `anyhow` | declared | 1.0.102 | 5 |
-| `tempfile` | declared | 3.27.0 | 4 |
+| `std` | stdlib | unknown | 10 |
+| `anyhow` | declared | 1.0.102 | 7 |
+| `sepheracompression` | workspace | unknown | 5 |
+| `sepherascan` | workspace | unknown | 4 |
+| `sepheracore` | workspace | unknown | 2 |
+| `sepheraignore` | workspace | unknown | 2 |
+| `serde` | declared | 1.0.228 | 1 |
 
 ## Most Imported Files
 
 | File | Imported by |
 |------|-------------|
-| `crates/sephera_core/src/core/symbols/mod.rs` | 11 |
-| `crates/sephera_core/src/core/runtime/context.rs` | 10 |
-| `crates/sephera_core/src/core/code_loc.rs` | 9 |
-| `crates/sephera_core/src/core/symbols/lookup.rs` | 5 |
-| `crates/sephera_core/src/core/runtime.rs` | 4 |
-| `crates/sephera_core/src/core.rs` | 1 |
-| `crates/sephera_core/src/core/code_loc/differential_tests.rs` | 1 |
-| `crates/sephera_core/src/core/code_loc/tests.rs` | 1 |
-| `crates/sephera_core/src/core/symbols/tests.rs` | 1 |
+| `crates/sephera_context/src/types.rs` | 27 |
+| `crates/sephera_context/src/candidate.rs` | 6 |
+| `crates/sephera_context/src/focus.rs` | 5 |
+| `crates/sephera_context/src/excerpt.rs` | 4 |
+| `crates/sephera_context/src/builder.rs` | 2 |
+| `crates/sephera_context/src/grouping.rs` | 2 |
+| `crates/sephera_context/src/ranker.rs` | 2 |
 
 ## Most Importing Files
 
 | File | Imports |
 |------|---------|
-| `crates/sephera_core/src/core/runtime.rs` | 10 |
-| `crates/sephera_core/src/core/runtime/context.rs` | 6 |
-| `crates/sephera_core/src/core/symbols/lookup.rs` | 6 |
-| `crates/sephera_core/src/core/symbols/mod.rs` | 6 |
-| `crates/sephera_core/src/core/code_loc/tests.rs` | 4 |
-| `crates/sephera_core/src/core.rs` | 3 |
-| `crates/sephera_core/src/core/symbols/tests.rs` | 3 |
-| `crates/sephera_core/src/core/code_loc.rs` | 2 |
-| `crates/sephera_core/src/core/code_loc/differential_tests.rs` | 2 |
-| `crates/sephera_core/src/lib.rs` | 1 |
+| `crates/sephera_context/src/lib.rs` | 18 |
+| `crates/sephera_context/src/builder.rs` | 17 |
+| `crates/sephera_context/src/excerpt.rs` | 4 |
+| `crates/sephera_context/src/candidate.rs` | 3 |
+| `crates/sephera_context/src/grouping.rs` | 3 |
+| `crates/sephera_context/src/ranker.rs` | 2 |
+| `crates/sephera_context/src/focus.rs` | 1 |
 
 ## Dependency Diagram
 
 ```mermaid
 graph LR
-    n0["core.rs"]
-    n1["code_loc.rs"]
-    n2["differential_tests.rs"]
-    n3["tests.rs"]
-    n4["runtime.rs"]
-    n5["context.rs"]
-    n6["lookup.rs"]
-    n7["mod.rs"]
-    n8["tests.rs"]
-    n9["lib.rs"]
+    n0["builder.rs"]
+    n1["candidate.rs"]
+    n2["excerpt.rs"]
+    n3["focus.rs"]
+    n4["grouping.rs"]
+    n5["lib.rs"]
+    n6["ranker.rs"]
+    n7["types.rs"]
     n0 --> n1
+    n0 --> n2
+    n0 --> n3
     n0 --> n4
+    n0 --> n6
     n0 --> n7
-    n1 --> n2
     n1 --> n3
+    n1 --> n7
     n2 --> n1
-    n3 --> n1
-    n4 --> n5
+    n2 --> n7
+    n3 --> n7
+    n4 --> n7
+    n5 --> n0
     n5 --> n1
-    n5 --> n7
+    n5 --> n2
+    n5 --> n3
     n5 --> n4
-    n6 --> n7
+    n5 --> n6
+    n5 --> n7
     n6 --> n1
-    n7 --> n6
-    n7 --> n8
-    n8 --> n7
-    n9 --> n0
+    n6 --> n7
 ```
 ````
 
@@ -319,19 +319,19 @@ directly, so you do not have to know that `graph` has a flag for it.
 
 ```bash
 # What transitively imports this file? 9 files do.
-sephera impact crates/sephera_core/src/core/code_loc.rs
+sephera impact crates/sephera_context/src/types.rs
 
 # Only the 5 files that import it directly
-sephera impact crates/sephera_core/src/core/code_loc.rs --depth 1
+sephera impact crates/sephera_context/src/types.rs --depth 1
 
 # Several files at once, widest first; the graph is built once
-sephera impact crates/sephera_core/src/core/code_loc.rs crates/sephera_cli/src/run.rs
+sephera impact crates/sephera_context/src/types.rs crates/sephera_cli/src/run.rs
 
 # Machine-readable, for a script
-sephera impact crates/sephera_core/src/core/ignore.rs --format json
+sephera impact crates/sephera_context/src/types.rs --format json
 
 # Fail the build when one file reaches more than 40 dependents
-sephera impact crates/sephera_core/src/core/ignore.rs --fail-on 40
+sephera impact crates/sephera_context/src/types.rs --fail-on 40
 ```
 
 `--fail-on` exits **2**, which is deliberately different from the **1** that
@@ -351,10 +351,10 @@ sephera graph --path .
 sephera graph --path . --format markdown
 
 # Blast radius: everything that transitively imports a file
-sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs
+sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs
 
 # Limit how far the impact spreads
-sephera graph --path . --what-depends-on crates/sephera_core/src/core/code_loc.rs --depth 1
+sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --depth 1
 
 # What does this change reach? Widest blast radius first.
 sephera graph --path . --diff origin/master --format markdown
@@ -524,7 +524,7 @@ budget = "32k"
 # A whole long invocation, under one word
 [aliases.who]
 command = "graph"
-what_depends_on = "crates/sephera_core/src/core/code_loc.rs"
+what_depends_on = "crates/sephera_context/src/types.rs"
 format = "markdown"
 ```
 

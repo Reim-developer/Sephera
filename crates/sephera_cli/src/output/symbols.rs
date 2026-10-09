@@ -14,9 +14,7 @@
 
 use std::fmt::Write as _;
 
-use sephera_core::core::symbols::{
-    SymbolDetail, SymbolEntry, SymbolKind, SymbolReport,
-};
+use sephera_symbols::{SymbolDetail, SymbolEntry, SymbolKind, SymbolReport};
 
 use super::grid::{Column, Format, Grid, cell, code, grid_of};
 
@@ -329,7 +327,7 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use sephera_core::core::symbols::{
+    use sephera_symbols::{
         LanguageSymbols, SymbolDetail, SymbolEntry, SymbolKind, SymbolReport,
     };
 

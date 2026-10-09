@@ -4,10 +4,8 @@ use std::path::{Path, PathBuf};
 
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use sephera_core::core::{
-    code_loc::IgnoreMatcher,
-    context::ContextBuilder,
-};
+use sephera_context::ContextBuilder;
+use sephera_ignore::IgnoreMatcher;
 use tempfile::tempdir;
 
 #[derive(Debug, Arbitrary)]
@@ -34,7 +32,11 @@ fuzz_target!(|data: &[u8]| {
 
     for (index, file) in fixture.files.iter().take(16).enumerate() {
         let relative_path = relative_path(file, index);
-        write_fixture_file(temp_dir.path(), &relative_path, file.contents.as_slice());
+        write_fixture_file(
+            temp_dir.path(),
+            &relative_path,
+            file.contents.as_slice(),
+        );
 
         if file.focus && focus_paths.len() < 4 {
             if file.location_selector % 2 == 0 {
@@ -87,8 +89,7 @@ fn sanitized_stem(raw_name: &str, index: usize) -> String {
     let sanitized = raw_name
         .chars()
         .filter(|character| {
-            character.is_ascii_alphanumeric()
-                || matches!(character, '_' | '-')
+            character.is_ascii_alphanumeric() || matches!(character, '_' | '-')
         })
         .take(24)
         .collect::<String>();

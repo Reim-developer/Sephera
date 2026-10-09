@@ -1,6 +1,6 @@
 use std::{fmt::Write as _, path::Path};
 
-use sephera_core::core::context::{
+use sephera_context::{
     ContextFile, ContextGroupKind, ContextGroupSummary, ContextMetadata,
     ContextReport,
 };

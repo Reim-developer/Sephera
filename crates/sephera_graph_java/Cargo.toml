@@ -1,0 +1,30 @@
+[package]
+name = "sephera_graph_java"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Java dependency extraction for Sephera graph."
+documentation = "https://docs.rs/sephera_graph_java"
+readme = "README.md"
+keywords = ["java", "dependencies", "tree-sitter", "maven", "gradle"]
+categories = ["development-tools", "text-processing"]
+
+[lib]
+name = "sephera_graph_java"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+tree-sitter = "0.26"
+tree-sitter-java = "0.23"
+
+sephera_core = { path = "../sephera_core", version = "0.6.0" }
+sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+
+sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }

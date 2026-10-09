@@ -1,6 +1,6 @@
 //! Rendering for `sephera impact`.
 //!
-//! The counting lives in `sephera_core::core::graph::blast_radius`, because it
+//! The counting lives in `sephera_graph::blast_radius`, because it
 //! is graph analysis rather than presentation and the MCP server answers the
 //! same question. This module is the part that is genuinely the command's own:
 //! how a blast radius reads on a terminal and in JSON.
@@ -10,7 +10,7 @@ use std::fmt::Write as _;
 // Re-exported so `run.rs` and the graph-diff path keep one import site for the
 // whole blast-radius surface. The counting itself lives in core, where the MCP
 // server reaches the same code.
-pub use sephera_core::core::graph::blast_radius::{
+pub use sephera_graph::blast_radius::{
     BlastRadius, dependent_count, match_path, measure, measure_all,
 };
 
@@ -170,7 +170,7 @@ fn json_for(radius: &BlastRadius) -> serde_json::Value {
 
 #[cfg(test)]
 mod tests {
-    use sephera_core::core::graph::blast_radius::Dependent;
+    use sephera_graph::blast_radius::Dependent;
 
     use super::{
         BlastRadius, render_markdown, render_report, render_report_json,

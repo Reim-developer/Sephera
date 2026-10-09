@@ -4,10 +4,16 @@ use std::{path::PathBuf, time::Duration};
 
 use libfuzzer_sys::fuzz_target;
 use sephera::render_report_table;
-use sephera_core::core::code_loc::{CodeLocReport, LanguageLoc, LocMetrics};
+use sephera_scan::{CodeLocReport, LanguageLoc, LocMetrics};
 
-const LANGUAGE_NAMES: [&str; 6] =
-    ["Rust", "Python", "TypeScript", "JSON", "HTML", "Shell Script"];
+const LANGUAGE_NAMES: [&str; 6] = [
+    "Rust",
+    "Python",
+    "TypeScript",
+    "JSON",
+    "HTML",
+    "Shell Script",
+];
 
 fuzz_target!(|data: &[u8]| {
     let language_count = usize::from(data.first().copied().unwrap_or(0))
@@ -17,7 +23,9 @@ fuzz_target!(|data: &[u8]| {
     let mut totals = LocMetrics::zero();
     let mut files_scanned = 0_u64;
 
-    for (index, chunk) in metric_bytes.chunks(8).take(language_count).enumerate() {
+    for (index, chunk) in
+        metric_bytes.chunks(8).take(language_count).enumerate()
+    {
         let metrics = LocMetrics {
             code_lines: scaled_value(chunk.first().copied().unwrap_or(0)),
             comment_lines: scaled_value(chunk.get(1).copied().unwrap_or(0)),

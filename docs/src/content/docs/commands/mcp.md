@@ -117,7 +117,7 @@ Example `graph` tool call:
     "name": "graph",
     "arguments": {
       "path": ".",
-      "depends_on": "crates/sephera_core/src/core/context/builder.rs",
+      "depends_on": "crates/sephera_context/src/builder.rs",
       "depth": 1
     }
   }
@@ -165,11 +165,11 @@ an error**. The call succeeds either way:
 
 ```json
 "gate": {
-  "fail_on": 40,
+  "fail_on": 5,
   "crossed": true,
   "exit_code": 2,
   "violations": [
-    { "target": "crates/sephera_core/src/core/ignore.rs", "dependent_count": 36 }
+    { "target": "crates/sephera_context/src/types.rs", "dependent_count": 7 }
   ]
 }
 ```
@@ -201,8 +201,8 @@ Example `impact` tool call:
     "arguments": {
       "path": ".",
       "files": [
-        "crates/sephera_core/src/core/code_loc.rs",
-        "crates/sephera_core/src/core/ignore.rs"
+        "crates/sephera_context/src/types.rs",
+        "crates/sephera_context/src/builder.rs"
       ]
     }
   }

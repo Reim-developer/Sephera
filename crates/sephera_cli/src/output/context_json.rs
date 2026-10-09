@@ -1,4 +1,4 @@
-use sephera_core::core::context::ContextReport;
+use sephera_context::ContextReport;
 
 /// # Panics
 ///

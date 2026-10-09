@@ -5,4 +5,4 @@
 //! the MCP crate, so putting this in core is what keeps the dependency graph
 //! acyclic while letting both front ends share one implementation.
 
-pub use sephera_core::core::graph::render::render_graph;
+pub use sephera_graph::render::render_graph;

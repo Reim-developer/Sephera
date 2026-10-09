@@ -20,6 +20,13 @@ name = "sephera"
 path = "src/main.rs"
 
 [dependencies]
+sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+sephera_context = { path = "../sephera_context", version = "0.6.0" }
+sephera_graph = { path = "../sephera_graph", version = "0.6.0" }
+sephera_ignore = { path = "../sephera_ignore", version = "0.6.0" }
+sephera_runtime = { path = "../sephera_runtime", version = "0.6.0" }
+sephera_scan = { path = "../sephera_scan", version = "0.6.0" }
+sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }
 anyhow = "1.0.102"
 clap = { version = "4.6.0", features = ["derive"] }
 comfy-table = "7.2.1"
