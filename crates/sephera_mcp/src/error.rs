@@ -4,7 +4,7 @@
 //! from a core error type needs to be mapped into an internal-error payload
 //! with enough context to diagnose the failure from the agent transcript.
 
-use sephera_core::core::code_loc::IgnoreMatcher;
+use sephera_scan::IgnoreMatcher;
 
 /// Build an [`IgnoreMatcher`] from optional glob or regex patterns.
 ///

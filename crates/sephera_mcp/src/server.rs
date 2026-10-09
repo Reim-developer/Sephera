@@ -19,20 +19,11 @@ use rmcp::{
     transport::io::stdio,
 };
 
-use sephera_core::core::{
-    code_loc::CodeLoc,
-    graph::{
-        blast_radius,
-        render::render_graph,
-        resolver::{build_focus_set, build_graph},
-        types::{GraphFormat, GraphQuery},
-    },
-    runtime::{
-        ContextCommandInput, ResolvedContextCommand, SourceRequest,
-        build_context_report, resolve_context_command, resolve_source,
-    },
-    symbols::{SymbolAnalyzer, SymbolDetail},
-};
+use sephera_core::{config::CommentStyle, types::Language};
+use sephera_graph::{blast_radius, render::render_graph, resolver::{build_focus_set, build_graph}, types::{GraphFormat, GraphQuery}};
+use sephera_runtime::{ContextCommandInput, ResolvedContextCommand, SourceRequest, build_context_report, resolve_context_command, resolve_source};
+use sephera_scan::CodeLoc;
+use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},

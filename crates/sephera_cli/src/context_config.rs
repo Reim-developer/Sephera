@@ -1,7 +1,5 @@
 use anyhow::Result;
-use sephera_core::core::runtime::{
-    ContextCommandInput, SourceRequest, resolve_context_command,
-};
+use sephera_runtime::{ContextCommandInput, SourceRequest, resolve_context_command};
 
 use crate::args::{ContextArgs, ContextCompress, ContextFormat};
 
@@ -50,6 +48,4 @@ fn context_format_name(format: ContextFormat) -> String {
     }
 }
 
-pub use sephera_core::core::runtime::{
-    AvailableContextProfiles, ResolvedContextCommand, ResolvedContextOptions,
-};
+pub use sephera_runtime::{AvailableContextProfiles, ResolvedContextCommand, ResolvedContextOptions};

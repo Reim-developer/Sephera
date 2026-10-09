@@ -35,13 +35,13 @@ fn repo_with_two_packages() -> tempfile::TempDir {
         write_file(
             temp_dir.path(),
             &format!("src/core/user{index}.rs"),
-            b"use crate::core::lib_file;\n",
+            b"use sephera_core::lib_file;\n",
         );
     }
     write_file(
         temp_dir.path(),
         "src/other/client.rs",
-        b"use crate::core::lib_file;\n",
+        b"use sephera_core::lib_file;\n",
     );
 
     temp_dir

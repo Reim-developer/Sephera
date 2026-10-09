@@ -1,6 +1,6 @@
 use std::path::Path;
 
-use sephera_core::core::language_data::{builtin_languages, language_for_path};
+use sephera_core::language_data::{builtin_languages, language_for_path};
 
 #[test]
 fn every_builtin_language_resolves_all_declared_selectors() {

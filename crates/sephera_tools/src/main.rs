@@ -2,16 +2,9 @@ use std::path::PathBuf;
 
 use anyhow::Result;
 use clap::{Parser, Subcommand, ValueEnum};
-use sephera_tools::{
-    benchmark_corpus::{
-        default_benchmark_corpus_path, default_benchmark_dataset_names,
-        generate_benchmark_corpus,
-    },
-    language_data::{
-        default_generated_language_data_path, default_language_config_path,
-        generate_language_data_file,
-    },
-};
+use sephera_tools::{benchmark_corpus::{
+        default_benchmark_corpus_path, default_benchmark_dataset_names, generate_benchmark_corpus, }, language_data::{
+        default_generated_language_data_path, default_language_config_path, generate_language_data_file, }};
 
 #[derive(Debug, Parser)]
 #[command(

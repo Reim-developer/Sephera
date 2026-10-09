@@ -1,9 +1,6 @@
 use std::{fmt::Write as _, path::Path};
 
-use sephera_core::core::context::{
-    ContextFile, ContextGroupKind, ContextGroupSummary, ContextMetadata,
-    ContextReport,
-};
+use sephera_context::{ContextFile, ContextGroupKind, ContextGroupSummary, ContextMetadata, ContextReport};
 
 #[must_use]
 pub fn render_context_markdown(report: &ContextReport) -> String {

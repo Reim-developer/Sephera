@@ -7,7 +7,7 @@
 
 use std::fmt::Write as _;
 
-use sephera_core::core::code_loc::CodeLocReport;
+use sephera_scan::CodeLocReport;
 
 /// The label on the totals row.
 ///
@@ -177,9 +177,7 @@ pub fn render_loc_csv(report: &CodeLocReport) -> String {
 mod tests {
     use std::{path::PathBuf, time::Duration};
 
-    use sephera_core::core::code_loc::{
-        CodeLocReport, LanguageLoc, LocMetrics,
-    };
+    use sephera_scan::{CodeLocReport, LanguageLoc, LocMetrics};
 
     use super::{render_loc_csv, render_loc_json, render_loc_markdown};
 

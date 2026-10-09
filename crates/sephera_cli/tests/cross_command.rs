@@ -206,7 +206,7 @@ fn the_same_depth_bounds_the_same_walk_on_both_commands() {
     // which used to need `--depth 0` to mean "the root and what it reaches" and is
     // spelled `--depth 1` now.
     let dir = repo();
-    write_file(dir.path(), "src/far.rs", "use crate::core::user0;\n");
+    write_file(dir.path(), "src/far.rs", "use sephera_core::user0;\n");
 
     // Three direct importers plus `far.rs` at two hops.
     assert_eq!(

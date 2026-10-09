@@ -1,0 +1,30 @@
+[package]
+name = "sephera_graph_rust"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Rust dependency extraction for Sephera graph."
+documentation = "https://docs.rs/sephera_graph_rust"
+readme = "README.md"
+keywords = ["rust", "dependencies", "tree-sitter", "cargo"]
+categories = ["development-tools", "text-processing"]
+
+[lib]
+name = "sephera_graph_rust"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+phf = { version = "0.11.3", features = ["macros"] }
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+tree-sitter = "0.26"
+tree-sitter-rust = "0.24"
+
+sephera_core = { path = "../sephera_core", version = "0.6.0" }
+sephera_graph = { path = "../sephera_graph", version = "0.6.0" }
+sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }

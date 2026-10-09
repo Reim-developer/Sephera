@@ -4,7 +4,7 @@ use comfy_table::{
     Cell, CellAlignment, ContentArrangement, Table,
     modifiers::UTF8_ROUND_CORNERS, presets::UTF8_FULL_CONDENSED,
 };
-use sephera_core::core::code_loc::CodeLocReport;
+use sephera_scan::CodeLocReport;
 
 use super::timing::render_elapsed_line;
 

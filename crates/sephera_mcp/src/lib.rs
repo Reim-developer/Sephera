@@ -25,7 +25,7 @@
 //! missing for a while, and an agent had to assemble the same answer out of
 //! `graph` with `depends_on` and parse a node array to find the count -- which
 //! meant the most actionable question the tool can answer was the hardest one
-//! to ask. The counting lives in `sephera_core::core::graph::blast_radius` and
+//! to ask. The counting lives in `sephera_graph::blast_radius` and
 //! is shared with the `impact` command, so the two cannot disagree.
 //!
 //! # Quick start

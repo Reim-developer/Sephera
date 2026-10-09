@@ -1,0 +1,45 @@
+[package]
+name = "sephera_graph"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Dependency graph core: resolver, declarations, blast radius, rendering."
+documentation = "https://docs.rs/sephera_graph"
+readme = "README.md"
+keywords = ["graph", "dependencies", "blast-radius", "resolver", "tree-sitter"]
+categories = ["development-tools", "text-processing"]
+
+[lib]
+name = "sephera_graph"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+globset = "0.4.18"
+memchr = "2.7.6"
+phf = { version = "0.11.3", features = ["macros"] }
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.145"
+tree-sitter = "0.26"
+
+sephera_core = { path = "../sephera_core", version = "0.6.0" }
+sephera_scan = { path = "../sephera_scan", version = "0.6.0" }
+
+[dev-dependencies]
+criterion = { workspace = true }
+tempfile = "3.23.0"
+
+[[bench]]
+name = "graph_path_utils"
+path = "../sephera_core/benches/graph_path_utils.rs"
+harness = false
+
+[[bench]]
+name = "resolve_focus_scope"
+path = "../sephera_core/benches/resolve_focus_scope.rs"
+harness = false

@@ -1,23 +1,60 @@
-//! # Sephera Core
+//! # Sephera Core Traits
 //!
-//! `sephera_core` is the shared analysis engine that drives the Sephera CLI.
-//! It provides robust, language-aware repository traversal and metric gathering,
-//! as well as deterministic context bundle generation for LLM usage.
-//!
-//! ## Core Capabilities
-//!
-//! - **Repository Traversal & Filtering**: Implements rigorous Git-aware ignore rules
-//!   and global exclusion patterns.
-//! - **Language Detection**: Identifies programming languages across the repository
-//!   based on file signatures and naming conventions.
-//! - **Code Metrics (LOC)**: Calculates fast, accurate line-of-code counts across
-//!   different files and languages.
-//! - **AST Compression**: Provides Tree-sitter-based structure extraction for 8
-//!   supported languages, allowing large codebases to be compressed to fit within
-//!   LLM prompt budgets by generating skeletons or API signatures.
-//! - **Context Building**: Generates deterministic Markdown or JSON bundles representing
-//!   a repository or a focused set of paths, including Git diff scoping.
+//! Shared traits, types, and interfaces for the Sephera analysis engine.
+//! This crate is intentionally minimal — concrete implementations live in
+//! the feature crates (scan, ignore, compression, runtime, symbols, graph, etc.).
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
-pub mod core;
+pub mod config;
+pub mod declarations;
+pub mod language_data;
+pub mod line_slices;
+pub mod paths;
+pub mod plugins;
+pub mod progress;
+pub mod types;
+
+/// Trait for language-specific extraction rules.
+pub mod extraction {
+    use crate::types::{Language, ImportStatement, Declaration};
+
+    /// Rules for extracting imports and declarations from a language.
+    pub trait ExtractionRules: Send + Sync + 'static {
+        /// The Tree-sitter language this ruleset applies to.
+        const LANGUAGE: Language;
+
+        /// File extensions this extractor handles.
+        fn extensions() -> &'static [&'static str];
+
+        /// Extract imports from a parsed tree.
+        fn extract_imports(
+            tree: &tree_sitter::Tree,
+            source: &[u8],
+            file_path: &std::path::Path,
+        ) -> anyhow::Result<Vec<ImportStatement>>;
+
+        /// Extract declarations from a parsed tree.
+        fn extract_declarations(
+            tree: &tree_sitter::Tree,
+            source: &[u8],
+            file_path: &std::path::Path,
+        ) -> anyhow::Result<Vec<Declaration>>;
+    }
+}
+
+/// Trait for language-aware comment scanning.
+pub mod scanning {
+    use crate::config::CommentStyle;
+
+    /// Rules for counting lines of code vs comments vs empty.
+    pub trait ScanRules: Send + Sync + 'static {
+        /// The comment style for this language.
+        fn comment_style() -> CommentStyle;
+
+        /// Whether this language uses block comments that can nest.
+        fn nested_block_comments() -> bool {
+            false
+        }
+    }
+}

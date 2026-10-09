@@ -15,7 +15,7 @@ use std::fmt::Write as _;
 
 use anyhow::Result;
 
-use sephera_core::core::graph::types::{GraphQuery, GraphReport};
+use sephera_graph::types::{GraphQuery, GraphReport};
 
 use crate::impact::{self, BlastRadius};
 
@@ -205,7 +205,7 @@ pub const fn diff_query() -> Option<GraphQuery> {
 mod tests {
     use std::path::PathBuf;
 
-    use sephera_core::core::graph::types::{
+    use sephera_graph::types::{
         GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
     };
 

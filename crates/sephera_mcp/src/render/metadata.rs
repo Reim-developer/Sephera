@@ -2,7 +2,7 @@
 
 use std::fmt::Write as _;
 
-use sephera_core::core::context::ContextMetadata;
+use sephera_context::ContextMetadata;
 
 /// Write the `## Metadata` section.
 ///

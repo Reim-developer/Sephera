@@ -14,7 +14,7 @@
 
 use std::path::Path;
 
-use sephera_core::core::graph::resolver::build_graph;
+use sephera_graph::resolver::build_graph;
 use tempfile::TempDir;
 
 /// A small project: write each file and return its root.
@@ -33,7 +33,7 @@ fn project(files: &[(&str, &str)]) -> TempDir {
 fn resolved_targets(root: &Path) -> Vec<String> {
     let report = build_graph(
         root,
-        &sephera_core::core::code_loc::IgnoreMatcher::empty(),
+        &sephera_scan::IgnoreMatcher::empty(),
         &[],
         None,
         None,

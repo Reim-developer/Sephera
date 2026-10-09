@@ -1,0 +1,29 @@
+[package]
+name = "sephera_graph_python"
+version.workspace = true
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+rust-version.workspace = true
+description = "Python dependency extraction for Sephera graph."
+documentation = "https://docs.rs/sephera_graph_python"
+readme = "README.md"
+keywords = ["python", "dependencies", "tree-sitter", "pip", "pyproject"]
+categories = ["development-tools", "text-processing"]
+
+[lib]
+name = "sephera_graph_python"
+path = "src/lib.rs"
+
+[dependencies]
+anyhow = "1.0.102"
+rayon = "1.11.0"
+serde = { version = "1.0.228", features = ["derive"] }
+tree-sitter = "0.26"
+tree-sitter-python = "0.25"
+
+sephera_core = { path = "../sephera_core", version = "0.6.0" }
+sephera_graph = { path = "../sephera_graph", version = "0.6.0" }
+sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }

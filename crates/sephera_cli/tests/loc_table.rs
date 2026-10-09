@@ -1,7 +1,7 @@
 use std::{path::PathBuf, process::Command, time::Duration};
 
 use sephera::render_report_table;
-use sephera_core::core::code_loc::{CodeLocReport, LanguageLoc, LocMetrics};
+use sephera_scan::{CodeLocReport, LanguageLoc, LocMetrics};
 use tempfile::tempdir;
 
 #[test]

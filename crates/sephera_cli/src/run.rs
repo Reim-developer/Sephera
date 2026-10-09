@@ -772,7 +772,7 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
 #[cfg(test)]
 mod tests {
     use anyhow::anyhow;
-    use sephera_core::core::runtime::{INTERRUPTED_EXIT_CODE, Interrupted};
+    use sephera_runtime::{INTERRUPTED_EXIT_CODE, Interrupted};
 
     use std::process::ExitCode;
 
