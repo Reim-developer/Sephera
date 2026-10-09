@@ -1485,7 +1485,6 @@ dependencies = [
  "rayon",
  "sephera_compression",
  "sephera_core",
- "sephera_graph",
  "sephera_symbols",
  "serde",
  "tree-sitter",

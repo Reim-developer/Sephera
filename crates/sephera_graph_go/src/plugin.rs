@@ -124,13 +124,48 @@ mod tests {
         plugins::{KnownFiles, ModuleManifestLookup},
         types::ImportKind,
     };
-    use sephera_graph::manifests::ManifestIndex;
+    use std::collections::BTreeMap;
 
     use super::*;
 
+    /// A `go.mod` reduced to the two questions the trait asks.
+    ///
+    /// Not `ManifestIndex`: that lives in `sephera_graph`, which depends on this
+    /// crate for the registry, and a dev-dependency cycle cannot be published.
+    /// The plugin's contract is the trait, so the test implements the trait.
+    /// The real index is tested against real `go.mod` content in `sephera_graph`.
+    struct GoMod {
+        module_path: Option<&'static str>,
+        replaces: BTreeMap<String, String>,
+    }
+
+    impl GoMod {
+        fn new(module_path: &'static str) -> Self {
+            Self {
+                module_path: Some(module_path),
+                replaces: BTreeMap::new(),
+            }
+        }
+
+        fn replacing(mut self, from: &str, to: &str) -> Self {
+            self.replaces.insert(from.to_owned(), to.to_owned());
+            self
+        }
+    }
+
+    impl ModuleManifestLookup for GoMod {
+        fn go_replaces(&self) -> &BTreeMap<String, String> {
+            &self.replaces
+        }
+
+        fn is_go_module_root(&self, import_path: &str) -> bool {
+            self.module_path == Some(import_path)
+        }
+    }
+
     fn context_for<'a>(
         files: &'a KnownFiles,
-        manifests: Option<&'a ManifestIndex>,
+        manifests: Option<&'a GoMod>,
     ) -> ResolveContext<'a> {
         ResolveContext {
             source_file: "main.go",
@@ -139,9 +174,8 @@ mod tests {
             kind: ImportKind::Dependency,
             declarations: None,
             // Unsized here rather than at the parameter: `ResolveContext` asks
-            // the question through the trait, so a `&ManifestIndex` is the
-            // concrete answer and `&dyn ModuleManifestLookup` is what it is
-            // being asked as.
+            // the question through the trait, so a `&GoMod` is the concrete
+            // answer and `&dyn ModuleManifestLookup` is what it is being asked as.
             manifests: manifests
                 .map(|index| index as &dyn ModuleManifestLookup),
             base_path: std::path::Path::new("."),
@@ -209,8 +243,7 @@ mod tests {
         // found nothing, so every Go project's own root package was reported
         // unresolved.
         let files = known(&["main.go", "config.go", "internal/store/store.go"]);
-        let mut manifests = ManifestIndex::default();
-        manifests.set_go_module_path("example.com/app");
+        let manifests = GoMod::new("example.com/app");
 
         let resolved = GoPlugin
             .resolve("example.com/app", context_for(&files, Some(&manifests)));
@@ -226,8 +259,7 @@ mod tests {
         // Another project's module path must not be pulled into this one, or
         // every external Go import that happens to match would resolve.
         let files = known(&["main.go", "config.go"]);
-        let mut manifests = ManifestIndex::default();
-        manifests.set_go_module_path("example.com/app");
+        let manifests = GoMod::new("example.com/app");
 
         assert_eq!(
             GoPlugin.resolve(
@@ -243,12 +275,9 @@ mod tests {
         // `replace github.com/x/y => ./local/x` means imports of
         // `github.com/x/y/...` resolve to files under `local/x/...`.
         let files = known(&["main.go", "local/x/y.go", "local/x/z.go"]);
-        let mut manifests = ManifestIndex::default();
-        manifests.set_go_module_path("example.com/app");
-        // Insert the replace directive directly (normally parsed from go.mod)
-        manifests
-            .go_replaces_mut()
-            .insert("github.com/x/y".to_owned(), "./local/x".to_owned());
+        // Normally parsed from a `go.mod`; set directly here.
+        let manifests = GoMod::new("example.com/app")
+            .replacing("github.com/x/y", "./local/x");
 
         // Import of the replaced module itself (no subpath) resolves to the
         // package directory `local/x/`.
