@@ -220,8 +220,9 @@ The report is still printed; only the exit code changes.
 | 2 | analysed, the blast radius crossed `--fail-on` |
 
 The distinction is deliberate. Merging 1 and 2 would make a broken install and
-a violated rule look identical in a log, which is the situation where someone
-adds `--ignore-failures` to the workflow and then never notices either.
+a violated rule look identical in a log — and that is the situation where someone
+teaches their CI to swallow the failing exit code and then never notices either
+one again.
 
 ## Related commands
 

@@ -5,7 +5,7 @@ description: Build Sephera locally, run the CLI, and preview the documentation s
 
 # Getting Started
 
-This guide targets the `v0.5.x` release line.
+This guide targets the `0.7.x` release line.
 
 ## Requirements
 
@@ -88,12 +88,48 @@ cargo run -p sephera -- context --path . --focus crates/sephera_core --budget 32
 
 ## Core development checks
 
+Four groups, and all four have to pass. Clippy is denied at pedantic level, so a
+suggestion is a failure.
+
 ```bash
+# Formatting and lints
 cargo fmt --all --check
 cargo clippy --workspace --all-targets --all-features -- -D warnings
+# The fuzz targets are a separate member tree, so --workspace never reaches them.
+cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
+
+# Tests
 cargo test --workspace
-npm run pyright
 ```
+
+The end-to-end cases run the real resolver over expectations written by hand from
+what each language means, so they need a release binary:
+
+```bash
+cargo build --release
+python e2e/run.py
+```
+
+The scripts check claims the documentation makes, and they need a corpus for the
+figures. On Windows set `SEPHERA_CORPUS_DIR` to `$env:LOCALAPPDATA\sephera\corpus`
+first:
+
+```powershell
+$env:SEPHERA_CORPUS_DIR = "$env:LOCALAPPDATA\sephera\corpus"
+
+python scripts/check_readme_examples.py             # every documented command runs
+python scripts/check_readme_figures.py              # the numbers the README quotes are true
+python scripts/measure_accuracy.py --verify         # the pinned extraction figures hold
+python scripts/check_docs.py                        # code fences are paired, quoted paths exist
+python scripts/check_doc_flags.py                   # every documented flag exists
+python scripts/check_doc_links.py                   # documentation links are claims the tree can keep
+python scripts/check_publish_order.py               # every crate packages in dependency order
+npx pyright
+```
+
+`check_readme_figures.py` regenerates the README's blast-radius example from a real
+run. If you change extraction behaviour, this will fail, and that is the point:
+update the README from a fresh run rather than editing the number by hand.
 
 ## Docs development
 

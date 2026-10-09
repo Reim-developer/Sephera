@@ -5,15 +5,17 @@ description: Fast LOC analysis and deterministic context packs for review, debug
 
 # Sephera
 
-Sephera is a Rust workspace for codebase inspection. It currently focuses on five practical workflows:
+Sephera is a Rust workspace for codebase inspection. It currently focuses on seven practical workflows:
 
 - `loc` for fast, language-aware line counting
+- `symbols` for what each language declares, read from parse trees rather than text
 - `context` for deterministic Markdown or JSON context packs with AST compression
 - `graph` for multi-language dependency graph analysis
 - `impact` for the blast radius of a single file, with a CI exit-code gate
+- `watch` for re-running any of the above whenever the tree changes
 - `mcp` for built-in MCP server agent integration
 
-The current docs reflect the `v0.5.x` release line.
+The current docs describe the `0.7.x` release line.
 
 The project is intentionally narrow in scope. It does not try to be an AI agent framework or a hosted service. The goal is to provide reliable local analysis primitives that fit naturally into review, debugging, and prompting workflows.
 
@@ -29,14 +31,16 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 ## Current capabilities
 
 - Fast `loc` analysis with per-language totals in table, Markdown, JSON, and CSV
-- Deterministic `context` packs with focus-path prioritization, Git diff awareness, and approximate token budgeting
+- Declaration counts per language read from Tree-sitter parse trees, so a keyword inside a comment or a string is not counted
+- Deterministic `context` packs with focus-path and focus-symbol prioritization, Git diff awareness, and approximate token budgeting
 - Tree-sitter AST compression that keeps the API surface and drops function bodies, typically 50-70% fewer tokens on implementation-heavy files
 - Dependency `graph` generation with cycle detection and exports to Markdown, JSON, XML, and DOT
 - `impact` blast-radius reports for a single file or for every file a change touched
 - CI gates via `--fail-on`, `--fail-on-cycles`, and `--fail-on-unresolved`, exiting 2 on a violated rule and 1 on a broken run
+- `watch` to re-run any analysis on every file change, with write debouncing
 - Built-in MCP server for direct integration with AI agents like Claude Desktop
 - URL mode for direct analysis of cloneable repo URLs and GitHub/GitLab tree URLs
-- Repo-level defaults through `.sephera.toml`, with `[project]` shared by every command and `[context]` plus named profiles for packs
+- Repo-level defaults through `.sephera.toml`, with `[project]` shared by every command plus per-command tables, named profiles, and aliases
 - Export to Markdown for human copy-paste workflows and JSON for automation
 - Generated language metadata sourced from `config/languages.yml`
 - Byte-oriented scanning with newline portability across `LF`, `CRLF`, and classic `CR`

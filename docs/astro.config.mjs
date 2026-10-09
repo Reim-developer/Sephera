@@ -21,9 +21,11 @@ export default defineConfig({
 					label: 'Commands',
 					items: [
 						{ slug: 'commands/loc' },
+						{ slug: 'commands/symbols' },
 						{ slug: 'commands/context' },
 						{ slug: 'commands/graph' },
 						{ slug: 'commands/impact' },
+						{ slug: 'commands/watch' },
 						{ slug: 'commands/mcp' },
 					],
 				},

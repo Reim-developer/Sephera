@@ -24,6 +24,32 @@ A context pack currently contains:
 - excerpts with truncation markers when the budget is tight
 - compressed AST excerpts when `--compress` is enabled
 
+## Focusing on a declaration rather than a file
+
+`--focus <PATH>` pulls in a whole file, which is right most of the time and wrong
+when one file carries far more than you need. `--focus-symbol <NAME>` packs the
+declaration instead:
+
+```bash
+sephera context --path . --focus-symbol resolve_import
+sephera context --path . --focus-symbol resolve_import --focus-symbol clamp_to_root
+```
+
+Repeat the flag to pack several declarations. Matching is case-insensitive and
+partial, so `resolve` also finds `resolve_source`.
+
+Two cases are reported rather than guessed, and both are deliberate:
+
+- a name matching several declarations, because picking one silently would put the
+  wrong code in the pack and leave no sign of it
+- a name matching nothing, because the rest of the pack still builds and a reader
+  would otherwise not notice the empty section
+
+`--focus-symbol` cannot be combined with `--diff`. A diff selects whole changed
+files, and the two answer different questions: one names a declaration, the other
+names a change. Letting them combine would produce a pack whose contents depend on
+which of the two happened to match more.
+
 ## Basic usage
 
 Generate Markdown to standard output:
