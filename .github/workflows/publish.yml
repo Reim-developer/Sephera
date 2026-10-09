@@ -3,18 +3,17 @@ name: Publish
 on:
   workflow_dispatch:
     inputs:
-      publish_core:
-        description: Publish sephera_core
+      # The version to publish, typed rather than read from the workflow's ref.
+      # A ref can sit on a commit whose `Cargo.toml` says something else, and an
+      # upload nobody asked for cannot be undone. The step below refuses a
+      # mismatch rather than publishing whichever one it finds.
+      version:
+        description: Version to publish, matching Cargo.toml
         required: true
-        default: true
-        type: boolean
-      publish_mcp:
-        description: Publish sephera_mcp
-        required: true
-        default: true
-        type: boolean
-      publish_cli:
-        description: Publish sephera
+      # On by default, so the first thing a run does is prove the plan works
+      # rather than upload sixteen crates. A release is the unchecked box.
+      dry_run:
+        description: Dry run only — package everything, upload nothing
         required: true
         default: true
         type: boolean
@@ -30,19 +29,20 @@ jobs:
   publish:
     name: Publish crates.io packages
     runs-on: ubuntu-latest
-    timeout-minutes: 30
+    # Sixteen crates, each waiting for the index before the next one starts. The
+    # old timeout assumed three and the old job published three, for the same
+    # reason: the workflow predates the split.
+    timeout-minutes: 120
     environment: release
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Validate selected packages
-        shell: bash
-        run: |
-          if [[ "${{ inputs.publish_core }}" != "true" && "${{ inputs.publish_mcp }}" != "true" && "${{ inputs.publish_cli }}" != "true" ]]; then
-            echo "::error::Select at least one package to publish."
-            exit 1
-          fi
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
 
       - name: Setup Node
         uses: actions/setup-node@v4
@@ -50,12 +50,6 @@ jobs:
           node-version: "22"
           cache: npm
           cache-dependency-path: docs/package-lock.json
-
-      - name: Install Rust toolchain
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust artifacts
-        uses: Swatinem/rust-cache@v2
 
       - name: Install docs dependencies
         run: npm --prefix docs ci
@@ -70,78 +64,56 @@ jobs:
             exit 1
           fi
 
+      # The workspace version is the single source of every crate's version,
+      # because each manifest inherits it with `version.workspace = true`.
+      - name: Read the workspace version
+        shell: bash
+        run: |
+          VERSION="$(python -c '
+          import tomllib, pathlib
+          data = tomllib.loads(pathlib.Path("Cargo.toml").read_text(encoding="utf-8"))
+          print(data["workspace"]["package"]["version"])
+          ')"
+          echo "SEPHERA_VERSION=$VERSION" >> "$GITHUB_ENV"
+          if [[ "$VERSION" != "${{ inputs.version }}" ]]; then
+            echo "::error::Asked to publish ${{ inputs.version }} but the workspace is $VERSION. Change Cargo.toml, or the input, and re-run."
+            exit 1
+          fi
+
       - name: Run release checks
         run: |
           cargo fmt --all --check
           cargo clippy --workspace --all-targets --all-features -- -D warnings
+          cargo clippy --manifest-path fuzz/Cargo.toml --all-targets -- -D warnings
           cargo test --workspace
           npm run docs:build
-          cargo publish --dry-run -p sephera_core
-          cargo publish --dry-run -p sephera_mcp --config "patch.crates-io.sephera_core.path='crates/sephera_core'"
-          cargo publish --dry-run -p sephera --config "patch.crates-io.sephera_core.path='crates/sephera_core'" --config "patch.crates-io.sephera_mcp.path='crates/sephera_mcp'"
 
-      - name: Read workspace version
-        shell: bash
-        run: |
-          VERSION="$(python3 - <<'PY'
-          import tomllib
-          from pathlib import Path
-
-          cargo_toml = Path("Cargo.toml")
-          data = tomllib.loads(cargo_toml.read_text(encoding = "utf-8"))
-          print(data["workspace"]["package"]["version"])
-          PY
-          )"
-          echo "SEPHERA_VERSION=$VERSION" >> "$GITHUB_ENV"
-
-      - name: Publish sephera_core
-        if: ${{ inputs.publish_core }}
+      # One command, and it is the same order and the same patch flags the
+      # `publish_dry_run` job verifies in CI -- computed once, by the code that
+      # checks them.
+      #
+      # What this replaces had three crates out of sixteen and two
+      # `--config` patches out of forty-five, and it failed with
+      # `no matching package named sephera_compression found`: an error naming a
+      # *dependency* of the crate being published, which is not where the list
+      # went wrong. A list nobody runs is wrong invisibly, which is why the
+      # publishing lives next to the verification rather than beside it.
+      #
+      # The choice is made in bash rather than in a workflow expression.
+      # `inputs.dry_run` is a boolean, and GitHub's expression engine casts a
+      # boolean and a string to different numbers before comparing them, so
+      # `inputs.dry_run != 'true'` is not reliably the negation of what the
+      # checkbox says. Handing it to `[[` as a string leaves one interpreter and
+      # one interpretation.
+      - name: Publish every crate, in dependency order
         env:
           CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p sephera_core
-
-      - name: Wait for sephera_core to reach crates.io index
-        if: ${{ inputs.publish_core && inputs.publish_cli }}
-        shell: bash
+          DRY_RUN: ${{ inputs.dry_run }}
         run: |
-          for attempt in {1..20}; do
-            if cargo search sephera_core --limit 1 | grep -q "\"${SEPHERA_VERSION}\""; then
-              echo "sephera_core ${SEPHERA_VERSION} is visible in the crates.io index."
-              exit 0
-            fi
+          if [[ "$DRY_RUN" == "true" ]]; then
+            python scripts/check_publish_order.py --publish
+          else
+            python scripts/check_publish_order.py --publish --no-dry-run
+            echo "Published ${SEPHERA_VERSION}."
+          fi
 
-            echo "Waiting for sephera_core ${SEPHERA_VERSION} to propagate (attempt ${attempt}/20)..."
-            sleep 15
-          done
-
-          echo "::error::Timed out waiting for sephera_core ${SEPHERA_VERSION} to appear in the crates.io index."
-          exit 1
-
-      - name: Publish sephera_mcp
-        if: ${{ inputs.publish_mcp }}
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p sephera_mcp
-
-      - name: Wait for sephera_mcp to reach crates.io index
-        if: ${{ inputs.publish_mcp && inputs.publish_cli }}
-        shell: bash
-        run: |
-          for attempt in {1..20}; do
-            if cargo search sephera_mcp --limit 1 | grep -q "\"${SEPHERA_VERSION}\""; then
-              echo "sephera_mcp ${SEPHERA_VERSION} is visible in the crates.io index."
-              exit 0
-            fi
-
-            echo "Waiting for sephera_mcp ${SEPHERA_VERSION} to propagate (attempt ${attempt}/20)..."
-            sleep 15
-          done
-
-          echo "::error::Timed out waiting for sephera_mcp ${SEPHERA_VERSION} to appear in the crates.io index."
-          exit 1
-
-      - name: Publish sephera
-        if: ${{ inputs.publish_cli }}
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CRATES_IO_TOKEN }}
-        run: cargo publish -p sephera

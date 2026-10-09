@@ -130,6 +130,70 @@ jobs:
       - name: Check docs fences and quoted paths
         run: python scripts/check_docs.py
 
+      # A `documentation` field is a claim the tree has to be able to keep. A
+      # crate with `publish = false` claiming `https://docs.rs/<name>` points at
+      # a page that can never exist, which is worse than no link: it is a 404 in
+      # a place a reader has already decided to trust. Thirteen crates were
+      # 404ing here because they had never been published, which nothing in the
+      # build could see -- publishing is the only thing that names a docs.rs
+      # page, exactly as a `readme` field is the only thing that names a README.
+      - name: Check documentation links are claims the tree can keep
+        run: python scripts/check_doc_links.py
+
+      # A third doc failure, and the one that costs a reader the most: a page
+      # describing a flag the CLI rejects. `check_docs.py` checks that a quoted
+      # *path* exists; this checks that a quoted *flag* does, against
+      # `sephera --help` read per subcommand.
+      #
+      # It runs after the release build rather than in its own job, because it
+      # reads `--help` from the real binary.
+      - name: Check every documented flag exists
+        run: python scripts/check_doc_flags.py
+
+  # The only check that runs the real resolver over expectations written by hand
+  # from what each language means. `cargo test --workspace` cannot cover this: it
+  # asserts against `e2e/graph` too, but through `tests/corpus.toml` figures and
+  # fixture strings in the unit tests, where the right answer is already written
+  # in the same tree as the code. A suite that is not run is not a gate, and this
+  # one was not in the workflow at all -- the last defect listed in
+  # `e2e/README.md` sat excluded from a result nobody was computing.
+  #
+  # The job builds the release binary itself, because `run.py` builds on every
+  # run: skipping the build when the file exists would keep asserting against the
+  # previous binary after a resolver change, and the failure mode of that is the
+  # flattering one.
+  e2e:
+    name: End-to-End Graph Cases
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      # No corpus to fetch: the fixtures are committed under `e2e/graph`, which is
+      # what makes this job independent of the `SEPHERA_CORPUS_DIR` plumbing the
+      # `test` job needs for its own figures.
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      # The full report rather than `--summary`, because the figure this job
+      # exists to publish -- `accuracy over local imports: 44/44 resolved` --
+      # is printed by that path and not by the summary one.
+      #
+      # A case listed in a `KNOWN_DEFECTS` table is excluded from the result and
+      # reported as `healed` if it now passes, which exits non-zero. That is the
+      # intended behaviour: a defect that has been fixed has to come off the list,
+      # and a suite that quietly stops reporting it is how it stays on.
+      - name: Run every case
+        run: python e2e/run.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest

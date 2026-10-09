@@ -181,7 +181,7 @@ Clone and analyze a remote repository directly.
 Check out a specific branch, tag, or commit before analysis.
 
 ```bash
-sephera graph --url https://github.com/Reim-developer/Sephera --ref v0.5.0 --format markdown
+sephera graph --url https://github.com/Reim-developer/Sephera --ref v0.6.0 --format markdown
 ```
 
 `--ref` only applies to repo URLs. Tree URLs already encode the ref in the URL and reject `--ref`.
@@ -227,6 +227,21 @@ sephera graph --path . --diff origin/master --format markdown
 
 Mutually exclusive with `--what-depends-on`, which answers about one named file
 rather than about a change.
+
+### `--exclude-types`
+
+Drop type aliases and wildcard imports from the graph.
+
+```bash
+sephera graph --path . --exclude-types
+```
+
+A `type X = Y` alias in Rust, or an `import ... .*` wildcard, names a namespace
+rather than a runtime dependency: nothing fails at execution time if it goes
+stale, and the edge it creates is the kind a reader of a blast radius would find
+misleading. The edges are omitted rather than drawn differently, because a blast
+radius number that includes them is the wrong number, and a graph that draws them
+faintly is still a graph that claims them.
 
 ### `--fail-on-cycles <COUNT>` / `--fail-on-unresolved <COUNT>`
 

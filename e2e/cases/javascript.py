@@ -93,7 +93,7 @@ CASES: Final[tuple[Case, ...]] = (
     Case(
         id="javascript/a_package_root_resolves_through_package_json",
         source=f"{J}/src/index.js",
-        import_path="../javascript",
+        import_path="..",
         why="`require('..')` from `javascript/src` lands on the package root, "
         "and the root's `package.json` `main` says which file that is. Node "
         "reads the manifest before falling back to `index`, and so must this -- "
@@ -124,9 +124,4 @@ FILE_CASES: Final[tuple[FileCase, ...]] = (
     ),
 )
 
-KNOWN_DEFECTS: Final[dict[str, str]] = {
-    "javascript/a_package_root_resolves_through_package_json":
-        "`require('..')` is reported as a gap; the `package.j"
-        "son` `main` lookup that exists for the corpus does n"
-        "ot fire for this path",
-}
+KNOWN_DEFECTS: Final[dict[str, str]] = {}

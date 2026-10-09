@@ -9,13 +9,21 @@
 		"scripts/pr_report.py",
 		"scripts/probe_symbol_node_kinds.py",
 		"scripts/verify_mcp_graph_formats.py",
-		"scripts/verify_mcp_symbols.py"
+		"scripts/verify_mcp_symbols.py",
+		"scripts/check_doc_flags.py",
+		"scripts/check_doc_links.py",
+		"scripts/check_publish_order.py",
+		"e2e/cases/",
+		"e2e/run.py",
+		"e2e/support.py"
 	],
 	"exclude": [
 		"benchmarks/generated_corpus",
 		"benchmarks/reports",
 		"benchmarks/__pycache__",
-		"scripts/__pycache__"
+		"scripts/__pycache__",
+		"e2e/graph/python",
+		"e2e/graph/python/**"
 	],
 	"reportMissingTypeStubs": false,
 	"pythonVersion": "3.11"

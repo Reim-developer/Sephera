@@ -360,7 +360,14 @@ pub struct CommandToml {
     pub what_depends_on: Option<String>,
     pub diff: Option<String>,
     pub fail_on: Option<u64>,
-    pub detail: Option<String>,
+    /// Whether to list every declaration rather than the per-language summary.
+    ///
+    /// A boolean because the flag is: `symbols --detail` carries no value, so a
+    /// config key that took one would synthesise `--detail <value>` and `clap`
+    /// rejects the pair with "unexpected argument", naming the flag rather than
+    /// the config key that produced it. It was a string until the docs were
+    /// checked against the CLI, which found the key could not work at all.
+    pub detail: Option<bool>,
     pub by_file: Option<bool>,
     pub on: Option<Vec<String>>,
     pub once: Option<bool>,
@@ -439,7 +446,6 @@ impl CommandToml {
         value("what-depends-on", self.what_depends_on.clone());
         value("diff", self.diff.clone());
         value("fail-on", self.fail_on.map(|limit| limit.to_string()));
-        value("detail", self.detail.clone());
         for path in self.focus.iter().flatten() {
             value("focus", Some(config_path(path, config_directory)));
         }
@@ -453,6 +459,7 @@ impl CommandToml {
             ("exclude-types", self.exclude_types),
             ("fail-on-cycles", self.fail_on_cycles),
             ("fail-on-unresolved", self.fail_on_unresolved),
+            ("detail", self.detail),
             ("by-file", self.by_file),
             ("once", self.once),
         ] {
@@ -1035,7 +1042,7 @@ format = "json"
 
 [symbols]
 by_file = true
-detail = "functions"
+detail = true
 
 [graph]
 depth = 2
@@ -1069,6 +1076,41 @@ what_depends_on = "src/main.rs"
         assert_eq!(config.parsed.watch.command.once, Some(true));
         assert!(config.parsed.profiles.contains_key("review"));
         assert_eq!(config.parsed.aliases["audit"].command, "graph");
+    }
+
+    #[test]
+    fn a_boolean_key_becomes_a_bare_flag_and_never_a_pair() {
+        // Parsing is not the whole contract: a config value becomes an argument
+        // pair, and a key whose flag takes no value must not produce
+        // `--detail true`. `clap` rejects that with "unexpected argument",
+        // naming the flag rather than the config key that caused it -- and the
+        // parse test above passed either way, because it never built the args.
+        //
+        // This is the shape every boolean key shares, so it is checked as a group
+        // rather than one key at a time. `detail` was the odd one out until the
+        // docs were checked against the CLI and found the key could not work.
+        let config =
+            load("[symbols]\ndetail = true\nby_file = true\n").unwrap();
+        let args = config.parsed.symbols.command.to_args(Path::new("."));
+
+        assert!(args.contains(&"--detail".to_owned()), "{args:?}");
+        assert!(args.contains(&"--by-file".to_owned()), "{args:?}");
+
+        // Every argument that is not a flag must be the value of the flag before
+        // it. A stray `true` is the failure being guarded.
+        let mut expect_value = false;
+        for argument in &args {
+            if expect_value {
+                assert!(
+                    !argument.starts_with('-'),
+                    "`{argument:?}` is a value, not a flag: {args:?}"
+                );
+                expect_value = false;
+            } else if argument.starts_with('-') {
+                expect_value =
+                    !matches!(argument.as_str(), "--detail" | "--by-file");
+            }
+        }
     }
 
     #[test]

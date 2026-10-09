@@ -32,7 +32,7 @@ tree-sitter-java = "0.23"
 tree-sitter-cpp = "0.23"
 tree-sitter-c = "0.23"
 
-sephera_core = { path = "../sephera_core", version = "0.7.0" }
+sephera_core = { path = "../sephera_core", version = "0.7.1" }
 
 [dev-dependencies]
 tempfile = "3.23.0"

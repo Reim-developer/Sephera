@@ -60,20 +60,19 @@ sephera loc --url https://github.com/Reim-developer/Sephera/tree/master/crates
 ## Sample Output
 
 ```text
-Scanning: crates                                  
+Scanning: crates
 
-╭──────────┬──────┬─────────┬───────┬─────────╮
-│ Language ┆ Code ┆ Comment ┆ Empty ┆    Size │
-│          ┆      ┆         ┆       ┆ (bytes) │
-╞══════════╪══════╪═════════╪═══════╪═════════╡
-│ Rust     ┆ 9724 ┆     652 ┆  1357 ┆  358209 │
-│ TOML     ┆  113 ┆       0 ┆    11 ┆    3493 │
-│ Markdown ┆   69 ┆       0 ┆    35 ┆    2980 │
-│ Totals   ┆ 9906 ┆     652 ┆  1403 ┆  364682 │
-╰──────────┴──────┴─────────┴───────┴─────────╯
-Files scanned: 88
+╭──────────┬───────┬─────────┬───────┬──────────────╮
+│ Language ┆  Code ┆ Comment ┆ Empty ┆ Size (bytes) │
+╞══════════╪═══════╪═════════╪═══════╪══════════════╡
+│ Rust     ┆ 28897 ┆    7818 ┆  4437 ┆      1448814 │
+│ TOML     ┆   533 ┆      28 ┆    70 ┆        21184 │
+│ Markdown ┆   380 ┆       0 ┆   159 ┆        20564 │
+│ Totals   ┆ 29810 ┆    7846 ┆  4666 ┆      1490562 │
+╰──────────┴───────┴─────────┴───────┴──────────────╯
+Files scanned: 183
 Languages detected: 3
-Elapsed: 3.909 ms (0.003909 s)
+Elapsed: 3.539 ms (0.003539 s)
 ```
 
 ## Demo
@@ -151,7 +150,7 @@ to standard output, so a captured report is unaffected either way.
 For repo URLs, use `--ref` to analyze a specific branch, tag, or commit:
 
 ```bash
-sephera loc --url https://github.com/Reim-developer/Sephera --ref v0.5.0
+sephera loc --url https://github.com/Reim-developer/Sephera --ref v0.6.0
 ```
 
 `--ref` applies to repo URLs only. Tree URLs already encode the ref in the URL itself.
