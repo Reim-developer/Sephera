@@ -24,7 +24,7 @@ serde = { version = "1.0.228", features = ["derive"] }
 tree-sitter = "0.26"
 tree-sitter-python = "0.25"
 
-sephera_core = { path = "../sephera_core", version = "0.7.0" }
-sephera_compression = { path = "../sephera_compression", version = "0.7.0" }
+sephera_core = { path = "../sephera_core", version = "0.7.1" }
+sephera_compression = { path = "../sephera_compression", version = "0.7.1" }
 
-sephera_symbols = { path = "../sephera_symbols", version = "0.7.0" }
+sephera_symbols = { path = "../sephera_symbols", version = "0.7.1" }

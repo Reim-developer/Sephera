@@ -26,11 +26,11 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tree-sitter = "0.26"
 
-sephera_core = { path = "../sephera_core", version = "0.7.0" }
-sephera_ignore = { path = "../sephera_ignore", version = "0.7.0" }
-sephera_context = { path = "../sephera_context", version = "0.7.0" }
-sephera_compression = { path = "../sephera_compression", version = "0.7.0" }
-sephera_scan = { path = "../sephera_scan", version = "0.7.0" }
+sephera_core = { path = "../sephera_core", version = "0.7.1" }
+sephera_ignore = { path = "../sephera_ignore", version = "0.7.1" }
+sephera_context = { path = "../sephera_context", version = "0.7.1" }
+sephera_compression = { path = "../sephera_compression", version = "0.7.1" }
+sephera_scan = { path = "../sephera_scan", version = "0.7.1" }
 
 [dev-dependencies]
 tempfile = "3.23.0"
