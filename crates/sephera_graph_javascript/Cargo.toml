@@ -10,7 +10,7 @@ rust-version.workspace = true
 description = "JavaScript/TypeScript dependency extraction for Sephera graph."
 documentation = "https://docs.rs/sephera_graph_javascript"
 readme = "README.md"
-keywords = ["javascript", "typescript", "dependencies", "tree-sitter", "npm", "package-json"]
+keywords = ["javascript", "typescript", "dependencies", "tree-sitter", "package-json"]
 categories = ["development-tools", "text-processing"]
 
 [lib]

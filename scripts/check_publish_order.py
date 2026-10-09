@@ -341,6 +341,62 @@ def config_args(patches: dict[str, str]) -> list[str]:
     return args
 
 
+# crates.io's own limits, and the reason they are checked here rather than left
+# to `cargo publish --dry-run`: a dry run does not upload, so it never asks the
+# registry whether it would accept the manifest. `sephera_graph_cpp` carried seven
+# keywords and every dry run was green, then the real publish failed with
+#
+#     error: failed to publish sephera_graph_cpp v0.7.1
+#       status 400 Bad Request: expected at most 5 keywords per crate
+#
+# at crate 7 of 16. The failure costs a release run and discovers, in the log, a
+# fact that was readable in the manifest all along.
+MAX_KEYWORDS: Final[int] = 5
+MAX_CATEGORIES: Final[int] = 5
+
+
+def check_metadata(names: dict[str, pathlib.Path]) -> list[str]:
+    """Manifest fields the registry will reject, checked before an upload."""
+    problems: list[str] = []
+
+    for name in sorted(names):
+        text = (names[name] / "Cargo.toml").read_text(encoding="utf-8")
+        package = re.search(r"^\[package\]$(.*?)(?=^\[|\Z)", text, re.M | re.S)
+        if not package:
+            problems.append(f"{name}: no [package] table")
+            continue
+
+        block = package.group(1)
+
+        def field(key: str) -> list[str]:
+            match = re.search(rf'^{re.escape(key)}\s*=\s*\[(.*?)\]', block, re.M)
+            if not match:
+                return []
+            return re.findall(r'"([^"]*)"', match.group(1))
+
+        keywords = field("keywords")
+        if len(keywords) > MAX_KEYWORDS:
+            problems.append(
+                f"{name}: {len(keywords)} keywords, the registry allows at most "
+                f"{MAX_KEYWORDS} -- {keywords}"
+            )
+
+        categories = field("categories")
+        if len(categories) > MAX_CATEGORIES:
+            problems.append(
+                f"{name}: {len(categories)} categories, the registry allows at "
+                f"most {MAX_CATEGORIES}"
+            )
+
+        description = re.search(r'^description\s*=\s*"([^"]*)"', block, re.M)
+        if not description:
+            problems.append(f"{name}: no description")
+        elif not description.group(1).strip():
+            problems.append(f"{name}: an empty description")
+
+    return problems
+
+
 def read_version() -> str:
     """The workspace version, which every crate inherits.
 
@@ -660,6 +716,12 @@ def main() -> int:
                 "CARGO_REGISTRY_TOKEN is not set; publish needs a crates.io "
                 "token with upload access"
             )
+        metadata = check_metadata(names)
+        if metadata:
+            print("The registry would reject these manifests:")
+            for line in metadata:
+                print(f"  {line}")
+            return 1
         return publish_plan(names, paths, dry_run="--no-dry-run" not in sys.argv)
 
     print("READMEs")
@@ -667,6 +729,17 @@ def main() -> int:
         print("  commit these; `cargo publish` refuses a dirty tree\n")
     else:
         print("  every publishable crate has one\n")
+
+    # The same metadata check, in the mode CI runs. It is here for the reason
+    # `check_metadata` records: a dry run does not upload, so nothing else in
+    # this script would ever ask the registry whether it accepts the manifest.
+    metadata = check_metadata(names)
+    if metadata:
+        print("The registry would reject these manifests:")
+        for line in metadata:
+            print(f"  {line}")
+        return 1
+    print("manifest metadata the registry accepts\n")
 
     sequence = order(paths)
     print(f"publish order, {len(sequence)} crates:")
