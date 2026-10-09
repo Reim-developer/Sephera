@@ -26,18 +26,18 @@ rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.145"
 tree-sitter = "0.26"
-sephera_graph_rust = { path = "../sephera_graph_rust", version = "0.6.0" }
-sephera_graph_python = { path = "../sephera_graph_python", version = "0.6.0" }
-sephera_graph_javascript = { path = "../sephera_graph_javascript", version = "0.6.0" }
-sephera_graph_java = { path = "../sephera_graph_java", version = "0.6.0" }
-sephera_graph_go = { path = "../sephera_graph_go", version = "0.6.0" }
-sephera_graph_cpp = { path = "../sephera_graph_cpp", version = "0.6.0" }
-sephera_ignore = { path = "../sephera_ignore", version = "0.6.0" }
-sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+sephera_graph_rust = { path = "../sephera_graph_rust", version = "0.7.0" }
+sephera_graph_python = { path = "../sephera_graph_python", version = "0.7.0" }
+sephera_graph_javascript = { path = "../sephera_graph_javascript", version = "0.7.0" }
+sephera_graph_java = { path = "../sephera_graph_java", version = "0.7.0" }
+sephera_graph_go = { path = "../sephera_graph_go", version = "0.7.0" }
+sephera_graph_cpp = { path = "../sephera_graph_cpp", version = "0.7.0" }
+sephera_ignore = { path = "../sephera_ignore", version = "0.7.0" }
+sephera_compression = { path = "../sephera_compression", version = "0.7.0" }
 toml = "0.9.8"
 
-sephera_core = { path = "../sephera_core", version = "0.6.0" }
-sephera_scan = { path = "../sephera_scan", version = "0.6.0" }
+sephera_core = { path = "../sephera_core", version = "0.7.0" }
+sephera_scan = { path = "../sephera_scan", version = "0.7.0" }
 
 [dev-dependencies]
 criterion = { workspace = true }

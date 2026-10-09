@@ -24,10 +24,10 @@ serde = { version = "1.0.228", features = ["derive"] }
 tree-sitter = "0.26"
 tree-sitter-go = "0.25"
 
-sephera_core = { path = "../sephera_core", version = "0.6.0" }
-sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+sephera_core = { path = "../sephera_core", version = "0.7.0" }
+sephera_compression = { path = "../sephera_compression", version = "0.7.0" }
 
-sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }
+sephera_symbols = { path = "../sephera_symbols", version = "0.7.0" }
 
 # No dev-dependencies, deliberately. The one plugin that reads a manifest used to
 # depend on `sephera_graph` for `ManifestIndex` -- and `sephera_graph` depends on
