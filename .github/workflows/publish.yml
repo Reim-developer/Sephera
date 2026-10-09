@@ -29,10 +29,20 @@ jobs:
   publish:
     name: Publish crates.io packages
     runs-on: ubuntu-latest
-    # Sixteen crates, each waiting for the index before the next one starts. The
-    # old timeout assumed three and the old job published three, for the same
-    # reason: the workflow predates the split.
-    timeout-minutes: 120
+    # Sixteen crates, each waiting for the index, and paced so the registry's
+    # new-crate limiter is not hit in the first place. The first real run spent
+    # thirteen minutes and was refused at crate 7 of 16 with a 429 -- six crates
+    # uploaded inside about eighteen seconds, then "too many new crates in a short
+    # period of time, try again after 11:38:22". Four minutes, not an hour: the
+    # limiter is a burst limiter, so the cheap response is not to burst.
+    #
+    # 300 minutes is a ceiling, not an expectation. Paced at 45 s a crate,
+    # sixteen crates is about twelve minutes plus the checks. The headroom is for
+    # the case where a 429 still lands, which `--publish` rides out by reading the
+    # server's own retry time. GitHub caps a job at six hours, so this cannot go
+    # higher -- and a run that reaches it is resumable rather than lost, because
+    # crates already at the version are skipped.
+    timeout-minutes: 300
     environment: release
     steps:
       - name: Checkout

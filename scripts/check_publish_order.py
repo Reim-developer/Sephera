@@ -61,6 +61,8 @@ import time
 import urllib.error
 import urllib.parse
 import urllib.request
+from datetime import datetime, timezone
+from typing import Final
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
@@ -357,12 +359,32 @@ def read_version() -> str:
 INDEX = "https://crates.io/api/v1/crates/{name}/{version}"
 
 
-def wait_for_index(name: str, version: str) -> bool:
-    """Whether `name` at `version` is visible in the crates.io index.
+def is_published(name: str, version: str) -> bool:
+    """Whether `name` at `version` is already on crates.io.
 
     Published rather than polled with `cargo search`, which is rate-limited and
     whose output is a search ranking rather than an existence check. The API
     answers the question that was asked: is *this* version of *this* crate there.
+    """
+    try:
+        with urllib.request.urlopen(
+            INDEX.format(name=urllib.parse.quote(name), version=version),
+            timeout=20,
+        ) as response:
+            return response.status == 200
+    except urllib.error.HTTPError as error:
+        if error.code != 404:
+            print(f"    crates.io returned {error.code} for {name}")
+        return False
+    except urllib.error.URLError as error:
+        # A network problem is not a finding about the registry, and failing a
+        # publish on it would send someone to fix a cable.
+        print(f"    could not reach crates.io: {error.reason}")
+        return False
+
+
+def wait_for_index(name: str, version: str) -> bool:
+    """Whether `name` at `version` is visible in the crates.io index.
 
     The wait exists at all because of what a consumer resolves. `cargo publish
     --config patch.crates-io.X.path=...` would succeed for a crate whose
@@ -371,26 +393,138 @@ def wait_for_index(name: str, version: str) -> bool:
     a consumer resolving that has nothing but the registry. Publishing sixteen
     crates in an order nobody waited on produces an uninstallable final one, and
     the patch flags are exactly what hides it.
-    """
-    for attempt in range(1, 13):
-        try:
-            with urllib.request.urlopen(
-                INDEX.format(name=urllib.parse.quote(name), version=version),
-                timeout=20,
-            ) as response:
-                if response.status == 200:
-                    return True
-        except urllib.error.HTTPError as error:
-            if error.code != 404:
-                print(f"    crates.io returned {error.code} for {name}")
-        except urllib.error.URLError as error:
-            print(f"    could not reach crates.io: {error.reason}")
 
-        if attempt < 12:
-            print(f"    waiting for {name} {version} ({attempt}/12)")
+    More attempts than before, because a 429 from the *publish* is not the only
+    way the index lags: a run that was rate-limited and then succeeded can also
+    land while the sparse index is still catching up.
+    """
+    for attempt in range(1, 25):
+        if is_published(name, version):
+            return True
+        if attempt < 25:
+            print(f"    waiting for {name} {version} ({attempt}/24)")
             time.sleep(8)
 
     return False
+
+
+# A 429 says how long to wait, in seconds, and the fallback is used when the
+# message does not carry a number. The doubling is capped so a long evening does
+# not spend most of it sleeping.
+RATE_LIMIT_RETRY: Final[int] = int(
+    os.environ.get("SEPHERA_PUBLISH_ATTEMPTS", "80")
+)
+RATE_LIMIT_FIRST: Final[float] = 60.0
+RATE_LIMIT_MAX: Final[float] = 1_200.0
+
+# Pause between successful publishes, in seconds.
+#
+# This is the fix for the first thing that actually went wrong, and it is worth
+# recording why it is a *pace* rather than only a retry. Six crates uploaded
+# inside about eighteen seconds and the seventh was refused with
+# "You have published too many new crates in a short period of time. Please try
+# again after ... 11:38:22 GMT" -- four minutes later, not an hour. A limiter
+# that clears in four minutes is a burst limiter, not an hourly quota, and the
+# cheapest response to a burst limiter is not to burst.
+#
+# Retrying alone would also work, but it would work by hitting the wall and
+# waiting, which spends the run's wall clock on refusals. Pacing spends the same
+# time and uploads continuously.
+PACE_SECONDS: Final[float] = float(os.environ.get("SEPHERA_PUBLISH_PACE", "45"))
+
+
+# `Sat, 09 Oct 2026 11:38:22 GMT` -- the shape of the sentence cargo prints.
+RETRY_AT = re.compile(
+    r"try again after\s+\w{3},\s+(?P<day>\d{2})\s+(?P<month>[A-Z][a-z]{2})"
+    r"\s+(?P<year>\d{4})\s+(?P<hh>\d{2}):(?P<mm>\d{2}):(?P<ss>\d{2})\s+GMT"
+)
+MONTHS = {
+    "Jan": 1, "Feb": 2, "Mar": 3, "Apr": 4, "May": 5, "Jun": 6,
+    "Jul": 7, "Aug": 8, "Sep": 9, "Oct": 10, "Nov": 11, "Dec": 12,
+}
+
+
+def rate_limit_after(text: str) -> float | None:
+    """Seconds to wait, if a 429 response names a time to wait for.
+
+    Cargo prints the server's message rather than its headers, so the number has
+    to be read out of a sentence: "Please try again after Fri, 09 Oct 2026
+    11:38:22 GMT". Parsed rather than ignored because it is the only piece of
+    information the server gives, and a fixed backoff throws it away on every
+    retry -- the first failure waited four minutes because the server said four
+    minutes, not because doubling from one minute happened to arrive there.
+
+    A reworded message returns `None` and the caller falls back to its own
+    doubling, so the wording changing costs precision and not correctness.
+    """
+    match = RETRY_AT.search(text)
+    if not match:
+        return None
+    month = MONTHS.get(match.group("month"))
+    if month is None:
+        return None
+
+    retry_at = datetime(
+        int(match.group("year")),
+        month,
+        int(match.group("day")),
+        int(match.group("hh")),
+        int(match.group("mm")),
+        int(match.group("ss")),
+        tzinfo=timezone.utc,
+    )
+    return max((retry_at - datetime.now(timezone.utc)).total_seconds(), 1.0)
+
+
+def publish_one(name: str, command: list[str]) -> int:
+    """Run one `cargo publish`, riding out the registry's rate limit.
+
+    Three outcomes, and only two of them are failures:
+
+    * **OK** -- uploaded. Returns 0.
+    * **already there** -- the version exists. Returns 0. This is what makes a
+      re-run cheap: a interrupted run has already uploaded some crates, and
+      refusing to continue would leave the rest permanently behind.
+    * **429** -- wait and try again. Returns 0 once it lands, 1 if the budget is
+      spent.
+    * **anything else** -- returns 1, and the caller stops.
+    """
+    delay = RATE_LIMIT_FIRST
+    for attempt in range(1, RATE_LIMIT_RETRY + 1):
+        result = subprocess.run(
+            command, cwd=ROOT, check=False, capture_output=True, text=True
+        )
+        if result.returncode == 0:
+            return 0
+
+        output = result.stdout + result.stderr
+
+        if "already exists" in output or "already uploaded" in output:
+            print(f"    {name} is already at this version")
+            return 0
+
+        if "429 Too Many Requests" not in output and "too many" not in output.lower():
+            print(f"{name}: FAILED")
+            for line in output.splitlines()[-12:]:
+                print(f"    {line}")
+            return 1
+
+        wait = rate_limit_after(output)
+        # A stated time that has already passed is not a wait to honour. It means
+        # the message is stale, or the clock is wrong, and retrying after one
+        # second earns a second 429 -- which is how a fixed backoff got here in
+        # the first place. Fall back to the doubling instead.
+        if wait is None or wait < 5.0:
+            wait = delay
+        print(
+            f"    {name}: rate-limited by crates.io, waiting "
+            f"{wait:.0f}s (attempt {attempt}/{RATE_LIMIT_RETRY})"
+        )
+        time.sleep(wait)
+        delay = min(delay * 2, RATE_LIMIT_MAX)
+
+    print(f"{name}: still rate-limited after {RATE_LIMIT_RETRY} attempts")
+    return 1
 
 
 def publish_plan(
@@ -405,11 +539,20 @@ def publish_plan(
     could not test either. Every way that can go wrong -- an order that is wrong,
     a patch that names a crate which is not a dependency, a wait that never
     happens -- was invisible in the workflow it replaced.
+
+    Resumable, because the first real run was not: it was refused at crate 7 of
+    16 with a 429 and the six it had already uploaded were left behind. A run
+    that can only ever start from the beginning is a run that has to be watched.
     """
     sequence = order(paths)
     version = read_version()
-    print(f"publishing {len(sequence)} crates, version {version}"
-          f"{' (dry run)' if dry_run else ''}\n")
+    print(
+        f"publishing {len(sequence)} crates, version {version}"
+        f"{' (dry run)' if dry_run else ''}\n"
+    )
+
+    uploaded: list[str] = []
+    skipped: list[str] = []
 
     for index, name in enumerate(sequence, 1):
         patches = patch_flags(name, names, paths)
@@ -423,14 +566,21 @@ def publish_plan(
             command.append("--allow-dirty")
         command += config_args(patches)
 
-        print(f"{index:>2}/{len(sequence)} {name}" + (f"  (+{len(patches)} patches)" if patches else ""))
-        result = subprocess.run(
-            command, cwd=ROOT, check=False, capture_output=True, text=True
+        print(
+            f"{index:>2}/{len(sequence)} {name}"
+            + (f"  (+{len(patches)} patches)" if patches else "")
         )
-        if result.returncode != 0:
-            print(f"{name}: FAILED")
-            for line in (result.stdout + result.stderr).splitlines()[-12:]:
-                print(f"    {line}")
+
+        # A crate already at this version is not re-uploaded. The check costs one
+        # HTTP request and makes an interrupted run resumable instead of a
+        # failure that has to be explained.
+        if not dry_run and is_published(name, version):
+            print(f"    already at {version}, skipping")
+            skipped.append(name)
+            continue
+
+        started = time.monotonic()
+        if publish_one(name, command) != 0:
             # Stop rather than continue. A crate whose dependency failed to
             # upload is not publishable, and the next sixteen lines of output
             # would be the same error with a different name on it.
@@ -445,6 +595,8 @@ def publish_plan(
                     f"and those after are not. Fix this crate and re-run."
                 )
             return 1
+        elapsed = time.monotonic() - started
+        uploaded.append(name)
 
         if dry_run:
             continue
@@ -457,9 +609,22 @@ def publish_plan(
                 f"::error::{name} {version} did not appear in the crates.io index."
             )
             return 1
-        print(f"    in the index")
+        print(f"    in the index ({elapsed:.0f}s upload, "
+              f"{time.monotonic() - started - elapsed:.0f}s index)")
 
-    print(f"\n{'packaged' if dry_run else 'published'} {len(sequence)} crates")
+        # Pace the next one. The last crate of the run has nothing to pace for,
+        # and sleeping after it just holds the job open.
+        if index < len(sequence) and PACE_SECONDS > 0:
+            print(f"    pausing {PACE_SECONDS:.0f}s before the next crate")
+            time.sleep(PACE_SECONDS)
+
+    if skipped:
+        print(f"\n{len(skipped)} crate(s) were already at {version}: "
+              + ", ".join(skipped))
+    print(
+        f"\n{'packaged' if dry_run else 'published'} {len(uploaded)} of "
+        f"{len(sequence)} crates"
+    )
     return 0
 
 
