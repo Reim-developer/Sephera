@@ -31,14 +31,36 @@ dependency patch, which is the failure this script exists to catch.
 
 The order is a topological sort of the path-dependency graph, ties broken by name
 so it does not reorder between runs.
+
+Four modes, one plan:
+
+* default -- give every crate a README and verify all of them package
+* `--plan` -- print the order and the patch flags as JSON
+* `--publish` -- publish every crate in that order, waiting for each to reach
+  the index before the next one starts. `--no-dry-run` uploads; without it, the
+  default packages each crate and uploads nothing.
+
+`--publish` lives here rather than in a shell loop in the workflow for a reason
+worth recording: the order and the flags are computed once, by the code that
+verifies them. The `publish.yml` they replaced had three crates out of sixteen
+and two patch flags out of forty-five, and it failed with `no matching package
+named sephera_compression found` -- an error naming a *dependency* of the crate
+it was publishing, which is not where the list went wrong. A list nobody tests
+is a list that is wrong invisibly.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import pathlib
 import re
 import subprocess
 import sys
+import time
+import urllib.error
+import urllib.parse
+import urllib.request
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
 CRATES = ROOT / "crates"
@@ -271,8 +293,199 @@ def write_readmes(names: dict[str, pathlib.Path], paths: dict[str, set[str]]) ->
     return written
 
 
+def patch_flags(
+    name: str, names: dict[str, pathlib.Path], paths: dict[str, set[str]]
+) -> dict[str, str]:
+    """The `--config` patches one crate needs, as `key -> value`.
+
+    `cargo publish --dry-run -p X` resolves X's dependencies from crates.io, so
+    every path dependency beneath X has to be redirected back to the checkout or
+    cargo looks for a version that is not there yet. A `--config` naming a crate
+    that does not exist is silently ignored, which is why the pair is computed
+    from the manifests rather than typed out.
+    """
+    return {
+        f"patch.crates-io.{dep}.path": names[dep]
+        .relative_to(ROOT)
+        .as_posix()
+        for dep in sorted(paths[name])
+        if dep in names
+    }
+
+
+def config_args(patches: dict[str, str]) -> list[str]:
+    """`--config` arguments for a set of patches, ready for `cargo publish`.
+
+    The value is quoted, and that is not decoration. Cargo parses `KEY=VALUE`
+    by handing `VALUE` to a TOML parser, so `patch.crates-io.sephera_core.path=crates/sephera_core`
+    fails at column 35: `crates/sephera_core` is not a TOML value on its own. A
+    literal string -- single quotes -- is. Decomposing the patch into a key and
+    a value and re-joining them unquoted reproduces exactly that error, which is
+    how this helper acquired the quoting and the note.
+    """
+    args: list[str] = []
+    for key, value in sorted(patches.items()):
+        args += ["--config", f"{key}='{value}'"]
+    return args
+
+
+def read_version() -> str:
+    """The workspace version, which every crate inherits.
+
+    Read rather than derived, because `version.workspace = true` is the whole
+    point of the workspace table: every crate's version is this one string, so a
+    publish plan and the binaries it uploads agree without anything to keep in
+    step.
+    """
+    text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
+    match = re.search(r'^\s*version\s*=\s*"([^"]+)"', text, re.M)
+    if not match:
+        raise SystemExit("no version in the workspace [package] table")
+    return match.group(1)
+
+
+INDEX = "https://crates.io/api/v1/crates/{name}/{version}"
+
+
+def wait_for_index(name: str, version: str) -> bool:
+    """Whether `name` at `version` is visible in the crates.io index.
+
+    Published rather than polled with `cargo search`, which is rate-limited and
+    whose output is a search ranking rather than an existence check. The API
+    answers the question that was asked: is *this* version of *this* crate there.
+
+    The wait exists at all because of what a consumer resolves. `cargo publish
+    --config patch.crates-io.X.path=...` would succeed for a crate whose
+    dependencies are not published yet -- it reads them from the checkout. But
+    the `Cargo.toml` that gets uploaded says `sephera_compression = "0.7.1"`, and
+    a consumer resolving that has nothing but the registry. Publishing sixteen
+    crates in an order nobody waited on produces an uninstallable final one, and
+    the patch flags are exactly what hides it.
+    """
+    for attempt in range(1, 13):
+        try:
+            with urllib.request.urlopen(
+                INDEX.format(name=urllib.parse.quote(name), version=version),
+                timeout=20,
+            ) as response:
+                if response.status == 200:
+                    return True
+        except urllib.error.HTTPError as error:
+            if error.code != 404:
+                print(f"    crates.io returned {error.code} for {name}")
+        except urllib.error.URLError as error:
+            print(f"    could not reach crates.io: {error.reason}")
+
+        if attempt < 12:
+            print(f"    waiting for {name} {version} ({attempt}/12)")
+            time.sleep(8)
+
+    return False
+
+
+def publish_plan(
+    names: dict[str, pathlib.Path], paths: dict[str, set[str]], dry_run: bool
+) -> int:
+    """Publish every crate in order, waiting for each to reach the index.
+
+    A mode of this script rather than a shell loop in the workflow, for one
+    reason: it is the same order and the same patch flags the check above uses,
+    computed once. A shell loop in `publish.yml` would have to recompute both
+    from JSON with `jq` and shell word-splitting, and the working tree it ran in
+    could not test either. Every way that can go wrong -- an order that is wrong,
+    a patch that names a crate which is not a dependency, a wait that never
+    happens -- was invisible in the workflow it replaced.
+    """
+    sequence = order(paths)
+    version = read_version()
+    print(f"publishing {len(sequence)} crates, version {version}"
+          f"{' (dry run)' if dry_run else ''}\n")
+
+    for index, name in enumerate(sequence, 1):
+        patches = patch_flags(name, names, paths)
+        command = ["cargo", "publish", "-p", name]
+        if dry_run:
+            command.append("--dry-run")
+            # Only in a dry run. The docstring above records why: refusing to
+            # package on a dirty tree makes a check runnable in exactly one
+            # state, and this is the mode that has to be runnable mid-edit. A
+            # real upload must still refuse, and does.
+            command.append("--allow-dirty")
+        command += config_args(patches)
+
+        print(f"{index:>2}/{len(sequence)} {name}" + (f"  (+{len(patches)} patches)" if patches else ""))
+        result = subprocess.run(
+            command, cwd=ROOT, check=False, capture_output=True, text=True
+        )
+        if result.returncode != 0:
+            print(f"{name}: FAILED")
+            for line in (result.stdout + result.stderr).splitlines()[-12:]:
+                print(f"    {line}")
+            # Stop rather than continue. A crate whose dependency failed to
+            # upload is not publishable, and the next sixteen lines of output
+            # would be the same error with a different name on it.
+            if dry_run:
+                print(
+                    f"\nstopped at {name}; nothing was uploaded. "
+                    f"Fix this crate and re-run."
+                )
+            else:
+                print(
+                    f"\nstopped at {name}; the crates before it are uploaded "
+                    f"and those after are not. Fix this crate and re-run."
+                )
+            return 1
+
+        if dry_run:
+            continue
+
+        # The only place the order is load-bearing. Everything above would work
+        # in any order, because the patches redirect the dependencies to the
+        # checkout; this is what makes the release a set a consumer can resolve.
+        if not wait_for_index(name, version):
+            print(
+                f"::error::{name} {version} did not appear in the crates.io index."
+            )
+            return 1
+        print(f"    in the index")
+
+    print(f"\n{'packaged' if dry_run else 'published'} {len(sequence)} crates")
+    return 0
+
+
 def main() -> int:
     names, paths = load()
+
+    if "--plan" in sys.argv:
+        # A machine-readable plan, because the order and the flags are the one
+        # thing here that a shell script cannot recompute: a hardcoded list is
+        # wrong invisibly, and the error it produces names a dependency rather
+        # than the crate missing from the list. `publish.yml` consumes this
+        # instead of listing sixteen crates by hand.
+        sequence = order(paths)
+        plan = {
+            "version": read_version(),
+            "count": len(sequence),
+            "sequence": [
+                {
+                    "name": name,
+                    "patches": patch_flags(name, names, paths),
+                }
+                for name in sequence
+            ],
+        }
+        print(json.dumps(plan, indent=2))
+        return 0
+
+    if "--publish" in sys.argv:
+        # Requires a token in the environment rather than an argument: a token
+        # on a command line lands in the process table and in the shell history.
+        if not os.environ.get("CARGO_REGISTRY_TOKEN"):
+            raise SystemExit(
+                "CARGO_REGISTRY_TOKEN is not set; publish needs a crates.io "
+                "token with upload access"
+            )
+        return publish_plan(names, paths, dry_run="--no-dry-run" not in sys.argv)
 
     print("READMEs")
     if write_readmes(names, paths):
@@ -291,14 +504,9 @@ def main() -> int:
     failures: list[str] = []
 
     for name in sequence:
-        patches = [
-            f"patch.crates-io.{dep}.path='{names[dep].relative_to(ROOT).as_posix()}'"
-            for dep in sorted(paths[name])
-            if dep in names
-        ]
+        patches = patch_flags(name, names, paths)
         command = ["cargo", "publish", "--dry-run", "--allow-dirty", "-p", name]
-        for patch in patches:
-            command += ["--config", patch]
+        command += config_args(patches)
         if not verify:
             command.append("--no-verify")
 
