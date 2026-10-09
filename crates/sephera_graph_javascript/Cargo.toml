@@ -20,11 +20,16 @@ path = "src/lib.rs"
 [dependencies]
 anyhow = "1.0.102"
 rayon = "1.11.0"
+serde_json = "1.0.145"
 serde = { version = "1.0.228", features = ["derive"] }
 tree-sitter = "0.26"
 tree-sitter-javascript = "0.25"
 tree-sitter-typescript = "0.23"
 
 sephera_core = { path = "../sephera_core", version = "0.6.0" }
-sephera_graph = { path = "../sephera_graph", version = "0.6.0" }
+sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+
 sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }
+
+[dev-dependencies]
+tempfile = "3.23.0"

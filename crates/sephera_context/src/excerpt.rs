@@ -1,7 +1,9 @@
 use anyhow::Result;
 
-use sephera_compression::{{CompressionMode, SupportedLanguage, compress_source}};
-use sephera_core::{line_slices::LineSlices};
+use sephera_compression::{
+    CompressionMode, SupportedLanguage, compress_source,
+};
+use sephera_core::line_slices::LineSlices;
 
 use super::{
     budget::estimate_tokens_from_bytes,

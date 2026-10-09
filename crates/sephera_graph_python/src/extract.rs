@@ -15,10 +15,14 @@
 
 use tree_sitter::Node;
 
-use sephera_graph::{ImportKind, declarations::{
-        DeclarationRules, DeclaredNames, collect_declared_names_with, }, types::ImportStatement};
+use sephera_core::{
+    declarations::{
+        DeclarationRules, DeclaredNames, collect_declared_names_with,
+    },
+    types::{ImportKind, ImportStatement},
+};
 
-use super::super::walk::{line_of, node_text};
+use sephera_core::plugins::{line_of, node_text};
 
 /// The grammar's names for what a Python module declares.
 ///
@@ -38,7 +42,7 @@ const PYTHON_DECLARATION_KINDS: &[&str] =
 /// them needs Python's own shape -- and only at module level, since a local
 /// variable inside a function is not something `from module import name` can
 /// reach.
-pub(super) fn declared_names(
+pub fn declared_names(
     source: &[u8],
     tree: &tree_sitter::Tree,
 ) -> DeclaredNames {
@@ -113,7 +117,7 @@ fn assignment_targets(assignment: Node<'_>) -> Vec<Node<'_>> {
 }
 
 /// Read the imports out of one node.
-pub(super) fn extract_from_node(
+pub fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
@@ -221,16 +225,16 @@ fn from_imports(
 mod tests {
     use super::*;
     use sephera_compression::SupportedLanguage;
+    use sephera_compression::with_parser;
 
-    use sephera_graph::walk::imports_found_by;
+    use sephera_core::plugins::imports_found_by;
 
     /// Every import with its kind, for the assertions that care about it.
     fn imports(source: &[u8]) -> Vec<ImportStatement> {
-        imports_found_by(
-            source,
-            SupportedLanguage::Python,
-            &super::super::PythonPlugin,
-        )
+        with_parser(SupportedLanguage::Python, source.len(), |parser| {
+            Ok(imports_found_by(source, parser, &crate::PythonPlugin))
+        })
+        .expect("a parser exists")
     }
 
     /// Every path one Python file imports, in order.

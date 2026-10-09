@@ -46,7 +46,7 @@ impl Language {
 
     /// File extensions for this language.
     #[must_use]
-    pub fn extensions(self) -> &'static [&'static str] {
+    pub const fn extensions(self) -> &'static [&'static str] {
         match self {
             Self::Rust => &[".rs"],
             Self::Python => &[".py", ".pyx", ".pxd", ".pxi"],
@@ -73,7 +73,9 @@ impl std::fmt::Display for Language {
 }
 
 /// What a reference in source code says about the file it names.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum ImportKind {
     /// An ordinary `use` or `import`. A real dependency.
@@ -224,6 +226,12 @@ pub struct CommentStyle {
 }
 
 impl CommentStyle {
+    /// A ruleset from whichever of the three delimiters this language has.
+    ///
+    /// `None` means the language has no such comment form, which is a fact about
+    /// the language rather than a missing value: Python has no block comment, and
+    /// a ruleset that had to invent one would report the wrong lines.
+    #[must_use]
     pub const fn new(
         line_comment: Option<&'static str>,
         block_comment_start: Option<&'static str>,

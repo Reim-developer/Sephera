@@ -3,15 +3,13 @@
 //! One plugin serves both languages; only the grammar differs, and resolution is
 //! identical because `#include` means the same thing in each.
 
-mod extract;
-
 use std::collections::BTreeSet;
 
 use sephera_compression::SupportedLanguage;
 
-use super::{
-    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
-    walk::walk_with_declarations,
+use sephera_core::{
+    path_utils as paths,
+    plugins::{ImportPlugin, ResolveContext, ResolverPlugin},
 };
 
 /// C or C++ import extraction and resolution.
@@ -22,28 +20,16 @@ pub struct CCppPlugin {
 }
 
 impl ImportPlugin for CCppPlugin {
-    fn language(&self) -> SupportedLanguage {
-        self.language
-    }
-
     fn extract_from_node(
         &self,
         source: &[u8],
         node: &tree_sitter::Node<'_>,
-    ) -> Option<Vec<sephera_graph::types::ImportStatement>> {
-        extract::extract_from_node(source, node)
-    }
-
-    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
-        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
+    ) -> Option<Vec<sephera_core::types::ImportStatement>> {
+        crate::extract::extract_from_node(source, node)
     }
 }
 
 impl ResolverPlugin for CCppPlugin {
-    fn language(&self) -> SupportedLanguage {
-        self.language
-    }
-
     fn resolve(
         &self,
         import_path: &str,
@@ -126,7 +112,7 @@ mod tests {
     ) -> Option<String> {
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context = super::super::test_context(source_file, &known);
+        let context = sephera_core::plugins::test_context(source_file, &known);
         CCppPlugin {
             language: SupportedLanguage::C,
         }

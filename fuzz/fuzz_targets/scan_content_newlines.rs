@@ -1,13 +1,13 @@
 #![no_main]
 
 use libfuzzer_sys::fuzz_target;
-use sephera_core::core::{code_loc::scan_content, config::CommentStyle};
+use sephera_core::config::CommentStyle;
+use sephera_scan::scan_content;
 
 const COMMENTLESS_STYLE: CommentStyle = CommentStyle::new(None, None, None);
 const C_STYLE: CommentStyle =
     CommentStyle::new(Some("//"), Some("/*"), Some("*/"));
-const HASH_STYLE: CommentStyle =
-    CommentStyle::new(Some("#"), None, None);
+const HASH_STYLE: CommentStyle = CommentStyle::new(Some("#"), None, None);
 const HTML_STYLE: CommentStyle =
     CommentStyle::new(None, Some("<!--"), Some("-->"));
 const TRIPLE_QUOTE_STYLE: CommentStyle =

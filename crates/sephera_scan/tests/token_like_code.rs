@@ -1,7 +1,5 @@
-use sephera_core::core::{
-    code_loc::{LocMetrics, scan_content},
-    language_data::C_STYLE,
-};
+use sephera_core::language_data::C_STYLE;
+use sephera_scan::{LocMetrics, scan_content};
 
 fn assert_metrics(
     metrics: LocMetrics,

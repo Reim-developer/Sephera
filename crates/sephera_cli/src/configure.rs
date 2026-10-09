@@ -153,9 +153,9 @@ pub fn expand(
 }
 
 fn profile_section(
-    profile: &sephera_runtime::settings::ProfileToml,
+    profile: &sephera_runtime::ProfileToml,
     command: ConfigCommand,
-) -> sephera_runtime::settings::CommandToml {
+) -> sephera_runtime::CommandToml {
     match command {
         ConfigCommand::Loc => profile.loc.command.clone(),
         ConfigCommand::Symbols => profile.symbols.command.clone(),

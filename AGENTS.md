@@ -103,9 +103,19 @@ without a shell.
   beside each figure records *why* it is what it is, and a figure that moves
   during a correctness fix needs its new value justified, not just accepted.
 
-- **Adding a language** means one directory under
-  `crates/sephera_core/src/core/graph/plugins/`, plus a `walk.rs` entry. Do not
-  add a `match language` anywhere; that dispatcher was deleted for a reason.
+- **Adding a language** means one crate under `crates/` — a directory named
+  `sephera_graph_<language>` with a `plugin.rs` and an `extract.rs` — plus one row
+  in the `BUNDLED` table in `crates/sephera_graph/src/plugins.rs`. Do not add a
+  `match language` anywhere; that dispatcher was deleted for a reason, and the
+  table is its replacement.
+
+- **Which crate an item belongs in.** `sephera_core` is the only crate all of them
+  can name, so it holds the vocabulary — the plugin traits, the graph's types, the
+  declaration index, the two lookup traits, the shared path helpers. Anything only
+  the resolver needs goes in `sephera_graph`; anything only the CLI needs goes in
+  `sephera_cli`. The test for a new item: *do the six language crates need it?*
+  If yes, it cannot live anywhere else, because `sephera_graph` holds the registry
+  that names all six and a plugin that depended on it would close that circle.
 
 - **`docs/` is an Astro site.** If you add a command page, add it to the sidebar
   in `docs/astro.config.mjs` too.
@@ -116,8 +126,10 @@ without a shell.
   `#[must_use]` and a doc comment that says *why* to a wrong-looking shape.
 - Commits explain the reasoning and the measurement, not the diff. If a figure
   moved, say whether that is the fix or a regression.
-- `crates/sephera_core` holds analysis; `crates/sephera_cli` holds presentation.
-  A dependency between MCP and the CLI is impossible by design
+- `crates/sephera_core` holds the vocabulary every crate speaks; `crates/sephera_cli`
+  holds presentation. A dependency between MCP and the CLI is impossible by design
   (CLI → MCP → core), so anything both need belongs in core. That is why blast
-  radius lives in `sephera_core::core::graph::blast_radius` and only its
-  rendering lives in the command.
+  radius lives in `sephera_graph::blast_radius` and only its rendering lives in the
+  command. The split pushed this further: `sephera_core` is no longer the crate that
+  does the analysis, it is the crate that defines the words, and the analysis moved
+  out to nine crates beneath it.

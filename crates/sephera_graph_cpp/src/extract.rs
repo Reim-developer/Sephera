@@ -10,12 +10,12 @@
 
 use tree_sitter::Node;
 
-use sephera_graph::types::ImportStatement;
+use sephera_core::types::ImportStatement;
 
-use super::super::walk::{line_of, node_text};
+use sephera_core::plugins::{line_of, node_text};
 
 /// Read the includes out of one node.
-pub(super) fn extract_from_node(
+pub fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
@@ -60,9 +60,9 @@ pub(super) fn extract_from_node(
 
 #[cfg(test)]
 mod tests {
-    use sephera_compression::SupportedLanguage;
+    use sephera_compression::{SupportedLanguage, with_parser};
 
-    use sephera_graph::walk::imports_found_by;
+    use sephera_core::plugins::imports_found_by;
 
     /// Every path one file includes, in order.
     ///
@@ -70,11 +70,14 @@ mod tests {
     /// and only the grammar differs, so the test reads the same field the
     /// registry does rather than picking a language of its own.
     fn paths(source: &[u8], language: SupportedLanguage) -> Vec<String> {
-        imports_found_by(
-            source,
-            language,
-            &super::super::CCppPlugin { language },
-        )
+        with_parser(language, source.len(), |parser| {
+            Ok(imports_found_by(
+                source,
+                parser,
+                &crate::CCppPlugin { language },
+            ))
+        })
+        .expect("a parser exists")
         .into_iter()
         .map(|s| s.raw_path)
         .collect()

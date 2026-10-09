@@ -9,49 +9,29 @@
 //! - `mod name { }` opens a scope, so references inside it sit one level down.
 //! - `#[cfg(feature = "...")]` gates a reference on a feature flag.
 
-mod extract;
-mod names;
-mod paths;
-
 // Re-exported because cycle detection outside this plugin needs to know where a
 // file's own submodules sit, which is the same module-tree arithmetic the
 // resolver asks `self::` and `mod` by. One definition, one caller outside.
-pub use paths::module_children_dir;
+pub use crate::paths::module_children_dir;
 
 use tree_sitter::Node;
 
-use sephera_compression::{SupportedLanguage};
-use sephera_graph::{{ImportKind, types::ImportStatement}};
+use sephera_core::types::{ImportKind, ImportStatement};
 
-use super::{
-    ExtractedSource,
-    ImportPlugin,
-    ResolveContext,
-    ResolverPlugin,
-    // Aliased because `paths` here is this plugin's own module arithmetic, which
-    // the crate shares with every other language. The shared one is string
-    // surgery; this one knows what a module tree looks like.
-    paths as shared_paths,
-    walk::walk_with_declarations,
+use crate::names::{crate_root_file, names_a_crate_outside};
+use crate::paths::{crate_root, module_path, qualify};
+use sephera_core::{
+    path_utils as shared_paths,
+    plugins::{ImportPlugin, ResolveContext, ResolverPlugin},
 };
-use names::{crate_root_file, names_a_crate_outside};
-use paths::{crate_root, module_path, qualify};
 
 impl ImportPlugin for RustPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
-    }
-
     fn extract_from_node(
         &self,
         source: &[u8],
         node: &Node<'_>,
     ) -> Option<Vec<ImportStatement>> {
-        extract::extract_from_node(source, node)
-    }
-
-    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
-        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
+        crate::extract::extract_from_node(source, node)
     }
 
     /// What this file declares, so a path naming a declaration rather than a
@@ -66,18 +46,18 @@ impl ImportPlugin for RustPlugin {
         &self,
         source: &[u8],
         tree: &tree_sitter::Tree,
-    ) -> Option<super::super::declarations::DeclaredNames> {
-        Some(super::super::declarations::collect_declared_names(
+    ) -> Option<sephera_core::declarations::DeclaredNames> {
+        Some(sephera_core::declarations::collect_declared_names(
             source, tree,
         ))
     }
 
     fn child_depth_step(&self, node: &Node<'_>) -> u8 {
-        u8::from(extract::opens_inline_module(node))
+        u8::from(crate::extract::opens_inline_module(node))
     }
 
     fn is_cfg_gated(&self, source: &[u8], node: &Node<'_>) -> bool {
-        extract::is_cfg_gated(source, node)
+        crate::extract::is_cfg_gated(source, node)
     }
 }
 
@@ -85,10 +65,6 @@ impl ImportPlugin for RustPlugin {
 #[derive(Debug, Clone, Copy, Default)]
 pub struct RustPlugin;
 impl ResolverPlugin for RustPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Rust
-    }
-
     fn resolve(
         &self,
         import_path: &str,
@@ -271,7 +247,7 @@ fn resolve_qualified(
 /// A module may be `foo.rs`, `foo/mod.rs`, or — when a sibling file carries the
 /// module's contents — a bare `foo.rs` or `foo/mod.rs` one level up from
 /// `foo/bar.rs`. That last pair is what makes an *item* inside a directory
-/// module resolve: `sephera_compression::CompressionMode` names an item of
+/// module resolve: `crate::core::compression::CompressionMode` names an item of
 /// the `compression` module, so no `CompressionMode.rs` exists and the answer is
 /// the module's own `mod.rs`.
 fn first_existing(
@@ -280,7 +256,7 @@ fn first_existing(
     // Whether the path that got here carried `super::`, `self::` or `crate::`.
     //
     // It decides what a re-export in the importing file means, and the two
-    // answers are opposites. `pub use sephera_graph::blast_radius::
+    // answers are opposites. `pub use sephera_core::core::graph::blast_radius::
     // BlastRadius;` in `crates/sephera_cli/src/impact.rs` followed by `use
     // super::{BlastRadius, render_markdown, ..}` in that file's test module is a
     // real self-reference: the file brings the name into its own scope on
@@ -363,10 +339,9 @@ fn resolve(
     source_file: &str,
     files: &[&str],
 ) -> Option<String> {
-    let known: super::KnownFiles =
+    let known: sephera_core::plugins::KnownFiles =
         files.iter().map(|f| (*f).to_owned()).collect();
-    let context =
-        sephera_graph::test_context(source_file, &known);
+    let context = sephera_core::plugins::test_context(source_file, &known);
     RustPlugin.resolve(import_path, context)
 }
 #[cfg(test)]
@@ -393,7 +368,7 @@ mod tests {
         let files = ["src/core/graph.rs", "src/main.rs"];
 
         assert_eq!(
-            resolve("sephera_core::graph", "src/main.rs", &files),
+            resolve("crate::core::graph", "src/main.rs", &files),
             Some("src/core/graph.rs".to_owned())
         );
     }
@@ -403,7 +378,7 @@ mod tests {
         let files = ["src/core/graph/mod.rs", "src/main.rs"];
 
         assert_eq!(
-            resolve("sephera_core::graph", "src/main.rs", &files),
+            resolve("crate::core::graph", "src/main.rs", &files),
             Some("src/core/graph/mod.rs".to_owned())
         );
     }
@@ -456,7 +431,7 @@ mod tests {
 
     #[test]
     fn an_item_inside_a_directory_module_resolves_to_that_module() {
-        // `sephera_compression::CompressionMode` names an item of the
+        // `crate::core::compression::CompressionMode` names an item of the
         // `compression` module, so no `CompressionMode.rs` exists. The answer is
         // the module's own `mod.rs`, and without that candidate 19 of this
         // repository's edges were counted as external.
@@ -464,7 +439,7 @@ mod tests {
 
         assert_eq!(
             resolve(
-                "sephera_compression::CompressionMode",
+                "crate::core::compression::CompressionMode",
                 "crates/sephera_core/src/core/context/builder.rs",
                 &files,
             ),
@@ -481,7 +456,7 @@ mod tests {
 
         assert_eq!(
             resolve(
-                "sephera_symbols::SymbolEntry",
+                "crate::core::symbols::SymbolEntry",
                 "crates/sephera_core/src/core/runtime/context.rs",
                 &files,
             ),
@@ -534,12 +509,12 @@ mod tests {
 
     #[test]
     fn falls_back_to_the_parent_module_file() {
-        // `sephera_graph::types` where `graph` is a sibling file rather
+        // `crate::core::graph::types` where `graph` is a sibling file rather
         // than a directory must resolve to `core/graph.rs`.
         let files = ["src/core/graph.rs", "src/main.rs"];
 
         assert_eq!(
-            resolve("sephera_graph::types", "src/main.rs", &files),
+            resolve("crate::core::graph::types", "src/main.rs", &files),
             Some("src/core/graph.rs".to_owned())
         );
     }

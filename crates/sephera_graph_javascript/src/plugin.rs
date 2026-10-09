@@ -11,13 +11,11 @@
 //! `..` and 12 `../..` imports on express's own examples were reported
 //! unresolved.
 
-mod extract;
-
 use sephera_compression::SupportedLanguage;
 
-use super::{
-    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
-    walk::walk_with_declarations,
+use sephera_core::{
+    path_utils as paths,
+    plugins::{ImportPlugin, ResolveContext, ResolverPlugin},
 };
 
 /// Suffixes tried in order when a specifier names a file without an extension.
@@ -35,28 +33,16 @@ pub struct JavaScriptPlugin {
 }
 
 impl ImportPlugin for JavaScriptPlugin {
-    fn language(&self) -> SupportedLanguage {
-        self.language
-    }
-
     fn extract_from_node(
         &self,
         source: &[u8],
         node: &tree_sitter::Node<'_>,
-    ) -> Option<Vec<sephera_graph::types::ImportStatement>> {
-        extract::extract_from_node(source, node)
-    }
-
-    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
-        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
+    ) -> Option<Vec<sephera_core::types::ImportStatement>> {
+        crate::extract::extract_from_node(source, node)
     }
 }
 
 impl ResolverPlugin for JavaScriptPlugin {
-    fn language(&self) -> SupportedLanguage {
-        self.language
-    }
-
     fn resolve(
         &self,
         import_path: &str,
@@ -162,8 +148,7 @@ mod tests {
     ) -> Option<String> {
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context =
-            sephera_graph::test_context(source_file, &known);
+        let context = sephera_core::plugins::test_context(source_file, &known);
         JavaScriptPlugin {
             language: SupportedLanguage::TypeScript,
         }
@@ -250,7 +235,7 @@ mod tests {
             source_file: "app/main.js",
             known_files: &known,
             module_depth: 0,
-            kind: sephera_graph::ImportKind::Dependency,
+            kind: sephera_core::types::ImportKind::Dependency,
             declarations: None,
             manifests: None,
             base_path: directory.path(),
@@ -276,7 +261,7 @@ mod tests {
             source_file: "app/main.js",
             known_files: &known,
             module_depth: 0,
-            kind: sephera_graph::ImportKind::Dependency,
+            kind: sephera_core::types::ImportKind::Dependency,
             declarations: None,
             manifests: None,
             base_path: empty.path(),
@@ -297,7 +282,7 @@ mod tests {
             source_file: "app/main.js",
             known_files: &broken,
             module_depth: 0,
-            kind: sephera_graph::ImportKind::Dependency,
+            kind: sephera_core::types::ImportKind::Dependency,
             declarations: None,
             manifests: None,
             base_path: empty.path(),

@@ -7,10 +7,10 @@
 
 use tree_sitter::Node;
 
-use sephera_graph::types::ImportStatement;
+use sephera_core::types::ImportStatement;
 
-use super::super::walk::node_text;
-use super::super::walk::{line_of, line_of_or};
+use sephera_core::plugins::node_text;
+use sephera_core::plugins::{line_of, line_of_or};
 
 /// Read the imports out of one node.
 ///
@@ -18,7 +18,7 @@ use super::super::walk::{line_of, line_of_or};
 ///
 /// Never. Every branch returns `None` rather than unwrapping, because the walk
 /// visits every node in the file and most of them are not imports.
-pub(super) fn extract_from_node(
+pub fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
@@ -84,16 +84,19 @@ fn push_spec(
 
 #[cfg(test)]
 mod tests {
-    use sephera_compression::SupportedLanguage;
+    use sephera_compression::{SupportedLanguage, with_parser};
 
-    use sephera_graph::walk::imports_found_by;
+    use sephera_core::plugins::imports_found_by;
 
     /// Every path one Go file imports, in order.
     fn paths(source: &[u8]) -> Vec<String> {
-        imports_found_by(source, SupportedLanguage::Go, &super::super::GoPlugin)
-            .into_iter()
-            .map(|s| s.raw_path)
-            .collect()
+        with_parser(SupportedLanguage::Go, source.len(), |parser| {
+            Ok(imports_found_by(source, parser, &crate::GoPlugin))
+        })
+        .expect("a parser exists")
+        .into_iter()
+        .map(|s| s.raw_path)
+        .collect()
     }
 
     #[test]
@@ -118,11 +121,11 @@ mod tests {
     fn a_group_keeps_each_import_on_its_own_line() {
         let source = b"package main\n\nimport (\n\t\"fmt\"\n\t\"os\"\n)\n";
 
-        let found = imports_found_by(
-            source,
-            SupportedLanguage::Go,
-            &super::super::GoPlugin,
-        );
+        let found =
+            with_parser(SupportedLanguage::Go, source.len(), |parser| {
+                Ok(imports_found_by(source, parser, &crate::GoPlugin))
+            })
+            .expect("a parser exists");
 
         assert_eq!(
             found.iter().map(|s| s.line).collect::<Vec<_>>(),

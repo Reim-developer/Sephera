@@ -1217,8 +1217,15 @@ dependencies = [
  "console",
  "indicatif",
  "notify",
+ "sephera_compression",
+ "sephera_context",
  "sephera_core",
+ "sephera_graph",
+ "sephera_ignore",
  "sephera_mcp",
+ "sephera_runtime",
+ "sephera_scan",
+ "sephera_symbols",
  "serde",
  "serde_json",
  "tokio",
@@ -1232,8 +1239,46 @@ dependencies = [
  "arbitrary",
  "libfuzzer-sys",
  "sephera",
+ "sephera_compression",
+ "sephera_context",
  "sephera_core",
+ "sephera_graph",
+ "sephera_ignore",
+ "sephera_scan",
  "tempfile",
+]
+
+[[package]]
+name = "sephera_compression"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "memchr",
+ "sephera_core",
+ "serde",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+ "tree-sitter-go",
+ "tree-sitter-java",
+ "tree-sitter-javascript",
+ "tree-sitter-python",
+ "tree-sitter-rust",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "sephera_context"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_ignore",
+ "sephera_scan",
+ "serde",
+ "serde_json",
 ]
 
 [[package]]
@@ -1266,16 +1311,205 @@ dependencies = [
 ]
 
 [[package]]
+name = "sephera_graph"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "globset",
+ "memchr",
+ "phf",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_graph_cpp",
+ "sephera_graph_go",
+ "sephera_graph_java",
+ "sephera_graph_javascript",
+ "sephera_graph_python",
+ "sephera_graph_rust",
+ "sephera_ignore",
+ "sephera_scan",
+ "serde",
+ "serde_json",
+ "toml",
+ "tree-sitter",
+]
+
+[[package]]
+name = "sephera_graph_cpp"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_symbols",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-c",
+ "tree-sitter-cpp",
+]
+
+[[package]]
+name = "sephera_graph_go"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_symbols",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-go",
+]
+
+[[package]]
+name = "sephera_graph_java"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_symbols",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-java",
+]
+
+[[package]]
+name = "sephera_graph_javascript"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_symbols",
+ "serde",
+ "serde_json",
+ "tree-sitter",
+ "tree-sitter-javascript",
+ "tree-sitter-typescript",
+]
+
+[[package]]
+name = "sephera_graph_python"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_symbols",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-python",
+]
+
+[[package]]
+name = "sephera_graph_rust"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "phf",
+ "rayon",
+ "sephera_compression",
+ "sephera_core",
+ "sephera_symbols",
+ "serde",
+ "tree-sitter",
+ "tree-sitter-rust",
+]
+
+[[package]]
+name = "sephera_ignore"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "globset",
+ "regex",
+ "sephera_core",
+ "serde",
+ "serde_json",
+ "walkdir",
+]
+
+[[package]]
 name = "sephera_mcp"
 version = "0.6.0"
 dependencies = [
  "anyhow",
  "rmcp",
  "schemars",
+ "sephera_compression",
+ "sephera_context",
  "sephera_core",
+ "sephera_graph",
+ "sephera_ignore",
+ "sephera_runtime",
+ "sephera_scan",
+ "sephera_symbols",
  "serde",
  "serde_json",
  "tokio",
+]
+
+[[package]]
+name = "sephera_runtime"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "sephera_compression",
+ "sephera_context",
+ "sephera_core",
+ "sephera_ignore",
+ "sephera_scan",
+ "sephera_symbols",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tokio",
+ "toml",
+ "url",
+]
+
+[[package]]
+name = "sephera_scan"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "globset",
+ "memchr",
+ "phf",
+ "rayon",
+ "regex",
+ "sephera_core",
+ "sephera_ignore",
+ "serde",
+ "serde_json",
+ "tempfile",
+ "tree-sitter",
+ "walkdir",
+]
+
+[[package]]
+name = "sephera_symbols"
+version = "0.6.0"
+dependencies = [
+ "anyhow",
+ "memchr",
+ "phf",
+ "rayon",
+ "sephera_compression",
+ "sephera_context",
+ "sephera_core",
+ "sephera_ignore",
+ "sephera_scan",
+ "serde",
+ "serde_json",
+ "tree-sitter",
 ]
 
 [[package]]

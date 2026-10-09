@@ -44,7 +44,7 @@ impl SupportedLanguage {
     /// # Examples
     ///
     /// ```
-    /// use sephera_core::core::compression::SupportedLanguage;
+    /// use sephera_compression::SupportedLanguage;
     ///
     /// assert_eq!(
     ///     SupportedLanguage::from_language_name("Rust"),
@@ -120,7 +120,7 @@ impl SupportedLanguage {
     /// # Examples
     ///
     /// ```
-    /// use sephera_core::core::compression::SupportedLanguage;
+    /// use sephera_compression::SupportedLanguage;
     ///
     /// assert!(SupportedLanguage::all().len() >= 8);
     /// ```
@@ -149,7 +149,7 @@ impl SupportedLanguage {
 /// # Examples
 ///
 /// ```
-/// use sephera_core::core::compression::{SupportedLanguage, new_parser};
+/// use sephera_compression::{SupportedLanguage, new_parser};
 ///
 /// let mut parser = new_parser(SupportedLanguage::Rust).unwrap();
 /// let tree = parser.parse("fn main() {}", None).unwrap();

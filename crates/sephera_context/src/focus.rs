@@ -2,8 +2,8 @@ use std::path::{Path, PathBuf};
 
 use anyhow::{Context, Result, bail};
 
-use sephera_ignore::{normalize_relative_path};
-use sephera_scan::{project_files::ProjectFile};
+use sephera_ignore::normalize_relative_path;
+use sephera_scan::project_files::ProjectFile;
 
 use super::types::SelectionClass;
 

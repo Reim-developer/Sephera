@@ -141,13 +141,33 @@ impl ResolveContext<'_> {
     }
 }
 
+/// Everything one source file contributes to the graph.
+///
+/// Returned as a pair because the two halves come from the same parse tree, and
+/// building them separately meant reading and parsing the same bytes twice.
+#[derive(Debug, Default)]
+pub struct ExtractedSource {
+    /// The imports this file names, in source order.
+    pub imports: Vec<crate::types::ImportStatement>,
+
+    /// The names this file declares, when the language needs a lookup by name.
+    ///
+    /// `None` for every language but Rust, and that is the normal answer rather
+    /// than a gap.
+    pub declared: Option<crate::declarations::DeclaredNames>,
+}
+
 /// A context for a resolver test, with no lookup tables attached.
+///
+/// Public and unconditional: it is used by the test modules of six language
+/// crates, and `cfg(test)` compiles per crate rather than per workspace, so a
+/// tests-only helper in `sephera_core` would be unreachable from all of them.
 ///
 /// The two lookups are what a production resolution reads, and a test that
 /// populated them would be testing the fixture as much as the resolver. Tests
 /// that do exercise a lookup build the index and pass it explicitly.
-#[cfg(test)]
-pub(crate) fn test_context<'a>(
+#[must_use]
+pub fn test_context<'a>(
     source_file: &'a str,
     known_files: &'a KnownFiles,
 ) -> ResolveContext<'a> {
@@ -162,12 +182,183 @@ pub(crate) fn test_context<'a>(
     }
 }
 
+/// The parse and traversal every language shares.
+///
+/// The walker visits every node in the tree and asks the plugin which ones say
+/// something about imports. Keeping only this in one place is what lets a new
+/// language be added by writing one module file; the alternative was a `match`
+/// over every language here as well as in the plugin registry, which is a second
+/// place to edit and a second place to get wrong.
+///
+/// Depth is carried down rather than looked up, because Rust's `mod tests { ... }`
+/// declares a module and `super::` inside it climbs one level further: ten
+/// references in this repository were counted as unresolved before depth was
+/// tracked, because a reference in a test module resolved to a sibling of the
+/// file rather than to the file itself.
+///
+/// The parser comes from the caller rather than from `sephera_compression`, so
+/// this module links no grammar crate. The caller has one -- the cache exists so
+/// a run over N files sets the language up once per worker rather than N times.
+use anyhow::Result;
+use tree_sitter::{Node, Parser, Tree};
+
+use crate::types::ImportStatement;
+
+/// Parse `source` once and return both what it imports and what it declares.
+///
+/// The two used to be separate methods on the plugin, each building its own
+/// parser, so a Rust file was parsed twice to answer two questions about the same
+/// bytes.
+///
+/// # Errors
+///
+/// Returns an error when the parse fails. A source the grammar rejects is an
+/// error here rather than an empty result: the caller knows which file it was.
+pub fn walk_with_declarations(
+    source: &[u8],
+    parser: &mut Parser,
+    extractor: &dyn ImportPlugin,
+) -> Result<ExtractedSource> {
+    let tree: Tree = parser
+        .parse(source, None)
+        .ok_or_else(|| anyhow::anyhow!("Tree-sitter returned no parse tree"))?;
+
+    let mut imports = Vec::new();
+    descend(source, &tree.root_node(), extractor, 0, &mut imports);
+
+    Ok(ExtractedSource {
+        imports,
+        declared: extractor.collect_declarations(source, &tree),
+    })
+}
+
+/// Walk a node's children, carrying the depth a reference inside them sits at.
+fn descend(
+    source: &[u8],
+    node: &Node<'_>,
+    extractor: &dyn ImportPlugin,
+    depth: u8,
+    imports: &mut Vec<ImportStatement>,
+) {
+    if let Some(mut extracted) = extractor.extract_from_node(source, node) {
+        let gated = extractor.is_cfg_gated(source, node);
+        for statement in &mut extracted {
+            statement.module_depth = depth;
+            statement.cfg_gated = gated;
+        }
+        imports.extend(extracted);
+    }
+
+    let child_depth = depth.saturating_add(extractor.child_depth_step(node));
+
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        descend(source, &child, extractor, child_depth, imports);
+    }
+}
+
+/// The text of a node, as written.
+///
+/// Every extractor reads paths out of the grammar rather than slicing
+/// statements apart, and this is how it gets at a field's text. Trailing
+/// whitespace is trimmed because a field's span can include it, and a path with
+/// a trailing space matches no file.
+#[must_use]
+pub fn node_text(source: &[u8], node: &Node<'_>) -> String {
+    let start = node.start_byte();
+    let end = node.end_byte().min(source.len());
+    if start >= source.len() {
+        return String::new();
+    }
+    String::from_utf8_lossy(&source[start..end])
+        .trim_end()
+        .to_owned()
+}
+
+/// The 1-based line a node sits on.
+///
+/// Tree-sitter rows are 0-based and every report here is 1-based, so the
+/// conversion is not optional, and doing it in one place is what stops two
+/// extractors disagreeing about the same import's line.
+///
+/// Returns `None` rather than clamping: a row that cannot be converted means the
+/// position is not a line number, and an extractor reporting a guess would put a
+/// reader on the wrong line with no way to tell.
+#[must_use]
+pub fn line_of(node: &Node<'_>) -> Option<u64> {
+    u64::try_from(node.start_position().row + 1).ok()
+}
+
+/// The 1-based line a node sits on, falling back when the row is unusable.
+///
+/// For the extractors that report a line *per import* rather than per statement:
+/// a grouped `import (...)` is one node for the whole block, so the statement's
+/// line is the right answer for any import in it whose own line cannot be read.
+#[must_use]
+pub fn line_of_or(node: &Node<'_>, fallback: u64) -> u64 {
+    line_of(node).unwrap_or(fallback)
+}
+
+/// The value a string literal holds, without its quotes.
+///
+/// Prefers the grammar's own `string_fragment`, which is the unescaped content,
+/// and falls back to trimming quote characters for grammars that expose no
+/// fragment. An empty result means the node was not a usable path, so a caller
+/// treats it as "no import here" rather than as an empty path.
+#[must_use]
+pub fn string_value(source: &[u8], node: &Node<'_>) -> String {
+    if let Some(fragment) = node.named_child(0) {
+        let text = node_text(source, &fragment);
+        if !text.is_empty() {
+            return text;
+        }
+    }
+    node_text(source, node)
+        .trim_matches(['\'', '"', '`', ';'])
+        .trim()
+        .to_owned()
+}
+
 /// Extracts import statements from source text for one language.
 ///
 /// `Sync` because extraction runs across a thread pool: parsing is the
 /// dominant cost of a graph run and the work is independent per file. The
 /// built-in plugins are stateless, so this costs nothing and buys the
 /// parallelism. A plugin holding mutable state would need interior locking.
+pub mod walk {
+    pub use super::{
+        line_of, line_of_or, node_text, string_value, walk_with_declarations,
+    };
+}
+
+/// Every import a plugin finds in one source, for an extractor's own tests.
+///
+/// This is [`walk_with_declarations`] under a name that says what a test wants.
+/// It exists because that traversal was reimplemented in each extractor's test
+/// module -- six copies of the same recursion, each one reaching for the
+/// extractor's free `extract_from_node` because it had no plugin to hand. That
+/// was the extractor tested and not the walk: a statement the walker reached at
+/// the wrong depth, or marked `cfg_gated` when the extractor cannot see an
+/// attribute, passed in the copy and failed in production.
+///
+/// Taking the plugin rather than a function pointer is what closes that. The
+/// plugin is the thing that knows the language, and going through it is what
+/// makes the test agree with the walk the graph actually uses.
+///
+/// Takes a parser rather than a language, for the reason
+/// [`walk_with_declarations`] does: this crate may not depend on the one holding
+/// the eight grammars, and six extractor test modules need this name.
+#[must_use]
+pub fn imports_found_by(
+    source: &[u8],
+    parser: &mut tree_sitter::Parser,
+    plugin: &dyn ImportPlugin,
+) -> Vec<ImportStatement> {
+    walk_with_declarations(source, parser, plugin)
+        .map(|extracted| extracted.imports)
+        .unwrap_or_default()
+}
+
 pub trait ImportPlugin: Sync {
     /// Read whatever this node says about imports, if it says anything.
     ///
@@ -286,7 +477,8 @@ mod tests {
 
     #[test]
     fn context_reports_membership() {
-        let files: KnownFiles = std::iter::once("src/a.rs".to_owned()).collect();
+        let files: KnownFiles =
+            std::iter::once("src/a.rs".to_owned()).collect();
         let context = test_context("src/b.rs", &files);
 
         assert!(context.contains("src/a.rs"));
@@ -295,7 +487,8 @@ mod tests {
 
     #[test]
     fn first_existing_skips_unknown_candidates() {
-        let files: KnownFiles = std::iter::once("src/b.rs".to_owned()).collect();
+        let files: KnownFiles =
+            std::iter::once("src/b.rs".to_owned()).collect();
         let context = test_context("src/a.rs", &files);
 
         assert_eq!(

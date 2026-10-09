@@ -6,7 +6,7 @@
 //! resolver means the path arithmetic can be read as arithmetic, and adding a
 //! spelling is one edit in one file.
 
-use super::super::paths;
+use sephera_core::path_utils as paths;
 
 /// The module path a file belongs to, without its `.rs` extension.
 ///

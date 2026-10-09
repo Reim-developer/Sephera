@@ -63,7 +63,7 @@ fn render_prelude(output: &mut String) -> Result<()> {
     writeln!(output)?;
     writeln!(
         output,
-        "use sephera_core::config::{{CommentStyle, LanguageConfig}};"
+        "use crate::config::{{CommentStyle, LanguageConfig}};"
     )?;
     writeln!(output)?;
     writeln!(

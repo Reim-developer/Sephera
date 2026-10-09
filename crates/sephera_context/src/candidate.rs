@@ -2,8 +2,8 @@ use std::{collections::BTreeSet, ffi::OsStr, path::Path};
 
 use anyhow::Result;
 
-use sephera_scan::{project_files::ProjectFile};
-use sephera_core::{line_slices::LineSlices};
+use sephera_core::line_slices::LineSlices;
+use sephera_scan::project_files::ProjectFile;
 
 use super::{
     focus::{ResolvedFocus, classify_focus},

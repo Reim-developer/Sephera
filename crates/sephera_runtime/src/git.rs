@@ -11,7 +11,7 @@ use anyhow::{Context, Result, bail};
 
 use super::interrupt::interrupt;
 
-pub(super) fn run_git<I, S>(
+pub fn run_git<I, S>(
     working_directory: Option<&Path>,
     args: I,
     action: &str,
@@ -43,7 +43,7 @@ where
     }
 }
 
-pub(super) fn git_stdout_string<I, S>(
+pub fn git_stdout_string<I, S>(
     working_directory: &Path,
     args: I,
     action: &str,
@@ -56,7 +56,7 @@ where
     Ok(String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-pub(super) fn git_stdout_bytes<I, S>(
+pub fn git_stdout_bytes<I, S>(
     working_directory: &Path,
     args: I,
     action: &str,
@@ -70,7 +70,7 @@ where
 
 /// How a long git command ended.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum GitOutcome {
+pub enum GitOutcome {
     /// It ran to completion and succeeded.
     Finished,
     /// The user interrupted it.
@@ -98,7 +98,7 @@ pub(super) enum GitOutcome {
 /// stop: `tokio::select!` against the process's Ctrl+C listener, after which the
 /// child is killed and reaped, so the temporary checkout is removed by its own
 /// guard rather than left behind mid-download.
-pub(super) async fn run_git_streaming<I, S>(
+pub async fn run_git_streaming<I, S>(
     working_directory: Option<&Path>,
     args: I,
     action: &str,

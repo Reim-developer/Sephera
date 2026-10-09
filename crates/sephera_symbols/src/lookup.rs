@@ -12,8 +12,8 @@ use std::{collections::BTreeMap, path::PathBuf};
 
 use anyhow::{Result, bail};
 
-use sephera_context::{LineRange};
 use crate::{SymbolDetail, SymbolEntry, SymbolMatch};
+use sephera_context::LineRange;
 
 /// How many candidates an ambiguity message lists before truncating.
 const MAX_LISTED_CANDIDATES: usize = 8;
@@ -128,8 +128,8 @@ mod tests {
     use tempfile::tempdir;
 
     use super::*;
-    use sephera_scan::{code_loc::IgnoreMatcher};
-use crate::{SymbolAnalyzer, SymbolKind};
+    use crate::{SymbolAnalyzer, SymbolKind};
+    use sephera_ignore::IgnoreMatcher;
 
     fn detail_for(source: &str) -> SymbolDetail {
         detail_for_named("lib.rs", source)
@@ -347,7 +347,7 @@ use crate::{SymbolAnalyzer, SymbolKind};
         // like `new_`, and an untruncated message would be unreadable.
         let source: String = (0..40).fold(String::new(), |mut acc, index| {
             use std::fmt::Write as _;
-            let _ = writeln!(acc, "fn resolve_part{index}() {{}");
+            let _ = writeln!(acc, "fn resolve_part{index}() {{ ... }}");
             acc
         });
         let detail = detail_for(&source);

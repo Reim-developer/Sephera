@@ -7,7 +7,7 @@
 
 use std::path::PathBuf;
 
-use sephera_graph::types::{
+use crate::types::{
     GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
 };
 
@@ -112,7 +112,7 @@ use super::{
     BlastRadius, dependent_count, match_path, measure_all,
     measure_scoped as measure_scoped_raw,
 };
-use sephera_graph::resolver::build_focus_set;
+use crate::resolver::build_focus_set;
 
 /// Measure a target that the fixture report definitely describes.
 ///

@@ -32,9 +32,7 @@ pub enum Ecosystem {
 impl Ecosystem {
     /// The ecosystem an import written in `language` belongs to.
     #[must_use]
-    pub const fn of(
-        language: sephera_compression::SupportedLanguage,
-    ) -> Self {
+    pub const fn of(language: sephera_compression::SupportedLanguage) -> Self {
         use sephera_compression::SupportedLanguage as Language;
         match language {
             Language::Rust => Self::Rust,
@@ -697,6 +695,17 @@ fn normalise(name: &str) -> String {
     name.trim().to_lowercase().replace(['-', '_', ':'], "")
 }
 
+/// Answer the two questions Go's resolver asks of `go.mod`.
+impl sephera_core::plugins::ModuleManifestLookup for ManifestIndex {
+    fn go_replaces(&self) -> &BTreeMap<String, String> {
+        self.go_replaces()
+    }
+
+    fn is_go_module_root(&self, import_path: &str) -> bool {
+        self.is_go_module_root(import_path)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -801,7 +810,7 @@ mod tests {
         let index = ManifestIndex::from_parts(Vec::<String>::new(), []);
 
         for path in [
-            "sephera_core::graph",
+            "crate::core::graph",
             "self::types",
             "super::x",
             "./util",
@@ -978,7 +987,7 @@ serde = { version = "1", features = ["derive"] }
             ("anyhow::Result", Ecosystem::Rust),
             ("anyhow::Context", Ecosystem::Rust),
             ("anyhow::anyhow", Ecosystem::Rust),
-            ("sephera_core::graph", Ecosystem::Rust),
+            ("crate::core::graph", Ecosystem::Rust),
         ]);
 
         assert_eq!(

@@ -16,6 +16,9 @@ categories = ["command-line-utilities", "development-tools"]
 crate-type = ["rlib"]
 
 [dependencies]
+sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+sephera_context = { path = "../sephera_context", version = "0.6.0" }
+sephera_ignore = { path = "../sephera_ignore", version = "0.6.0" }
 anyhow = "1"
 rmcp = { version = "1.3.0", features = ["server", "macros", "transport-io"] }
 schemars = "1"

@@ -1,33 +1,12 @@
-//! # Sephera Graph C++
+//! Cpp import extraction and module-path resolution for Sephera's graph.
 //!
-//! C/C++ dependency extraction for Sephera graph.
+//! Implements the two halves every language contributes: what an import in this
+//! language means, and how that path names a file in a project. Both traits come
+//! from `sephera_core`, so this crate depends on nothing that knows it exists --
+//! `sephera_graph` depends on it for the registry, not the other way round.
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
-pub mod extract;
-pub mod mod;
-
-use sephera_core::types::{Declaration, ImportStatement};
-use sephera_graph::ExtractionPlugin;
-use tree_sitter::Tree;
-use std::path::Path;
-use anyhow::Result;
-
-/// C/C++ extraction plugin implementing the generic extraction trait.
-pub struct CppPlugin;
-
-impl ExtractionPlugin for CppPlugin {
-    const LANGUAGE: sephera_core::types::Language = sephera_core::types::Language::Cpp;
-
-    fn extensions() -> &'static [&'static str] {
-        &[".c", ".h", ".cpp", ".cc", ".cxx", ".hpp", ".hxx", ".hh"]
-    }
-
-    fn extract_imports(tree: &Tree, source: &[u8], path: &Path) -> Result<Vec<ImportStatement>> {
-        extract::extract_imports(tree, source, path)
-    }
-
-    fn extract_declarations(tree: &Tree, source: &[u8], path: &Path) -> Result<Vec<Declaration>> {
-        extract::extract_declarations(tree, source, path)
-    }
-}
+mod extract;
+mod plugin;
+pub use plugin::CCppPlugin;

@@ -7,8 +7,8 @@ use std::fs;
 
 use tempfile::tempdir;
 
+use crate::{LanguageSymbols, SymbolAnalyzer, SymbolKind, SymbolReport};
 use sephera_ignore::IgnoreMatcher;
-use crate::{LanguageSymbols, SymbolAnalyzer, SymbolKind};
 
 fn write(root: &std::path::Path, relative: &str, contents: &str) {
     let path = root.join(relative);
@@ -18,17 +18,13 @@ fn write(root: &std::path::Path, relative: &str, contents: &str) {
     fs::write(path, contents).unwrap();
 }
 
-fn analyze(root: &std::path::Path) -> sephera_symbols::SymbolReport {
+fn analyze(root: &std::path::Path) -> SymbolReport {
     SymbolAnalyzer::new(root, IgnoreMatcher::empty())
         .analyze()
         .expect("analysis must succeed")
 }
 
-fn count_of(
-    report: &sephera_symbols::SymbolReport,
-    language: &str,
-    kind: SymbolKind,
-) -> u64 {
+fn count_of(report: &SymbolReport, language: &str, kind: SymbolKind) -> u64 {
     report
         .by_language
         .iter()

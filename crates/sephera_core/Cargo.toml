@@ -62,6 +62,3 @@ tokio = { version = "1", features = ["macros", "rt", "time"] }
 # harness is timed by libtest's own stopwatch and reports no throughput, which is
 # how a benchmark target can sit in the tree looking authoritative while
 # measuring nothing.
-[[bench]]
-name = "loc_scan"
-harness = false

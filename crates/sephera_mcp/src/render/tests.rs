@@ -6,7 +6,11 @@
 
 use std::path::PathBuf;
 
-use sephera_context::{ContextDiffMetadata, ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary, ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass};
+use sephera_context::{
+    ContextDiffMetadata, ContextExcerpt, ContextFile, ContextGroupKind,
+    ContextGroupSummary, ContextLanguageSummary, ContextMetadata,
+    ContextReport, SelectionClass,
+};
 
 use super::render_context_markdown;
 
@@ -15,8 +19,7 @@ fn metadata() -> ContextMetadata {
         base_path: PathBuf::from("."),
         focus_paths: vec!["crates/core".to_owned()],
         diff: None,
-        compression_mode:
-            sephera_compression::CompressionMode::None,
+        compression_mode: sephera_compression::CompressionMode::None,
         budget_tokens: 8_000,
         metadata_budget_tokens: 800,
         excerpt_budget_tokens: 7_200,

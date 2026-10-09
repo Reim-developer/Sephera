@@ -9,14 +9,13 @@
 //! import of a nested type has no keyword, so it is recognised by the naming
 //! convention that a type starts with an upper-case letter.
 
-mod extract;
+use sephera_core::types::ImportKind;
 
-use sephera_compression::{SupportedLanguage};
-use sephera_graph::{ImportKind};
-
-use super::{
-    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin,
-    ends_with_segments, paths, walk::walk_with_declarations,
+use sephera_core::{
+    path_utils as paths,
+    plugins::{
+        ImportPlugin, ResolveContext, ResolverPlugin, ends_with_segments,
+    },
 };
 /// Java import extraction and resolution.
 #[derive(Debug, Clone, Copy, Default)]
@@ -26,28 +25,16 @@ pub struct JavaPlugin;
 const MAX_SUFFIX_SEGMENTS: usize = 12;
 
 impl ImportPlugin for JavaPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Java
-    }
-
     fn extract_from_node(
         &self,
         source: &[u8],
         node: &tree_sitter::Node<'_>,
-    ) -> Option<Vec<sephera_graph::types::ImportStatement>> {
-        extract::extract_from_node(source, node)
-    }
-
-    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
-        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
+    ) -> Option<Vec<sephera_core::types::ImportStatement>> {
+        crate::extract::extract_from_node(source, node)
     }
 }
 
 impl ResolverPlugin for JavaPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Java
-    }
-
     fn resolve(
         &self,
         import_path: &str,
@@ -157,7 +144,8 @@ mod tests {
     ) -> Option<String> {
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let mut context = super::super::test_context("main.java", &known);
+        let mut context =
+            sephera_core::plugins::test_context("main.java", &known);
         context.kind = kind;
         JavaPlugin.resolve(import_path, context)
     }

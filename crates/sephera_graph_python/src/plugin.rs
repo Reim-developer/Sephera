@@ -5,23 +5,15 @@
 //! absolute one, because everything after the dots is a plain module path in
 //! both cases.
 
-mod extract;
-
-use sephera_compression::SupportedLanguage;
-
-use super::{
-    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
-    walk::walk_with_declarations,
+use sephera_core::{
+    path_utils as paths,
+    plugins::{ImportPlugin, ResolveContext, ResolverPlugin},
 };
 /// Python import extraction and resolution.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct PythonPlugin;
 
 impl ImportPlugin for PythonPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Python
-    }
-
     /// Python's imports can name something other than a module.
     ///
     /// `from .app import Flask` names a class, and `from .globals import request`
@@ -35,28 +27,20 @@ impl ImportPlugin for PythonPlugin {
         &self,
         source: &[u8],
         tree: &tree_sitter::Tree,
-    ) -> Option<sephera_graph::declarations::DeclaredNames> {
-        Some(extract::declared_names(source, tree))
+    ) -> Option<sephera_core::declarations::DeclaredNames> {
+        Some(crate::extract::declared_names(source, tree))
     }
 
     fn extract_from_node(
         &self,
         source: &[u8],
         node: &tree_sitter::Node<'_>,
-    ) -> Option<Vec<sephera_graph::types::ImportStatement>> {
-        extract::extract_from_node(source, node)
-    }
-
-    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
-        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
+    ) -> Option<Vec<sephera_core::types::ImportStatement>> {
+        crate::extract::extract_from_node(source, node)
     }
 }
 
 impl ResolverPlugin for PythonPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Python
-    }
-
     fn resolve(
         &self,
         import_path: &str,
@@ -229,7 +213,7 @@ mod tests {
     ) -> Option<String> {
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context = super::super::test_context(source_file, &known);
+        let context = sephera_core::plugins::test_context(source_file, &known);
         PythonPlugin.resolve(import_path, context)
     }
 
@@ -460,13 +444,15 @@ mod tests {
             files.iter().map(|f| (*f).to_owned()).collect();
         let plugin = PythonPlugin;
 
-        let inside = super::super::test_context("app/pkg/sub/deep.py", &known);
+        let inside =
+            sephera_core::plugins::test_context("app/pkg/sub/deep.py", &known);
         assert!(
             plugin.names_a_known_module("pkg", inside),
             "`pkg` is a package in this analysis"
         );
 
-        let outside = super::super::test_context("app/pkg/sub/deep.py", &known);
+        let outside =
+            sephera_core::plugins::test_context("app/pkg/sub/deep.py", &known);
         assert!(
             !plugin.names_a_known_module("collections", outside),
             "the standard library is not a local gap"
@@ -484,7 +470,7 @@ mod tests {
         let files = ["pkg/__init__.py", "main.py"];
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context = super::super::test_context("main.py", &known);
+        let context = sephera_core::plugins::test_context("main.py", &known);
         let plugin = PythonPlugin;
 
         // The module `pkg` resolves, but `pkg.absent` should not.
@@ -499,7 +485,8 @@ mod tests {
         let files = ["pkg/sub/deep.py", "pkg/__init__.py", "main.py"];
         let known: BTreeSet<String> =
             files.iter().map(|f| (*f).to_owned()).collect();
-        let context = super::super::test_context("pkg/sub/deep.py", &known);
+        let context =
+            sephera_core::plugins::test_context("pkg/sub/deep.py", &known);
         let plugin = PythonPlugin;
 
         let resolved = plugin.resolve("...outside", context);

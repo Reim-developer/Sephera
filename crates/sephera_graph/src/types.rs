@@ -7,149 +7,17 @@ use std::{
 
 use serde::Serialize;
 
+// Re-exported so `graph::types::ImportKind` keeps naming
+// the one enum. The plugin trait in `sephera_core` speaks about it, and a
+// second definition here would be a type the two could never agree on.
+pub use sephera_core::types::ImportKind;
+
+// One definition, several names. `sephera_core::types` owns this because the
+// plugin trait hands one to `extract_from_node`; it is re-exported here so the
+// graph's modules keep importing it from `types`.
+pub use sephera_core::types::ImportStatement;
+
 use super::manifests;
-
-/// What a reference in source code actually says about the file it names.
-///
-/// These are mutually exclusive: each comes from a distinct grammar production,
-/// so one enum describes them all and no combination of flags has to be
-/// reasoned about.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Default, Serialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ImportKind {
-    /// An ordinary `use` or `import`. A real dependency.
-    #[default]
-    Dependency,
-
-    /// A module declaration such as `mod types;`.
-    ///
-    /// A declaration says a module lives in a file; it does not say the file
-    /// depends on it. Any child module that refers to its parent with `super::`
-    /// would otherwise close a cycle with its own declaration, so cycle
-    /// detection skips these edges.
-    ModuleDeclaration,
-
-    /// A renaming import such as `use foo::Bar as Baz`.
-    ///
-    /// Recorded from the parse rather than left to be found by searching the
-    /// path, since the resolved path does not carry the `as` clause.
-    TypeAlias,
-
-    /// A namespace import such as `use foo::*`.
-    Namespace,
-}
-
-impl ImportKind {
-    /// Whether this reference creates a dependency worth walking.
-    ///
-    /// False for a declaration, which is structural. The remaining kinds are all
-    /// real references; whether they are *useful* is [`EdgeFilters`](sephera_graph::resolver::EdgeFilters)'s
-    /// decision, not the graph's.
-    #[must_use]
-    pub const fn is_dependency(self) -> bool {
-        !matches!(self, Self::ModuleDeclaration)
-    }
-
-    /// Whether this reference only renames or namespaces what it imports.
-    #[must_use]
-    pub const fn is_renaming(self) -> bool {
-        matches!(self, Self::TypeAlias | Self::Namespace)
-    }
-
-    /// Whether this reference binds a name rather than naming a module.
-    ///
-    /// A namespace import such as Python's `from . import Flask` may name a
-    /// submodule or an attribute the package re-exports, and only the source can
-    /// say which. One that does not resolve is therefore not evidence of a
-    /// resolver gap. A renaming import is different: `use crate::foo::Bar as
-    /// Baz` names exactly one path, so failing to resolve it is a real gap.
-    #[must_use]
-    pub const fn is_namespace(self) -> bool {
-        matches!(self, Self::Namespace)
-    }
-}
-
-/// A single import statement extracted from a source file.
-#[derive(Debug, Clone, PartialEq, Eq, Hash, Serialize)]
-pub struct ImportStatement {
-    /// The raw import path as written in the source (e.g. `std::io`,
-    /// `./utils`, `fmt`).
-    pub raw_path: String,
-
-    /// The line number where this import appears (1-indexed).
-    pub line: u64,
-
-    /// What this reference says about the file it names.
-    #[serde(default)]
-    pub kind: ImportKind,
-
-    /// How many inline `mod name { ... }` blocks this reference sits inside.
-    ///
-    /// A reference inside `mod tests` starts one level below the file's own
-    /// module, so `super::` there climbs one level and lands back on the file
-    /// rather than on the file's parent directory. Resolving without this
-    /// attribute makes `use super::{Cli, Commands};` in a test module look for a
-    /// sibling file that does not exist.
-    #[serde(default)]
-    pub module_depth: u8,
-
-    /// Whether a `#[cfg(...)]` attribute decorates this import.
-    ///
-    /// The reference is real either way -- turning the feature on makes it
-    /// compile -- but a blast radius that counts it without saying so reports a
-    /// dependency the build may not have. axum gates nine of its public
-    /// re-exports on `feature = "form"` and `feature = "json"`.
-    #[serde(default)]
-    pub cfg_gated: bool,
-}
-
-impl ImportStatement {
-    /// An ordinary dependency at one line of a source file.
-    ///
-    /// Every extractor builds its statements here rather than writing the struct
-    /// literal, because three of the five fields have only one sensible value at
-    /// extraction time: `kind` defaults to [`ImportKind::Dependency`], and
-    /// `module_depth` and `cfg_gated` are answers the *walker* has, not the
-    /// extractor -- it is the one that descends into inline modules and reads
-    /// preceding attributes. An extractor that set them would be guessing.
-    ///
-    /// Taking `line` as `impl Into<u64>` is what lets the common case pass the
-    /// result of [`walk::line_of`](sephera_graph::walk::line_of)
-    /// straight through.
-    #[must_use]
-    pub fn new(raw_path: impl Into<String>, line: impl Into<u64>) -> Self {
-        Self {
-            raw_path: raw_path.into(),
-            line: line.into(),
-            kind: ImportKind::Dependency,
-            module_depth: 0,
-            cfg_gated: false,
-        }
-    }
-
-    /// The same statement, reclassified.
-    ///
-    /// A rename, a namespace or a module declaration is an ordinary reference
-    /// that the grammar says more about than its shape does, so each extractor
-    /// reads the distinguishing token and asks for it here rather than
-    /// constructing the struct itself.
-    #[must_use]
-    pub const fn with_kind(mut self, kind: ImportKind) -> Self {
-        self.kind = kind;
-        self
-    }
-
-    /// The same statement, on a line that overrides the node's own.
-    ///
-    /// A grouped `use` reports the line of each import rather than the line the
-    /// statement started on, and a `#[cfg]`-decorated import is attributed to
-    /// the reference it decorates.
-    #[must_use]
-    pub const fn at_line(mut self, line: u64) -> Self {
-        self.line = line;
-        self
-    }
-}
 
 /// Imports extracted from a single source file.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

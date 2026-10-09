@@ -22,10 +22,8 @@ use std::{
     path::{Path, PathBuf},
 };
 
-use sephera_core::core::{
-    code_loc::IgnoreMatcher,
-    graph::{resolver::build_graph, types::GraphReport},
-};
+use sephera_graph::{resolver::build_graph, types::GraphReport};
+use sephera_ignore::IgnoreMatcher;
 use tempfile::TempDir;
 
 /// One repository's pinned numbers.

@@ -5,9 +5,9 @@ use std::{
 
 use anyhow::{Context, Result};
 
-use sephera_compression::{CompressionMode};
-use sephera_ignore::{IgnoreMatcher};
-use sephera_scan::{project_files::{ProjectFile, collect_project_files_with}};
+use sephera_compression::CompressionMode;
+use sephera_ignore::IgnoreMatcher;
+use sephera_scan::project_files::{ProjectFile, collect_project_files_with};
 
 use super::{
     budget::{

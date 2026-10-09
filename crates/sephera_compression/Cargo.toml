@@ -37,17 +37,3 @@ sephera_core = { path = "../sephera_core", version = "0.6.0" }
 [dev-dependencies]
 tempfile = "3.23.0"
 
-[[bench]]
-name = "render_loc_table"
-path = "../sephera_core/benches/render_loc_table.rs"
-harness = false
-
-[[bench]]
-name = "build_context_report"
-path = "../sephera_core/benches/build_context_report.rs"
-harness = false
-
-[[bench]]
-name = "render_context_markdown"
-path = "../sephera_core/benches/render_context_markdown.rs"
-harness = false

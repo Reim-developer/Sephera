@@ -450,15 +450,53 @@ fn is_public_use(source: &[u8], node: tree_sitter::Node<'_>) -> bool {
     })
 }
 
+impl crate::plugins::DeclarationLookup for DeclarationIndex {
+    fn file_declares(&self, file: &str, name: &str) -> bool {
+        self.file_declares(file, name)
+    }
+
+    fn file_reaches(&self, file: &str, name: &str) -> bool {
+        self.file_reaches(file, name)
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use sephera_compression::{SupportedLanguage, new_parser};
+    use tree_sitter_python;
+    use tree_sitter_rust;
+
+    /// The Rust grammar, built directly.
+    ///
+    /// `sephera_compression` keeps the parser cache, but it depends on this
+    /// crate -- so importing its cache from here would close the loop, and a
+    /// dev-dependency is a dependency for that purpose. The test needs one
+    /// parser for one snippet, which is the whole of what the cache is for.
+    fn rust_parser() -> tree_sitter::Parser {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_rust::LANGUAGE.into())
+            .expect("the Rust grammar loads");
+        parser
+    }
+
+    /// The Python grammar, built directly.
+    ///
+    /// Beside [`rust_parser`] rather than a parameter on it, because the two
+    /// tests are for different languages and a `SupportedLanguage` argument
+    /// would have meant this crate naming the enum that lives in the crate which
+    /// depends on this one.
+    fn python_parser() -> tree_sitter::Parser {
+        let mut parser = tree_sitter::Parser::new();
+        parser
+            .set_language(&tree_sitter_python::LANGUAGE.into())
+            .expect("the Python grammar loads");
+        parser
+    }
 
     use super::*;
 
     fn names_of(source: &str) -> Vec<String> {
-        let mut parser =
-            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let mut parser = rust_parser();
         let tree = parser.parse(source.as_bytes(), None).expect("parses");
         let declared = collect_declared_names(source.as_bytes(), &tree);
         declared.into_sorted_vec()
@@ -471,8 +509,7 @@ mod tests {
     /// both answers, and a test that only saw the union could not tell which
     /// route a resolver found.
     fn reexports_of(source: &str) -> Vec<String> {
-        let mut parser =
-            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let mut parser = rust_parser();
         let tree = parser.parse(source.as_bytes(), None).expect("parses");
         let names = collect_declared_names(source.as_bytes(), &tree);
         names.reexported.into_iter().collect()
@@ -616,8 +653,7 @@ pin_project! {
 }
 pub struct AsExtractor;
 ";
-        let mut parser =
-            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let mut parser = rust_parser();
         let tree = parser.parse(source.as_bytes(), None).expect("parses");
         let declared = collect_declared_names(source.as_bytes(), &tree);
 
@@ -647,8 +683,7 @@ pub struct JsonLines<S, T = AsExtractor> {
     _marker: PhantomData<T>,
 }
 ";
-        let mut parser =
-            new_parser(SupportedLanguage::Rust).expect("rust parser");
+        let mut parser = rust_parser();
         let tree = parser.parse(source.as_bytes(), None).expect("parses");
         let declared = collect_declared_names(source.as_bytes(), &tree);
 
@@ -721,8 +756,7 @@ pub struct JsonLines<S, T = AsExtractor> {
         // A Rust-only table reads `struct_item`; Python spells the same idea
         // `class_definition`, and a lookup against the wrong list finds nothing
         // and reports it as a gap rather than as an error.
-        let mut parser =
-            new_parser(SupportedLanguage::Python).expect("python parser");
+        let mut parser = python_parser();
         let source =
             "class Flask:\n    pass\n\n\ndef helper() -> int:\n    return 1\n";
         let tree = parser.parse(source.as_bytes(), None).expect("parses");

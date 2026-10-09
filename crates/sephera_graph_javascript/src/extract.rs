@@ -15,15 +15,15 @@
 
 use tree_sitter::Node;
 
-use sephera_graph::types::ImportStatement;
+use sephera_core::types::ImportStatement;
 
-use super::super::walk::{line_of, node_text, string_value};
+use sephera_core::plugins::{line_of, node_text, string_value};
 
 /// The node kinds that name a module in this grammar.
 ///
 /// `import ... from`, `export ... from`, the bare side-effect `import './x'`, and
 /// `require('./x')`. The grammar points at the module string in every one.
-pub(super) fn extract_from_node(
+pub fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
@@ -65,9 +65,9 @@ pub(super) fn extract_from_node(
 
 #[cfg(test)]
 mod tests {
-    use sephera_compression::SupportedLanguage;
+    use sephera_compression::{SupportedLanguage, with_parser};
 
-    use sephera_graph::walk::imports_found_by;
+    use sephera_core::plugins::imports_found_by;
 
     /// Every path one file imports, in order.
     ///
@@ -75,11 +75,14 @@ mod tests {
     /// and JavaScript and only the grammar differs, so the test reads the same
     /// field the registry does rather than picking a language of its own.
     fn paths(source: &[u8], language: SupportedLanguage) -> Vec<String> {
-        imports_found_by(
-            source,
-            language,
-            &super::super::JavaScriptPlugin { language },
-        )
+        with_parser(language, source.len(), |parser| {
+            Ok(imports_found_by(
+                source,
+                parser,
+                &crate::JavaScriptPlugin { language },
+            ))
+        })
+        .expect("a parser exists")
         .into_iter()
         .map(|s| s.raw_path)
         .collect()

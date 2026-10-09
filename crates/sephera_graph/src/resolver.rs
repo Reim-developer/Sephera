@@ -12,12 +12,15 @@ use std::{
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
 
-use sephera_compression::{SupportedLanguage};
-use sephera_ignore::{IgnoreMatcher};
-use sephera_scan::{project_files::{ProjectFile, collect_project_files}};
-use sephera_core::{progress::{NoProgress, Progress}};
+use sephera_compression::{SupportedLanguage, with_parser};
+use sephera_core::plugins::walk_with_declarations;
+use sephera_core::progress::{NoProgress, Progress};
+use sephera_ignore::IgnoreMatcher;
+use sephera_scan::project_files::{ProjectFile, collect_project_files};
 
-use super::{declarations, manifests, plugins};
+use sephera_core::declarations;
+
+use super::{manifests, plugins};
 
 use super::types::{
     FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
@@ -344,9 +347,13 @@ fn extract_one_file(
     // declared names meant reading and parsing every Rust file twice, which is
     // what the declaration index cost before the plugin returned both halves
     // together.
-    let mut extracted = plugins::builtin_import_plugin(ts_language)
-        .and_then(|plugin| plugin.extract_source(&source))
-        .unwrap_or_default();
+    let Some(plugin) = plugins::builtin_import_plugin(ts_language) else {
+        return Ok(None);
+    };
+    let mut extracted = with_parser(ts_language, source.len(), |parser| {
+        walk_with_declarations(&source, parser, plugin)
+    })
+    .unwrap_or_default();
 
     // Taken rather than cloned: the declaration map is the larger of the two
     // halves by far, and there is no reason to copy it to get it out of the
@@ -450,8 +457,9 @@ pub fn build_focus_set(
             strip_relative_noise(focus).unwrap_or_else(|| focus.clone())
         };
 
-        let spelled =
-            super::path_utils::forward_slashes(&resolved.to_string_lossy());
+        let spelled = sephera_core::path_utils::forward_slashes(
+            &resolved.to_string_lossy(),
+        );
 
         // `""` is how a scope that means "the whole base" spells itself, and
         // both callers already read an empty set that way.
@@ -1212,7 +1220,7 @@ fn is_structural_module_edge(source: &str, target: &str) -> bool {
 
 /// Whether `target` is a direct child module of the file named by `source`.
 fn is_own_child_module(source: &str, target: &str) -> bool {
-    let children = plugins::rust::module_children_dir(source);
+    let children = sephera_graph_rust::module_children_dir(source);
     match target.rsplit_once('/') {
         Some((directory, _)) => directory == children,
         None => false,
@@ -1225,8 +1233,8 @@ fn is_own_child_module(source: &str, target: &str) -> bool {
 /// `src/a/b/c.rs` to `src/lib.rs` is as unavoidable as one to `src/a/mod.rs`, and
 /// a cycle that walked only immediate neighbours would miss it.
 fn is_ancestor_module(ancestor: &str, descendant: &str) -> bool {
-    let enclosing = plugins::rust::module_children_dir(ancestor);
-    let inner = plugins::rust::module_children_dir(descendant);
+    let enclosing = sephera_graph_rust::module_children_dir(ancestor);
+    let inner = sephera_graph_rust::module_children_dir(descendant);
     inner.starts_with(&enclosing)
         && inner.len() > enclosing.len()
         && inner.as_bytes().get(enclosing.len()) == Some(&b'/')
@@ -1565,7 +1573,7 @@ fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sephera_graph::ImportKind;
+    use crate::types::ImportKind;
     use std::fs;
     use tempfile::tempdir;
 
@@ -1760,7 +1768,7 @@ mod tests {
         // tree. Found because a Windows-only test input failed on Linux, where it
         // is a legal file name rather than a spelling mistake.
         let spelled =
-            sephera_graph::path_utils::forward_slashes("crates/cli\\src");
+            sephera_core::path_utils::forward_slashes("crates/cli\\src");
 
         if cfg!(windows) {
             assert_eq!(spelled, "crates/cli/src");
@@ -1866,7 +1874,7 @@ mod tests {
             |node_map: &mut NodeMap, path: &str, imported_by: &[&str]| {
                 node_map.insert(
                     path.to_owned(),
-                    sephera_graph::types::NodeEntry {
+                    crate::types::NodeEntry {
                         language: Some("Rust"),
                         imports: Vec::new(),
                         imported_by: imported_by
@@ -1940,7 +1948,7 @@ mod tests {
         };
 
         for import in [
-            "sephera_core::graph",
+            "crate::core::graph",
             "crate::foo::Bar",
             "std::collections::HashMap",
             // A name that merely starts with `*` is an ordinary item, not a
@@ -2722,7 +2730,7 @@ mod tests {
         assert_eq!(
             resolve_import_lang(
                 SupportedLanguage::Rust,
-                "sephera_core::graph",
+                "crate::core::graph",
                 "src/main.rs",
                 &files
             ),

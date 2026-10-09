@@ -3,7 +3,10 @@
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt::Write;
 
-use sephera_graph::{manifests::DependencyKind, types::{GraphFormat, GraphQuery, GraphReport}};
+use crate::{
+    manifests::DependencyKind,
+    types::{GraphFormat, GraphQuery, GraphReport},
+};
 
 /// Renders the graph report in the requested format.
 #[must_use]
@@ -643,7 +646,7 @@ fn format_query(query: &GraphQuery) -> String {
 mod tests {
     use std::path::PathBuf;
 
-    use sephera_graph::types::{
+    use crate::types::{
         GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
     };
 

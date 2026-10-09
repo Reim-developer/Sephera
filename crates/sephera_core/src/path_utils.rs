@@ -322,7 +322,7 @@ mod tests {
         assert_eq!(replace_separator("a::b", ':'), "a/b");
         assert_eq!(replace_separator("a:::b", ':'), "a/b");
         assert_eq!(
-            replace_separator("sephera_graph::", ':'),
+            replace_separator("crate::core::graph::", ':'),
             "crate/core/graph"
         );
         assert_eq!(replace_separator("...", '.'), "");

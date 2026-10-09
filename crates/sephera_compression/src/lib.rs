@@ -20,7 +20,9 @@
 //! # Example
 //!
 //! ```
-//! use sephera_compression::{//!     CompressionMode, SupportedLanguage, compress_source, //!};
+//! use sephera_compression::{
+//!     CompressionMode, SupportedLanguage, compress_source,
+//! };
 //!
 //! let source = b"fn add(a: i32, b: i32) -> i32 {\n    a + b\n}\n";
 //! let result = compress_source(source, SupportedLanguage::Rust, CompressionMode::Signatures);
@@ -59,7 +61,9 @@ pub use types::{CompressedOutput, CompressionMode};
 /// # Examples
 ///
 /// ```
-/// use sephera_compression::{///     CompressionMode, SupportedLanguage, compress_source, ///};
+/// use sephera_compression::{
+///     CompressionMode, SupportedLanguage, compress_source,
+/// };
 ///
 /// let source = b"pub struct Config { pub path: String }\n";
 /// let output = compress_source(source, SupportedLanguage::Rust, CompressionMode::Signatures).unwrap();

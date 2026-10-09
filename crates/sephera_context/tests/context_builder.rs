@@ -1,11 +1,9 @@
 use std::path::Path;
 
-use sephera_core::core::{
-    code_loc::IgnoreMatcher,
-    context::{
-        ContextBuilder, ContextDiffSelection, ContextGroupKind, SelectionClass,
-    },
+use sephera_context::{
+    ContextBuilder, ContextDiffSelection, ContextGroupKind, SelectionClass,
 };
+use sephera_scan::IgnoreMatcher;
 use tempfile::{TempDir, tempdir};
 
 fn write_file(base_dir: &Path, relative_path: &str, contents: &[u8]) {

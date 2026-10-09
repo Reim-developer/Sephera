@@ -26,5 +26,6 @@ tree-sitter-c = "0.23"
 tree-sitter-cpp = "0.23"
 
 sephera_core = { path = "../sephera_core", version = "0.6.0" }
-sephera_graph = { path = "../sephera_graph", version = "0.6.0" }
+sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+
 sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }

@@ -34,7 +34,9 @@ use super::{
 /// # Examples
 ///
 /// ```
-/// use sephera_compression::{///     CompressionMode, SupportedLanguage, extract_compressed, new_parser, ///};
+/// use sephera_compression::{
+///     CompressionMode, SupportedLanguage, extract_compressed, new_parser,
+/// };
 ///
 /// let source = b"fn greet(name: &str) -> String {\n    format!(\"hi {name}\")\n}\n";
 /// let mut parser = new_parser(SupportedLanguage::Rust).unwrap();
@@ -304,7 +306,7 @@ fn extract_with_elided_body(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use sephera_compression::parser::new_parser;
+    use crate::parser::new_parser;
 
     fn compress(
         source: &str,

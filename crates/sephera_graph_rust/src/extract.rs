@@ -22,12 +22,12 @@
 
 use tree_sitter::Node;
 
-use sephera_graph::{ImportKind, types::ImportStatement};
+use sephera_core::types::{ImportKind, ImportStatement};
 
-use super::super::walk::{line_of, node_text};
+use sephera_core::plugins::{line_of, node_text};
 
 /// Read the references out of one node.
-pub(super) fn extract_from_node(
+pub fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
@@ -216,7 +216,7 @@ fn join_use_path(prefix: Option<&str>, leaf: &str) -> String {
 /// `mod tests { ... }` declares a module, so a `super::` inside it climbs one
 /// level further than the same keyword at file scope. Ten references in this
 /// repository were counted as unresolved before the depth was carried.
-pub(super) fn opens_inline_module(node: &Node<'_>) -> bool {
+pub fn opens_inline_module(node: &Node<'_>) -> bool {
     node.kind() == "mod_item" && node.child_by_field_name("body").is_some()
 }
 
@@ -226,7 +226,7 @@ pub(super) fn opens_inline_module(node: &Node<'_>) -> bool {
 /// child's own text starts with the attribute's name. Both facts were probed
 /// against the grammar rather than assumed, for the same reason the `#[path]`
 /// lookup looks back rather than at a field.
-pub(super) fn is_cfg_gated(source: &[u8], node: &Node<'_>) -> bool {
+pub fn is_cfg_gated(source: &[u8], node: &Node<'_>) -> bool {
     let Some(previous) = node.prev_sibling() else {
         return false;
     };
@@ -249,12 +249,15 @@ pub(super) fn is_cfg_gated(source: &[u8], node: &Node<'_>) -> bool {
 /// traversal the graph does not use.
 #[cfg(test)]
 fn walk(source: &[u8]) -> Vec<ImportStatement> {
-    use sephera_compression::SupportedLanguage;
-    use sephera_graph::walk::imports_found_by;
+    use sephera_compression::{SupportedLanguage, with_parser};
+    use sephera_core::plugins::imports_found_by;
 
     // `super` rather than `super::super`: this sits one level out from the test
     // module, so the plugin is already in the parent.
-    imports_found_by(source, SupportedLanguage::Rust, &super::RustPlugin)
+    with_parser(SupportedLanguage::Rust, source.len(), |parser| {
+        Ok(imports_found_by(source, parser, &super::RustPlugin))
+    })
+    .expect("a parser exists")
 }
 
 #[cfg(test)]
@@ -274,8 +277,8 @@ mod tests {
     #[test]
     fn a_crate_use_names_its_path() {
         assert_eq!(
-            paths(b"use sephera_core::graph;\n"),
-            vec!["sephera_core::graph".to_owned()]
+            paths(b"use crate::core::graph;\n"),
+            vec!["crate::core::graph".to_owned()]
         );
     }
 
@@ -349,7 +352,7 @@ mod tests {
 
     #[test]
     fn an_ordinary_use_is_a_plain_dependency() {
-        let found = walk(b"use sephera_core::graph;\n");
+        let found = walk(b"use crate::core::graph;\n");
 
         assert_eq!(found[0].kind, ImportKind::Dependency);
         assert!(found[0].kind.is_dependency());

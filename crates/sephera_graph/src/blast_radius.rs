@@ -26,9 +26,9 @@ use std::path::Path;
 
 use anyhow::{Result, bail};
 
-use super::path_utils;
 use super::resolver::path_matches_focus;
 use super::types::{GraphQuery, GraphReport};
+use sephera_core::path_utils;
 
 /// One dependent file and what it imports from the target.
 #[derive(Debug, Clone, PartialEq, Eq)]

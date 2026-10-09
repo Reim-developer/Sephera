@@ -4,9 +4,11 @@ use std::sync::Arc;
 use anyhow::{Context, Result, bail};
 use rayon::prelude::*;
 
-use sephera_ignore::{{
-        Decision, IGNORE_FILE_NAMES, IgnoreMatcher, IgnoreRules, normalize_relative_path, read_directory_rules, }};
-use sephera_core::{language_data::{LanguageMatch, language_for_path}};
+use sephera_core::language_data::{LanguageMatch, language_for_path};
+use sephera_ignore::{
+    Decision, IGNORE_FILE_NAMES, IgnoreMatcher, IgnoreRules,
+    normalize_relative_path, read_directory_rules,
+};
 
 #[derive(Debug, Clone)]
 pub struct ProjectFile {

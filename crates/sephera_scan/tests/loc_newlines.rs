@@ -1,7 +1,5 @@
-use sephera_core::core::{
-    code_loc::{LocMetrics, scan_content},
-    config::CommentStyle,
-};
+use sephera_core::config::CommentStyle;
+use sephera_scan::{LocMetrics, scan_content};
 
 const C_STYLE: CommentStyle =
     CommentStyle::new(Some("//"), Some("/*"), Some("*/"));

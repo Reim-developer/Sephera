@@ -327,7 +327,9 @@ mod tests {
     use std::collections::BTreeMap;
     use std::path::PathBuf;
 
-    use sephera_symbols::{LanguageSymbols, SymbolDetail, SymbolEntry, SymbolKind, SymbolReport};
+    use sephera_symbols::{
+        LanguageSymbols, SymbolDetail, SymbolEntry, SymbolKind, SymbolReport,
+    };
 
     use super::{
         TOTALS_LABEL, by_file_grid, declaration_grid, language_grid,

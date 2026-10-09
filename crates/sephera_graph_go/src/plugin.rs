@@ -5,44 +5,28 @@
 //! files. A Go file inside `internal/store/` is package `store` whatever the
 //! file is called, which is how a package is identified in Go.
 
-mod extract;
-
-use sephera_compression::SupportedLanguage;
-
 /// Go import extraction and resolution.
 ///
 /// A unit struct: nothing about Go needs per-instance state, and extraction runs
 /// across a thread pool, so a shared value is what lets it be shared.
 #[derive(Debug, Clone, Copy, Default)]
 pub struct GoPlugin;
-use super::{
-    ExtractedSource, ImportPlugin, ResolveContext, ResolverPlugin, paths,
-    walk::walk_with_declarations,
+use sephera_core::{
+    path_utils as paths,
+    plugins::{ImportPlugin, ResolveContext, ResolverPlugin},
 };
 
 impl ImportPlugin for GoPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Go
-    }
-
     fn extract_from_node(
         &self,
         source: &[u8],
         node: &tree_sitter::Node<'_>,
-    ) -> Option<Vec<sephera_graph::types::ImportStatement>> {
-        extract::extract_from_node(source, node)
-    }
-
-    fn extract_source(&self, source: &[u8]) -> Option<ExtractedSource> {
-        walk_with_declarations(source, ImportPlugin::language(self), self).ok()
+    ) -> Option<Vec<sephera_core::types::ImportStatement>> {
+        crate::extract::extract_from_node(source, node)
     }
 }
 
 impl ResolverPlugin for GoPlugin {
-    fn language(&self) -> SupportedLanguage {
-        SupportedLanguage::Go
-    }
-
     fn resolve(
         &self,
         import_path: &str,
@@ -136,9 +120,13 @@ fn is_go_file(path: &str) -> bool {
 
 #[cfg(test)]
 mod tests {
-    use super::super::KnownFiles;
+    use sephera_core::{
+        plugins::{KnownFiles, ModuleManifestLookup},
+        types::ImportKind,
+    };
+    use sephera_graph::manifests::ManifestIndex;
+
     use super::*;
-    use sephera_graph::{ImportKind, manifests::ManifestIndex};
 
     fn context_for<'a>(
         files: &'a KnownFiles,
@@ -150,7 +138,12 @@ mod tests {
             module_depth: 0,
             kind: ImportKind::Dependency,
             declarations: None,
-            manifests,
+            // Unsized here rather than at the parameter: `ResolveContext` asks
+            // the question through the trait, so a `&ManifestIndex` is the
+            // concrete answer and `&dyn ModuleManifestLookup` is what it is
+            // being asked as.
+            manifests: manifests
+                .map(|index| index as &dyn ModuleManifestLookup),
             base_path: std::path::Path::new("."),
         }
     }

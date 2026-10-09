@@ -9,10 +9,10 @@ use super::settings::{
     ContextToml, SepheraToml, TokenBudgetValue, load_config_file,
 };
 
-use sephera_compression::{CompressionMode};
-use sephera_context::{{ContextBuilder, ContextDiffSelection, ContextReport}};
-use sephera_scan::{code_loc::IgnoreMatcher};
-use sephera_symbols::{{self, SymbolAnalyzer}};
+use sephera_compression::CompressionMode;
+use sephera_context::{ContextBuilder, ContextDiffSelection, ContextReport};
+use sephera_ignore::IgnoreMatcher;
+use sephera_symbols::SymbolAnalyzer;
 
 use super::{
     ResolvedSource, SourceRequest, git::git_stdout_bytes, resolve_source,
@@ -178,7 +178,7 @@ fn apply_focus_symbols(
             anyhow::anyhow!("failed to resolve `--focus-symbol`: {error}")
         })?;
     let (symbol_focus, ranges, unresolved) =
-        symbols::collect_symbol_ranges(&detail, names);
+        sephera_symbols::collect_symbol_ranges(&detail, names);
 
     for path in symbol_focus {
         if !options.focus.contains(&path) {

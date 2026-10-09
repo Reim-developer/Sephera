@@ -1,8 +1,33 @@
-//! # Sephera Core Traits
+//! Types and traits shared by every other crate.
 //!
-//! Shared traits, types, and interfaces for the Sephera analysis engine.
-//! This crate is intentionally minimal — concrete implementations live in
-//! the feature crates (scan, ignore, compression, runtime, symbols, graph, etc.).
+//! Nothing here does analysis. What lives in this crate is the vocabulary the
+//! rest of the workspace argues in: the graph's own types, the language table,
+//! the declaration index, the two lookup traits a plugin asks questions through,
+//! and the walk every language shares.
+//!
+//! # Why the vocabulary is here and not in the crate that uses it
+//!
+//! [`plugins::ImportPlugin`] is implemented by six language crates, and
+//! [`plugins::ResolverPlugin`] by the same six. Neither can depend on
+//! `sephera_graph`, because `sephera_graph` holds the registry that names all six
+//! -- so a plugin naming an index, a path helper or a report type would close
+//! that circle. This crate is the one both sides can name, which is what makes it
+//! the only place those items can live.
+//!
+//! That is the whole design rule: **if the six language crates need it, it is
+//! here; if only the graph resolver needs it, it is in `sephera_graph`.**
+//!
+//! # What is deliberately absent
+//!
+//! A language-neutral extraction trait is *not* here. The earlier shape of this
+//! file declared `ExtractionRules`, taking a parsed tree and a file path and
+//! returning statements; nothing implemented it, nothing called it, and the
+//! per-node walk it was shaped around turned out to need to ask the plugin three
+//! separate questions per node. The trait that replaced it --
+//! [`plugins::ImportPlugin`] -- takes one node at a time instead, and a plugin
+//! that has no opinion returns `None`. `AGENTS.md` calls this shape a dead-code
+//! trap, and this was one: 40 lines of authoritative-looking trait that no `mod`
+//! declaration and no caller ever reached.
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
@@ -10,51 +35,8 @@ pub mod config;
 pub mod declarations;
 pub mod language_data;
 pub mod line_slices;
+pub mod path_utils;
 pub mod paths;
 pub mod plugins;
 pub mod progress;
 pub mod types;
-
-/// Trait for language-specific extraction rules.
-pub mod extraction {
-    use crate::types::{Language, ImportStatement, Declaration};
-
-    /// Rules for extracting imports and declarations from a language.
-    pub trait ExtractionRules: Send + Sync + 'static {
-        /// The Tree-sitter language this ruleset applies to.
-        const LANGUAGE: Language;
-
-        /// File extensions this extractor handles.
-        fn extensions() -> &'static [&'static str];
-
-        /// Extract imports from a parsed tree.
-        fn extract_imports(
-            tree: &tree_sitter::Tree,
-            source: &[u8],
-            file_path: &std::path::Path,
-        ) -> anyhow::Result<Vec<ImportStatement>>;
-
-        /// Extract declarations from a parsed tree.
-        fn extract_declarations(
-            tree: &tree_sitter::Tree,
-            source: &[u8],
-            file_path: &std::path::Path,
-        ) -> anyhow::Result<Vec<Declaration>>;
-    }
-}
-
-/// Trait for language-aware comment scanning.
-pub mod scanning {
-    use crate::config::CommentStyle;
-
-    /// Rules for counting lines of code vs comments vs empty.
-    pub trait ScanRules: Send + Sync + 'static {
-        /// The comment style for this language.
-        fn comment_style() -> CommentStyle;
-
-        /// Whether this language uses block comments that can nest.
-        fn nested_block_comments() -> bool {
-            false
-        }
-    }
-}

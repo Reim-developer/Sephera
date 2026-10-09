@@ -1,35 +1,16 @@
-//! # Sephera Graph Rust
+//! Rust import extraction and module-path resolution for Sephera's graph.
 //!
-//! Rust dependency extraction for Sephera graph.
+//! Implements the two halves every language contributes: what an import in this
+//! language means, and how that path names a file in a project. Both traits come
+//! from `sephera_core`, so this crate depends on nothing that knows it exists --
+//! `sephera_graph` depends on it for the registry, not the other way round.
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
-pub mod extract;
-pub mod mod;
-pub mod names;
-pub mod paths;
+mod extract;
+mod names;
+mod paths;
+mod plugin;
+pub use crate::paths::module_children_dir;
 
-use sephera_core::types::{Declaration, ImportStatement};
-use sephera_graph::ExtractionPlugin;
-use tree_sitter::Tree;
-use std::path::Path;
-use anyhow::Result;
-
-/// Rust extraction plugin implementing the generic extraction trait.
-pub struct RustPlugin;
-
-impl ExtractionPlugin for RustPlugin {
-    const LANGUAGE: sephera_core::types::Language = sephera_core::types::Language::Rust;
-
-    fn extensions() -> &'static [&'static str] {
-        &[".rs"]
-    }
-
-    fn extract_imports(tree: &Tree, source: &[u8], path: &Path) -> Result<Vec<ImportStatement>> {
-        extract::extract_imports(tree, source, path)
-    }
-
-    fn extract_declarations(tree: &Tree, source: &[u8], path: &Path) -> Result<Vec<Declaration>> {
-        extract::extract_declarations(tree, source, path)
-    }
-}
+pub use plugin::RustPlugin;

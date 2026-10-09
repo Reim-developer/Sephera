@@ -100,9 +100,8 @@ impl IgnoreMatcher {
     ///
     /// Only for tests, which need the same explicit patterns under both
     /// settings.
-    #[cfg(test)]
     #[must_use]
-    pub(crate) fn with_reads_ignore_files(&self, reads: bool) -> Self {
+    pub fn with_reads_ignore_files(&self, reads: bool) -> Self {
         Self::build(self.regex_ignore.clone(), self.glob_ignore.clone(), reads)
     }
 

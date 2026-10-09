@@ -25,5 +25,14 @@ tree-sitter = "0.26"
 tree-sitter-go = "0.25"
 
 sephera_core = { path = "../sephera_core", version = "0.6.0" }
-sephera_graph = { path = "../sephera_graph", version = "0.6.0" }
+sephera_compression = { path = "../sephera_compression", version = "0.6.0" }
+
 sephera_symbols = { path = "../sephera_symbols", version = "0.6.0" }
+
+# Only the tests. Go's resolver is the one plugin that reads `go.mod`, so its
+# tests need a real `ManifestIndex` -- and `ManifestIndex` lives in the crate
+# that holds the registry, which depends on this one. Cargo allows a cycle that
+# runs through a dev-dependency, so this costs nothing at build time and does
+# not put the registry's dependency in the release graph.
+[dev-dependencies]
+sephera_graph = { path = "../sephera_graph", version = "0.6.0" }

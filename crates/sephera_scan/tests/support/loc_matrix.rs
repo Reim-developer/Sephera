@@ -1,10 +1,7 @@
 use std::collections::BTreeMap;
 
-use sephera_core::core::{
-    code_loc::{LocMetrics, scan_content},
-    config::CommentStyle,
-    language_data::builtin_languages,
-};
+use sephera_core::{config::CommentStyle, language_data::builtin_languages};
+use sephera_scan::{LocMetrics, scan_content};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
 pub struct StyleKey {

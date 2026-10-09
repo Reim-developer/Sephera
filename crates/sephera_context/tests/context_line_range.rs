@@ -8,11 +8,9 @@ use std::fs;
 
 use tempfile::tempdir;
 
-use sephera_core::core::{
-    code_loc::IgnoreMatcher,
-    compression::CompressionMode,
-    context::{ContextBuilder, LineRange},
-};
+use sephera_compression::CompressionMode;
+use sephera_context::{ContextBuilder, LineRange};
+use sephera_ignore::IgnoreMatcher;
 
 /// A file with three clearly separated functions and a trailing marker line.
 ///

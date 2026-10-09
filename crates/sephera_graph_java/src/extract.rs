@@ -16,12 +16,12 @@
 
 use tree_sitter::Node;
 
-use sephera_graph::{ImportKind, types::ImportStatement};
+use sephera_core::types::{ImportKind, ImportStatement};
 
-use super::super::walk::{line_of, node_text};
+use sephera_core::plugins::{line_of, node_text};
 
 /// Read the imports out of one node.
-pub(super) fn extract_from_node(
+pub fn extract_from_node(
     source: &[u8],
     node: &Node<'_>,
 ) -> Option<Vec<ImportStatement>> {
@@ -63,16 +63,16 @@ pub(super) fn extract_from_node(
 mod tests {
     use super::*;
     use sephera_compression::SupportedLanguage;
+    use sephera_compression::with_parser;
 
-    use sephera_graph::walk::imports_found_by;
+    use sephera_core::plugins::imports_found_by;
 
     /// Every import one Java file declares.
     fn imports(source: &[u8]) -> Vec<ImportStatement> {
-        imports_found_by(
-            source,
-            SupportedLanguage::Java,
-            &super::super::JavaPlugin,
-        )
+        with_parser(SupportedLanguage::Java, source.len(), |parser| {
+            Ok(imports_found_by(source, parser, &crate::JavaPlugin))
+        })
+        .expect("a parser exists")
     }
 
     #[test]

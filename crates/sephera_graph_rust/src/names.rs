@@ -12,8 +12,8 @@
 //! with the false ones. Each of those attempts is written down at the decision it
 //! belongs to.
 
-use super::super::{ResolveContext, paths as shared_paths};
-use super::paths::{crate_root, module_path};
+use crate::paths::{crate_root, module_path};
+use sephera_core::{path_utils as shared_paths, plugins::ResolveContext};
 
 /// Whether a word is a Rust path qualifier rather than a name.
 ///
@@ -49,7 +49,7 @@ pub fn names_a_crate_outside(
     // Whether the path naming `name` carried `super::`, `self::` or `crate::`.
     //
     // It decides what a re-export in the importing file means, and the two
-    // answers are opposites. `pub use sephera_graph::blast_radius::
+    // answers are opposites. `pub use sephera_core::core::graph::blast_radius::
     // BlastRadius;` in `crates/sephera_cli/src/impact.rs` followed by `use
     // super::{BlastRadius, render_markdown, ..}` in that file's test module is a
     // real self-reference: the file brings the name into its own scope on
@@ -152,7 +152,7 @@ mod tests {
             source_file,
             known_files: known,
             module_depth: 0,
-            kind: sephera_graph::ImportKind::Dependency,
+            kind: sephera_core::types::ImportKind::Dependency,
             declarations: None,
             manifests: None,
             base_path: std::path::Path::new(""),
@@ -172,16 +172,16 @@ mod tests {
     /// cannot be reached through `from_names`, which records declarations only.
     struct ReexportingFile {
         known: std::collections::BTreeSet<String>,
-        index: sephera_graph::declarations::DeclarationIndex,
+        index: sephera_core::declarations::DeclarationIndex,
     }
 
     impl ReexportingFile {
         fn new(reexported: &str) -> Self {
             let mut index =
-                sephera_graph::declarations::DeclarationIndex::default();
+                sephera_core::declarations::DeclarationIndex::default();
             index.insert(
                 "src/leaf.rs",
-                sephera_graph::declarations::DeclaredNames::from_names_and_reexports(
+                sephera_core::declarations::DeclaredNames::from_names_and_reexports(
                     [],
                     [reexported],
                 ),
@@ -197,7 +197,7 @@ mod tests {
                 source_file: "src/leaf.rs",
                 known_files: &self.known,
                 module_depth: 0,
-                kind: sephera_graph::ImportKind::Dependency,
+                kind: sephera_core::types::ImportKind::Dependency,
                 declarations: Some(&self.index),
                 manifests: None,
                 base_path: std::path::Path::new(""),
@@ -262,7 +262,7 @@ mod tests {
 
     #[test]
     fn a_reexport_makes_a_qualified_name_local() {
-        // `pub use sephera_graph::blast_radius::BlastRadius;` in
+        // `pub use sephera_core::core::graph::blast_radius::BlastRadius;` in
         // `crates/sephera_cli/src/impact.rs` followed by `use
         // super::{BlastRadius, render_markdown, ..}` in that file's test module
         // is a real self-reference, and the file exists to make it.
@@ -283,7 +283,7 @@ mod tests {
         .expect("rust parser");
         let source = "pub struct JsonLines<S, T = AsExtractor> {}\n";
         let tree = parser.parse(source.as_bytes(), None).expect("parses");
-        let names = sephera_graph::declarations::collect_declared_names(
+        let names = sephera_core::declarations::collect_declared_names(
             source.as_bytes(),
             &tree,
         );
