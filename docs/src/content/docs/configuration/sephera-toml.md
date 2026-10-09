@@ -294,7 +294,7 @@ profile = "review"
 
 [aliases.who]
 command = "graph"
-what_depends_on = "crates/sephera_core/src/core/code_loc.rs"
+what_depends_on = "crates/sephera_context/src/types.rs"
 format = "markdown"
 ```
 

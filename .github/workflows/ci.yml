@@ -121,6 +121,15 @@ jobs:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/measure_accuracy.py --verify
 
+      # The docs are a separate site with its own build, and its content is not
+      # checked by anything above. Two failures live there: an unbalanced code
+      # fence, which renders the rest of a page as prose, and a path quoted in an
+      # example that no longer resolves, which fails when a reader types it.
+      # `graph.md` had the first and several pages had the second, so both are
+      # worth a check rather than a review.
+      - name: Check docs fences and quoted paths
+        run: python scripts/check_docs.py
+
   coverage:
     name: Coverage
     runs-on: ubuntu-latest
