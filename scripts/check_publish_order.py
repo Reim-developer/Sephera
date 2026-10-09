@@ -187,7 +187,10 @@ def dependency_block(text: str) -> str:
 
 def load() -> tuple[dict[str, pathlib.Path], dict[str, set[str]]]:
     workspace = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-    members = re.findall(r'"([^"]+)"', MEMBERS.search(workspace).group(1))
+    members_match = MEMBERS.search(workspace)
+    if not members_match:
+        raise SystemExit("no `members` list in the workspace Cargo.toml")
+    members = re.findall(r'"([^"]+)"', members_match.group(1))
     inherited = dict(WORKSPACE_PATH.findall(workspace))
 
     names: dict[str, pathlib.Path] = {}
@@ -197,7 +200,14 @@ def load() -> tuple[dict[str, pathlib.Path], dict[str, set[str]]]:
         text = (ROOT / member / "Cargo.toml").read_text(encoding="utf-8")
         if PUBLISH_FALSE.search(text):
             continue
-        name = CRATE_NAME.search(text).group(1)
+        name_match = CRATE_NAME.search(text)
+        if not name_match:
+            # A manifest without a package name is not something to paper over.
+            # `search(...).group(1)` on a `None` is a crash three call frames
+            # away, and the guard also keeps this module importable by
+            # `check_doc_links.py` under strict type checking.
+            raise SystemExit(f"{member}: no package name")
+        name = name_match.group(1)
         names[name] = ROOT / member
 
         local: set[str] = set()
