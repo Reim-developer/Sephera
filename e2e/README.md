@@ -7,9 +7,9 @@ expectation about what resolving it should produce, and checked against a real
 ## Status
 
 ```
-accuracy over local imports: 40/44 resolved (90.9%)
-external imports left alone: 17/28
-70 import cases, 16 file cases, 6 known defects
+accuracy over local imports: 44/44 resolved (100.0%)
+external imports left alone: 18/30
+74 import cases, 16 file cases, 0 known defects
 ```
 
 All eight bundled languages are covered.
@@ -17,14 +17,18 @@ All eight bundled languages are covered.
 | language | cases | known defects |
 |---|---:|---:|
 | Rust | 24 | 0 |
-| Python | 13 | 5 |
-| JavaScript | 8 | 1 |
+| Python | 17 | 0 |
+| JavaScript | 8 | 0 |
 | Go, Java, TypeScript | 15 | 0 |
 | C, C++ | 10 | 0 |
 
-Every known defect is listed with the measurement or the observation that bounds
-it. None of them is a file a user is likely to open and find wrong; they are
-cases the tool currently gets wrong in a direction that costs the reader.
+Nothing is currently listed as a known defect. The last one was removed when it
+turned out to be a wrong expectation rather than a resolver bug: the case claimed
+`require('..')` from `javascript/src` should land on the package root, but the
+fixture wrote `require('../javascript')`, and the two had disagreed since the
+commit that introduced them. Node resolves the first to the `package.json` `main`
+entry and fails on the second, and so does this resolver — the fixture was fixed,
+not the resolver.
 
 ## Why this exists
 
@@ -55,11 +59,20 @@ python e2e/run.py --list              # the inventory, without running
 python e2e/run.py --summary           # counts only, for CI logs
 ```
 
-The script builds `target/release/sephera` if it is missing. It captures stdout
-as bytes and decodes it explicitly: routing it through a shell pipe re-encodes
-it, which mangles the Unicode fixture paths and makes the tool look broken when
-it is not. That is not hypothetical — measuring Unicode filename handling through
-a PowerShell pipe produced two convincing fake bugs before the byte-level check.
+The script builds `target/release/sephera` on every run, not only when the binary
+is missing. Skipping the build when the file exists looks like a cheap
+optimisation and is the opposite: after a resolver change the suite keeps
+asserting against the previous binary, so the run passes or fails for a reason
+that has nothing to do with the code in the tree — and the failure mode is the
+flattering one, because the expectations were written against the newer
+behaviour. Cargo is incremental, so an unchanged tree costs a no-op fingerprint
+check rather than a rebuild.
+
+It captures stdout as bytes and decodes it explicitly: routing it through a shell
+pipe re-encodes it, which mangles the Unicode fixture paths and makes the tool
+look broken when it is not. That is not hypothetical — measuring Unicode filename
+handling through a PowerShell pipe produced two convincing fake bugs before the
+byte-level check.
 
 ## Layout
 
@@ -106,21 +119,38 @@ answer reads and is still run. It is excluded from the pass/fail decision, not
 from the suite, and the reason is printed on every run. Editing it to match
 today's behaviour is the one thing that would make it worthless.
 
-What they have in common is a direction. Six of the eight are *absent* rather
-than *wrong*: a dependency the tool cannot see, filed under `node_modules`, the
-standard library, or nothing at all. A blast radius understates a change it
-cannot account for, and the reader has no way to tell the difference from a file
-that genuinely has no imports.
+There are none today. What was there, and how each closed, is kept because the
+pattern that produced all of them is worth knowing the next time a number moves.
 
-The two exceptions are Rust's, and those invent couplings. The parent fallback in
-`first_existing` lands a path on the enclosing module without checking the name
-is declared or re-exported there. On axum, guarding it with a declaration check
-moves `self_references` from 66 to 18 and `unresolved_local` from 8 to 13 while
-leaving `internal_edges` at 640 — so roughly 48 of those 66 self-dependencies
-were claimed couplings the compiler does not have.
+**Rust's three were all self-dependencies the parent fallback invented.** The
+fallback in `first_existing` lands a path on the module one level up without
+checking that the name is declared or re-exported there. It exists for a real case
+— `crate::core::compression::CompressionMode` names an item inside
+`compression/mod.rs`, and no `CompressionMode.rs` exists — so removing it outright
+was never the fix. A `super::` path naming a name declared nowhere, a
+`pub use http;` outside the crate root, and the bare `crate` fragment a partial
+parse leaves in a non-UTF-8 file each landed on the file they were written in.
+The guard that closed the first two is `names_a_crate_outside` in
+`rust/names.rs`, and it is deliberately narrow: guarding qualified paths as well
+was tried and reverted on measurement.
 
-That guard is not shippable on its own. It also rejects `super::IntoResponse`,
-which `response/mod.rs` reaches through a re-export rather than a declaration.
-Following re-exports to the file that declares the name recovers those, and then
-200 further edges disappear — which is what the re-export collector needed
-completing first, and why the two work items are sequenced the way they are.
+On axum the wider guard moves `self_references` from 66 to 18 and
+`unresolved_local` from 8 to 13 while leaving `internal_edges` at 640 — so
+roughly 48 of those 66 self-dependencies were claimed couplings the compiler does
+not have. Two follow-ups were sequenced behind it: it rejects
+`super::IntoResponse`, which `response/mod.rs` reaches through a re-export rather
+than a declaration, and following re-exports to the file that declares the name
+recovers those and then takes 200 further edges away.
+
+**Python's five were all *absent* rather than *wrong***: dependencies the tool
+could not see, filed under `node_modules`, the standard library, or nothing at
+all. A blast radius understates a change it cannot account for, and the reader
+has no way to tell the difference from a file that genuinely has no imports.
+
+**The JavaScript one was an expectation, not a defect.** The case's own text said
+`require('..')` while the fixture wrote `require('../javascript')`, and the
+resolver answered both correctly. It is worth recording here because it is the
+shape a wrong expectation takes: the tool is right, the case is not, and the
+temptation is to change the tool. The suite has no `--update`, so the only way out
+of that trap is to read the case against the language and decide which one is
+wrong — which is the same work that has to be done either way.
