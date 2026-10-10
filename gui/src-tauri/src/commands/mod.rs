@@ -13,6 +13,7 @@
 //! they exist because every other piece needs them.
 
 pub mod explorer;
+pub mod file_chunk;
 pub mod file;
 pub mod graph;
 pub mod loc;

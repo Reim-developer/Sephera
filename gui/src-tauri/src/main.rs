@@ -15,7 +15,7 @@
 
 mod commands;
 
-use commands::{explorer, file, graph, loc, progress, symbols};
+use commands::{explorer, file, file_chunk, graph, loc, progress, symbols};
 use commands::progress::Progress;
 
 /// Open the window and register every command.
@@ -36,6 +36,7 @@ pub fn run() -> tauri::Result<()> {
         .invoke_handler(tauri::generate_handler![
             explorer::list_tree,
             file::file_detail,
+            file_chunk::read_file_chunk,
             loc::count_lines,
             symbols::count_declarations,
             graph::dependency_graph,

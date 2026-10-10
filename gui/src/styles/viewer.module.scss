@@ -1,0 +1,74 @@
+// The file viewer: a file's text, read in chunks.
+//
+// A monospaced pre is the right element -- the text is code, and a reader
+// expects the columns to line up the way the file's own author did. The
+// loading control is a button rather than an infinite scroll, because "read
+// the rest of this 200 MB file" should be a decision, not a scroll wheel.
+
+@use "tokens" as t;
+
+.viewer {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  min-height: 0;
+  background: t.$editor-bg;
+}
+
+.viewer__pre {
+  flex: 1 1 auto;
+  margin: 0;
+  padding: 14px 18px 22px;
+  overflow: auto;
+  font-family: t.$font-mono;
+  font-size: 12.5px;
+  line-height: 1.55;
+  // A long line wraps rather than scrolling sideways: this is a reader, not
+  // an editor, and a reader that scrolls two ways is a reader that loses
+
+  // its place.
+
+  white-space: pre-wrap;
+  word-break: break-word;
+  color: t.$text-normal;
+}
+
+.viewer__more {
+  position: sticky;
+  bottom: 0;
+  margin: 0 18px 14px;
+  padding: 7px 14px;
+  border: 1px solid t.$widget-border;
+  border-radius: t.$radius-small;
+  background: t.$tabs-bg;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover {
+    background: t.$list-hover-bg;
+    border-color: t.$focus-border;
+  }
+}
+
+.viewer__end {
+  margin: 0 18px 14px;
+  padding-top: 8px;
+  border-top: 1px solid t.$panel-border;
+  font-size: 11px;
+  color: t.$text-muted;
+  text-align: center;
+}
+
+.viewer__error {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 14px 18px;
+  padding: 10px 12px;
+  border-left: 3px solid t.$error-fg;
+  background: t.$side-bar-bg;
+  color: t.$text-normal;
+  font-size: 12.5px;
+}
