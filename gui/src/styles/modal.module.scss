@@ -1,0 +1,74 @@
+// The modal shown while a count runs.
+//
+// A real element covering everything, because a `disabled` attribute on every
+// button is a button that stays enabled after one missed state. The backdrop is
+// separate from the box so the box can be centred without the backdrop being
+// stretched, and the spinner is a CSS animation rather than an image or a font,
+// so there is nothing to download and nothing to fail to download.
+
+@use "tokens" as t;
+
+.modal {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+}
+
+// Transparent rather than opaque: the work behind is dimmed enough to say
+// "not interactive" without hiding what the reader was looking at.
+.modal__backdrop {
+  position: absolute;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+}
+
+.modal__box {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 14px 18px;
+  background: t.$tabs-bg;
+  border: 1px solid t.$widget-border;
+  border-radius: t.$radius-medium;
+}
+
+.modal__label {
+  font-size: 13px;
+  color: t.$text-bright;
+}
+
+// A spinner is a ring with a gap, rotating. The gap is what makes the rotation
+// legible -- a solid ring spinning reads as a rendering bug rather than as
+// progress.
+.modal__spinner {
+  width: 16px;
+  height: 16px;
+  border: 2px solid t.$text-muted;
+  border-top-color: transparent;
+  border-radius: 50%;
+  animation: spin 0.9s linear infinite;
+}
+
+@keyframes spin {
+  to {
+    transform: rotate(360deg);
+  }
+}
+
+.modal__cancel {
+  padding: 4px 10px;
+  border: 1px solid t.$widget-border;
+  border-radius: t.$radius-small;
+  background: t.$input-bg;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+
+  &:hover {
+    background: t.$list-hover-bg;
+  }
+}

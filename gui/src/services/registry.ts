@@ -13,7 +13,9 @@
  */
 
 import {
+  dialogService,
   explorerService,
+  fileService,
   graphService,
   locService,
   symbolsService,
@@ -25,6 +27,8 @@ export interface ServiceRegistry {
   symbols: typeof symbolsService;
   graph: typeof graphService;
   explorer: typeof explorerService;
+  file: typeof fileService;
+  dialog: typeof dialogService;
 }
 
 /** The live registry. */
@@ -33,6 +37,8 @@ export const services: ServiceRegistry = {
   symbols: symbolsService,
   graph: graphService,
   explorer: explorerService,
+  file: fileService,
+  dialog: dialogService,
 };
 
 /**

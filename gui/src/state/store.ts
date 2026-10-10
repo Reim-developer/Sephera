@@ -7,11 +7,18 @@
  * The actions call services through the registry, so a view that says
  * `recompute()` has no idea whether the answer came from Tauri or from a test
  * double -- and that is the property the other three layers exist to provide.
+ *
+ * `epoch` is the number that makes cancellation work. A request carries one, and
+ * when its reply arrives the store asks whether it is still the run anyone is
+ * waiting for; if not, the reply is discarded rather than written over a newer
+ * answer. That is what lets `Cancel` close the dialog at once, and it is also
+ * what stops a slow reply for an old directory from replacing a fresh one.
  */
 
 import { create, type StoreApi } from "zustand";
 
 import type {
+  FileDetail,
   GraphReport,
   LocView,
   SymbolReport,
@@ -55,6 +62,7 @@ export interface ClientState {
   loc: Analysis<LocView>;
   symbols: Analysis<SymbolReport>;
   graph: Analysis<GraphReport>;
+  file: Analysis<FileDetail>;
   /** The explorer's tree, keyed by directory to keep the levels apart. */
   tree: Record<string, TreeNode[]>;
 
@@ -71,10 +79,29 @@ export interface ClientState {
   recompute: () => void;
   /** Run every analysis, for a directory or pattern change. */
   recomputeAll: () => void;
+  /** Abandon whatever is running, and close the dialog. */
+  cancel: () => void;
   /** Replace one level of the explorer's tree. */
   setTreeLevel: (directory: string, nodes: TreeNode[]) => void;
   /** Drop the tree, for a directory change. */
   clearTree: () => void;
+}
+
+/**
+ * The epoch a new request carries, and the epoch below which nothing is wanted.
+ *
+ * Two counters rather than one, because they answer different questions:
+ * `stamp` says which run this reply is for, `discarded` says whether anyone
+ * still wants it. A cancel moves the second and leaves the first alone, which is
+ * why a reply arriving after a cancel is dropped for being old rather than for
+ * being the wrong run -- the run a cancel discards is usually the one you were
+ * waiting for, and comparing stamps alone would let it through.
+ */
+let stamp = 0;
+let discarded = 0;
+function next_epoch(): number {
+  stamp += 1;
+  return stamp;
 }
 
 /** An analysis that has never run. */
@@ -93,20 +120,50 @@ function bump(set: SetState): void {
   set((state) => ({ generation: state.generation + 1 }));
 }
 
+/**
+ * Write an analysis's outcome, or drop it when it is stale.
+ *
+ * The epoch is compared on arrival rather than trusted: a reply for a run nobody
+ * is waiting for is dropped, so a slow answer for an old directory cannot
+ * replace a fresh one for a new one. The work still completed -- the host bumped
+ * its own epoch -- so the reply came back carrying zero.
+ */
+function settle<T>(
+  set: SetState,
+  key: "loc" | "symbols" | "graph",
+  reply: [T, number],
+): void {
+  const [data, epoch] = reply;
+  // A reply at or below the discard mark is one nobody wants. `<=` rather than
+  // `==` because a cancel outranks every run before it, not only the one that
+  // was in flight when it happened.
+  if (epoch <= discarded) return;
+  set({ [key]: { data, error: null, busy: false } });
+  bump(set);
+}
+
+/** Record an analysis's failure. */
+function fail(
+  set: SetState,
+  key: "loc" | "symbols" | "graph",
+  message: string,
+): void {
+  set({ [key]: { data: null, error: message, busy: false } });
+  bump(set);
+}
+
 /** Run the line count, writing its result and its error into the store. */
 async function runLoc(
   set: SetState,
   root: string,
   ignore: readonly string[],
+  epoch: number,
 ): Promise<void> {
   set((state) => ({ loc: { ...state.loc, busy: true, error: null } }));
   try {
-    const data = await services.loc.count(root, ignore);
-    set({ loc: { data, error: null, busy: false } });
-    bump(set);
+    settle(set, "loc", await services.loc.count(root, ignore, epoch));
   } catch (error) {
-    set({ loc: { data: null, error: String(error), busy: false } });
-    bump(set);
+    fail(set, "loc", String(error));
   }
 }
 
@@ -115,15 +172,17 @@ async function runSymbols(
   set: SetState,
   root: string,
   ignore: readonly string[],
+  epoch: number,
 ): Promise<void> {
   set((state) => ({ symbols: { ...state.symbols, busy: true, error: null } }));
   try {
-    const data = await services.symbols.count(root, ignore);
-    set({ symbols: { data, error: null, busy: false } });
-    bump(set);
+    settle(
+      set,
+      "symbols",
+      await services.symbols.count(root, ignore, epoch),
+    );
   } catch (error) {
-    set({ symbols: { data: null, error: String(error), busy: false } });
-    bump(set);
+    fail(set, "symbols", String(error));
   }
 }
 
@@ -133,6 +192,7 @@ async function runGraph(
   root: string,
   target: string,
   ignore: readonly string[],
+  epoch: number,
 ): Promise<void> {
   // No target means there is nothing to ask. `busy` is left alone so the view's
   // "pick a file" placeholder is what shows, rather than a spinner that never
@@ -141,11 +201,29 @@ async function runGraph(
 
   set((state) => ({ graph: { ...state.graph, busy: true, error: null } }));
   try {
-    const data = await services.graph.dependents(root, target, null, ignore);
-    set({ graph: { data, error: null, busy: false } });
+    settle(
+      set,
+      "graph",
+      await services.graph.dependents(root, target, null, ignore, epoch),
+    );
+  } catch (error) {
+    fail(set, "graph", String(error));
+  }
+}
+
+/** Count one file and list what it declares. */
+async function runFile(
+  set: SetState,
+  root: string,
+  path: string,
+): Promise<void> {
+  set((state) => ({ file: { ...state.file, busy: true, error: null } }));
+  try {
+    const data = await services.file.detail(root, path);
+    set({ file: { data, error: null, busy: false } });
     bump(set);
   } catch (error) {
-    set({ graph: { data: null, error: String(error), busy: false } });
+    set({ file: { data: null, error: String(error), busy: false } });
     bump(set);
   }
 }
@@ -160,6 +238,7 @@ export const useClient = create<ClientState>((set, get) => ({
   loc: never<LocView>(),
   symbols: never<SymbolReport>(),
   graph: never<GraphReport>(),
+  file: never<FileDetail>(),
   tree: {},
   generation: 0,
 
@@ -190,7 +269,7 @@ export const useClient = create<ClientState>((set, get) => ({
     // something to show the moment a file is chosen.
     if (path) {
       set({ target: path });
-      get().recompute();
+      void runFile(set, get().root, path);
     }
   },
 
@@ -203,16 +282,37 @@ export const useClient = create<ClientState>((set, get) => ({
 
   recompute: () => {
     const { view, root, ignore, target } = get();
-    if (view === "loc") void runLoc(set, root, ignore);
-    else if (view === "symbols") void runSymbols(set, root, ignore);
-    else void runGraph(set, root, target, ignore);
+    // One stamp per run, taken before the call so the reply can be compared
+    // against it. The showing analysis is the one that runs.
+    const stamp = next_epoch();
+    if (view === "loc") void runLoc(set, root, ignore, stamp);
+    else if (view === "symbols") void runSymbols(set, root, ignore, stamp);
+    else void runGraph(set, root, target, ignore, stamp);
   },
 
   recomputeAll: () => {
     const { root, ignore, target } = get();
-    void runLoc(set, root, ignore);
-    void runSymbols(set, root, ignore);
-    if (target) void runGraph(set, root, target, ignore);
+    // One stamp for the whole batch, so a cancel discards every reply in it at
+    // once and a partial set of newer answers never appears beside an older one.
+    const stamp = next_epoch();
+    void runLoc(set, root, ignore, stamp);
+    void runSymbols(set, root, ignore, stamp);
+    if (target) void runGraph(set, root, target, ignore, stamp);
+  },
+
+  cancel: () => {
+    // Move the discard mark past every run in flight, so each reply is dropped
+    // as it arrives rather than racing the cancel. The host's own epoch is
+    // bumped as well, and the work still completes; nobody waits for it.
+    discarded = stamp;
+    void services.dialog.cancel().then(() => {
+      set((state) => ({
+        loc: { ...state.loc, busy: false },
+        symbols: { ...state.symbols, busy: false },
+        graph: { ...state.graph, busy: false },
+        file: { ...state.file, busy: false },
+      }));
+    });
   },
 
   setTreeLevel: (directory, nodes) =>
