@@ -1,9 +1,9 @@
 // The workbench grid: activity bar, sidebar, editor, status bar.
 //
 // This is the part that has to stay hand-written. It is a four-region layout
-// with two resizable tracks, and a component library's grid is not going to
-// express "the middle track shrinks to zero and the sidebar can be dragged
-// between 180 and 520 pixels" without fighting the library's own assumptions.
+// with one resizable track, and a component library's grid is not going to
+// express "the right column is a panel that can be 240px or 4 Careful editing
+// without fighting the library's own assumptions.
 
 @use "tokens" as t;
 
@@ -30,7 +30,9 @@
   grid-column: 3;
   grid-row: 1;
   display: grid;
-  grid-template-rows: auto t.$tab-height minmax(0, 1fr);
+  // The controls, the tabs, then the split. Three rows, and only the last one
+  // is allowed to grow, so the controls never move when a table does.
+  grid-template-rows: auto 35px minmax(0, 1fr);
   min-width: 0;
   background: t.$editor-bg;
 }
@@ -125,6 +127,7 @@
 .sidebar__title {
   display: flex;
   align-items: center;
+  gap: 5px;
   padding: 0 10px;
   font-size: 11px;
   text-transform: uppercase;
@@ -230,4 +233,41 @@
 .tree__label {
   overflow: hidden;
   text-overflow: ellipsis;
+}
+
+// ---- the split -----------------------------------------------------------
+// Two columns, and the panel is the narrow one. A `fr` on the grid rather than
+// a fixed width on the panel, so the table takes what is left rather than the
+// panel taking what is left over.
+
+.split {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 320px;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.split__grid {
+  display: grid;
+  grid-template-rows: auto minmax(0, 1fr);
+  min-width: 0;
+  min-height: 0;
+}
+
+.split__scroll {
+  min-height: 0;
+}
+
+.split__viewport {
+  min-height: 0;
+}
+
+// The panel carries a left rule rather than a background of its own: it is the
+// same surface as the tables, and a change of surface would say the panel were
+// a separate region rather than a detail of the same one.
+.split__panel {
+  border-left: 1px solid t.$panel-border;
+  background: t.$editor-bg;
+  min-height: 0;
+  overflow: hidden;
 }

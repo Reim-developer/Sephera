@@ -20,6 +20,10 @@ sephera_graph = { path = "../../crates/sephera_graph" }
 sephera_runtime = { path = "../../crates/sephera_runtime" }
 sephera_ignore = { path = "../../crates/sephera_ignore" }
 sephera_gui = { path = "../../crates/sephera_gui" }
+# For `language_for_path`, which is what the scanner uses to pick a language by
+# path. The per-file panel needs the same choice the directory scan makes, so a
+# file's counts agree whichever way they were produced.
+sephera_core = { path = "../../crates/sephera_core" }
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }

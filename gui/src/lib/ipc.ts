@@ -77,11 +77,7 @@ export interface GraphEdge {
   /** `null` for an external dependency or a path that could not be placed. */
   to: string | null;
   resolved: boolean;
-  /**
-   * True when the path looked local and could not be placed. Distinct from
-   * `!resolved`, which also covers every external crate: a gap is a resolver
-   * defect, an external import is not.
-   */
+  /** A path that looked local and could not be placed. */
   local_gap: boolean;
   /** Gated behind a `#[cfg(...)]`. */
   cfg_gated: boolean;
@@ -117,6 +113,27 @@ export interface GraphReport {
   metrics: GraphMetrics;
 }
 
+/** One declaration inside a single file. */
+export interface FileDeclaration {
+  name: string;
+  /** `functions`, `types`, `enums`, or `constants`. */
+  kind: string;
+  /** 1-based line where the declaration's name appears. */
+  line: number;
+}
+
+/** What the per-file panel shows. */
+export interface FileDetail {
+  path: string;
+  code: number;
+  comment: number;
+  empty: number;
+  size_bytes: number;
+  /** `null` when the extension is not a bundled language. */
+  language: string | null;
+  declarations: FileDeclaration[];
+}
+
 /**
  * The command names the Rust host registers.
  *
@@ -128,6 +145,8 @@ export const COMMANDS = {
   countDeclarations: "count_declarations",
   dependencyGraph: "dependency_graph",
   listTree: "list_tree",
+  fileDetail: "file_detail",
+  cancelCurrent: "cancel_current",
 } as const;
 
 /** Call a command on the Rust host.

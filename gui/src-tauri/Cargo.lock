@@ -2979,6 +2979,7 @@ name = "sephera_gui_tauri"
 version = "0.7.1"
 dependencies = [
  "anyhow",
+ "sephera_core",
  "sephera_graph",
  "sephera_gui",
  "sephera_ignore",
