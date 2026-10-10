@@ -35,6 +35,7 @@ pub async fn dependency_graph(
     state: State<'_, Progress>,
 ) -> Result<(sephera_graph::types::GraphReport, u64), String> {
     let resolved = resolve_path(&path);
+    let began = state.0.begin();
     let matcher =
         IgnoreMatcher::from_patterns(&ignore).map_err(|e| e.to_string())?;
 
@@ -46,6 +47,6 @@ pub async fn dependency_graph(
         Some(GraphQuery::DependsOn(target)),
     )
     .map_err(|e| e.to_string())?;
-    let epoch = if state.0.is_current(epoch) { epoch } else { 0 };
+    let epoch = if state.0.is_current(began) { epoch } else { 0 };
     Ok((report, epoch))
 }

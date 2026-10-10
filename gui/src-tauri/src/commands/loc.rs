@@ -18,6 +18,11 @@ use sephera_gui::LocView;
 /// replacing what the window is showing. That is what makes `Cancel` able to
 /// close the dialog at once -- the work still finishes, but nothing waits for it.
 ///
+/// The host's own half of that contract is in `progress::Epoch`: a snapshot of
+/// the cancellation generation before the work, compared after it. The client's
+/// stamp is echoed untouched -- it was the client's stamp being compared against
+/// the host's counter that made the first request always look stale.
+///
 /// # Errors
 ///
 /// Returns an error when the path is not a directory, or when traversal fails.
@@ -29,7 +34,8 @@ pub async fn count_lines(
     state: State<'_, Progress>,
 ) -> Result<(LocView, u64), String> {
     let resolved = resolve_path(&path);
+    let began = state.0.begin();
     let view = sephera_gui::count(&resolved, &ignore).map_err(|e| e.to_string())?;
-    let epoch = if state.0.is_current(epoch) { epoch } else { 0 };
+    let epoch = if state.0.is_current(began) { epoch } else { 0 };
     Ok((view, epoch))
 }
