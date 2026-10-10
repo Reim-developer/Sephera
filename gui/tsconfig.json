@@ -16,7 +16,20 @@
     "noUnusedParameters": true,
     "noFallthroughCasesInSwitch": true,
     "noUncheckedSideEffectImports": true,
-    "types": ["vite/client"]
+    "types": ["vite/client", "node"],
+    // The `@/` alias. Declared here as well as in `vite.config.ts` and
+    // `vitest.config.ts`, because the three tools resolve independently: a type
+    // checked against one mapping and built against another is a mismatch that
+    // surfaces as a module-not-found in one of them only.
+    //
+    // It also gives the layering a fixed shape to read. `scripts/check_gui_layers.py`
+    // looks at the first segment after `@/` to know which layer an import belongs
+    // to, which is what let it stop resolving `..` segments -- the part that had
+    // the bugs.
+    "baseUrl": ".",
+    "paths": {
+      "@/*": ["src/*"]
+    }
   },
   "include": ["src"]
 }
