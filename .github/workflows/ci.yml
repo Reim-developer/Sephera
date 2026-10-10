@@ -140,6 +140,17 @@ jobs:
       - name: Check documentation links are claims the tree can keep
         run: python scripts/check_doc_links.py
 
+      # The GUI's import directions. A view that reaches into the service layer
+      # still compiles, still runs, and silently stops being testable by handing
+      # it a store -- which is the whole boundary the split exists to hold.
+      #
+      # A script rather than a lint, because the rule is about the shape of the
+      # dependency graph and no language-level tool expresses it. It reads the
+      # first segment of an `@/` specifier, which is why the alias had to exist
+      # before this check could work at all.
+      - name: Check the GUI's import directions
+        run: python scripts/check_gui_layers.py
+
       # A third doc failure, and the one that costs a reader the most: a page
       # describing a flag the CLI rejects. `check_docs.py` checks that a quoted
       # *path* exists; this checks that a quoted *flag* does, against
