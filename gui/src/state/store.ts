@@ -230,7 +230,14 @@ async function runFile(
 
 /** The store. */
 export const useClient = create<ClientState>((set, get) => ({
-  root: ".",
+  // Empty rather than `"."`. A relative default resolves against the host
+  // process's working directory, which under `tauri dev` is `gui/src-tauri`
+  // -- so `.` counted that directory, which is not the project the user
+  // meant, and the count ran for a long time over a build tree.
+  //
+  // Empty means "no analysis yet", and the shell shows the picker rather
+  // than a table of numbers about nowhere.
+  root: "",
   ignore: [],
   target: "",
   selected: null,
@@ -243,6 +250,14 @@ export const useClient = create<ClientState>((set, get) => ({
   generation: 0,
 
   setRoot: (path) => {
+    // An empty path clears the analysis rather than running it. The host would
+    // resolve "" against its own working directory -- which under `tauri dev`
+    // is `gui/src-tauri` -- so treating it as a directory counted somewhere
+    // nobody chose.
+    if (!path) {
+      set({ root: "", loc: never<LocView>() });
+      return;
+    }
     set({ root: path });
     // A new directory invalidates every analysis, and the tree with it. Running
     // only the showing one would leave the others stale and one click away from

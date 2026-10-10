@@ -81,7 +81,7 @@ pub async fn file_detail(root: String, path: String) -> Result<FileDetail, Strin
         |(_, config)| scan_content(&bytes, config.comment_style),
     );
 
-    let declarations = declarations_of(&absolute, &relative);
+    let declarations = declarations_of(&absolute);
 
     Ok(FileDetail {
         path: relative,
@@ -104,7 +104,7 @@ pub async fn file_detail(root: String, path: String) -> Result<FileDetail, Strin
 /// A directory the analyzer cannot read yields no declarations rather than an
 /// error: the panel's counts have already come from the bytes themselves, and
 /// failing the whole panel on the declaration half would discard them.
-fn declarations_of(absolute: &Path, relative: &str) -> Vec<FileDeclaration> {
+fn declarations_of(absolute: &Path) -> Vec<FileDeclaration> {
     let Some(parent) = absolute.parent() else {
         return Vec::new();
     };
@@ -115,11 +115,17 @@ fn declarations_of(absolute: &Path, relative: &str) -> Vec<FileDeclaration> {
         return Vec::new();
     };
 
+    // The analyzer measures `file_path` from the directory it was handed, so the
+    // file has to be named the same way before any comparison is honest.
+    let Some(name) = absolute.file_name().and_then(|name| name.to_str()) else {
+        return Vec::new();
+    };
+
     let SymbolDetail { symbols, .. } = detail;
 
     let mut declarations: Vec<FileDeclaration> = symbols
         .iter()
-        .filter(|symbol| symbol.file_path == relative)
+        .filter(|symbol| symbol.file_path == name)
         .map(|symbol| FileDeclaration {
             name: symbol.name.clone(),
             kind: format!("{:?}", symbol.kind).to_lowercase(),
@@ -131,4 +137,70 @@ fn declarations_of(absolute: &Path, relative: &str) -> Vec<FileDeclaration> {
     // a reader looks for the line they were just on.
     declarations.sort_by_key(|declaration| declaration.line);
     declarations
+}
+/// The per-file command's own tests.
+///
+/// One test, and it is the bug that shipped. `declarations_of` filtered the
+/// analyzer's `file_path` against a path stripped from the *analysis root*,
+/// while the analyzer reports paths relative to the directory it was handed.
+/// For `src/a.rs` that is `src/a.rs` against `a.rs`, so every file reported no
+/// declarations -- and a reader looking at a file full of functions was told
+/// it held none.
+///
+/// The test builds a real file in a real directory, because the failure was a
+/// mismatch between two path spellings rather than a value that could be
+/// asserted without one.
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn a_file_with_declarations_reports_them() {
+        let directory = tempfile::tempdir().expect("a writable directory");
+        let source = directory.path().join("lib.rs");
+        std::fs::write(
+            &source,
+            "pub fn count_line() {}\n\npub struct Widget;\n\nimpl Widget {\n    pub fn render(&self) {}\n}\n",
+        )
+        .expect("the source file is written");
+
+        // A path reaching into the tree, the way the client sends it.
+        let root = directory.path().parent().expect("a parent");
+        let relative = source
+            .strip_prefix(root)
+            .expect("the file is under the parent")
+            .to_string_lossy()
+            .replace('\\', "/");
+
+        let declared = declarations_of(&source);
+
+        // Three declarations, not zero: the filter now compares the file name
+        // against what the analyzer reports.
+        assert_eq!(declared.len(), 3, "declared: {declared:?}");
+        assert_eq!(declared[0].name, "count_line");
+        assert_eq!(declared[0].kind, "functions");
+        assert_eq!(declared[0].line, 1);
+        assert_eq!(declared[1].name, "Widget");
+        assert_eq!(declared[1].kind, "types");
+        assert_eq!(declared[2].name, "render");
+        assert_eq!(declared[2].kind, "functions");
+        // Source order, not the analyzer's ordering by kind.
+        assert_eq!(
+            declared.iter().map(|d| d.line).collect::<Vec<_>>(),
+            vec![1, 3, 6],
+        );
+
+        // The relative path is what the caller held, and it is not what the
+        // filter compares against any more.
+        assert!(relative.contains('/'), "{relative}");
+    }
+
+    #[test]
+    fn a_file_with_no_declarations_reports_none() {
+        let directory = tempfile::tempdir().expect("a writable directory");
+        let source = directory.path().join("notes.txt");
+        std::fs::write(&source, "just some prose\n").expect("the file is written");
+
+        assert!(declarations_of(&source).is_empty());
+    }
 }

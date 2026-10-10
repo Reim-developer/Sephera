@@ -2,9 +2,11 @@ import { useEffect } from "react";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 import { FolderOpen, RefreshCw } from "lucide-react";
 
+import { EmptyState } from "@/components/EmptyState";
 import { ActivityBar, PANELS } from "@/components/ActivityBar";
 import { FilePanel } from "@/components/FilePanel";
 import { FileTree } from "@/components/FileTree";
+import { FileViewer } from "@/components/FileViewer";
 import { ProgressModal } from "@/components/ProgressModal";
 import { StatusBar } from "@/components/StatusBar";
 import { TabBar } from "@/components/TabBar";
@@ -68,6 +70,17 @@ export function App() {
   const active = VIEWS.find((entry) => entry.id === view) ?? VIEWS[0];
   const Active = active.component;
 
+  // No root means no analysis to show. The picker rather than an empty table:
+  // the tables are the product, and a table of numbers about nowhere is worse
+  // than a prompt naming what is missing.
+  if (!root) {
+    return (
+      <div className={styles.workbench}>
+        <EmptyState />
+      </div>
+    );
+  }
+
   return (
     <div className={styles.workbench}>
       <ActivityBar items={PANELS} active="explorer" onSelect={() => undefined} />
@@ -86,35 +99,46 @@ export function App() {
       </aside>
 
       <main className={styles.workbench__main}>
-        <div className={editor.controls}>
-          <button
-            type="button"
-            onClick={() => void run(commandIds.pickDirectory)}
-          >
-            Open…
-          </button>
-          <DirectoryField />
-          <IgnoreField />
-          <button type="button" onClick={() => void run(commandIds.recompute)}>
-            <RefreshCw size={13} aria-hidden="true" /> Count
-          </button>
-        </div>
+        {selected ? null : (
+          <>
+            <div className={editor.controls}>
+              <button
+                type="button"
+                onClick={() => void run(commandIds.pickDirectory)}
+              >
+                Open…
+              </button>
+              <DirectoryField />
+              <IgnoreField />
+              <button type="button" onClick={() => void run(commandIds.recompute)}>
+                <RefreshCw size={13} aria-hidden="true" /> Count
+              </button>
+            </div>
 
-        <TabBar
-          tabs={VIEWS.map((entry) => ({ id: entry.id, label: entry.label }))}
-          active={view}
-          onSelect={setView}
-        />
+            <TabBar
+              tabs={VIEWS.map((entry) => ({
+                id: entry.id,
+                label: entry.label,
+              }))}
+              active={view}
+              onSelect={setView}
+            />
+          </>
+        )}
 
         <div className={styles.split}>
           <section className={styles.split__grid}>
             {/* The graph's query row is the view's own, because typing a path is
                 how that analysis is addressed rather than the shell's directory
                 field, which applies to all three alike. */}
-            {active.id === "graph" ? <QueryRow /> : null}
+            {active.id === "graph" && !selected ? <QueryRow /> : null}
             <ScrollArea.Root className={styles.split__scroll}>
               <ScrollArea.Viewport className={styles.split__viewport}>
-                <Active generation={generation} />
+                {selected ? (
+                  <FileViewer />
+                ) : (
+                  <Active generation={generation} />
+                )}
               </ScrollArea.Viewport>
               <ScrollArea.Scrollbar orientation="vertical">
                 <ScrollArea.Thumb />
