@@ -1,5 +1,5 @@
 /**
- * The file tree's data, as a hook.
+ * Layer 4: the file tree's data, as a hook.
  *
  * `components/FileTree.tsx` used to import the registry and call
  * `services.explorer.list` itself. That compiles, runs, and crosses the layering:
@@ -47,6 +47,10 @@ export interface FileTreeData {
  * trip and nothing else. Loading the whole tree once is what makes a file explorer
  * feel instant on a small repository and frozen on a large one, and the crossover
  * is much closer than it looks.
+ *
+ * Both the root and the directory are sent, because the host resolves the read
+ * against the analysis root rather than against its own working directory. Sending
+ * one path made every folder below the root read somewhere that did not exist.
  */
 export function useFileTree(root: string): FileTreeData {
   const tree = useClient((state) => state.tree);
@@ -66,9 +70,7 @@ export function useFileTree(root: string): FileTreeData {
       pending.current = inFlight;
 
       try {
-        const entries = await services.explorer.list(
-          directory === "" ? root : directory,
-        );
+        const entries = await services.explorer.list(root, directory);
         setTreeLevel(directory, entries);
       } catch (cause) {
         setError(String(cause));
