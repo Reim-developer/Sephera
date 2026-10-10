@@ -1,10 +1,6 @@
-import {
-  ChevronDown,
-  ChevronRight,
-  File,
-  Folder,
-  FolderOpen,
-} from "lucide-react";
+import { ChevronDown, ChevronRight, Folder, FolderOpen } from "lucide-react";
+
+import { fileIcon } from "@/components/fileIcon";
 
 import { useFileTree } from "@/hooks/useFileTree";
 import type { TreeNode } from "@/lib/ipc";
@@ -91,11 +87,14 @@ function TreeRow({
   onOpen: (path: string) => void;
 }) {
   const isOpen = expanded.has(node.path);
+  // The file's own language mark, or a plain file when the extension is not one
+  // of the bundled languages.
+  const Icon = node.is_dir ? Folder : fileIcon(node.path);
   const isSelected = selected === node.path;
   const children = levels[node.path];
   const isLoading = isOpen && children === undefined;
 
-  const Directory = isOpen ? FolderOpen : Folder;
+
 
   return (
     <>
@@ -120,7 +119,15 @@ function TreeRow({
           ) : null}
         </span>
         <span className={styles.tree__icon} aria-hidden="true">
-          {node.is_dir ? <Directory size={14} /> : <File size={14} />}
+          {node.is_dir ? (
+            isOpen ? (
+              <FolderOpen size={14} />
+            ) : (
+              <Folder size={14} />
+            )
+          ) : (
+            <Icon size={14} />
+          )}
         </span>
         <span className={styles.tree__label}>{name(node.path)}</span>
       </button>

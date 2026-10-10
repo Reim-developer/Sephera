@@ -1,6 +1,7 @@
 import { AlertTriangle, FileText } from "lucide-react";
+import type { LucideIcon } from "lucide-react";
 
-
+import { declarationIcon } from "@/components/DeclarationIcon";
 import { ProgressBar } from "@/components/ProgressBar";
 import { useFile } from "@/hooks/useAnalysis";
 import { useClient } from "@/state/store";
@@ -90,13 +91,23 @@ export function FilePanel() {
             </tr>
           </thead>
           <tbody>
-            {data.declarations.map((declaration) => (
-              <tr key={`${declaration.line}:${declaration.name}`}>
-                <td>{declaration.name}</td>
-                <td>{declaration.kind}</td>
-                <td className={styles.numeric}>{declaration.line}</td>
-              </tr>
-            ))}
+            {data.declarations.map((declaration) => {
+              // The kind's icon, named once so the JSX below stays readable.
+              // A kind the table does not know falls back to a brace rather
+              // than rendering nothing, because a missing icon in a list of
+              // declarations reads as a row the tool failed on.
+              const KindIcon: LucideIcon = declarationIcon(declaration.kind);
+              return (
+                <tr key={`${declaration.line}:${declaration.name}`}>
+                  <td>{declaration.name}</td>
+                  <td className={styles.panel__kind}>
+                    <KindIcon size={12} aria-hidden="true" />
+                    {declaration.kind}
+                  </td>
+                  <td className={styles.numeric}>{declaration.line}</td>
+                </tr>
+              );
+            })}
           </tbody>
         </table>
       ) : (

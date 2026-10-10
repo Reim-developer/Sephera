@@ -153,3 +153,12 @@
   font-size: 11px;
   color: t.$text-muted;
 }
+
+// A declaration's kind sits beside its icon, and the two are one cell. The
+// gap keeps the mark from crowding the word it labels.
+.panel__kind {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: t.$text-muted;
+}
