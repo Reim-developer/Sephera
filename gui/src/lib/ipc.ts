@@ -69,26 +69,62 @@ export interface TreeNode {
   children: TreeNode[];
 }
 
-/** A reverse-dependency query, as the graph command accepts it. */
+/** A file in the graph, with its degrees. */
+export interface GraphNode {
+  file_path: string;
+  /** `null` when the language could not be detected. */
+  language: string | null;
+  /** How many imports this file makes. */
+  imports_count: number;
+  /** How many files import this file -- the number `impact` reports. */
+  imported_by_count: number;
+}
+
+/** One import statement, resolved or not. */
+export interface GraphEdge {
+  from: string;
+  import_path: string;
+  /** `null` for an external dependency or a path that could not be placed. */
+  to: string | null;
+  resolved: boolean;
+  /**
+   * True when the path looked local and could not be placed. Distinct from
+   * `!resolved`, which also covers every external crate: a gap is a resolver
+   * defect, an external import is not.
+   */
+  local_gap: boolean;
+  /** Gated behind a `#[cfg(...)]`. */
+  cfg_gated: boolean;
+  kind: string;
+}
+
+/** A top-level count, as the report's metrics. */
+export interface GraphMetrics {
+  total_files: number;
+  total_internal_edges: number;
+  self_references: number;
+  total_external_edges: number;
+  unresolved_local_edges: number;
+  cfg_gated_edges: number;
+  circular_dependencies: number;
+}
+
+/**
+ * A reverse-dependency report: everything that depends on one file.
+ *
+ * This is the view where a graphical client earns its keep. The CLI can print
+ * the number and stop there; it cannot let a reader click a dependent and then
+ * ask the same question about *that* file, which is how a blast radius is
+ * actually explored.
+ */
 export interface GraphReport {
   base_path: string;
   focus_paths: string[];
   depth: number | null;
   query: { DependsOn: string } | null;
-  nodes: Array<{
-    file_path: string;
-    language: string;
-    is_test: boolean;
-  }>;
-  edges: Array<{
-    from: string;
-    import_path: string;
-    to: string | null;
-    resolved: boolean;
-    local_gap: boolean;
-    kind: string;
-  }>;
-  metrics: Record<string, number>;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+  metrics: GraphMetrics;
 }
 
 /** Count a directory. Extra patterns are merged after `.sephera.toml`'s. */
