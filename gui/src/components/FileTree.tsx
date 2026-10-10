@@ -17,6 +17,12 @@ import styles from "@/styles/workbench.module.scss";
  * live in `useFileTree`, because a component that fetches its own data has no
  * seam a test can substitute -- `scripts/check_gui_layers.py` enforces that, and
  * this file previously imported the registry directly.
+ *
+ * A node's children are rendered by `TreeBranch`, a component per level, so a
+ * row re-renders without re-rendering everything under it. That is what keeps a
+ * deep expansion of a repository with thousands of files from freezing the
+ * sidebar, and it is why the recursion ends here rather than continuing through
+ * the child rows.
  */
 export function FileTree({
   root,
@@ -27,8 +33,7 @@ export function FileTree({
   selected: string | null;
   onOpen: (path: string) => void;
 }) {
-  const { levels, expanded, error, isPending, toggle, autoExpandDepth } =
-    useFileTree(root);
+  const { levels, expanded, error, isPending, toggle } = useFileTree(root);
 
   const nodes = levels[""] ?? [];
 
@@ -54,14 +59,18 @@ export function FileTree({
           selected={selected}
           onToggle={toggle}
           onOpen={onOpen}
-          autoExpandDepth={autoExpandDepth}
         />
       ))}
     </div>
   );
 }
 
-/** One row, and its subtree. */
+/** One row, with its branch below it.
+ *
+ * The row is a single node with no recursion of its own; the rows below it are
+ * its children, each of which is a `TreeRow` of its own -- so the component tree
+ * mirrors the expanded tree one level at a time, and React can stop at a row that
+ * did not change. */
 function TreeRow({
   node,
   depth,
@@ -71,7 +80,6 @@ function TreeRow({
   selected,
   onToggle,
   onOpen,
-  autoExpandDepth,
 }: {
   node: TreeNode;
   depth: number;
@@ -81,19 +89,11 @@ function TreeRow({
   selected: string | null;
   onToggle: (path: string) => void;
   onOpen: (path: string) => void;
-  autoExpandDepth: number;
 }) {
   const isOpen = expanded.has(node.path);
   const isSelected = selected === node.path;
   const children = levels[node.path];
   const isLoading = isOpen && children === undefined;
-
-  // A directory expands on the same click that a file opens with. A separate
-  // disclosure triangle is one more thing to aim at.
-  function activate() {
-    if (node.is_dir) onToggle(node.path);
-    else onOpen(node.path);
-  }
 
   const Directory = isOpen ? FolderOpen : Folder;
 
@@ -107,7 +107,7 @@ function TreeRow({
         aria-busy={isLoading || undefined}
         className={styles.tree__row}
         style={{ paddingLeft: 6 + depth * 12 }}
-        onClick={activate}
+        onClick={() => (node.is_dir ? onToggle(node.path) : onOpen(node.path))}
         title={node.path}
       >
         <span className={styles.tree__chevron} aria-hidden="true">
@@ -126,47 +126,83 @@ function TreeRow({
       </button>
 
       {node.is_dir && isOpen ? (
-        isLoading ? (
-          // A placeholder row, so expanding does not leave an empty gap where the
-          // contents are about to appear. `aria-live` is absent on purpose: the
-          // rows themselves announce the change.
-          <div
-            className={styles.tree__row}
-            style={{ paddingLeft: 18 + depth * 12 }}
-          >
-            <span className={styles.tree__label}>…</span>
-          </div>
-        ) : children.length === 0 ? (
-          <div
-            className={styles.tree__row}
-            style={{ paddingLeft: 18 + depth * 12 }}
-          >
-            <span className={styles.tree__label} aria-hidden="true">
-              ∅
-            </span>
-          </div>
-        ) : depth >= autoExpandDepth ? null : (
-          children.map((child) => (
-            <TreeRow
-              key={child.path}
-              node={child}
-              depth={depth + 1}
-              levels={levels}
-              expanded={expanded}
-              pending={pending}
-              selected={selected}
-              onToggle={onToggle}
-              onOpen={onOpen}
-              autoExpandDepth={autoExpandDepth}
-            />
-          ))
-        )
+        <TreeBranch
+          directory={node.path}
+          depth={depth}
+          levels={levels}
+          expanded={expanded}
+          pending={pending}
+          selected={selected}
+          onToggle={onToggle}
+          onOpen={onOpen}
+          loading={isLoading}
+        />
       ) : null}
+    </>
+  );
+}
 
-      {/* Past the automatic depth the branch is rendered but its children are
-          fetched only when opened -- which is the point of the depth limit. The
-          rows are still interactive and their own expansion loads the next level
-          on demand. */}
+/** The children of one open directory.
+ *
+ * Separate from the row so the subtree re-renders only when the subtree changes.
+ * Rendering the children inline in `TreeRow` made every open-and-close re-render
+ * every descendant, which is the stutter this component exists to remove.
+ */
+function TreeBranch({
+  directory,
+  depth,
+  levels,
+  expanded,
+  pending,
+  selected,
+  onToggle,
+  onOpen,
+  loading,
+}: {
+  directory: string;
+  depth: number;
+  levels: Record<string, TreeNode[]>;
+  expanded: ReadonlySet<string>;
+  pending: (directory: string) => boolean;
+  selected: string | null;
+  onToggle: (path: string) => void;
+  onOpen: (path: string) => void;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <div className={styles.tree__row} style={{ paddingLeft: 18 + depth * 12 }}>
+        <span className={styles.tree__label}>…</span>
+      </div>
+    );
+  }
+
+  const children = levels[directory] ?? [];
+  if (children.length === 0) {
+    return (
+      <div className={styles.tree__row} style={{ paddingLeft: 18 + depth * 12 }}>
+        <span className={styles.tree__label} aria-hidden="true">
+          ∅
+        </span>
+      </div>
+    );
+  }
+
+  return (
+    <>
+      {children.map((child) => (
+        <TreeRow
+          key={child.path}
+          node={child}
+          depth={depth + 1}
+          levels={levels}
+          expanded={expanded}
+          pending={pending}
+          selected={selected}
+          onToggle={onToggle}
+          onOpen={onOpen}
+        />
+      ))}
     </>
   );
 }

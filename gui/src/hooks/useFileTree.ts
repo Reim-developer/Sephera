@@ -26,14 +26,6 @@ import type { TreeNode } from "@/lib/ipc";
 import { services } from "@/services/registry";
 import { useClient } from "@/state/store";
 
-/** How deep to expand before insisting the user ask for more.
- *
- * Two levels is enough to see `crates/` and `sephera_core/` in a workspace of
- * crates without walking every leaf of a tree that may be tens of thousands of
- * files. Expanding nothing would make the first render the whole repository,
- * which is what the lazy load exists to avoid. */
-const AUTO_EXPAND_DEPTH = 2;
-
 /** What a tree needs to know before it can render. */
 export interface FileTreeData {
   /** Directory path -> its immediate children. `""` is the root level. */
@@ -46,8 +38,6 @@ export interface FileTreeData {
   isPending: (directory: string) => boolean;
   /** Open or close a directory, loading its children on first open. */
   toggle: (directory: string) => void;
-  /** The depth at which automatic loading stops. */
-  autoExpandDepth: number;
 }
 
 /**
@@ -144,6 +134,5 @@ export function useFileTree(root: string): FileTreeData {
     error,
     isPending: (directory) => pending.current.has(directory),
     toggle,
-    autoExpandDepth: AUTO_EXPAND_DEPTH,
   };
 }
