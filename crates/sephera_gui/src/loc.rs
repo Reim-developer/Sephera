@@ -184,7 +184,8 @@ mod tests {
     //
     // The client is TypeScript with hand-written interfaces in
     // gui/src/lib/ipc.ts. Nothing checks the two against each other: a rename
-    // in one place compiles fine and fails at runtime as ield not found,
+    // in one place compiles fine and fails at runtime as
+    // field not found,
     // which surfaces as a blank table with no explanation.
     //
     // These pin the field names the interfaces depend on, so a rename breaks the
