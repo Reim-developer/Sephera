@@ -4,7 +4,10 @@
 /benchmarks/reports/
 /benchmarks/__pycache__/
 __pycache__/
+# Both trees, not just the root: the Tauri client has its own `node_modules`
+# and its own lockfile, and `/node_modules/` alone matches only the repo root.
 /node_modules/
+/gui/node_modules/
 /docs/node_modules/
 /docs/dist/
 /fuzz/artifacts/
@@ -22,6 +25,21 @@ __pycache__/
 !/fuzz/seeds/graph_path_utils/
 !/fuzz/seeds/resolve_focus_scope/
 !/fuzz/seeds/README.md
+# The Tauri client, excluded from the workspace for the reason its manifest gives:
+# `tauri`, `wry` and WebKitGTK's system requirements must not reach
+# `cargo test --workspace`. So it gets its own `target/` and its own lockfile,
+# exactly as `fuzz/` does.
+#
+# The path is `src-tauri/target/`, not `target/`: the Tauri CLI builds from
+# `src-tauri/`, and cargo resolves `target/` relative to the *manifest*, not to
+# the repo root. The first version of this rule used `/gui/target/` and ignored
+# nothing at all, which is how 9,000 object files ended up in a commit.
+/gui/src-tauri/target/
+/gui/dist/
+# A real lockfile is committed for the front-end. `package-lock.json` is not
+# optional here the way it is for `docs/`: the GUI is a product surface, and a
+# build that resolves a different React minor version on a different machine is
+# a build that cannot be reproduced.
 # The graph corpus repositories are not ignored here on purpose. They live in a
 # cache directory outside the tree -- see scripts/fetch_corpus.py -- because
 # `graph` reads only the ignore patterns it is given and would analyse test data

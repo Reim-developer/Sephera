@@ -17,8 +17,9 @@ members = [
     "crates/sephera_graph_go",
     "crates/sephera_graph_java",
     "crates/sephera_graph_cpp",
+    "crates/sephera_gui",
 ]
-exclude = ["fuzz"]
+exclude = ["fuzz", "gui"]
 resolver = "3"
 
 [workspace.package]
@@ -86,6 +87,48 @@ criterion = { version = "0.7", default-features = false }
 # gate. If coverage is ever measured without llvm-cov, this is the first thing to
 # revisit: it is 900 MiB for the cost of a number nothing currently reads.
 incremental = false
+
+# The GUI's build, and the reason it is its own profile rather than `release`.
+#
+# `[profile.release]` below is `lto = "fat"` and `codegen-units = 1` because a
+# hot loop crossing a crate boundary is what this tool is. A GUI is not that: it
+# spends effectively all of its wall time idle in the event loop, and the one
+# thing it does is count lines, which `sephera_scan` already does in parallel
+# over `mmap`. Fat LTO over `winit`, a graphics backend and a font stack would
+# add minutes to every release build to optimise code that is waiting for a
+# mouse click.
+#
+# So the CLI keeps the measured profile and the GUI gets this one:
+#
+#     cargo build --release -p sephera        # fat LTO, unchanged
+#     cargo build -p sephera_gui --profile release-gui
+#
+# Measured from clean, in a fresh `target/`, each built once:
+#
+#     -p sephera, --release                   2m 30s   0.66 GiB   exe 14.7 MB
+#     -p sephera_gui, --profile release-gui   2m 57s   1.29 GiB   exe 16.7 MB
+#     both                                    —        1.95 GiB
+#
+# And the reason it is a separate profile rather than just `release`. Building the
+# GUI *with* `--release`, in a separate target directory so nothing was shared:
+#
+#     -p sephera_gui, --release               4m 19s   1.24 GiB   exe 14.4 MB
+#
+# So thin LTO builds in 68% of the time and costs 2.3 MB of binary -- which is the
+# right way round for a window that waits for clicks. `opt-level = 3` is inherited,
+# so the counting itself is not the thing being traded away.
+#
+# The profiles write to different directories, so building one never invalidates
+# the other.
+[profile.release-gui]
+# Inherits `release`'s `opt-level = 3`, `strip = "symbols"` and panic settings,
+# then overrides only the two this profile exists to change. A profile without
+# `inherits` is rejected outright -- cargo requires it for anything that is not
+# `dev` or `release` -- and that is the right default: a custom profile that
+# started from nothing would silently be `opt-level = 0`.
+inherits = "release"
+lto = "thin"
+codegen-units = 16
 
 [profile.release]
 opt-level = 3

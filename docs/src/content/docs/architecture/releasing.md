@@ -193,11 +193,48 @@ replaces did, for all sixteen crates rather than three.
 ## Packaging notes
 
 - `sephera` is the user-facing install crate
+- `sephera_gui` is the graphical front-end, and is `publish = false` — see below
 - the fifteen library crates are the split of what `sephera_core` used to be, and
   each carries a README saying whether a reader should install it
-- `sephera_tools` stays unpublished, and is the only one with `publish = false`
+- `sephera_tools` stays unpublished, and is the only other one with `publish = false`
 - `publish.yml` is for crates.io publishing, while `release.yml` is for prebuilt GitHub release assets
 - the crates.io READMEs are separate from the GitHub landing README so each surface can stay focused on its own audience
+
+## The GUI is not published
+
+`sephera_gui` has `publish = false`, and that is a consequence of being a binary
+rather than a library. Publishing it would pull `winit`, a graphics backend and a
+font stack into every tree that wanted a line count, and crates.io would gain a
+crate whose only entry point is a window.
+
+It also has its own `rust-version` rather than the workspace's `1.85`: `eframe`
+0.36 declares `1.95`, and a manifest that claims otherwise is promising something
+it cannot keep. CI does not gate MSRV, so this diverges without breaking
+anything — but it is a real divergence and it is recorded rather than hidden.
+
+## The GUI has its own cargo profile
+
+`release.yml` builds the CLI with the workspace `release` profile and the GUI
+with `release-gui`. The CLI's profile is `lto = "fat"` and `codegen-units = 1`
+because a hot loop crossing a crate boundary is what it is; a GUI is idle in its
+event loop and has none. The commands, from a clean target directory:
+
+```bash
+cargo build --release -p sephera                       # fat LTO, unchanged
+cargo build -p sephera_gui --profile release-gui       # thin LTO
+cargo build --release -p sephera_gui                   # for comparison
+```
+
+Measured from clean, each built once:
+
+| what | time | directory | binary |
+|---|---|---|---|
+| CLI, fat LTO | 2m 30s | 0.66 GiB | 14.7 MB |
+| GUI, thin LTO | 2m 57s | 1.29 GiB | 16.7 MB |
+| GUI, fat LTO | 4m 19s | 1.24 GiB | 14.4 MB |
+
+So thin LTO saves 32% of the build for 2.3 MB of binary, which is the right way
+round for a window that waits for clicks.
 
 ## Every crate carries a README
 

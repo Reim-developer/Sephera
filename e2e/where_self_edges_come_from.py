@@ -6,16 +6,20 @@ mechanism -- a parent fallback, a `super::` fallback, a declaration index that
 misses re-exports -- and each one was wrong. This walks the report and says.
 
     python e2e/where_self_edges_come_from.py
+
+It is a diagnostic rather than a test: it needs the axum corpus, so it is not in
+`e2e/run.py`'s suite and is excluded from CI on purpose. It is still type-checked
+like everything else, because "only I run this" is not a type system.
 """
 
 from __future__ import annotations
 
 import json
-import os
 import subprocess
 import sys
 from collections import Counter
 from pathlib import Path
+from typing import Any
 
 REPO = Path(__file__).resolve().parent.parent
 # Reuse `scripts/fetch_corpus.py`'s platform-aware default rather than a
@@ -24,6 +28,11 @@ REPO = Path(__file__).resolve().parent.parent
 # `XDG_CACHE_HOME` or `~/.cache`, so the documented fetch-then-diagnose workflow
 # reported `corpus missing` at a path that cannot exist. `SEPHERA_CORPUS_DIR`
 # still overrides it.
+#
+# `pyrightconfig.json` carries the matching `extraPaths` entry. Without it the
+# import is unresolvable to the type checker and every value read through it
+# becomes `Unknown`, which is how this file accumulated twenty errors while
+# still being the thing that answered the question.
 sys.path.insert(0, str(REPO / "scripts"))
 from fetch_corpus import corpus_dir
 
@@ -31,19 +40,21 @@ AXUM = corpus_dir() / "axum"
 BINARY = REPO / "target" / "release" / "sephera"
 
 
-def report() -> dict:
+def report() -> dict[str, Any]:
     """Run the real command over axum and return its JSON."""
     if not AXUM.exists():
         sys.exit(f"corpus missing: {AXUM}. Run scripts/fetch_corpus.py first.")
 
     completed = subprocess.run(
         [str(BINARY), "graph", "--path", str(AXUM), "--format", "json"],
-        cwd=REPO, capture_output=True, check=False,
+        cwd=REPO,
+        capture_output=True,
+        check=False,
     )
     if completed.returncode != 0:
         sys.exit(completed.stderr.decode("utf-8", "replace"))
 
-    parsed: dict = json.loads(completed.stdout.decode("utf-8"))
+    parsed: dict[str, Any] = json.loads(completed.stdout.decode("utf-8"))
     return parsed
 
 
@@ -51,7 +62,12 @@ def main() -> int:
     """Group every self-edge by the import path that produced it."""
     data = report()
 
-    self_edges = [e for e in data["edges"] if e["to"] == e["from"]]
+    # Annotated rather than inferred. `data` is `dict[str, Any]`, so a bare
+    # comprehension over `data["edges"]` leaves the element type unknown, and
+    # strict mode then reports it at every use -- which is what produced most of
+    # the twenty errors here, all of them describing the same missing annotation.
+    edges: list[dict[str, Any]] = data["edges"]
+    self_edges = [edge for edge in edges if edge["to"] == edge["from"]]
     print(f"\nself-references: {len(self_edges)}")
     print(f"metrics say:    {data['metrics']['self_references']}\n")
 
@@ -60,7 +76,7 @@ def main() -> int:
     # else is the thing worth looking at.
     shapes: Counter[str] = Counter()
     for edge in self_edges:
-        path = edge["import_path"]
+        path: str = edge["import_path"]
         for prefix in ("super::", "crate::", "self::"):
             if path.startswith(prefix):
                 shapes[prefix + path[len(prefix) :].split("::")[-1]] += 1
@@ -72,7 +88,10 @@ def main() -> int:
         print(f"  {count:>3}  {shape}")
 
     print("\nfiles carrying the most:")
-    files: Counter[str] = Counter(e["from"] for e in self_edges)
+    # `str(...)` because `edge["from"]` is `Any`, and a `Counter[str]` built from
+    # an `Any` generator is reported as partially unknown even though every key
+    # here is a path.
+    files: Counter[str] = Counter(str(edge["from"]) for edge in self_edges)
     for name, count in files.most_common(10):
         print(f"  {count:>3}  {name}")
 

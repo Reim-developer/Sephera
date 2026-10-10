@@ -37,6 +37,23 @@ Run a quick LOC scan:
 sephera loc --path .
 ```
 
+## Use the GUI
+
+If you would rather not use a terminal, there is a graphical front-end. It
+counts lines of code in a directory you pick:
+
+```bash
+cargo run -p sephera_gui --profile release-gui
+```
+
+Pick a directory with the file picker, or type one and press **Count**. The GUI
+reads `.sephera.toml` and `.gitignore` exactly as the CLI does, so the number it
+shows is the number `sephera loc` would print. See [the architecture
+notes](/architecture/releasing/) for why it has its own cargo profile.
+
+Prebuilt binaries ship inside the same release archive as the CLI, so one
+download has both.
+
 Run the same scan against a remote repository:
 
 ```bash
