@@ -1,6 +1,7 @@
-import { AlertTriangle, RefreshCw } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
 import { DataTable, type DataRow } from "@/components/DataTable";
+import { ProgressBar } from "@/components/ProgressBar";
 import { useGeneration, useLoc } from "@/hooks/useAnalysis";
 import type { LocView } from "@/lib/ipc";
 import styles from "@/styles/views.module.scss";
@@ -30,12 +31,16 @@ export function LocView() {
       </div>
     );
   }
+  // Counting with nothing to show yet: a header and an indeterminate bar,
+  // rather than a placeholder that says the same thing in words.
   if (busy && !data) {
     return (
-      <div className={styles.placeholder}>
-        <span className={styles.placeholder__title}>
-          <RefreshCw size={14} aria-hidden="true" /> Counting…
-        </span>
+      <div className={styles.view}>
+        <header className={styles.view__header}>
+          <h2 className={styles.view__title}>Lines of code</h2>
+          <p className={styles.view__subtitle}>Counting…</p>
+        </header>
+        <ProgressBar label="Counting lines of code" />
       </div>
     );
   }

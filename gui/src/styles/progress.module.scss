@@ -1,0 +1,32 @@
+// The indeterminate progress bar.
+//
+// A sliding fill rather than a percentage, because the count is one call into
+// Rust that reports nothing until it is done. Read `base.scss` for the
+// reduced-motion rule that makes the animation honest.
+
+@use "tokens" as t;
+
+.progress {
+  height: 3px;
+  margin-bottom: 14px;
+  background: t.$input-bg;
+  border-radius: 2px;
+  overflow: hidden;
+}
+
+.progress__bar {
+  width: 40%;
+  height: 100%;
+  background: t.$focus-border;
+  border-radius: 2px;
+  animation: slide 1.2s ease-in-out infinite;
+}
+
+@keyframes slide {
+  0% {
+    transform: translateX(-100%);
+  }
+  100% {
+    transform: translateX(350%);
+  }
+}

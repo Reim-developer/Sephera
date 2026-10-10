@@ -1,14 +1,11 @@
-import {
-  AlertTriangle,
-  FileCode2,
-  Loader,
-} from "lucide-react";
+import { AlertTriangle, FileCode2 } from "lucide-react";
 
+import { ProgressBar } from "@/components/ProgressBar";
 import { useGeneration, useGraph } from "@/hooks/useAnalysis";
-import { QueryRow } from "@/views/QueryRow";
 import { run } from "@/platform/commands";
 import { useClient } from "@/state/store";
 import type { GraphNode } from "@/lib/ipc";
+import { QueryRow } from "./QueryRow";
 import styles from "@/styles/views.module.scss";
 
 /**
@@ -81,16 +78,14 @@ export function DependenciesView() {
           </span>
         </div>
       ) : busy && !data ? (
-        <div className={styles.placeholder}>
-          <span className={styles.placeholder__title}>
-            <Loader size={14} aria-hidden="true" /> Building the graph
-          </span>
-          <span className={styles.placeholder__hint}>
+        <>
+          <ProgressBar label="Building the dependency graph" />
+          <p className={styles.view__subtitle}>
             The whole tree is parsed once, then traversed in reverse. On a
             workspace this size it is well under a second; on a large repository
             it is a few seconds.
-          </span>
-        </div>
+          </p>
+        </>
       ) : data ? (
         <>
           <Summary />

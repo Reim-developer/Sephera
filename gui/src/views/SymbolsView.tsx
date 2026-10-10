@@ -1,5 +1,6 @@
-import { AlertTriangle, Braces } from "lucide-react";
+import { AlertTriangle } from "lucide-react";
 
+import { ProgressBar } from "@/components/ProgressBar";
 import { useGeneration, useSymbols } from "@/hooks/useAnalysis";
 import type { SymbolReport } from "@/lib/ipc";
 import styles from "@/styles/views.module.scss";
@@ -34,12 +35,15 @@ export function SymbolsView() {
       </div>
     );
   }
+  // Counting with nothing to show yet: a header and an indeterminate bar.
   if (busy && !data) {
     return (
-      <div className={styles.placeholder}>
-        <span className={styles.placeholder__title}>
-          <Braces size={14} aria-hidden="true" /> Reading declarations…
-        </span>
+      <div className={styles.view}>
+        <header className={styles.view__header}>
+          <h2 className={styles.view__title}>Declarations</h2>
+          <p className={styles.view__subtitle}>Reading declarations…</p>
+        </header>
+        <ProgressBar label="Counting declarations" />
       </div>
     );
   }
@@ -53,9 +57,9 @@ export function SymbolsView() {
         <p className={styles.view__subtitle}>
           {data.files_scanned.toLocaleString()} files parsed
           {data.files_skipped > 0
-            ? ` · ${data.files_skipped.toLocaleString()} skipped`
+            ? ` | ${data.files_skipped.toLocaleString()} skipped`
             : ""}{" "}
-          · {data.languages_detected.toLocaleString()} languages
+          | {data.languages_detected.toLocaleString()} languages
         </p>
       </header>
 
