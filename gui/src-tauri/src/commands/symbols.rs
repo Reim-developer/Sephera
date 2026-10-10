@@ -5,10 +5,16 @@
 //! what counts as a declaration, what a nested function does to the count --
 //! is `sephera_symbols`', and it is where it is tested.
 
-use sephera_symbols::SymbolAnalyzer;
+use tauri::State;
+
+use super::{progress::Progress, resolve_path};
 use sephera_scan::IgnoreMatcher;
+use sephera_symbols::SymbolAnalyzer;
 
 /// Count declarations per language, read from parse trees.
+///
+/// `epoch` is returned so the client can tell whether this reply is still the one
+/// it is waiting for; see `loc::count_lines`.
 ///
 /// # Errors
 ///
@@ -17,10 +23,15 @@ use sephera_scan::IgnoreMatcher;
 pub async fn count_declarations(
     path: String,
     ignore: Vec<String>,
-) -> Result<sephera_symbols::SymbolReport, String> {
-    let analyzer = SymbolAnalyzer::new(
-        std::path::Path::new(&path),
-        IgnoreMatcher::from_patterns(&ignore).map_err(|error| error.to_string())?,
-    );
-    analyzer.analyze().map_err(|error| format!("{error:#}"))
+    epoch: u64,
+    state: State<'_, Progress>,
+) -> Result<(sephera_symbols::SymbolReport, u64), String> {
+    let resolved = resolve_path(&path);
+    let matcher =
+        IgnoreMatcher::from_patterns(&ignore).map_err(|e| e.to_string())?;
+    let report = SymbolAnalyzer::new(&resolved, matcher)
+        .analyze()
+        .map_err(|e| e.to_string())?;
+    let epoch = if state.0.is_current(epoch) { epoch } else { 0 };
+    Ok((report, epoch))
 }

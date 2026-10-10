@@ -15,24 +15,32 @@
 
 mod commands;
 
-use commands::{explorer, graph, loc, symbols};
+use commands::{explorer, file, graph, loc, progress, symbols};
+use commands::progress::Progress;
 
 /// Open the window and register every command.
 ///
 /// # Errors
 ///
 /// Returns an error when the window or a graphics backend cannot be created.
+///
+/// The `custom-protocol` feature is on the `tauri` dependency rather than declared
+/// here, because the crate is a binary and Tauri enables it automatically for
+/// `tauri build`. Without it the built binary starts, registers nothing it can
+/// serve, and exits zero with no window and no message -- which is the single
+/// hardest failure in this crate to diagnose from a launcher.
 pub fn run() -> tauri::Result<()> {
     tauri::Builder::default()
         .plugin(tauri_plugin_dialog::init())
+        .manage(Progress::default())
         .invoke_handler(tauri::generate_handler![
             explorer::list_tree,
+            file::file_detail,
             loc::count_lines,
             symbols::count_declarations,
             graph::dependency_graph,
+            progress::cancel_current,
         ])
-        // The window, with the configuration that keeps it a FixedSize-free
-        // normal window. `run_native` blocks until the window closes.
         .run(tauri::generate_context!())
 }
 
@@ -41,6 +49,7 @@ pub fn run() -> tauri::Result<()> {
 /// Kept separate from [`run`] so the failure has somewhere to print to: a GUI
 /// that cannot start has no window to show an error in, and an exit code with no
 /// message is the one thing that is impossible to diagnose from a launcher.
+#[allow(clippy::missing_panics_doc)]
 fn main() {
     if let Err(error) = run() {
         eprintln!("sephera-gui failed to start: {error}");

@@ -10,12 +10,16 @@
 //! that is worth clicking through; a forward traversal is a diagram, and a
 //! diagram is what the export formats are for.
 
-use std::path::PathBuf;
+use tauri::State;
 
+use super::{progress::Progress, resolve_path};
 use sephera_graph::{build_graph, types::GraphQuery};
 use sephera_scan::IgnoreMatcher;
 
 /// Build a reverse-dependency graph for one file: what breaks if it changes.
+///
+/// `epoch` is returned so the client can tell whether this reply is still the one
+/// it is waiting for; see `loc::count_lines`.
 ///
 /// # Errors
 ///
@@ -27,16 +31,21 @@ pub async fn dependency_graph(
     target: String,
     depth: Option<u32>,
     ignore: Vec<String>,
-) -> Result<sephera_graph::types::GraphReport, String> {
-    let matcher = IgnoreMatcher::from_patterns(&ignore)
-        .map_err(|error| error.to_string())?;
+    epoch: u64,
+    state: State<'_, Progress>,
+) -> Result<(sephera_graph::types::GraphReport, u64), String> {
+    let resolved = resolve_path(&path);
+    let matcher =
+        IgnoreMatcher::from_patterns(&ignore).map_err(|e| e.to_string())?;
 
-    build_graph(
-        PathBuf::from(path).as_path(),
+    let report = build_graph(
+        &resolved,
         &matcher,
         &[],
         depth,
         Some(GraphQuery::DependsOn(target)),
     )
-    .map_err(|error| format!("{error:#}"))
+    .map_err(|e| e.to_string())?;
+    let epoch = if state.0.is_current(epoch) { epoch } else { 0 };
+    Ok((report, epoch))
 }
