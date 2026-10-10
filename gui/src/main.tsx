@@ -1,7 +1,9 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { App } from "./App";
-import "./styles/theme.css";
+// The reset and the page chrome. Everything a component owns lives in its own
+// SCSS module, so this import is the only global stylesheet.
+import "./styles/base.scss";
 
 const container = document.getElementById("root");
 if (!container) {
@@ -10,8 +12,8 @@ if (!container) {
 
 // StrictMode is on in development and off in production, which is the default
 // `createRoot` behaviour. The double-invoked effects it adds in development are
-// why every effect below writes its results through a cancellation flag rather
-// than assuming it runs once.
+// why every effect writes its results through a cancellation flag rather than
+// assuming it runs once.
 createRoot(container).render(
   <StrictMode>
     <App />

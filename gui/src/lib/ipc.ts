@@ -62,6 +62,13 @@ export interface SymbolReport {
   languages_detected: number;
 }
 
+/** One node of the sidebar's file tree. */
+export interface TreeNode {
+  path: string;
+  is_dir: boolean;
+  children: TreeNode[];
+}
+
 /** A reverse-dependency query, as the graph command accepts it. */
 export interface GraphReport {
   base_path: string;

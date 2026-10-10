@@ -1,19 +1,21 @@
 import { useCallback, useEffect, useRef, useState } from "react";
-import { listTree } from "../lib/ipc";
+import {
+  ChevronDown,
+  ChevronRight,
+  File,
+  Folder,
+  FolderOpen,
+} from "lucide-react";
 
-/** A file or directory node, as the explorer renders it. */
-export interface TreeNode {
-  path: string;
-  is_dir: boolean;
-  children: TreeNode[];
-}
+import { listTree, type TreeNode } from "../lib/ipc";
+import styles from "../styles/workbench.module.scss";
 
 /** How deep to expand before insisting the user ask for more.
  *
- * Two levels is enough to see `src/` and `crates/` in a workspace of crates
- * without walking every leaf of a tree that may be tens of thousands of files.
- * Expanding nothing would make the first render the whole repository, which is
- * what the lazy load exists to avoid. */
+ * Two levels is enough to see `crates/` and `sephera_core/` in a workspace of
+ * crates without walking every leaf of a tree that may be tens of thousands of
+ * files. Expanding nothing would make the first render the whole repository,
+ * which is what the lazy load exists to avoid. */
 const AUTO_EXPAND_DEPTH = 2;
 
 /**
@@ -47,14 +49,14 @@ export function FileTree({
     pending.current = inFlight;
 
     try {
-      const entries = await listTree(
-        directory === "" ? root : directory,
-      );
+      const entries = await listTree(directory === "" ? root : directory);
       setLevels((previous) =>
         previous[directory] ? previous : { ...previous, [directory]: entries },
       );
     } catch (cause) {
       setError(String(cause));
+      // Collapse a directory that could not be read, so the row does not sit
+      // expanded over nothing.
       setExpanded((previous) => {
         const next = new Set(previous);
         next.delete(directory);
@@ -98,14 +100,16 @@ export function FileTree({
   const nodes = levels[""] ?? [];
 
   if (error && nodes.length === 0) {
-    return <p className="sidebar__empty">Cannot read the tree: {error}</p>;
+    return (
+      <p className={styles.sidebar__empty}>Cannot read the tree: {error}</p>
+    );
   }
   if (nodes.length === 0) {
-    return <p className="sidebar__empty">No files to show.</p>;
+    return <p className={styles.sidebar__empty}>No files to show.</p>;
   }
 
   return (
-    <div className="tree" role="tree" aria-label="Files">
+    <div className={styles.tree} role="tree" aria-label="Files">
       {nodes.map((node) => (
         <TreeRow
           key={node.path}
@@ -114,7 +118,6 @@ export function FileTree({
           levels={levels}
           expanded={expanded}
           selected={selected}
-          pending={pending.current}
           onToggle={toggle}
           onOpen={onOpen}
         />
@@ -129,7 +132,6 @@ function TreeRow({
   levels,
   expanded,
   selected,
-  pending,
   onToggle,
   onOpen,
 }: {
@@ -138,7 +140,6 @@ function TreeRow({
   levels: Record<string, TreeNode[]>;
   expanded: ReadonlySet<string>;
   selected: string | null;
-  pending: ReadonlySet<string>;
   onToggle: (path: string) => void;
   onOpen: (path: string) => void;
 }) {
@@ -147,14 +148,13 @@ function TreeRow({
   const children = levels[node.path];
 
   // A directory expands on the same click that a file opens with. A separate
-  // disclosure triangle is one more thing to aim at, and VS Code's tree opens a
-  // directory on a single click too.
+  // disclosure triangle is one more thing to aim at.
   function activate() {
     if (node.is_dir) onToggle(node.path);
     else onOpen(node.path);
   }
 
-  const showChildren = node.is_dir && isOpen;
+  const Directory = isOpen ? FolderOpen : Folder;
 
   return (
     <>
@@ -163,30 +163,46 @@ function TreeRow({
         role="treeitem"
         aria-selected={isSelected}
         aria-expanded={node.is_dir ? isOpen : undefined}
-        className={`tree__row${isSelected ? " tree__row--selected" : ""}`}
+        className={styles.tree__row}
         style={{ paddingLeft: 6 + depth * 12 }}
         onClick={activate}
         title={node.path}
       >
-        <span className="tree__chevron" aria-hidden="true">
-          {node.is_dir ? (isOpen ? "▾" : "▸") : ""}
+        <span className={styles.tree__chevron} aria-hidden="true">
+          {node.is_dir ? (
+            isOpen ? (
+              <ChevronDown size={12} />
+            ) : (
+              <ChevronRight size={12} />
+            )
+          ) : null}
         </span>
-        <span className="tree__icon" aria-hidden="true">
-          {node.is_dir ? (isOpen ? "📂" : "📁") : "📄"}
+        <span className={styles.tree__icon} aria-hidden="true">
+          {node.is_dir ? (
+            <Directory size={14} />
+          ) : (
+            <File size={14} />
+          )}
         </span>
-        <span className="tree__label">{name(node.path)}</span>
+        <span className={styles.tree__label}>{name(node.path)}</span>
       </button>
 
-      {showChildren ? (
+      {node.is_dir && isOpen ? (
         children === undefined ? (
           // Not loaded yet: a placeholder row, so expanding does not leave an
           // empty gap where the contents are about to appear.
-          <div className="tree__row" style={{ paddingLeft: 18 + depth * 12 }}>
-            <span className="tree__label">…</span>
+          <div
+            className={styles.tree__row}
+            style={{ paddingLeft: 18 + depth * 12 }}
+          >
+            <span className={styles.tree__label}>…</span>
           </div>
         ) : children.length === 0 ? (
-          <div className="tree__row" style={{ paddingLeft: 18 + depth * 12 }}>
-            <span className="tree__label" aria-hidden="true">
+          <div
+            className={styles.tree__row}
+            style={{ paddingLeft: 18 + depth * 12 }}
+          >
+            <span className={styles.tree__label} aria-hidden="true">
               ∅
             </span>
           </div>
@@ -199,7 +215,6 @@ function TreeRow({
               levels={levels}
               expanded={expanded}
               selected={selected}
-              pending={pending}
               onToggle={onToggle}
               onOpen={onOpen}
             />
@@ -207,28 +222,10 @@ function TreeRow({
         )
       ) : null}
 
-      {/* Past the automatic depth, the branch is rendered but its children are
-          fetched only when this node is opened -- which is the whole point of
-          the depth limit. The rows are still rendered, and their own expansion
-          loads the next level on demand. */}
-      {showChildren &&
-      depth >= AUTO_EXPAND_DEPTH &&
-      children &&
-      children.length > 0 ? (
-        children.map((child) => (
-          <TreeRow
-            key={child.path}
-            node={child}
-            depth={depth + 1}
-            levels={levels}
-            expanded={expanded}
-            selected={selected}
-            pending={pending}
-            onToggle={onToggle}
-            onOpen={onOpen}
-          />
-        ))
-      ) : null}
+      {/* Past the automatic depth the branch is rendered but its children are
+          fetched only when opened -- which is the point of the depth limit. The
+          rows are still interactive and their own expansion loads the next
+          level on demand. */}
     </>
   );
 }

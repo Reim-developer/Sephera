@@ -1,0 +1,113 @@
+// The states a view can be in, and the header it sits under.
+//
+// `placeholder` is the empty state, `banner` is an error, `view` is the frame
+// around a populated report. All three are shared, so they live here rather than
+// duplicated per view.
+
+@use "tokens" as t;
+
+.view {
+  padding: 14px 18px 22px;
+}
+
+.view__header {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.view__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: t.$text-bright;
+}
+
+.view__subtitle {
+  font-size: 12px;
+  color: t.$text-muted;
+}
+
+// An error is a left rule and a panel, not a red box: the colour carries the
+// meaning and the border carries the structure, so one being wrong does not
+// destroy the other.
+.banner {
+  display: flex;
+  gap: 9px;
+  padding: 10px 12px;
+  margin-bottom: 12px;
+  border-left: 3px solid t.$error-fg;
+  background: t.$side-bar-bg;
+  color: t.$text-normal;
+  font-size: 12.5px;
+  line-height: 1.5;
+}
+
+.banner__icon {
+  color: t.$error-fg;
+}
+
+.banner__hint {
+  color: t.$text-muted;
+}
+
+.placeholder {
+  display: grid;
+  place-content: center;
+  gap: 10px;
+  height: 100%;
+  padding: 40px;
+  text-align: center;
+  color: t.$text-muted;
+}
+
+.placeholder__title {
+  font-size: 15px;
+  font-weight: 600;
+  color: t.$text-normal;
+}
+
+.placeholder__hint {
+  font-size: 12.5px;
+  max-width: 46ch;
+  line-height: 1.6;
+}
+
+// `kbd` is styled rather than left bare because the shortcuts are the difference
+// between a discoverable client and one where a feature exists but nobody finds
+// it.
+.kbd {
+  padding: 1px 5px;
+  border: 1px solid t.$widget-border;
+  border-radius: t.$radius-small;
+  background: t.$input-bg;
+  font-family: inherit;
+  font-size: 11px;
+  color: t.$text-bright;
+}
+
+// A row of controls under a view header, for a query that takes an argument.
+.query {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-bottom: 14px;
+
+  input {
+    height: 24px;
+    padding: 0 7px;
+    border: 1px solid t.$widget-border;
+    border-radius: t.$radius-small;
+    background: t.$input-bg;
+    color: t.$text-normal;
+    font: inherit;
+    font-size: 12px;
+    flex: 1 1 auto;
+    min-width: 0;
+
+    &:focus {
+      outline: 1px solid t.$focus-border;
+      border-color: t.$focus-border;
+    }
+  }
+}

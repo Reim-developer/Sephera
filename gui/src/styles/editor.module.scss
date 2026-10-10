@@ -1,0 +1,122 @@
+// The editor region: the directory controls, the tab bar, and the scroll area
+// the views are rendered into.
+//
+// Radix owns the tabs (`@radix-ui/react-tabs`), so the selectors here style
+// Radix's own `[data-state]` attributes rather than an `aria-selected` on a
+// button. That is the whole trade of using a component library: the interaction
+// and the keyboard behaviour come for free, and the styling has to learn its
+// attribute contract.
+
+@use "tokens" as t;
+
+@mixin chromeInput {
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid t.$widget-border;
+  border-radius: t.$radius-small;
+  background: t.$input-bg;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 12px;
+
+  &:focus {
+    outline: 1px solid t.$focus-border;
+    border-color: t.$focus-border;
+  }
+}
+
+@mixin chromeButton {
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: t.$radius-small;
+  background: t.$input-bg;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: t.$list-hover-bg;
+    border-color: t.$widget-border;
+  }
+}
+
+.controls {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 10px;
+  background: t.$tabs-bg;
+  border-bottom: 1px solid t.$panel-border;
+
+  input {
+    @include chromeInput;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  // The directory field is the one a person types in most, so it gets the
+  // remaining space rather than an equal share with the ignore patterns.
+  input:first-of-type {
+    flex: 2 1 auto;
+  }
+
+  button {
+    @include chromeButton;
+  }
+}
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  background: t.$tabs-bg;
+  border-bottom: 1px solid t.$panel-border;
+  // A fourth tab would otherwise force a horizontal scrollbar on a narrow
+  // window; the editor scrolls its tabs and the view scrolls itself.
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid t.$panel-border;
+  background: t.$tab-inactive-bg;
+  color: t.$text-muted;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  position: relative;
+
+  // Radix's contract: `data-state="active"`, not `aria-selected`. The active tab
+  // is drawn with the editor's own background and a top rule, so it reads as
+  // part of the content rather than as a toolbar button.
+  &[data-state="active"] {
+    background: t.$tab-active-bg;
+    color: t.$text-bright;
+
+    &::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 1px;
+      background: t.$selection-border;
+    }
+  }
+}
+
+.content {
+  overflow: auto;
+  min-height: 0;
+}

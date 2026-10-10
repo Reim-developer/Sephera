@@ -1,0 +1,75 @@
+// Design tokens: the Visual Studio Code Dark+ palette, as the theme ships it.
+//
+// Values taken from the theme's own JSON rather than sampled, because a hex two
+// percent off reads as "almost right" in a way that is worse than obviously
+// different. Names follow the theme's keys so a token can be looked up without
+// guessing what it is for.
+//
+// This is the one file that should need editing for a re-skin. Everything else
+// consumes tokens and nothing here knows about a component.
+
+// ---- surfaces ------------------------------------------------------------
+$activity-bar-bg: #333333;
+$side-bar-bg: #181818;
+$editor-bg: #1e1e1e;
+$tabs-bg: #252526;
+$tab-active-bg: #1e1e1e;
+$tab-inactive-bg: #2d2d2d;
+$status-bar-bg: #007acc;
+$input-bg: #3c3c3c;
+
+// ---- borders -------------------------------------------------------------
+$panel-border: #2b2b2b;
+$widget-border: #454545;
+$border-subtle: rgba($widget-border, 0.45);
+$focus-border: #007fd4;
+
+// ---- text ----------------------------------------------------------------
+$text-normal: #cccccc;
+$text-bright: #ffffff;
+$text-muted: #858585;
+$text-disabled: #6b6b6b;
+$link-foreground: #3794ff;
+
+// ---- interaction ---------------------------------------------------------
+$list-hover-bg: #2a2d2e;
+$list-active-bg: #04395e;
+$selection-bg: #264f78;
+$selection-border: #0078d4;
+
+// ---- semantic ------------------------------------------------------------
+$error-fg: #f14c4c;
+$warning-fg: #cca700;
+$git-added: #81b88b;
+$git-removed: #f14c4c;
+
+// ---- derived -------------------------------------------------------------
+// `color-mix` is used rather than a flat hex because a border derived from a
+// surface stays correct when the surface is themed.
+$scrollbar-thumb: rgba($text-muted, 0.4);
+
+// ---- geometry ------------------------------------------------------------
+// VS Code's density: 13px body, 48px activity bar, 22px status bar, 35px tabs.
+$font-size: 13px;
+$line-height: 1.45;
+
+$activity-bar-width: 48px;
+$status-bar-height: 22px;
+$tab-height: 35px;
+
+$sidebar-min: 180px;
+$sidebar-default: 260px;
+$sidebar-max: 520px;
+
+$radius-small: 2px;
+$radius-medium: 4px;
+
+$spacing-unit: 4px;
+
+// ---- typography ----------------------------------------------------------
+// A monospace stack only for numeric columns. Numbers that do not line up
+// column-wise defeat the purpose of the table, and a proportional font destroys
+// that with no offset elsewhere.
+$font-sans: "Segoe UI", Ubuntu, "Droid Sans", system-ui, sans-serif;
+$font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono",
+  "DejaVu Sans Mono", monospace;
