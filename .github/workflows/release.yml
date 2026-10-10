@@ -135,18 +135,25 @@ jobs:
           - os: windows-latest
             target: x86_64-pc-windows-msvc
             binary_name: sephera.exe
+            # The GUI's binary name, alongside the CLI's. Both go in the same
+            # archive: a person who does not use a terminal should not have to
+            # work out which of two releases to download.
+            gui_binary_name: sephera-gui.exe
             archive_ext: zip
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             binary_name: sephera
+            gui_binary_name: sephera-gui
             archive_ext: tar.gz
           - os: macos-15-intel
             target: x86_64-apple-darwin
             binary_name: sephera
+            gui_binary_name: sephera-gui
             archive_ext: tar.gz
           - os: macos-14
             target: aarch64-apple-darwin
             binary_name: sephera
+            gui_binary_name: sephera-gui
             archive_ext: tar.gz
     steps:
       - name: Checkout
@@ -169,6 +176,17 @@ jobs:
       - name: Build release binary
         run: cargo build --locked --release --bin sephera --target ${{ matrix.target }}
 
+      # The GUI, on its own profile. `--profile release-gui` rather than
+      # `--release`, because the CLI's fat-LTO profile exists for a hot loop
+      # crossing a crate boundary and a GUI has none: thin LTO builds the same
+      # window in about two-thirds of the time (`Cargo.toml` records the
+      # measurements). A release build that has to pay four minutes for fat LTO
+      # over `winit` and a graphics backend buys nothing a click would notice.
+      - name: Build the GUI binary
+        run: >-
+          cargo build --locked -p sephera_gui --profile release-gui
+          --bin sephera-gui --target ${{ matrix.target }}
+
       - name: Package Windows archive
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -178,8 +196,11 @@ jobs:
 
           New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" (Join-Path $packageDir "${{ matrix.binary_name }}")
+          Copy-Item "target/${{ matrix.target }}/release-gui/${{ matrix.gui_binary_name }}" (Join-Path $packageDir "${{ matrix.gui_binary_name }}")
           Copy-Item "LICENSE" (Join-Path $packageDir "LICENSE")
 
+          # Both binaries in one archive, so a reader who does not use a
+          # terminal has one download and one folder to open.
           Compress-Archive -Path $packageDir -DestinationPath "dist/$archiveBase.zip" -Force
 
       - name: Package Unix archive
@@ -191,6 +212,7 @@ jobs:
 
           mkdir -p "${PACKAGE_DIR}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${PACKAGE_DIR}/${{ matrix.binary_name }}"
+          cp "target/${{ matrix.target }}/release-gui/${{ matrix.gui_binary_name }}" "${PACKAGE_DIR}/${{ matrix.gui_binary_name }}"
           cp "LICENSE" "${PACKAGE_DIR}/LICENSE"
 
           tar -C dist -czf "dist/${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}"

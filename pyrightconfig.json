@@ -15,7 +15,11 @@
 		"scripts/check_publish_order.py",
 		"e2e/cases/",
 		"e2e/run.py",
-		"e2e/support.py"
+		"e2e/support.py",
+		"e2e/where_self_edges_come_from.py"
+	],
+	"extraPaths": [
+		"scripts"
 	],
 	"exclude": [
 		"benchmarks/generated_corpus",

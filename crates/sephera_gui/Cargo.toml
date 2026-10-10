@@ -1,0 +1,41 @@
+[package]
+name = "sephera_gui"
+version.workspace = true
+description = "The Rust-side view model for Sephera's graphical front-end."
+# No `documentation` and no `readme`: this crate is a library consumed by the
+# Tauri host, but it is not published -- the host is what a user installs, and a
+# docs.rs page for a crate nobody installs would be a 404. `check_doc_links.py`
+# enforces this one.
+publish = false
+
+edition.workspace = true
+authors.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lib]
+name = "sephera_gui"
+# The window used to live here, in `app.rs` and `main.rs`, behind `eframe`. It is
+# React now, in `gui/src`, and the binary is `gui/src-tauri`. What is left is the
+# part worth keeping: the code that turns a scan result into something a client
+# renders, which is pure Rust and unit-testable.
+path = "src/lib.rs"
+
+[dependencies]
+# Declared directly rather than inherited, matching every other crate: `anyhow`
+# is not in the workspace's dependency table.
+anyhow = "1.0.102"
+tempfile = "3.23.0"
+# Serialize on the view models, because the client is a web process that reads
+# JSON. Every field below is chosen so it can cross that boundary: no Duration,
+# no OS path types.
+serde = { version = "1.0", features = ["derive"] }
+
+sephera_scan = { path = "../sephera_scan", version = "0.7.1" }
+sephera_runtime = { path = "../sephera_runtime", version = "0.7.1" }
+
+
+[dev-dependencies]
+# Only the tests use it: serde_json::Value is what lets a test assert on field
+# *names* rather than on values, which is the whole point of the contract tests.
+serde_json = "1.0"
