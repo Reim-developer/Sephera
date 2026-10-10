@@ -1,6 +1,6 @@
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { App } from "./App";
+import { App } from "@/App";
 // The reset and the page chrome. Everything a component owns lives in its own
 // SCSS module, so this import is the only global stylesheet.
 import "./styles/base.scss";

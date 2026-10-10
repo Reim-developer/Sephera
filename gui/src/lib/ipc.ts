@@ -1,16 +1,13 @@
 /**
- * The IPC boundary, mirrored from the Rust side by hand.
+ * Layer 0: the transport and the vocabulary.
  *
- * Every type here matches a struct in `crates/sephera_gui` or a `#[serde]`
- * derive in `crates/sephera_graph`. There is deliberately no code generator: the
- * shared vocabulary is small enough to read, and a generator would add a build
- * step that only re-runs when the Rust side changes -- which is exactly when a
- * stale type would be most expensive.
+ * This module owns `invoke` and every type that crosses the webview boundary.
+ * It is the only file in the client that knows Tauri exists -- every other layer
+ * speaks in the types below and never sees a `Promise` from the host.
  *
- * The consequence is that a rename here and a rename in Rust can disagree. The
- * thing that catches it is `Error: field not found` at runtime, which is why
- * every command below returns a discriminated union rather than throwing: a
- * failure to decode is a value the caller can render, not a crash.
+ * The rule that makes the layering real: a *service* imports this. Nothing else
+ * does, for anything but a type. `scripts/check_gui_layers.py` enforces it,
+ * because a rule nobody checks is a rule that survives one sprint.
  */
 
 import { invoke } from "@tauri-apps/api/core";
@@ -36,10 +33,10 @@ export interface LocView {
 }
 
 /** One node of the sidebar's file tree. */
-export interface TreeEntry {
+export interface TreeNode {
   path: string;
   is_dir: boolean;
-  children: TreeEntry[];
+  children: TreeNode[];
 }
 
 /** A declaration kind, as the Rust enum names it in snake case. */
@@ -62,14 +59,7 @@ export interface SymbolReport {
   languages_detected: number;
 }
 
-/** One node of the sidebar's file tree. */
-export interface TreeNode {
-  path: string;
-  is_dir: boolean;
-  children: TreeNode[];
-}
-
-/** A file in the graph, with its degrees. */
+/** A file in the dependency graph, with its degrees. */
 export interface GraphNode {
   file_path: string;
   /** `null` when the language could not be detected. */
@@ -98,7 +88,7 @@ export interface GraphEdge {
   kind: string;
 }
 
-/** A top-level count, as the report's metrics. */
+/** The top-level counts a report carries. */
 export interface GraphMetrics {
   total_files: number;
   total_internal_edges: number;
@@ -127,33 +117,22 @@ export interface GraphReport {
   metrics: GraphMetrics;
 }
 
-/** Count a directory. Extra patterns are merged after `.sephera.toml`'s. */
-export async function countLines(
-  path: string,
-  ignore: string[],
-): Promise<LocView> {
-  return invoke<LocView>("count_lines", { path, ignore });
-}
+/**
+ * The command names the Rust host registers.
+ *
+ * Spelling one out twice is how a rename becomes a runtime failure that surfaces
+ * as an empty table, so they are named once and the services import them.
+ */
+export const COMMANDS = {
+  countLines: "count_lines",
+  countDeclarations: "count_declarations",
+  dependencyGraph: "dependency_graph",
+  listTree: "list_tree",
+} as const;
 
-/** Count declarations per language, read from parse trees. */
-export async function countDeclarations(
-  path: string,
-  ignore: string[],
-): Promise<SymbolReport> {
-  return invoke<SymbolReport>("count_declarations", { path, ignore });
-}
-
-/** Build a reverse-dependency graph: what breaks if `target` changes. */
-export async function dependencyGraph(
-  path: string,
-  target: string,
-  depth: number | null,
-  ignore: string[],
-): Promise<GraphReport> {
-  return invoke<GraphReport>("dependency_graph", { path, target, depth, ignore });
-}
-
-/** List one level of a directory, for the file tree. */
-export async function listTree(path: string): Promise<TreeEntry[]> {
-  return invoke<TreeEntry[]>("list_tree", { path });
-}
+/** Call a command on the Rust host.
+ *
+ * Re-exported from here rather than imported by each service so that a service
+ * never imports Tauri directly -- which is what makes the whole service layer
+ * substitutable in a test. */
+export { invoke };

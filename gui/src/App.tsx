@@ -1,221 +1,96 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { useEffect } from "react";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
-import { FolderOpen, PanelRightClose, RefreshCw } from "lucide-react";
+import { FolderOpen, RefreshCw } from "lucide-react";
 
-import { ActivityBar, PANELS } from "./components/ActivityBar";
-import { FileTree } from "./components/FileTree";
-import { StatusBar } from "./components/StatusBar";
-import { TabBar } from "./components/TabBar";
-import { DependenciesView } from "./views/DependenciesView";
-import { LocView } from "./views/LocView";
-import { SymbolsView } from "./views/SymbolsView";
-import { countLines } from "./lib/ipc";
-import { open as openDialog } from "@tauri-apps/plugin-dialog";
-import styles from "./styles/workbench.module.scss";
-import editor from "./styles/editor.module.scss";
-
-/** The views the editor can show. */
-const TABS = [
-  { id: "loc", label: "Lines of code" },
-  { id: "symbols", label: "Declarations" },
-  { id: "graph", label: "Dependencies" },
-] as const;
+import { ActivityBar, PANELS } from "@/components/ActivityBar";
+import { useActions } from "@/hooks/useActions";
+import { FileTree } from "@/components/FileTree";
+import { StatusBar } from "@/components/StatusBar";
+import { TabBar } from "@/components/TabBar";
+import { useGeneration } from "@/hooks/useAnalysis";
+import { commandIds, run } from "@/platform/commands";
+import { useClient } from "@/state/store";
+import styles from "@/styles/workbench.module.scss";
+import editor from "@/styles/editor.module.scss";
+import { VIEWS } from "@/views/registry";
 
 export function App() {
-  const [root, setRoot] = useState<string>(
-    () => new URLSearchParams(location.search).get("path") ?? ".",
-  );
-  const [ignore, setIgnore] = useState("");
-  const [panel, setPanel] = useState<string | null>("explorer");
-  const [tab, setTab] = useState<string>("loc");
-  const [selected, setSelected] = useState<string | null>(null);
-  const [graphTarget, setGraphTarget] = useState("");
-  const [reloadToken, setReloadToken] = useState(0);
-  const [summary, setSummary] = useState<string | null>(null);
-  const [config, setConfig] = useState<string | null>(null);
-  const [sidebarWidth, setSidebarWidth] = useState(260);
-  const dragging = useRef(false);
+  const root = useClient((state) => state.root);
+  const selected = useClient((state) => state.selected);
+  const view = useClient((state) => state.view);
+  const generation = useGeneration();
+  const { setSelected, setView } = useActions();
 
-  const patterns = useMemo(
-    () =>
-      ignore
-        .split(",")
-        .map((entry) => entry.trim())
-        .filter((entry) => entry.length > 0),
-    [ignore],
-  );
-
-  // The status line is the count's own summary, refreshed on the same token the
-  // views use. Reading it from here rather than passing a callback into a view
-  // keeps the view free of anything that is not rendering.
-  useEffect(() => {
-    let cancelled = false;
-    void (async () => {
-      try {
-        const view = await countLines(root, patterns);
-        if (cancelled) return;
-        setSummary(
-          `${view.files_scanned.toLocaleString()} files, ${view.rows.length} languages, ${view.elapsed_ms} ms`,
-        );
-        setConfig(view.config_source);
-      } catch {
-        if (!cancelled) setSummary(null);
-      }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [root, patterns, reloadToken]);
-
-  const reopen = useCallback(
-    () => setReloadToken((token) => token + 1),
-    [],
-  );
-
-  // Drag to resize the sidebar, with the handle hidden until a drag starts. The
-  // width is applied to the sidebar directly rather than through React state on
-  // every mousemove, so a drag does not re-render the tree at sixty frames a
-  // second.
-  const onHandleDown = useCallback((event: React.PointerEvent) => {
-    event.preventDefault();
-    dragging.current = true;
-    (event.target as HTMLElement).setPointerCapture(event.pointerId);
-  }, []);
-
-  const onHandleMove = useCallback((event: React.PointerEvent) => {
-    if (!dragging.current) return;
-    setSidebarWidth(
-      Math.min(520, Math.max(180, event.clientX - 48)),
-    );
-  }, []);
-
-  const onHandleUp = useCallback(() => {
-    dragging.current = false;
-  }, []);
-
-  async function pickDirectory() {
-    const chosen = await openDialog({ directory: true, multiple: false });
-    if (typeof chosen === "string") setRoot(chosen);
-  }
-
-  // Ctrl+R recomputes. The default browser binding is suppressed at the window
-  // level, because in a Tauri app there is no page to reload and a Ctrl+R that
-  // does nothing is worse than one that recomputes.
+  // ---- keyboard ---------------------------------------------------------
+  // Both shortcuts run commands rather than calling the store, so a keybinding
+  // and a button are one code path. `preventDefault` matters: a browser's F5
+  // reloads the document, and in a Tauri app there is no document to reload.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.key === "F5" || (event.ctrlKey && event.key === "r")) {
         event.preventDefault();
-        reopen();
+        void run(commandIds.recompute);
       }
-    }
-    window.addEventListener("keydown", onKey);
-    return () => window.removeEventListener("keydown", onKey);
-  }, [reopen]);
-
-  // Ctrl+Shift+O opens the directory picker: the one action worth a shortcut,
-  // because it is what a user does first and most often.
-  useEffect(() => {
-    function onKey(event: KeyboardEvent) {
       if (event.ctrlKey && event.shiftKey && event.key === "O") {
         event.preventDefault();
-        void pickDirectory();
+        void run(commandIds.pickDirectory);
       }
     }
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
+  const active = VIEWS.find((entry) => entry.id === view) ?? VIEWS[0];
+  const Active = active.component;
+
   return (
     <div className={styles.workbench}>
-      <ActivityBar items={PANELS} active={panel} onSelect={setPanel} />
+      <ActivityBar items={PANELS} active="explorer" onSelect={() => undefined} />
 
-      {panel ? (
-        <aside className={styles.sidebar} style={{ width: sidebarWidth }}>
-          <h2 className={styles.sidebar__title}>
-            <FolderOpen size={12} aria-hidden="true" /> {panel}
-          </h2>
-          <div className={styles.sidebar__body}>
-            {panel === "explorer" ? (
-              <FileTree
-                root={root}
-                onOpen={(picked) => {
-                  setSelected(picked);
-                  // A file picked in the explorer is also the graph's target, so
-                  // the view has something to show the moment a file is chosen.
-                  // A directory in the tree is expanded, not opened, so only
-                  // files reach here.
-                  setGraphTarget(picked);
-                }}
-                selected={selected}
-              />
-            ) : (
-              <ConfigPanel root={root} patterns={patterns} />
-            )}
-          </div>
-          <div
-            className={styles.sidebar__handle}
-            role="separator"
-            aria-orientation="vertical"
-            aria-label="Resize sidebar"
-            onPointerDown={onHandleDown}
-            onPointerMove={onHandleMove}
-            onPointerUp={onHandleUp}
+      <aside className={styles.sidebar}>
+        <h2 className={styles.sidebar__title}>
+          <FolderOpen size={12} aria-hidden="true" /> Explorer
+        </h2>
+        <div className={styles.sidebar__body}>
+          <FileTree
+            root={root}
+            selected={selected}
+            // The store sets the graph target as well as the selection, so a
+            // file picked here has something to show the moment it is chosen.
+            onOpen={setSelected}
           />
-        </aside>
-      ) : null}
+        </div>
+      </aside>
 
       <main className={styles.workbench__main}>
         <div className={editor.controls}>
-          <button type="button" onClick={() => void pickDirectory()}>
-            <PanelRightClose size={13} aria-hidden="true" /> Open…
+          <button
+            type="button"
+            onClick={() => void run(commandIds.pickDirectory)}
+          >
+            Open…
           </button>
-          <input
-            value={root}
-            onChange={(event) => setRoot(event.target.value)}
-            aria-label="Directory"
-            placeholder="/path/to/project"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") reopen();
-            }}
-          />
-          <input
-            value={ignore}
-            onChange={(event) => setIgnore(event.target.value)}
-            aria-label="Ignore patterns"
-            placeholder="ignore: target, *.snap"
-            onKeyDown={(event) => {
-              if (event.key === "Enter") reopen();
-            }}
-          />
-          <button type="button" onClick={reopen}>
+          <DirectoryField />
+          <IgnoreField />
+          <button type="button" onClick={() => void run(commandIds.recompute)}>
             <RefreshCw size={13} aria-hidden="true" /> Count
           </button>
         </div>
 
-        <TabBar tabs={TABS} active={tab} onSelect={setTab} />
+        <TabBar
+          tabs={VIEWS.map((entry) => ({
+            id: entry.id,
+            label: entry.label,
+          }))}
+          active={view}
+          onSelect={setView}
+        />
 
+        {/* The whole registry is iterated here and the shell knows nothing about
+            how many views exist. Adding the fourth is a new file in `views/`. */}
         <ScrollArea.Root className={editor.content}>
           <ScrollArea.Viewport className={editor.content}>
-            {tab === "loc" ? (
-              <LocView
-                path={root}
-                ignore={patterns}
-                reloadToken={reloadToken}
-              />
-            ) : tab === "symbols" ? (
-              <SymbolsView
-                path={root}
-                ignore={patterns}
-                reloadToken={reloadToken}
-              />
-            ) : (
-              <DependenciesView
-                path={root}
-                target={graphTarget}
-                onTargetChange={setGraphTarget}
-                reloadToken={reloadToken}
-              />
-            )}
+            <Active generation={generation} />
           </ScrollArea.Viewport>
           <ScrollArea.Scrollbar orientation="vertical">
             <ScrollArea.Thumb />
@@ -224,32 +99,60 @@ export function App() {
       </main>
 
       <StatusBar
-        summary={summary}
-        config={config}
-        busy={false}
-        onRecompute={reopen}
+        onRecompute={() => void run(commandIds.recompute)}
+        onPick={() => void run(commandIds.pickDirectory)}
       />
     </div>
   );
 }
 
+/** The directory field: local state for the keystrokes, committed on Enter.
+ *
+ * A controlled input bound straight to the store would rebuild every analysis on
+ * each character, so the field keeps its own draft and hands it over on Enter.
+ * That is the one place a component holds state, and it is transient by design.
+ */
+function DirectoryField() {
+  const root = useClient((state) => state.root);
+  const setRoot = useClient((state) => state.setRoot);
 
-/** The configuration panel: which file was read, and what it contributed. */
-function ConfigPanel({
-  root,
-  patterns,
-}: {
-  root: string;
-  patterns: string[];
-}) {
   return (
-    <div className={styles.tree}>
-      <div className={styles.sidebar__groupHeader}>Configuration</div>
-      <p className={styles.sidebar__empty}>
-        Reads <code>.sephera.toml</code> from {root}. Patterns from the file are
-        applied first, then the {patterns.length} typed here.
-      </p>
-    </div>
+    <input
+      defaultValue={root}
+      key={root}
+      aria-label="Directory"
+      placeholder="/path/to/project"
+      onKeyDown={(event) => {
+        if (event.key === "Enter") {
+          const value = (event.target as HTMLInputElement).value.trim();
+          if (value && value !== root) setRoot(value);
+        }
+      }}
+    />
   );
 }
 
+/** The ignore-patterns field, committed on Enter for the same reason. */
+function IgnoreField() {
+  const ignore = useClient((state) => state.ignore);
+  const setIgnore = useClient((state) => state.setIgnore);
+
+  return (
+    <input
+      defaultValue={ignore.join(", ")}
+      key={ignore.join(",")}
+      aria-label="Ignore patterns"
+      placeholder="ignore: target, *.snap"
+      onKeyDown={(event) => {
+        if (event.key !== "Enter") return;
+        const value = (event.target as HTMLInputElement).value;
+        setIgnore(
+          value
+            .split(",")
+            .map((entry) => entry.trim())
+            .filter((entry) => entry.length > 0),
+        );
+      }}
+    />
+  );
+}

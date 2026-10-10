@@ -6,7 +6,7 @@ import {
   TextSearch,
 } from "lucide-react";
 
-import styles from "../styles/workbench.module.scss";
+import styles from "@/styles/workbench.module.scss";
 
 /** One panel the activity bar can open. */
 export interface ActivityItem {

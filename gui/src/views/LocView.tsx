@@ -1,52 +1,24 @@
-import { useCallback, useEffect, useState } from "react";
 import { AlertTriangle, RefreshCw } from "lucide-react";
 
-import { DataTable, type DataRow } from "../components/DataTable";
-import type { LocView } from "../lib/ipc";
-import { countLines } from "../lib/ipc";
-import styles from "../styles/views.module.scss";
+import { DataTable, type DataRow } from "@/components/DataTable";
+import { useGeneration, useLoc } from "@/hooks/useAnalysis";
+import type { LocView } from "@/lib/ipc";
+import styles from "@/styles/views.module.scss";
 
 /**
- * The line-count view: one table, ordered the way the CLI orders it.
+ * The line-count view.
  *
- * The Rust side already sorted the rows by code lines and summed the totals, so
- * this renders in the order it is given rather than re-deriving either. A second
- * sort here would be a second opinion to disagree with.
+ * It holds no state and calls nothing. It subscribes to the line count, reads the
+ * directory and the patterns, and renders -- which is all a view should do, and
+ * the reason it can be tested by handing it a populated store.
  *
- * `reloadToken` is how the app asks for a recompute: a changed value means
- * "again". It is a token rather than a callback identity because the tree is
- * deep enough that a new function on every render would re-run this effect and
- * hit Rust on a state change that has nothing to do with the count.
+ * `generation` is subscribed even though nothing is done with it. Without it, a
+ * recompute that returned the same object identity would not re-render, and the
+ * view would show a stale answer after an edit that changed the number.
  */
-export function LocView({
-  path,
-  ignore,
-  reloadToken,
-}: {
-  path: string;
-  ignore: string[];
-  reloadToken: number;
-}) {
-  const [view, setView] = useState<LocView | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [busy, setBusy] = useState(true);
-
-  const run = useCallback(async () => {
-    setBusy(true);
-    setError(null);
-    try {
-      setView(await countLines(path, ignore));
-    } catch (cause) {
-      setError(String(cause));
-      setView(null);
-    } finally {
-      setBusy(false);
-    }
-  }, [path, ignore]);
-
-  useEffect(() => {
-    void run();
-  }, [run, reloadToken]);
+export function LocView() {
+  const { data, error, busy } = useLoc();
+  const generation = useGeneration();
 
   if (error) {
     return (
@@ -58,7 +30,7 @@ export function LocView({
       </div>
     );
   }
-  if (busy && !view) {
+  if (busy && !data) {
     return (
       <div className={styles.placeholder}>
         <span className={styles.placeholder__title}>
@@ -67,23 +39,27 @@ export function LocView({
       </div>
     );
   }
-  if (!view) return null;
+  if (!data) return null;
+
+  // The generation is read here rather than in a dependency array, because there
+  // is no effect to depend on anything. Its value is what makes the render happen.
+  void generation;
 
   return (
     <div className={styles.view}>
       <header className={styles.view__header}>
         <h2 className={styles.view__title}>Lines of code</h2>
         <p className={styles.view__subtitle}>
-          {view.files_scanned.toLocaleString()} files ·{" "}
-          {view.rows.length.toLocaleString()} languages · {view.elapsed_ms} ms
+          {data.files_scanned.toLocaleString()} files ·{" "}
+          {data.rows.length.toLocaleString()} languages · {data.elapsed_ms} ms
         </p>
       </header>
 
       <DataTable
         caption="Lines of code by language"
         firstColumn="Language"
-        rows={view.rows.map(toDataRow)}
-        totals={toDataRow(view.totals)}
+        rows={data.rows.map(toDataRow)}
+        totals={toDataRow(data.totals)}
         emptyMessage="No source files found."
       />
     </div>

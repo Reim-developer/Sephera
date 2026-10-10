@@ -1,5 +1,5 @@
 import type { ReactNode } from "react";
-import styles from "../styles/table.module.scss";
+import styles from "@/styles/table.module.scss";
 
 /**
  * One row of the shared data table.

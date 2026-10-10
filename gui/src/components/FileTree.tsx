@@ -1,4 +1,3 @@
-import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ChevronDown,
   ChevronRight,
@@ -7,95 +6,29 @@ import {
   FolderOpen,
 } from "lucide-react";
 
-import { listTree, type TreeNode } from "../lib/ipc";
-import styles from "../styles/workbench.module.scss";
-
-/** How deep to expand before insisting the user ask for more.
- *
- * Two levels is enough to see `crates/` and `sephera_core/` in a workspace of
- * crates without walking every leaf of a tree that may be tens of thousands of
- * files. Expanding nothing would make the first render the whole repository,
- * which is what the lazy load exists to avoid. */
-const AUTO_EXPAND_DEPTH = 2;
+import { useFileTree } from "@/hooks/useFileTree";
+import type { TreeNode } from "@/lib/ipc";
+import styles from "@/styles/workbench.module.scss";
 
 /**
  * The file tree in the sidebar.
  *
- * Children are fetched one level at a time, so expanding a directory is a round
- * trip and nothing else. Loading the whole tree once is what makes a file
- * explorer feel instant on a small repository and frozen on a large one, and the
- * crossover is much closer than it looks.
+ * Rendering only. The loading, the expansion state and the in-flight guard all
+ * live in `useFileTree`, because a component that fetches its own data has no
+ * seam a test can substitute -- `scripts/check_gui_layers.py` enforces that, and
+ * this file previously imported the registry directly.
  */
 export function FileTree({
   root,
-  onOpen,
   selected,
+  onOpen,
 }: {
   root: string;
-  onOpen: (path: string) => void;
   selected: string | null;
+  onOpen: (path: string) => void;
 }) {
-  /** Directory path -> its immediate children. `""` is the root level. */
-  const [levels, setLevels] = useState<Record<string, TreeNode[]>>({});
-  const [expanded, setExpanded] = useState<ReadonlySet<string>>(new Set());
-  const [error, setError] = useState<string | null>(null);
-  /** Directories with a request in flight, so a double click cannot re-fetch. */
-  const pending = useRef<ReadonlySet<string>>(new Set());
-
-  const load = useCallback(async (directory: string) => {
-    if (pending.current.has(directory)) return;
-    const inFlight = new Set(pending.current);
-    inFlight.add(directory);
-    pending.current = inFlight;
-
-    try {
-      const entries = await listTree(directory === "" ? root : directory);
-      setLevels((previous) =>
-        previous[directory] ? previous : { ...previous, [directory]: entries },
-      );
-    } catch (cause) {
-      setError(String(cause));
-      // Collapse a directory that could not be read, so the row does not sit
-      // expanded over nothing.
-      setExpanded((previous) => {
-        const next = new Set(previous);
-        next.delete(directory);
-        return next;
-      });
-    } finally {
-      const done = new Set(pending.current);
-      done.delete(directory);
-      pending.current = done;
-    }
-  }, [root]);
-
-  // The root level, whenever the root changes. Guarded by a cancellation flag
-  // because switching roots quickly would otherwise let the slower reply win.
-  useEffect(() => {
-    let cancelled = false;
-    setLevels({});
-    setExpanded(new Set());
-    setError(null);
-
-    void load("").then(() => {
-      if (cancelled) return;
-    });
-
-    return () => {
-      cancelled = true;
-    };
-  }, [load]);
-
-  function toggle(directory: string) {
-    setExpanded((previous) => {
-      const next = new Set(previous);
-      if (next.has(directory)) next.delete(directory);
-      else next.add(directory);
-      return next;
-    });
-    const already = levels[directory] !== undefined || expanded.has(directory);
-    if (!already) void load(directory);
-  }
+  const { levels, expanded, error, isPending, toggle, autoExpandDepth } =
+    useFileTree(root);
 
   const nodes = levels[""] ?? [];
 
@@ -117,35 +50,43 @@ export function FileTree({
           depth={0}
           levels={levels}
           expanded={expanded}
+          pending={isPending}
           selected={selected}
           onToggle={toggle}
           onOpen={onOpen}
+          autoExpandDepth={autoExpandDepth}
         />
       ))}
     </div>
   );
 }
 
+/** One row, and its subtree. */
 function TreeRow({
   node,
   depth,
   levels,
   expanded,
+  pending,
   selected,
   onToggle,
   onOpen,
+  autoExpandDepth,
 }: {
   node: TreeNode;
   depth: number;
   levels: Record<string, TreeNode[]>;
   expanded: ReadonlySet<string>;
+  pending: (directory: string) => boolean;
   selected: string | null;
   onToggle: (path: string) => void;
   onOpen: (path: string) => void;
+  autoExpandDepth: number;
 }) {
   const isOpen = expanded.has(node.path);
   const isSelected = selected === node.path;
   const children = levels[node.path];
+  const isLoading = isOpen && children === undefined;
 
   // A directory expands on the same click that a file opens with. A separate
   // disclosure triangle is one more thing to aim at.
@@ -163,6 +104,7 @@ function TreeRow({
         role="treeitem"
         aria-selected={isSelected}
         aria-expanded={node.is_dir ? isOpen : undefined}
+        aria-busy={isLoading || undefined}
         className={styles.tree__row}
         style={{ paddingLeft: 6 + depth * 12 }}
         onClick={activate}
@@ -178,19 +120,16 @@ function TreeRow({
           ) : null}
         </span>
         <span className={styles.tree__icon} aria-hidden="true">
-          {node.is_dir ? (
-            <Directory size={14} />
-          ) : (
-            <File size={14} />
-          )}
+          {node.is_dir ? <Directory size={14} /> : <File size={14} />}
         </span>
         <span className={styles.tree__label}>{name(node.path)}</span>
       </button>
 
       {node.is_dir && isOpen ? (
-        children === undefined ? (
-          // Not loaded yet: a placeholder row, so expanding does not leave an
-          // empty gap where the contents are about to appear.
+        isLoading ? (
+          // A placeholder row, so expanding does not leave an empty gap where the
+          // contents are about to appear. `aria-live` is absent on purpose: the
+          // rows themselves announce the change.
           <div
             className={styles.tree__row}
             style={{ paddingLeft: 18 + depth * 12 }}
@@ -206,7 +145,7 @@ function TreeRow({
               ∅
             </span>
           </div>
-        ) : depth >= AUTO_EXPAND_DEPTH ? null : (
+        ) : depth >= autoExpandDepth ? null : (
           children.map((child) => (
             <TreeRow
               key={child.path}
@@ -214,9 +153,11 @@ function TreeRow({
               depth={depth + 1}
               levels={levels}
               expanded={expanded}
+              pending={pending}
               selected={selected}
               onToggle={onToggle}
               onOpen={onOpen}
+              autoExpandDepth={autoExpandDepth}
             />
           ))
         )
@@ -224,8 +165,8 @@ function TreeRow({
 
       {/* Past the automatic depth the branch is rendered but its children are
           fetched only when opened -- which is the point of the depth limit. The
-          rows are still interactive and their own expansion loads the next
-          level on demand. */}
+          rows are still interactive and their own expansion loads the next level
+          on demand. */}
     </>
   );
 }
