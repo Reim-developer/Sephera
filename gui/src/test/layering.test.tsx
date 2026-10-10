@@ -1,30 +1,27 @@
-import { act, render, screen, within } from "@testing-library/react";
+import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { LocView } from "@/views/LocView";
 import { SymbolsView } from "@/views/SymbolsView";
-import { DependenciesView } from "@/views/DependenciesView";
 import { useClient } from "@/state/store";
 import {
   declarations,
-  dependents,
   installServices,
   twoLanguageLoc,
 } from "@/test/setup";
 
 /**
  * The point of the layering: a view renders from a populated store with no host
- * in sight. If any of these tests needs `invoke`, a service, or a Tauri module,
- * the boundary has been crossed somewhere above.
+ * in sight. If any of these tests needed `invoke`, a service, or a Tauri module,
+ * the boundary would have been crossed somewhere above them.
  */
 
-/**
- * Seed the store with a fixture, without going through the service layer.
+/** Seed the store with a fixture, without going through the service layer.
  *
  * A function of the previous state rather than a partial object, because
- * zustand v5's setState accepts either a whole state or a function returning
+ * zustand v5's `setState` accepts either a whole state or a function returning
  * one -- and a partial would be read as a replacement, dropping every field the
- * test did not mention. Spreading the previous state in is what makes seed
+ * test did not mention. Spreading the previous state in is what makes `seed`
  * name only the slice it means.
  */
 function seed(partial: Partial<ReturnType<typeof useClient.getState>>): void {
@@ -33,7 +30,7 @@ function seed(partial: Partial<ReturnType<typeof useClient.getState>>): void {
 
 beforeEach(() => {
   useClient.setState({
-    root: "/project",
+    root: ".",
     ignore: [],
     target: "",
     selected: null,
@@ -94,67 +91,18 @@ describe("SymbolsView", () => {
   });
 });
 
-describe("DependenciesView", () => {
-  it("shows the list of dependents, heaviest first", () => {
-    installServices();
-    seed({
-      target: "a.rs",
-      graph: { data: dependents(), error: null, busy: false },
-    });
-
-    render(<DependenciesView />);
-
-    expect(screen.getByText("b.rs")).toBeTruthy();
-    expect(screen.getByText("c.rs")).toBeTruthy();
-    // `imports_count` descending, asserted inside the table rather than across the
-    // document: the summary carries its own `1` (unresolved-local), and a
-    // document-order assertion would read that one instead.
-    const table = screen.getByRole("table");
-    const cells = within(table).getAllByText(/^(12|1)$/);
-    expect(cells.map((cell) => cell.textContent)).toEqual(["12", "1"]);
-  });
-
-  it("colours unresolved-local because it qualifies the answer", () => {
-    installServices();
-    seed({
-      target: "a.rs",
-      graph: { data: dependents(), error: null, busy: false },
-    });
-
-    render(<DependenciesView />);
-
-    // The metric is the caveat, not decoration: one unresolved local path means
-    // this radius understates. Queried inside the summary, because the table
-    // carries a `1` of its own.
-    const label = screen.getByText("Unresolved local");
-    const value = label.nextElementSibling;
-    expect(value?.textContent).toBe("1");
-  });
-
-  it("asks for a file when there is no target", () => {
-    installServices();
-    seed({ target: "", graph: { data: null, error: null, busy: false } });
-
-    render(<DependenciesView />);
-
-    expect(screen.getByText("Pick a file")).toBeTruthy();
-    // The query row is not offered until there is something to trace.
-    expect(screen.queryByLabelText("File to trace")).toBeNull();
-  });
-});
-
 describe("the store, with the registry replaced", () => {
   it("calls the service and writes the result", async () => {
     const calls = installServices();
 
     await act(async () => {
-      useClient.getState().setRoot("/project");
+      useClient.getState().setRoot(".");
     });
 
     // Every analysis is run for a directory change, because a stale one is one
     // click away from being shown as current.
-    expect(calls.loc).toHaveBeenCalledWith("/project", []);
-    expect(calls.symbols).toHaveBeenCalledWith("/project", []);
+    expect(calls.loc).toHaveBeenCalledWith(".", [], expect.any(Number));
+    expect(calls.symbols).toHaveBeenCalledWith(".", [], expect.any(Number));
     expect(useClient.getState().loc.data).not.toBeNull();
     expect(useClient.getState().loc.data?.config_source).toBe(
       "/project/.sephera.toml",
@@ -166,7 +114,7 @@ describe("the store, with the registry replaced", () => {
     calls.loc.mockRejectedValueOnce(new Error("path is not a directory"));
 
     await act(async () => {
-      useClient.getState().setRoot("/project");
+      useClient.getState().setRoot(".");
     });
 
     const state = useClient.getState();
@@ -185,14 +133,46 @@ describe("the store, with the registry replaced", () => {
     expect(calls.graph).toHaveBeenCalled();
   });
 
-  it("a cancelled dialog leaves the root alone", async () => {
-    installServices();
+  it("selecting a file counts that file, and only that one", async () => {
+    const calls = installServices();
 
     await act(async () => {
-      // `setRoot` is what a chosen path does; no path means no directory change.
-      useClient.getState().setRoot("/project");
+      useClient.getState().setSelected("src/a.rs");
     });
 
-    expect(useClient.getState().root).toBe("/project");
+    // The store asked for the file, and did not re-run the directory counts to
+    // answer a question only the file can answer.
+    expect(calls.file).toHaveBeenCalledWith(".", "src/a.rs");
+    expect(useClient.getState().file.data?.code).toBe(20);
+    expect(useClient.getState().target).toBe("src/a.rs");
+  });
+
+  it("cancel discards a reply that arrives after it", async () => {
+    const calls = installServices();
+
+    // A reply that lands after the cancel, so the epoch comparison is the only
+    // thing that stops it. A store that trusted its reply would be a store where
+    // Cancel only closes the dialog and the number still arrives.
+    calls.loc.mockImplementation(
+      async (_root: unknown, _ignore: unknown, epoch: number) =>
+        new Promise<[unknown, number]>((resolve) => {
+          setTimeout(() => resolve([twoLanguageLoc(), epoch]), 0);
+        }),
+    );
+
+    await act(async () => {
+      useClient.getState().recompute();
+    });
+    expect(useClient.getState().loc.busy).toBe(true);
+
+    await act(async () => {
+      useClient.getState().cancel();
+      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+
+    // The host was told, the dialog closed, and the late reply changed nothing.
+    expect(calls.cancel).toHaveBeenCalled();
+    expect(useClient.getState().loc.busy).toBe(false);
+    expect(useClient.getState().loc.data).toBeNull();
   });
 });

@@ -12,6 +12,7 @@ import { beforeEach, vi } from "vitest";
 import { withServices } from "@/services/registry";
 import type { ServiceRegistry } from "@/services/registry";
 import type {
+  FileDetail,
   GraphReport,
   LocView,
   SymbolReport,
@@ -40,8 +41,22 @@ export function emptyLoc(overrides: Partial<LocView> = {}): LocView {
 
 /** A line count over two languages, as `sephera loc` would report them. */
 export function twoLanguageLoc(): LocView {
-  const rust = { language: "Rust", files: 2, code: 20, comment: 3, empty: 4, size_bytes: 220 };
-  const toml = { language: "TOML", files: 1, code: 4, comment: 0, empty: 1, size_bytes: 44 };
+  const rust = {
+    language: "Rust",
+    files: 2,
+    code: 20,
+    comment: 3,
+    empty: 4,
+    size_bytes: 220,
+  };
+  const toml = {
+    language: "TOML",
+    files: 1,
+    code: 4,
+    comment: 0,
+    empty: 1,
+    size_bytes: 44,
+  };
   return emptyLoc({
     rows: [rust, toml],
     totals: {
@@ -109,6 +124,22 @@ export function dependents(): GraphReport {
   };
 }
 
+/** One file's counts, for the per-file panel. */
+export function fileDetail(): FileDetail {
+  return {
+    path: "src/a.rs",
+    code: 20,
+    comment: 3,
+    empty: 4,
+    size_bytes: 220,
+    language: "Rust",
+    declarations: [
+      { name: "Widget", kind: "types", line: 4 },
+      { name: "run", kind: "functions", line: 12 },
+    ],
+  };
+}
+
 /** One level of a tree. */
 export function treeLevel(): TreeNode[] {
   return [
@@ -119,25 +150,30 @@ export function treeLevel(): TreeNode[] {
 
 /** The registry a test installs.
  *
- * Every method resolves to a fixture, and every method records that it was called
- * -- which is how a test asserts the *store* asked the *service*, rather than
- * asserting on a rendered number that could have come from anywhere.
+ * Every method resolves to a fixture, and every method records that it was
+ * called -- which is how a test asserts the *store* asked the *service*, rather
+ * than asserting on a rendered number that could have come from anywhere.
+ *
+ * Each service is stamped with the epoch it was given, because the store drops a
+ * reply whose stamp is no longer current. A fixture that ignores its `epoch`
+ * argument returns a reply carrying no stamp, and the store then discards a call
+ * that succeeded -- which is a test failure that reads as a bug in the store.
  */
-export function installServices(): Record<
-  string,
-  ReturnType<typeof vi.fn>
-> {
-  const loc = vi.fn().mockResolvedValue(twoLanguageLoc());
-  const symbols = vi.fn().mockResolvedValue(declarations());
-  const graph = vi.fn().mockResolvedValue(dependents());
-  const explorer = vi.fn().mockResolvedValue(treeLevel());
+export function installServices(): Record<string, ReturnType<typeof vi.fn>> {
+  const stamped = (value: unknown) =>
+    vi.fn().mockImplementation(async (_a: unknown, _b: unknown, epoch: number) => [
+      value,
+      epoch,
+    ]);
 
-  const calls = {
-    loc,
-    symbols,
-    graph,
-    explorer,
-  };
+  const loc = stamped(twoLanguageLoc());
+  const symbols = stamped(declarations());
+  const graph = stamped(dependents());
+  const explorer = vi.fn().mockResolvedValue(treeLevel());
+  const file = vi.fn().mockResolvedValue(fileDetail());
+  const cancel = vi.fn().mockResolvedValue(undefined);
+
+  const calls = { loc, symbols, graph, explorer, file, cancel };
 
   withServices({
     loc: { count: loc } as unknown as ServiceRegistry["loc"],
@@ -146,6 +182,8 @@ export function installServices(): Record<
       dependents: graph,
     } as unknown as ServiceRegistry["graph"],
     explorer: { list: explorer } as unknown as ServiceRegistry["explorer"],
+    file: { detail: file } as unknown as ServiceRegistry["file"],
+    dialog: { cancel } as unknown as ServiceRegistry["dialog"],
   });
 
   return calls;
