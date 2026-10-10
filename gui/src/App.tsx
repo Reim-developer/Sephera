@@ -1,15 +1,19 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
-import {
-  open as openDialog,
-} from "@tauri-apps/plugin-dialog";
-import { getCurrentWindow } from "@tauri-apps/api/window";
+import * as ScrollArea from "@radix-ui/react-scroll-area";
+import * as Separator from "@radix-ui/react-separator";
+import { FolderOpen, PanelRightClose, RefreshCw } from "lucide-react";
 
-import { ActivityBar, type ActivityItem } from "./components/ActivityBar";
+import { ActivityBar, PANELS } from "./components/ActivityBar";
 import { FileTree } from "./components/FileTree";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
 import { LocView } from "./views/LocView";
+import { SymbolsView } from "./views/SymbolsView";
 import { countLines } from "./lib/ipc";
+import { open as openDialog } from "@tauri-apps/plugin-dialog";
+import styles from "./styles/workbench.module.scss";
+import editor from "./styles/editor.module.scss";
+import views from "./styles/views.module.scss";
 
 /** The views the editor can show. */
 const TABS = [
@@ -17,13 +21,6 @@ const TABS = [
   { id: "symbols", label: "Declarations" },
   { id: "graph", label: "Dependencies" },
 ] as const;
-
-/** The activity bar's panels. `explorer` is the only one with content today. */
-const PANELS: readonly ActivityItem[] = [
-  { id: "explorer", label: "Explorer", glyph: "📄" },
-  { id: "search", label: "Search", glyph: "🔍" },
-  { id: "config", label: "Configuration", glyph: "⚙" },
-];
 
 export function App() {
   const [root, setRoot] = useState<string>(
@@ -49,7 +46,7 @@ export function App() {
   );
 
   // The status line is the count's own summary, refreshed on the same token the
-  // views use. Reading it from here rather than passing a callback into the view
+  // views use. Reading it from here rather than passing a callback into a view
   // keeps the view free of anything that is not rendering.
   useEffect(() => {
     let cancelled = false;
@@ -70,11 +67,14 @@ export function App() {
     };
   }, [root, patterns, reloadToken]);
 
-  const reopen = useCallback(() => setReloadToken((token) => token + 1), []);
+  const reopen = useCallback(
+    () => setReloadToken((token) => token + 1),
+    [],
+  );
 
   // Drag to resize the sidebar, with the handle hidden until a drag starts. The
   // width is applied to the sidebar directly rather than through React state on
-  // each mousemove, so a drag does not re-render the tree at sixty frames a
+  // every mousemove, so a drag does not re-render the tree at sixty frames a
   // second.
   const onHandleDown = useCallback((event: React.PointerEvent) => {
     event.preventDefault();
@@ -84,8 +84,9 @@ export function App() {
 
   const onHandleMove = useCallback((event: React.PointerEvent) => {
     if (!dragging.current) return;
-    const width = event.clientX - 48;
-    setSidebarWidth(Math.min(520, Math.max(180, width)));
+    setSidebarWidth(
+      Math.min(520, Math.max(180, event.clientX - 48)),
+    );
   }, []);
 
   const onHandleUp = useCallback(() => {
@@ -111,8 +112,8 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, [reopen]);
 
-  // Ctrl+Shift+O opens the directory picker, which is the one action worth a
-  // shortcut: it is the thing a user does first and most often.
+  // Ctrl+Shift+O opens the directory picker: the one action worth a shortcut,
+  // because it is what a user does first and most often.
   useEffect(() => {
     function onKey(event: KeyboardEvent) {
       if (event.ctrlKey && event.shiftKey && event.key === "O") {
@@ -124,29 +125,28 @@ export function App() {
     return () => window.removeEventListener("keydown", onKey);
   }, []);
 
-  // Dragging the window by the empty area of the editor, because a Tauri window
-  // with `decorations: true` already has a title bar and this client's own
-  // regions should not fight it. Left out deliberately.
-  void getCurrentWindow;
-
   return (
-    <div className="workbench">
+    <div className={styles.workbench}>
       <ActivityBar items={PANELS} active={panel} onSelect={setPanel} />
 
       {panel ? (
-        <aside className="sidebar" style={{ width: sidebarWidth }}>
-          <h2 className="sidebar__title">{panel}</h2>
-          <div className="sidebar__body">
+        <aside className={styles.sidebar} style={{ width: sidebarWidth }}>
+          <h2 className={styles.sidebar__title}>
+            <FolderOpen size={12} aria-hidden="true" /> {panel}
+          </h2>
+          <div className={styles.sidebar__body}>
             {panel === "explorer" ? (
-              <FileTree root={root} onOpen={setSelected} selected={selected} />
-            ) : panel === "config" ? (
-              <ConfigPanel root={root} patterns={patterns} />
+              <FileTree
+                root={root}
+                onOpen={setSelected}
+                selected={selected}
+              />
             ) : (
-              <Placeholder title="Search" hint="Not implemented yet." />
+              <ConfigPanel root={root} patterns={patterns} />
             )}
           </div>
           <div
-            className="sidebar__handle"
+            className={styles.sidebar__handle}
             role="separator"
             aria-orientation="vertical"
             aria-label="Resize sidebar"
@@ -157,10 +157,10 @@ export function App() {
         </aside>
       ) : null}
 
-      <main className="workbench__main">
-        <header className="editor__controls">
+      <main className={styles.workbench__main}>
+        <div className={editor.controls}>
           <button type="button" onClick={() => void pickDirectory()}>
-            Open…
+            <PanelRightClose size={13} aria-hidden="true" /> Open…
           </button>
           <input
             value={root}
@@ -181,31 +181,54 @@ export function App() {
             }}
           />
           <button type="button" onClick={reopen}>
-            Count
+            <RefreshCw size={13} aria-hidden="true" /> Count
           </button>
-        </header>
+        </div>
 
         <TabBar tabs={TABS} active={tab} onSelect={setTab} />
 
-        <div className="editor__content">
-          {tab === "loc" ? (
-            <LocView path={root} ignore={patterns} reloadToken={reloadToken} />
-          ) : (
-            <Placeholder
-              title={TABS.find((entry) => entry.id === tab)?.label ?? ""}
-              hint="This view is not implemented yet."
-            />
-          )}
-        </div>
+        <ScrollArea.Root className={editor.content}>
+          <ScrollArea.Viewport className={editor.content}>
+            {tab === "loc" ? (
+              <LocView
+                path={root}
+                ignore={patterns}
+                reloadToken={reloadToken}
+              />
+            ) : tab === "symbols" ? (
+              <SymbolsView
+                path={root}
+                ignore={patterns}
+                reloadToken={reloadToken}
+              />
+            ) : (
+              <NotBuilt label={labelFor(tab)} />
+            )}
+          </ScrollArea.Viewport>
+          <ScrollArea.Scrollbar orientation="vertical">
+            <ScrollArea.Thumb />
+          </ScrollArea.Scrollbar>
+        </ScrollArea.Root>
       </main>
 
       <StatusBar
         summary={summary}
         config={config}
         busy={false}
+        onRecompute={reopen}
       />
+
+      {/* Radix's separator, used where the shell needs a rule rather than a
+          border: it is one element with a role, and `decorative` where the rule
+          is visual only. */}
+      <Separator.Root decorative style={{ display: "none" }} />
     </div>
   );
+}
+
+/** The label for a tab id, without the caller having to know the table. */
+function labelFor(id: string): string {
+  return TABS.find((tab) => tab.id === id)?.label ?? id;
 }
 
 /** The configuration panel: which file was read, and what it contributed. */
@@ -217,9 +240,9 @@ function ConfigPanel({
   patterns: string[];
 }) {
   return (
-    <div className="sidebar__group">
-      <div className="sidebar__group-header">Configuration</div>
-      <p className="sidebar__empty">
+    <div className={styles.tree}>
+      <div className={styles.sidebar__groupHeader}>Configuration</div>
+      <p className={styles.sidebar__empty}>
         Reads <code>.sephera.toml</code> from {root}. Patterns from the file are
         applied first, then the {patterns.length} typed here.
       </p>
@@ -227,11 +250,17 @@ function ConfigPanel({
   );
 }
 
-function Placeholder({ title, hint }: { title: string; hint: string }) {
+/** A view that is not built yet, in the shape the real ones use. */
+function NotBuilt({ label }: { label: string }) {
   return (
-    <div className="placeholder">
-      <span className="placeholder__title">{title}</span>
-      <span className="placeholder__hint">{hint}</span>
+    <div className={views.placeholder}>
+      <span className={views.placeholder__title}>{label}</span>
+      <span className={views.placeholder__hint}>
+        The command and its types already exist in{" "}
+        <code>gui/src-tauri/src/commands/graph.rs</code> and{" "}
+        <code>gui/src/lib/ipc.ts</code>. Only the React is missing, and building
+        it is the next round.
+      </span>
     </div>
   );
 }

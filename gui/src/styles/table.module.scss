@@ -1,0 +1,56 @@
+// The shared data table, used by both the line-count view and the declarations
+// view.
+//
+// A table, not a grid of divs. Two reasons: it is what the data is, and screen
+// readers announce the row and column a cell belongs to -- which a `<div>` grid
+// silently does not. Radix has no table primitive, so this one is hand-built on
+// `<table>` and there is nothing to override.
+
+@use "tokens" as t;
+
+.table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 13px;
+
+  th,
+  td {
+    padding: 4px 10px;
+    text-align: left;
+    border-bottom: 1px solid t.$border-subtle;
+    white-space: nowrap;
+  }
+
+  thead th {
+    position: sticky;
+    top: 0;
+    z-index: 1;
+    background: t.$editor-bg;
+    color: t.$text-muted;
+    font-weight: 600;
+    font-size: 11px;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+  }
+
+  // A hover row is the only feedback a read-only table needs, and it is drawn on
+  // the body rather than the cells so the border colour does not change under
+  // the cursor.
+  tbody tr:hover {
+    background: t.$list-hover-bg;
+  }
+}
+
+.table__totals {
+  td {
+    font-weight: 600;
+    color: t.$text-bright;
+    border-top: 1px solid t.$widget-border;
+    border-bottom: 0;
+  }
+}
+
+.table__empty {
+  padding: 28px 4px;
+  color: t.$text-muted;
+}

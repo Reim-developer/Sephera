@@ -1,0 +1,98 @@
+// Everything that is not a component: the reset, the page chrome, and the
+// scrollbars. Imported once from `main.tsx` alongside the component modules, so
+// this file has nothing to say about any one component's internals.
+//
+// The old single `theme.css` did all of this in one place. It is split because
+// tokens, reset and component styles change for different reasons: a re-skin
+// touches tokens, an accessibility fix touches the reset, and a new widget
+// touches only its own module.
+
+@use "tokens" as t;
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  background: t.$editor-bg;
+  color: t.$text-normal;
+  font-family: t.$font-sans;
+  font-size: t.$font-size;
+  line-height: t.$line-height;
+  // A GUI, not a document: the window is the viewport and scrolling belongs to
+  // the panels that need it.
+  overflow: hidden;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  color-scheme: dark;
+}
+
+// Numeric columns share one class so `tabular-nums` is a decision made once
+// rather than per table.
+.numeric {
+  font-family: t.$font-mono;
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+// ---- scrollbars ----------------------------------------------------------
+// Both engines, because Tauri ships Chromium on Windows and WebKitGTK on Linux.
+::-webkit-scrollbar {
+  width: 10px;
+  height: 10px;
+}
+
+::-webkit-scrollbar-thumb {
+  background: t.$scrollbar-thumb;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: t.$text-muted;
+}
+
+::-webkit-scrollbar-corner,
+::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+* {
+  scrollbar-width: thin;
+  scrollbar-color: t.$scrollbar-thumb transparent;
+}
+
+// A screen-reader-only class for a table's caption. A caption is the difference
+// between a table with a name and four hundred numbers in an unnamed grid, and it
+// should not cost visual space.
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  padding: 0;
+  margin: -1px;
+  overflow: hidden;
+  clip: rect(0, 0, 0, 0);
+  white-space: nowrap;
+  border: 0;
+}
+
+// ---- reduced motion ------------------------------------------------------
+// The only animation in the client is Radix's own enter/exit transition. A client
+// that respects the OS setting does not have to know which animations it happens
+// to be running today.
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    transition-duration: 0.01ms !important;
+  }
+}

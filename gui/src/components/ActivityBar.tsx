@@ -1,19 +1,39 @@
-import type { ReactNode } from "react";
+import type { LucideIcon } from "lucide-react";
+import {
+  FileCode2,
+  Hash,
+  Settings2,
+  TextSearch,
+} from "lucide-react";
 
-/** One icon in the activity bar. */
+import styles from "../styles/workbench.module.scss";
+
+/** One panel the activity bar can open. */
 export interface ActivityItem {
   id: string;
   label: string;
-  /** A short glyph, drawn in the client rather than imported as an asset. */
-  glyph: string;
+  /** A real icon set rather than a glyph, so the rail weights consistently. */
+  icon: LucideIcon;
 }
 
 /**
- * The left rail that chooses which sidebar panel is open.
+ * The activity bar's panels.
  *
- * One selected item at a time, and clicking the selected one closes the panel --
- * the behaviour Visual Studio Code has, and the reason a second click is not a
- * no-op: with a sidebar this narrow, hiding it is how a reclaims the width.
+ * `search` is absent on purpose: it is a panel the CLI does not have a
+ * corresponding answer for, and an icon that opens nothing is worse than a
+ * missing one.
+ */
+export const PANELS: readonly ActivityItem[] = [
+  { id: "explorer", label: "Explorer", icon: FileCode2 },
+  { id: "config", label: "Configuration", icon: Settings2 },
+];
+
+/**
+ * The left rail that chooses which sidebar is open.
+ *
+ * One selected item at a time, and clicking the selected one closes the panel.
+ * With a sidebar this narrow, hiding it is how a reader reclaims the width, and
+ * a second click being a no-op is what makes the rail feel stuck.
  */
 export function ActivityBar({
   items,
@@ -25,20 +45,20 @@ export function ActivityBar({
   onSelect: (id: string | null) => void;
 }) {
   return (
-    <nav className="activity-bar" aria-label="Views">
-      {items.map((item) => {
-        const selected = active === item.id;
+    <nav className={styles.activityBar} aria-label="Views">
+      {items.map(({ id, label, icon: Icon }) => {
+        const selected = active === id;
         return (
           <button
-            key={item.id}
+            key={id}
             type="button"
-            className={`activity-bar__item${selected ? " activity-bar__item--active" : ""}`}
+            className={styles.activityBar__item}
             aria-pressed={selected}
-            aria-label={item.label}
-            title={item.label}
-            onClick={() => onSelect(selected ? null : item.id)}
+            aria-label={label}
+            title={label}
+            onClick={() => onSelect(selected ? null : id)}
           >
-            <span aria-hidden="true">{item.glyph}</span>
+            <Icon size={22} strokeWidth={1.5} aria-hidden="true" />
           </button>
         );
       })}
@@ -46,21 +66,6 @@ export function ActivityBar({
   );
 }
 
-/** A section inside a panel: a collapsible group with a titled body. */
-export function PanelGroup({
-  title,
-  children,
-}: {
-  title: string;
-  children: ReactNode;
-}) {
-  return (
-    <section className="sidebar__group">
-      <div className="sidebar__group-header">
-        <span aria-hidden="true">▾</span>
-        {title}
-      </div>
-      <div className="sidebar__group-body">{children}</div>
-    </section>
-  );
-}
+/** The search panel's icon, kept out of `PANELS` because there is no panel. */
+export const SEARCH_ICON: LucideIcon = TextSearch;
+export const SYMBOL_ICON: LucideIcon = Hash;

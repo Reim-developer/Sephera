@@ -1,0 +1,233 @@
+// The workbench grid: activity bar, sidebar, editor, status bar.
+//
+// This is the part that has to stay hand-written. It is a four-region layout
+// with two resizable tracks, and a component library's grid is not going to
+// express "the middle track shrinks to zero and the sidebar can be dragged
+// between 180 and 520 pixels" without fighting the library's own assumptions.
+
+@use "tokens" as t;
+
+@mixin panel($background) {
+  background: $background;
+  border-right: 1px solid t.$panel-border;
+}
+
+@mixin scrollable {
+  overflow: auto;
+  // Prevents a horizontal scrollbar appearing from a single long file name, and
+  // lets the ellipsis in `.tree__label` do its job.
+  overflow-x: hidden;
+}
+
+.workbench {
+  display: grid;
+  grid-template-columns: auto auto minmax(0, 1fr);
+  grid-template-rows: minmax(0, 1fr) t.$status-bar-height;
+  height: 100%;
+}
+
+.workbench__main {
+  grid-column: 3;
+  grid-row: 1;
+  display: grid;
+  grid-template-rows: auto t.$tab-height minmax(0, 1fr);
+  min-width: 0;
+  background: t.$editor-bg;
+}
+
+.workbench__status {
+  grid-column: 1 / -1;
+  grid-row: 2;
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 0 10px;
+  background: t.$status-bar-bg;
+  color: t.$text-bright;
+  font-size: 12px;
+  white-space: nowrap;
+  overflow: hidden;
+
+  // The right-hand slot is pushed to the edge without a spacer element, which
+  // would otherwise need to exist only to hold `margin-left: auto`.
+  > :last-child {
+    margin-left: auto;
+  }
+}
+
+// ---- activity bar --------------------------------------------------------
+
+.activityBar {
+  grid-column: 1;
+  grid-row: 1;
+  width: t.$activity-bar-width;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 6px 0;
+  gap: 4px;
+  @include panel(t.$activity-bar-bg);
+}
+
+.activityBar__item {
+  width: t.$activity-bar-width;
+  height: t.$activity-bar-width;
+  display: grid;
+  place-items: center;
+  border: 0;
+  background: transparent;
+  color: t.$text-muted;
+  cursor: pointer;
+  position: relative;
+
+  &:hover:not(:disabled) {
+    color: t.$text-bright;
+  }
+
+  // The selected rail is a two-pixel left bar rather than a filled tile: that is
+  // how the editor marks it, and a filled tile reads as a button rather than a
+  // selected view.
+  &[aria-pressed="true"] {
+    color: t.$text-bright;
+
+    &::before {
+      content: "";
+      position: absolute;
+      left: 0;
+      top: 0;
+      bottom: 0;
+      width: 2px;
+      background: t.$text-bright;
+    }
+  }
+
+  &:disabled {
+    color: t.$text-disabled;
+    cursor: default;
+  }
+}
+
+// ---- sidebar -------------------------------------------------------------
+
+.sidebar {
+  grid-column: 2;
+  grid-row: 1;
+  width: t.$sidebar-default;
+  min-width: t.$sidebar-min;
+  max-width: t.$sidebar-max;
+  display: grid;
+  grid-template-rows: 22px minmax(0, 1fr);
+  background: t.$side-bar-bg;
+  border-right: 1px solid t.$panel-border;
+  position: relative;
+}
+
+.sidebar__title {
+  display: flex;
+  align-items: center;
+  padding: 0 10px;
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: t.$text-muted;
+}
+
+.sidebar__body {
+  @include scrollable;
+  padding: 2px 0 8px;
+}
+
+// A real drag handle, not a border: `cursor: col-resize` and a hit area wider
+// than the one pixel it appears to be, because a 1px target is not usable.
+.sidebar__handle {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  right: -2px;
+  width: 4px;
+  cursor: col-resize;
+  z-index: 5;
+
+  &:hover,
+  &[data-resizing="true"] {
+    background: t.$focus-border;
+  }
+}
+
+.sidebar__groupHeader {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  width: 100%;
+  padding: 3px 8px 3px 0;
+  border: 0;
+  background: transparent;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    background: t.$list-hover-bg;
+  }
+}
+
+.sidebar__empty {
+  padding: 12px 14px;
+  color: t.$text-muted;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+// ---- file tree -----------------------------------------------------------
+
+.tree {
+  display: flex;
+  flex-direction: column;
+}
+
+.tree__row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 2px 8px 2px 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: t.$list-hover-bg;
+  }
+
+  &[aria-selected="true"] {
+    background: t.$list-active-bg;
+  }
+}
+
+.tree__chevron {
+  flex: 0 0 14px;
+  display: grid;
+  place-items: center;
+  color: t.$text-muted;
+}
+
+.tree__icon {
+  flex: 0 0 auto;
+  display: grid;
+  place-items: center;
+  color: t.$text-muted;
+}
+
+.tree__label {
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
