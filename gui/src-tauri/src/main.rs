@@ -31,6 +31,8 @@ pub fn run() -> tauri::Result<()> {
             symbols::count_declarations,
             graph::dependency_graph,
         ])
+        // The window, with the configuration that keeps it a FixedSize-free
+        // normal window. `run_native` blocks until the window closes.
         .run(tauri::generate_context!())
 }
 

@@ -1,25 +1,12 @@
 [package]
 name = "sephera_gui_tauri"
-# The workspace's version is not inherited, because this crate is outside the
-# workspace for the same reason `fuzz/` is: a member would put `tauri`, `wry` and
-# WebKitGTK's system requirements into `cargo test --workspace`, and every CI job
-# building the Rust tests would need Node and a GTK toolchain. It therefore has
-# its own version, which `scripts/check_version.py` keeps in step with the root.
 version = "0.7.1"
 edition = "2024"
 description = "The Tauri host for Sephera's graphical front-end."
-# Not published. It is a shell around crates that are, and a build script that
-# requires a webview is not something crates.io should be asked to package.
 publish = false
 
-# The parent workspace, at `../../Cargo.toml`, is deliberately not a parent of
-# this manifest: `[workspace]` in the root excludes `gui`, and this crate sits
-# inside `gui`. Cargo finds the root by the `exclude` above, so this is a
-# standalone package whose path dependencies resolve back into the main
-# workspace's `Cargo.toml` -- the same arrangement `fuzz/` uses.
-
 [dependencies]
-tauri = { version = "2.12", features = [] }
+tauri = { version = "2.12", features = ["custom-protocol"] }
 tauri-plugin-dialog = "2"
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
@@ -27,22 +14,12 @@ serde_json = "1.0"
 anyhow = "1.0.102"
 tempfile = "3.23.0"
 
-# The analysis crates. Path dependencies rather than versions, so the GUI always
-# tests the code in this checkout -- a GUI that analysed a *released* version of
-# the resolver while the checkout's resolver was mid-change would be the worst
-# possible thing to debug.
 sephera_scan = { path = "../../crates/sephera_scan" }
-sephera_gui = { path = "../../crates/sephera_gui" }
 sephera_symbols = { path = "../../crates/sephera_symbols" }
 sephera_graph = { path = "../../crates/sephera_graph" }
 sephera_runtime = { path = "../../crates/sephera_runtime" }
 sephera_ignore = { path = "../../crates/sephera_ignore" }
+sephera_gui = { path = "../../crates/sephera_gui" }
 
 [build-dependencies]
 tauri-build = { version = "2.7", features = [] }
-
-[features]
-# This crate is a binary, and `tauri-build` rejects a build that does not declare
-# exactly one of the two app patterns. The empty default keeps the manifest
-# honest until the commands module decides otherwise.
-custom-protocol = ["tauri/custom-protocol"]
