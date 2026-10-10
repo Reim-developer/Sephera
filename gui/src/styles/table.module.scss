@@ -1,50 +1,82 @@
-// The shared data table, used by both the line-count view and the declarations
-// view.
+// The shared data table, used by the line-count, declarations and dependency
+// views.
 //
 // A table, not a grid of divs. Two reasons: it is what the data is, and screen
 // readers announce the row and column a cell belongs to -- which a `<div>` grid
 // silently does not. Radix has no table primitive, so this one is hand-built on
 // `<table>` and there is nothing to override.
+//
+// The shape follows what makes a data grid readable rather than merely correct:
+// a header that is visually distinct from the body, numeric columns that align
+// digit-for-digit, a totals row that reads as the sum of what is above it, and a
+// row separation that a long table needs and a short one does not object to.
 
 @use "tokens" as t;
+
+// The row separator is a line, not a background band. Zebra striping quickly
+// becomes the loudest thing on screen and stops carrying information; a 1px rule
+// between rows is the smallest thing that still says where one row ends.
+$row-rule: 1px solid t.$border-subtle;
 
 .table {
   width: 100%;
   border-collapse: collapse;
   font-size: 13px;
-
-  th,
-  td {
-    padding: 4px 10px;
-    text-align: left;
-    border-bottom: 1px solid t.$border-subtle;
-    white-space: nowrap;
-  }
+  // The bottom rule is the table's own, so the last row does not carry a
+  // dangling border into the margin below it.
+  margin-bottom: 4px;
 
   thead th {
     position: sticky;
     top: 0;
     z-index: 1;
-    background: t.$editor-bg;
+    padding: 7px 12px 6px;
+    // The header sits on its own surface rather than being a bolded row of the
+    // body's, so a scroll under it reads as a change of region.
+    background: t.$tabs-bg;
     color: t.$text-muted;
     font-weight: 600;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    text-align: left;
+    white-space: nowrap;
+    border-bottom: 1px solid t.$widget-border;
   }
 
-  // A hover row is the only feedback a read-only table needs, and it is drawn on
-  // the body rather than the cells so the border colour does not change under
-  // the cursor.
-  tbody tr:hover {
+  tbody td {
+    padding: 7px 12px;
+    text-align: left;
+    border-bottom: $row-rule;
+    white-space: nowrap;
+    // A number that does not jump as the digits change is what makes a column
+    // scannable without reading every row.
+    font-variant-numeric: tabular-nums;
+  }
+
+  // The first column is the row's identity, so it is the one that gets emphasis.
+  // Bolding it is wrong -- it is a name, not a heading -- so it takes the bright
+  // text colour and nothing else.
+  tbody td:first-child {
+    color: t.$text-normal;
+  }
+
+  // Hover, then selected. Drawn on the row rather than the cells so the
+  // separator does not change colour under the cursor.
+  tbody tr:hover td {
     background: t.$list-hover-bg;
   }
-}
 
-.table__totals {
-  td {
+  tbody tr[aria-selected="true"] td {
+    background: t.$list-active-bg;
+  }
+
+  // The totals row: a rule above it that is heavier than the row rules, and the
+  // bright text. It is the row a reader's eye goes to last and first.
+  .table__totals td {
     font-weight: 600;
     color: t.$text-bright;
+    background: t.$tabs-bg;
     border-top: 1px solid t.$widget-border;
     border-bottom: 0;
   }
@@ -53,4 +85,45 @@
 .table__empty {
   padding: 28px 4px;
   color: t.$text-muted;
+}
+
+// A numeric column, right-aligned. Applied as a class rather than through
+// `nth-child`, because the columns differ per view and the class travels with
+// the header and the cell together.
+.numeric {
+  text-align: right;
+  font-family: t.$font-mono;
+}
+
+// A cell that is a link into the same view -- a file name in the dependency list.
+// Underlined on hover only, so a table of them is not a table of underlines.
+.link {
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: t.$link-foreground;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
+
+  &:hover {
+    text-decoration: underline;
+  }
+}
+
+// A bar inside a cell, for the share-of-total column.
+//
+// The bar is a background on the cell rather than a child element, so it adds
+// no height and cannot disturb the row's metrics.
+.cell__bar {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  background: t.$selection-bg;
+  opacity: 0.25;
+}
+
+.cell {
+  position: relative;
 }

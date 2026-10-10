@@ -50,6 +50,8 @@ export function LocView() {
   // is no effect to depend on anything. Its value is what makes the render happen.
   void generation;
 
+  const total = data.totals.code || 1;
+
   return (
     <div className={styles.view}>
       <header className={styles.view__header}>
@@ -66,6 +68,8 @@ export function LocView() {
         rows={data.rows.map(toDataRow)}
         totals={toDataRow(data.totals)}
         emptyMessage="No source files found."
+        shareOf={(row) => row.code / total}
+        shareLabel="Share of code"
       />
     </div>
   );
