@@ -1,19 +1,18 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
-import * as Separator from "@radix-ui/react-separator";
 import { FolderOpen, PanelRightClose, RefreshCw } from "lucide-react";
 
 import { ActivityBar, PANELS } from "./components/ActivityBar";
 import { FileTree } from "./components/FileTree";
 import { StatusBar } from "./components/StatusBar";
 import { TabBar } from "./components/TabBar";
+import { DependenciesView } from "./views/DependenciesView";
 import { LocView } from "./views/LocView";
 import { SymbolsView } from "./views/SymbolsView";
 import { countLines } from "./lib/ipc";
 import { open as openDialog } from "@tauri-apps/plugin-dialog";
 import styles from "./styles/workbench.module.scss";
 import editor from "./styles/editor.module.scss";
-import views from "./styles/views.module.scss";
 
 /** The views the editor can show. */
 const TABS = [
@@ -30,6 +29,7 @@ export function App() {
   const [panel, setPanel] = useState<string | null>("explorer");
   const [tab, setTab] = useState<string>("loc");
   const [selected, setSelected] = useState<string | null>(null);
+  const [graphTarget, setGraphTarget] = useState("");
   const [reloadToken, setReloadToken] = useState(0);
   const [summary, setSummary] = useState<string | null>(null);
   const [config, setConfig] = useState<string | null>(null);
@@ -138,7 +138,14 @@ export function App() {
             {panel === "explorer" ? (
               <FileTree
                 root={root}
-                onOpen={setSelected}
+                onOpen={(picked) => {
+                  setSelected(picked);
+                  // A file picked in the explorer is also the graph's target, so
+                  // the view has something to show the moment a file is chosen.
+                  // A directory in the tree is expanded, not opened, so only
+                  // files reach here.
+                  setGraphTarget(picked);
+                }}
                 selected={selected}
               />
             ) : (
@@ -202,7 +209,12 @@ export function App() {
                 reloadToken={reloadToken}
               />
             ) : (
-              <NotBuilt label={labelFor(tab)} />
+              <DependenciesView
+                path={root}
+                target={graphTarget}
+                onTargetChange={setGraphTarget}
+                reloadToken={reloadToken}
+              />
             )}
           </ScrollArea.Viewport>
           <ScrollArea.Scrollbar orientation="vertical">
@@ -217,19 +229,10 @@ export function App() {
         busy={false}
         onRecompute={reopen}
       />
-
-      {/* Radix's separator, used where the shell needs a rule rather than a
-          border: it is one element with a role, and `decorative` where the rule
-          is visual only. */}
-      <Separator.Root decorative style={{ display: "none" }} />
     </div>
   );
 }
 
-/** The label for a tab id, without the caller having to know the table. */
-function labelFor(id: string): string {
-  return TABS.find((tab) => tab.id === id)?.label ?? id;
-}
 
 /** The configuration panel: which file was read, and what it contributed. */
 function ConfigPanel({
@@ -250,17 +253,3 @@ function ConfigPanel({
   );
 }
 
-/** A view that is not built yet, in the shape the real ones use. */
-function NotBuilt({ label }: { label: string }) {
-  return (
-    <div className={views.placeholder}>
-      <span className={views.placeholder__title}>{label}</span>
-      <span className={views.placeholder__hint}>
-        The command and its types already exist in{" "}
-        <code>gui/src-tauri/src/commands/graph.rs</code> and{" "}
-        <code>gui/src/lib/ipc.ts</code>. Only the React is missing, and building
-        it is the next round.
-      </span>
-    </div>
-  );
-}

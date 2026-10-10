@@ -49,11 +49,3 @@ __pycache__/
 **/*.snap
 !crates/sephera_cli/tests/snapshots/*.snap
 .astro
-
-# A zero-byte artefact of running 
-px sass ... nul on Windows, where 
-ul is a
-# reserved device name: the shell redirects to the device, but sass opens the
-# path as a file and leaves a real 0-byte file behind. Windows then refuses to
-# delete it through an ordinary path, so it is ignored rather than removed.
-/gui/nul
