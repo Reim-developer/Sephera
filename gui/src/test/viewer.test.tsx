@@ -109,7 +109,7 @@ describe("the viewer's highlighting", () => {
 
   it("paints in the dark theme's colour", async () => {
     oneRead("let s = 1;\n");
-    withColours("src/a.rs", [oneColouredLine()]);
+    withColours("src/a.rs", [oneColouredLine(), []]);
 
     await act(async () => {
       show("src/a.rs");
@@ -127,7 +127,7 @@ describe("the viewer's highlighting", () => {
     // there -- which is also why a reader's choice survives a restart.
     localStorage.setItem("sephera.theme", "light");
     oneRead("let s = 1;\n");
-    withColours("src/a.rs", [oneColouredLine()]);
+    withColours("src/a.rs", [oneColouredLine(), []]);
 
     await act(async () => {
       show("src/a.rs");
@@ -145,6 +145,7 @@ describe("the viewer's highlighting", () => {
         { text: "fn", dark: "#569cd6", light: "#0000ff", italic: false, bold: false },
         { text: "f", dark: null, light: null, italic: true, bold: true },
       ],
+      [],
     ]);
 
     await act(async () => {
@@ -170,6 +171,8 @@ describe("the viewer's highlighting", () => {
       [
         { text: "s = 1;", dark: "#d4d4d4", light: "#000000", italic: false, bold: false },
       ],
+      [],
+      [],
     ]);
 
     await act(async () => {

@@ -176,8 +176,18 @@ export function installServices(): Record<string, ReturnType<typeof vi.fn>> {
     bytes: 10,
     total: 10,
   });
+  // No colour. A test that renders the viewer without caring about highlighting
+  // should not depend on Shiki's behaviour -- and with the real service in place
+  // it did, which made those tests break when the alignment was fixed.
+  const highlight = {
+    tokenize: vi.fn().mockResolvedValue(null),
+    grammarFor: vi.fn().mockReturnValue("rust"),
+  };
   const cancel = vi.fn().mockResolvedValue(undefined);
 
+  // The highlight service is not in `calls`: it is an object of two functions
+  // where every other service is a single mock, and a test that cares about
+  // highlighting installs its own stub regardless.
   const calls = { loc, symbols, graph, explorer, file, viewer, cancel };
 
   withServices({
@@ -189,6 +199,7 @@ export function installServices(): Record<string, ReturnType<typeof vi.fn>> {
     explorer: { list: explorer } as unknown as ServiceRegistry["explorer"],
     file: { detail: file } as unknown as ServiceRegistry["file"],
     viewer: { readChunk: viewer } as unknown as ServiceRegistry["viewer"],
+    highlight: highlight as unknown as ServiceRegistry["highlight"],
     dialog: { cancel } as unknown as ServiceRegistry["dialog"],
   });
 

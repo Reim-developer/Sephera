@@ -54,13 +54,8 @@ export function FileViewer() {
 
   const hasMore = loaded < total;
 
-  // The colours are used only when they describe the same file the plain text
-  // does. A count that disagrees means the highlighter partitioned the text into
-  // lines differently, and rendering the spans anyway would put file content
-  // under the wrong line number -- which is the one thing the numbers exist to
-  // prevent.
   const shown = lines(text);
-  const painted = colours !== null && colours.length === shown.length ? colours : null;
+  const painted = alignSpans(text, colours, shown);
 
   return (
     <div className={styles.viewer}>
@@ -121,6 +116,33 @@ function Painted({
       ))}
     </>
   );
+}
+
+/**
+ * The colours that describe the same lines `shown` numbers.
+ *
+ * Two partitions of one file, and they differ by one in the ordinary case. The
+ * highlighter splits on `\n` and keeps the empty line a file's final newline
+ * creates -- so `"fn f() {}\n"` is two arrays to it. This viewer's numbering drops
+ * that empty, because an editor does not number it. Comparing one against the
+ * other directly meant the guard was never satisfied for a file ending in a
+ * newline, which is nearly every source file: the viewer fell back to plain text
+ * every time, and no amount of correct highlighting would have shown it.
+ *
+ * So the trailing empty is dropped from the colour side, once, and only when the
+ * text really does end on a newline. The count is then checked rather than
+ * assumed: a highlighter that partitions the text some *genuinely* different way
+ * still yields `null`, and the viewer shows plain text rather than putting file
+ * content under the wrong line number.
+ */
+function alignSpans(
+  text: string,
+  colours: Spans[] | null,
+  shown: readonly string[],
+): Spans[] | null {
+  if (colours === null || colours.length === 0) return null;
+  const aligned = text.endsWith("\n") ? colours.slice(0, -1) : colours;
+  return aligned.length === shown.length ? aligned : null;
 }
 
 /**
