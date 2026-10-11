@@ -186,9 +186,19 @@
 
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) var(--panel-width, 320px);
+  // Three tracks: the table, the drag handle, and the panel the handle resizes.
+  // The handle is a real column rather than a border on the panel, because a
+  // border cannot carry a cursor or a hit area -- and a one-pixel target is not
+  // a hit area.
+  grid-template-columns: minmax(0, 1fr) 5px var(--panel-width, 320px);
   min-height: 0;
   overflow: hidden;
+}
+
+// The width is set once, on the workbench, so every rule that needs it reads the
+// same number rather than each hard-coding its own idea of how wide the panel is.
+:global(:root) {
+  --panel-width: 320px;
 }
 
 .split__grid {
@@ -204,6 +214,21 @@
 
 .split__viewport {
   min-height: 0;
+}
+
+// The drag handle between the two columns. Full height and no gap at the top, so
+// the pointer does not have to be aimed, and a cursor that says what it does.
+.split__handle {
+  cursor: col-resize;
+  background: transparent;
+  border: 0;
+  padding: 0;
+  align-self: stretch;
+
+  &:hover,
+  &[data-resizing="true"] {
+    background: t.$focus-border;
+  }
 }
 
 // The panel carries a left rule rather than a background of its own: it is the

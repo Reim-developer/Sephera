@@ -1,9 +1,11 @@
+import type { CSSProperties } from "react";
 import { useEffect } from "react";
 import * as ScrollArea from "@radix-ui/react-scroll-area";
 
 import { EmptyState } from "@/components/EmptyState";
 import { FilePanel } from "@/components/FilePanel";
 import { FileTree } from "@/components/FileTree";
+import { PanelResizer } from "@/components/PanelResizer";
 import { FileViewer } from "@/components/FileViewer";
 import { ProgressModal } from "@/components/ProgressModal";
 import { SettingsPanel } from "@/components/SettingsPanel";
@@ -48,6 +50,7 @@ export function App() {
   const setSelected = useClient((state) => state.setSelected);
   const view = useClient((state) => state.view);
   const panel = useClient((state) => state.panel);
+  const panelWidth = useClient((state) => state.panelWidth);
   const generation = useGeneration();
 
   // ---- keyboard ---------------------------------------------------------
@@ -76,7 +79,13 @@ export function App() {
     <div className={styles.workbench}>
       <TopNav />
 
-      <div className={styles.workbench__body}>
+      {/* The panel's width is a custom property rather than a style on the panel,
+          because the grid template that positions the handle reads the same
+          number. Two places holding the width is two places to update it. */}
+      <div
+        className={styles.workbench__body}
+        style={{ "--panel-width": `${panelWidth}px` } as CSSProperties}
+      >
         {root && panel === "explorer" ? (
           <aside className={styles.sidebar}>
             <h2 className={styles.sidebar__title}>Explorer</h2>
@@ -118,7 +127,12 @@ export function App() {
                 </ScrollArea.Root>
               </section>
 
-              <aside className={styles.split__panel}>
+              <PanelResizer />
+
+              <aside
+                className={styles.split__panel}
+                style={{ width: "var(--panel-width)" }}
+              >
                 <FilePanel />
               </aside>
             </div>

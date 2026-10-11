@@ -60,6 +60,8 @@ export interface ClientState {
   selected: string | null;
   /** Which analysis is showing. */
   view: ViewId;
+  /** How wide the declarations panel is, in pixels. */
+  panelWidth: number;
   /** Which side panel is showing, or `null` for none. */
   panel: PanelId | null;
 
@@ -82,6 +84,8 @@ export interface ClientState {
   setView: (view: ViewId) => void;
   /** Open a side panel, or close it when it is already the open one. */
   togglePanel: (panel: PanelId) => void;
+  /** How wide the declarations panel is. */
+  setPanelWidth: (width: number) => void;
   /** Run the showing analysis again. */
   recompute: () => void;
   /** Run every analysis, for a directory or pattern change. */
@@ -104,6 +108,10 @@ export interface ClientState {
  * being the wrong run -- the run a cancel discards is usually the one you were
  * waiting for, and comparing stamps alone would let it through.
  */
+/** The limits the declarations panel is dragged between. */
+const PANEL_MIN = 220;
+const PANEL_MAX = 760;
+
 let stamp = 0;
 let discarded = 0;
 function next_epoch(): number {
@@ -250,6 +258,7 @@ export const useClient = create<ClientState>((set, get) => ({
   selected: null,
   view: "loc",
   panel: null,
+  panelWidth: 320,
   loc: never<LocView>(),
   symbols: never<SymbolReport>(),
   graph: never<GraphReport>(),
@@ -309,6 +318,15 @@ export const useClient = create<ClientState>((set, get) => ({
     // panel closes it, and clicking a closed one swaps to it.
     const { panel: current } = get();
     set({ panel: current === panel ? null : panel });
+  },
+
+  setPanelWidth: (width) => {
+    // Clamped here rather than at the drag site, so a caller that is not a drag
+    // -- a keyboard nudge, a restore from a saved layout -- cannot set a width
+    // the CSS would then have to defend against.
+    set({
+      panelWidth: Math.min(PANEL_MAX, Math.max(PANEL_MIN, Math.round(width))),
+    });
   },
 
   recompute: () => {

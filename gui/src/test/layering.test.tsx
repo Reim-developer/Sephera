@@ -2,6 +2,7 @@ import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
 import { FileViewer } from "@/components/FileViewer";
+import { PanelResizer } from "@/components/PanelResizer";
 import { LocView } from "@/views/LocView";
 import { SymbolsView } from "@/views/SymbolsView";
 import { useClient } from "@/state/store";
@@ -253,5 +254,32 @@ describe("FileViewer", () => {
     });
 
     expect(screen.getByText(/cannot open src\/a.rs/)).toBeTruthy();
+  });
+});
+
+describe("the panel resizer", () => {
+  it("clamps the width to the range the layout can hold", () => {
+    useClient.setState((state) => ({ ...state, panelWidth: 430 }));
+    const { setPanelWidth } = useClient.getState();
+
+    setPanelWidth(20);
+    expect(useClient.getState().panelWidth).toBe(220);
+
+    setPanelWidth(5000);
+    expect(useClient.getState().panelWidth).toBe(760);
+
+    setPanelWidth(430);
+    expect(useClient.getState().panelWidth).toBe(430);
+  });
+
+  it("renders a separator that says how wide the panel is", () => {
+    installServices();
+    useClient.setState((state) => ({ ...state, panelWidth: 400 }));
+    render(<PanelResizer />);
+
+    const handle = screen.getByRole("separator");
+    expect(handle.getAttribute("aria-valuenow")).toBe("400");
+    expect(handle.getAttribute("aria-valuemin")).toBe("220");
+    expect(handle.getAttribute("aria-valuemax")).toBe("760");
   });
 });
