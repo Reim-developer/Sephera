@@ -49,3 +49,13 @@ __pycache__/
 **/*.snap
 !crates/sephera_cli/tests/snapshots/*.snap
 .astro
+
+# The binary `sephera-mcp`'s postinstall downloads, and the launcher falls back to
+# downloading on first run. Platform-specific, several megabytes, and nothing in
+# the repository needs it: committing one puts a Windows executable in the tree
+# where the Linux job finds it and the npm tarball ships it to users.
+npm/sephera-mcp/bin/sephera
+npm/sephera-mcp/bin/sephera.exe
+
+# npm's pack output, from `npm pack`.
+npm/sephera-mcp/*.tgz
