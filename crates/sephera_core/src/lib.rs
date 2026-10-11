@@ -39,4 +39,5 @@ pub mod path_utils;
 pub mod paths;
 pub mod plugins;
 pub mod progress;
+pub mod references;
 pub mod types;

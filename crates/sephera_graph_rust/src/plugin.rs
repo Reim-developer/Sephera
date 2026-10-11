@@ -52,6 +52,14 @@ impl ImportPlugin for RustPlugin {
         ))
     }
 
+    fn extract_uses(
+        &self,
+        source: &[u8],
+        tree: &tree_sitter::Tree,
+    ) -> Option<Vec<sephera_core::references::NameUse>> {
+        Some(crate::references::extract_uses(source, tree))
+    }
+
     fn child_depth_step(&self, node: &Node<'_>) -> u8 {
         u8::from(crate::extract::opens_inline_module(node))
     }

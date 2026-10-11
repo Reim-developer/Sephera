@@ -408,6 +408,25 @@ pub trait ImportPlugin: Sync {
     ) -> Option<crate::declarations::DeclaredNames> {
         None
     }
+
+    /// Every name this source uses that it does not itself define.
+    ///
+    /// The other half of [`Self::collect_declarations`], and the reason a symbol
+    /// can have a blast radius at all: a declaration nobody mentions is a
+    /// declaration nobody can break. What counts as a use is the language's to
+    /// decide, and the honest answer skips a use it cannot attribute -- a name
+    /// this file binds locally is this file's, not the one it shadows.
+    ///
+    /// Returning `None` is the normal answer. Five of the six languages have no
+    /// use extractor yet, and they contribute an empty index rather than an
+    /// index of guesses.
+    fn extract_uses(
+        &self,
+        _source: &[u8],
+        _tree: &tree_sitter::Tree,
+    ) -> Option<Vec<crate::references::NameUse>> {
+        None
+    }
 }
 
 /// Maps an import path onto a file inside the analysis.

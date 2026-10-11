@@ -11,6 +11,8 @@ mod extract;
 mod names;
 mod paths;
 mod plugin;
+mod references;
 pub use crate::paths::module_children_dir;
 
 pub use plugin::RustPlugin;
+pub use references::extract_uses;
