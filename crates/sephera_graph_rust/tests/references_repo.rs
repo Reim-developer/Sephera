@@ -187,16 +187,24 @@ fn let_binding(line: &str) -> Option<&str> {
 }
 
 #[test]
-fn a_name_a_file_binds_locally_is_not_attributed_to_anybody() {
+fn a_name_a_file_owns_is_not_attributed_to_anybody() {
     let (index, _) = repository_index();
-    let mut bindings = 0usize;
+    let mut owned = 0usize;
 
     for file in rust_files() {
+        // A name the file imports is not its own, however many `let`s bind it:
+        // a file that imports a type and destructures it records both, and both
+        // are couplings. Only a name it never imports is a candidate here.
+        let imported: BTreeSet<String> = imported_names(&file);
         let lines = source_lines(&file);
+
         for (at, line) in lines.iter().enumerate() {
             let Some(name) = let_binding(line) else {
                 continue;
             };
+            if imported.contains(name) {
+                continue;
+            }
             // Only interesting when the name is mentioned again below the
             // binding -- otherwise there is nothing for the rule to have caught.
             if !lines[at + 1..]
@@ -205,10 +213,10 @@ fn a_name_a_file_binds_locally_is_not_attributed_to_anybody() {
             {
                 continue;
             }
-            bindings += 1;
+            owned += 1;
             assert!(
                 uses_in(&index, &file, name).is_empty(),
-                "{file} binds `{name}` on line {} and then mentions it, so the \
+                "{file} binds `{name}` on line {} and never imports it, so the \
                  local-binding rule should have dropped every use of it",
                 at + 1
             );
@@ -216,9 +224,41 @@ fn a_name_a_file_binds_locally_is_not_attributed_to_anybody() {
     }
 
     assert!(
-        bindings > 200,
-        "a project this size has hundreds of local bindings; found {bindings}"
+        owned > 200,
+        "a project this size has hundreds of local bindings; found {owned}"
     );
+}
+
+/// The names a file imports, which is what it does not own.
+///
+/// Read from the extractor's own output rather than by parsing the source again:
+/// a recorded use carrying a path *is* an import, by the definition the extractor
+/// already committed to.
+fn imported_names(file: &str) -> BTreeSet<String> {
+    use_names(file)
+        .into_iter()
+        .filter(|(_, uses)| uses.iter().any(|used| used.alias_of.is_some()))
+        .map(|(file, _)| file)
+        .collect()
+}
+
+/// The uses the extractor makes of one file, as `(file, uses)` so the caller does
+/// not have to remember which of the two helpers returns what.
+fn use_names(
+    file: &str,
+) -> Vec<(String, Vec<sephera_core::references::NameUse>)> {
+    let root = repo_root();
+    let Ok(source) = std::fs::read(root.join(file)) else {
+        return Vec::new();
+    };
+    let mut parser = tree_sitter::Parser::new();
+    parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .expect("the Rust grammar loads");
+    let Some(tree) = parser.parse(&source, None) else {
+        return Vec::new();
+    };
+    vec![(file.to_owned(), extract_uses(&source, &tree))]
 }
 
 /// Every identifier each file mentions, with comments left out.

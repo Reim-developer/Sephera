@@ -63,7 +63,7 @@ use super::types::GraphReport;
 /// Written the way a person would name it: a file and a name inside it. The file
 /// is what makes the question answerable -- `Cli` alone would be a request for
 /// two answers at once.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
 pub struct SymbolTarget {
     /// The file that declares it.
     pub file: String,

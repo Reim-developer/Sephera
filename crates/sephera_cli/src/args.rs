@@ -148,6 +148,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera impact src/core/graph/resolver.rs\n  sephera impact src/lib.rs --depth 1\n  sephera impact src/core/ignore.rs --format json\n  sephera impact src/lib.rs --fail-on 40\n  sephera impact crates/sephera_core/src/core/graph.rs --fail-on 10 --output impact.md"
     )]
     Impact(ImpactArgs),
+    /// Report which files reference one declaration
+    #[command(
+        long_about = "Report which files reference one declaration.\n\nThe symbol-level question `impact` cannot answer: `impact src/graph/resolver.rs` reports every file that imports that module, so a module re-exporting forty types gives its every importer an edge for all forty. This asks about one name.\n\nA symbol is written `PATH::NAME` and the path is not optional, because a name alone is ambiguous -- this repository has two `Cli` structs in two crates.\n\nEvery reference says how it was attributed. `import` means the file's own import path led here, through re-exports if it had to; `unique` means one file in the project declares the name; `same-crate` means several do and exactly one is in the reader's own crate. The first is evidence, the other two are arithmetic, and the ordering is a ranking rather than a list.\n\nWhat the resolver refuses to guess is not hidden: `--show-unattributed` lists the mentions it could not place and how many files declare the name.",
+        after_long_help = "Examples:\n  sephera references src/core/graph/resolver.rs::Resolver\n  sephera references crates/sephera_core/src/references.rs::NameUse --format json\n  sephera references src/lib.rs::Foo src/lib.rs::Bar\n  sephera references src/declarations.rs::DeclaredNames --show-unattributed\n  sephera references src/ignore.rs::IgnoreMatcher --focus crates/sephera_cli"
+    )]
+    References(ReferencesArgs),
 }
 
 tree_command_args!(
@@ -672,6 +678,76 @@ tree_command_args!(
     )]
     pub exclude_types: bool,
 
+    }
+);
+
+/// How `references` renders its answer.
+///
+/// Its own enum rather than a shared one, because the JSON carries fields the
+/// others do not: which attribution placed each file, and which mentions could
+/// not be placed at all. Borrowing another command's type would mean either losing
+/// those or inventing fields it has no name for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, clap::ValueEnum)]
+pub enum ReferencesFormat {
+    /// One line per file, with the lines it references on.
+    #[default]
+    Text,
+    /// A document, grouped by attribution.
+    Markdown,
+    /// Structured, with the attribution and unplaceable files as fields.
+    Json,
+    /// Structured, as XML.
+    Xml,
+}
+
+tree_command_args!(
+    #[doc = "Report the files that reference one declaration."]
+    ReferencesArgs {
+        /// The declaration to report references to
+    #[arg(
+        value_name = "SYMBOL",
+        required = true,
+        num_args = 1..,
+        help = "Declaration to report references to, as PATH::NAME. Repeat for several.",
+        long_help = "The declaration to report references to, written `PATH::NAME`: the file that declares it, then the name inside it. Repeat the flag or pass several to ask about more than one; the project is analysed once and every symbol is measured against it.\n\nThe path is not optional, and that is the point. A name alone is ambiguous -- this repository has two `Cli` structs in two crates, and six files declaring `Dependency` -- so \"what references `Cli`\" is several questions at once. Naming the file is what makes it one.\n\nA path or a spelling that declares nothing is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
+    )]
+    pub symbols: Vec<String>,
+
+    /// Maximum depth of the reported references
+    #[arg(
+        long,
+        value_name = "DEPTH",
+        help = "Report only the users at most this many hops away.",
+        long_help = "How many hops of re-export a reference may be from the declaration. The default follows the chain as far as it resolves, which is what the resolver already knows how to do; set this to see only the files that name the symbol almost directly."
+    )]
+    pub depth: Option<u32>,
+
+    /// Restrict the reported users to a subtree
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Report only the users inside this path. Repeat for several.",
+        long_help = "Report only the users inside this path, which matches a path exactly or as a directory prefix at a `/` boundary. Repeat the flag to accept several scopes. This narrows the answer, not the analysis: a symbol is reported wherever it is declared, so `--focus crates/x` against a symbol in `crates/y` answers what in `x` would break from a change in `y`."
+    )]
+    pub focus: Vec<PathBuf>,
+
+    /// Report files whose reference could not be attributed
+    #[arg(
+        long,
+        help = "Also list the files whose mention could not be tied to this symbol.",
+        long_help = "Also list the files that mention the name without being attributable to this declaration, each with how many files declare it. These are the names several files declare at once, which the resolver refuses to guess between. Showing them is what makes a refused answer usable rather than merely absent -- and an answer that is silent about what it could not place reads as complete when it is not."
+    )]
+    pub show_unattributed: bool,
+
+    /// Output format
+    #[arg(
+        long,
+        value_name = "FORMAT",
+        default_value = "text",
+        help = "Output format: text, json, markdown, or xml.",
+        long_help = "Output format. `text` lists one file per line with its line numbers and the attribution that placed it; `markdown` is the same answer as a document; `json` and `xml` carry the attribution and the unplaceable files as fields, for a pipeline that needs to tell an import-attributed reference from an arithmetic one."
+    )]
+    pub format: ReferencesFormat,
     }
 );
 

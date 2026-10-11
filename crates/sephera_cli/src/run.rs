@@ -3,7 +3,10 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 use sephera_graph::{
-    resolver::{EdgeFilters, build_focus_set, build_graph_with_progress},
+    resolver::{
+        EdgeFilters, build_focus_set, build_graph_with_progress,
+        build_graph_with_references,
+    },
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
@@ -18,8 +21,8 @@ use crate::{
     args::{
         Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, IgnoreArgs,
         ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
-        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs, WatchArgs,
-        WatchTarget,
+        ReferencesArgs, SettingsArgs, SourceArgs, SymbolOutputFormat,
+        SymbolsArgs, WatchArgs, WatchTarget,
     },
     change_impact, configure,
     context_config::{
@@ -34,7 +37,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    watch,
+    references, watch,
 };
 
 #[must_use]
@@ -114,6 +117,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
             unreachable!("`watch` is dispatched before the runtime starts")
         }
         Commands::Impact(arguments) => run_impact(&arguments).await,
+        Commands::References(arguments) => run_references(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
 }
@@ -492,6 +496,55 @@ fn report_unresolved_symbols(names: &[String]) {
 /// it per target is the obvious implementation and the wrong one: on cargo,
 /// five targets cost 2,874 ms that way against 663 ms for the single build that
 /// answers all five questions.
+async fn run_references(arguments: &ReferencesArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Finding references...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    progress.set_message("Extracting imports and name uses...");
+    // No query, for the reason `run_impact` gives: a query would restrict the
+    // report to one target's dependents, and the path walk here needs the whole
+    // graph in order to follow a re-export.
+    let (report, facts) = build_graph_with_references(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        arguments.depth,
+        None,
+        EdgeFilters::default(),
+        &CliReporter(&progress),
+    )?;
+
+    // Normalised by the resolver's own helper, so `--focus` here cannot mean one
+    // thing and mean another in `graph`.
+    let focus = build_focus_set(&source.analysis_path, &arguments.focus)
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let answers = references::measure_all(
+        &report,
+        &facts,
+        &arguments.symbols,
+        &focus,
+        arguments.show_unattributed,
+    )?;
+    references::render(&answers, arguments.format, &mut std::io::stdout())?;
+    Ok(Vec::new())
+}
+
 async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     let source = resolve_source(
         &SourceRequest {

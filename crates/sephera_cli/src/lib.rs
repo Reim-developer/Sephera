@@ -9,6 +9,7 @@ mod gate;
 mod impact;
 mod output;
 mod progress;
+mod references;
 mod run;
 mod watch;
 
