@@ -1,0 +1,134 @@
+// The navigation bar: two rows across the top of the workbench.
+//
+// Row one is the analysis -- which folder, which patterns, and the button that
+// recounts. Row two is which analysis. Both are part of the shell rather than of
+// the content area, which is the point: they used to live in the content area,
+// and opening a file replaced them with the file's text.
+
+@use "tokens" as t;
+
+// The chrome Visual Studio uses for its inputs and buttons: 24px tall, a 1px
+// widget border, and the input surface. Written once here because the bar is the
+// only place that uses them -- the old editor region had the same two mixins, and
+// it is gone.
+@mixin chromeInput {
+  height: 24px;
+  padding: 0 7px;
+  border: 1px solid t.$widget-border;
+  border-radius: t.$radius-small;
+  background: t.$input-bg;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 12px;
+
+  &:focus {
+    outline: 1px solid t.$focus-border;
+    border-color: t.$focus-border;
+  }
+}
+
+@mixin chromeButton {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 24px;
+  padding: 0 10px;
+  border: 1px solid transparent;
+  border-radius: t.$radius-small;
+  background: t.$input-bg;
+  color: t.$text-normal;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+  white-space: nowrap;
+
+  &:hover {
+    background: t.$list-hover-bg;
+    border-color: t.$widget-border;
+  }
+}
+
+.nav {
+  display: grid;
+  grid-row: 1;
+  background: t.$activity-bar-bg;
+  border-bottom: 1px solid t.$panel-border;
+}
+
+.nav__row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  min-height: 32px;
+}
+
+// Two groups, and the second is pushed to the far edge. The gap between them is
+// what separates "which panel am I looking at" from "what am I counting".
+.nav__group {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+
+  &:last-child {
+    margin-left: auto;
+  }
+}
+
+.nav__brand {
+  margin-right: 6px;
+  padding: 0 6px;
+  color: t.$text-bright;
+  font-size: 12px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  white-space: nowrap;
+}
+
+// The panel toggles are icon buttons rather than labelled ones: the label is in
+// the tooltip and the aria-label, and an icon pair is narrower than two words.
+.nav__iconButton {
+  display: grid;
+  place-items: center;
+  width: 28px;
+  height: 24px;
+  border: 1px solid transparent;
+  border-radius: t.$radius-small;
+  background: transparent;
+  color: t.$text-muted;
+  cursor: pointer;
+
+  &:hover {
+    background: t.$list-hover-bg;
+    color: t.$text-bright;
+  }
+
+  // Pressed rather than highlighted, because it is a switch: the same click opens
+  // and closes, and the state has to be visible without looking at the panel.
+  &[aria-pressed="true"] {
+    background: t.$input-bg;
+    border-color: t.$widget-border;
+    color: t.$text-bright;
+  }
+}
+
+.nav__button {
+  @include chromeButton;
+}
+
+.nav__field {
+  @include chromeInput;
+  min-width: 0;
+
+  // The directory field is the one a person types in most, so it takes the
+  // remaining space rather than an equal share with the ignore patterns.
+  &:first-of-type {
+    flex: 2 1 auto;
+  }
+
+  &:not(:first-of-type) {
+    flex: 1 1 auto;
+    max-width: 220px;
+  }
+}

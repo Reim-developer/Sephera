@@ -1,0 +1,61 @@
+// The view tabs: which analysis is showing.
+//
+// The file was `editor.module.scss` and held the directory controls too. Those
+// moved to the navigation bar, which left the tabs -- so this is now just the
+// tabs, and it is named for what it holds.
+//
+// Radix owns the tab primitive (`@radix-ui/react-tabs`), so the selectors style
+// Radix's own `[data-state]` attribute rather than an `aria-selected` on a
+// button. That is the whole trade of using a component library: the interaction
+// and the keyboard behaviour come for free, and the styling has to learn its
+// attribute contract.
+
+@use "tokens" as t;
+
+.tabs {
+  display: flex;
+  align-items: stretch;
+  background: t.$tabs-bg;
+  border-bottom: 1px solid t.$panel-border;
+  // A fourth tab would otherwise force a horizontal scrollbar on a narrow
+  // window; the bar scrolls its tabs and the view scrolls itself.
+  overflow-x: auto;
+  scrollbar-width: none;
+
+  &::-webkit-scrollbar {
+    display: none;
+  }
+}
+
+.tab {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  border: 0;
+  border-right: 1px solid t.$panel-border;
+  background: t.$tab-inactive-bg;
+  color: t.$text-muted;
+  font: inherit;
+  font-size: 13px;
+  cursor: pointer;
+  position: relative;
+
+  // Radix's contract: `data-state="active"`, not `aria-selected`. The active tab
+  // is drawn with the editor's own background and a top rule, so it reads as
+  // part of the content rather than as a toolbar button.
+  &[data-state="active"] {
+    background: t.$tab-active-bg;
+    color: t.$text-bright;
+
+    &::after {
+      content: "";
+      position: absolute;
+      left: 0;
+      right: 0;
+      top: 0;
+      height: 1px;
+      background: t.$selection-border;
+    }
+  }
+}

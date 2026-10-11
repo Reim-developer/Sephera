@@ -1,5 +1,5 @@
 import * as Tabs from "@radix-ui/react-tabs";
-import styles from "@/styles/editor.module.scss";
+import styles from "@/styles/tabs.module.scss";
 
 /** A tab in the editor area. */
 export interface EditorTab<Id extends string = string> {

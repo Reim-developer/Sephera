@@ -29,6 +29,9 @@ import { services } from "@/services/registry";
 /** Which analysis the client is showing. */
 export type ViewId = "loc" | "symbols" | "graph";
 
+/** Which side panel is open, or `null` when neither is. */
+export type PanelId = "explorer" | "settings";
+
 /** One analysis, and the state it is in. */
 export interface Analysis<T> {
   data: T | null;
@@ -57,6 +60,8 @@ export interface ClientState {
   selected: string | null;
   /** Which analysis is showing. */
   view: ViewId;
+  /** Which side panel is showing, or `null` for none. */
+  panel: PanelId | null;
 
   // ---- results -----------------------------------------------------------
   loc: Analysis<LocView>;
@@ -75,6 +80,8 @@ export interface ClientState {
   setTarget: (path: string) => void;
   setSelected: (path: string | null) => void;
   setView: (view: ViewId) => void;
+  /** Open a side panel, or close it when it is already the open one. */
+  togglePanel: (panel: PanelId) => void;
   /** Run the showing analysis again. */
   recompute: () => void;
   /** Run every analysis, for a directory or pattern change. */
@@ -242,6 +249,7 @@ export const useClient = create<ClientState>((set, get) => ({
   target: "",
   selected: null,
   view: "loc",
+  panel: null,
   loc: never<LocView>(),
   symbols: never<SymbolReport>(),
   graph: never<GraphReport>(),
@@ -293,6 +301,14 @@ export const useClient = create<ClientState>((set, get) => ({
     // Switching to a view that has never run would otherwise show an empty
     // placeholder that looks like a result.
     get().recompute();
+  },
+
+  togglePanel: (panel) => {
+    // A toggle rather than a radio. The panel eats a couple of hundred pixels of
+    // table, and reclaiming them needs to be one click -- so clicking the open
+    // panel closes it, and clicking a closed one swaps to it.
+    const { panel: current } = get();
+    set({ panel: current === panel ? null : panel });
   },
 
   recompute: () => {

@@ -1,0 +1,96 @@
+// The settings panel: what was read, and what it was read with.
+//
+// Sits in the side-panel slot where the file tree goes, so it shares the width
+// and the scroll. It carries the two things the status bar used to -- the config
+// file that produced these numbers, and the summary of the last scan -- because
+// deleting the bar would otherwise lose them.
+
+@use "tokens" as t;
+
+.settings {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  height: 100%;
+  padding: 10px 12px 20px;
+  overflow-y: auto;
+}
+
+.settings__header {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.settings__title {
+  margin: 0;
+  font-size: 12px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: t.$text-muted;
+}
+
+// The root, elided from the left so the tail -- the part that differs between
+// two projects -- is what stays visible.
+.settings__path {
+  margin: 0;
+  overflow: hidden;
+  direction: rtl;
+  text-align: left;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font-family: t.$font-mono;
+  font-size: 11px;
+  color: t.$text-normal;
+}
+
+.settings__list {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  margin: 0;
+}
+
+.settings__row {
+  display: grid;
+  // A label that may wrap and a value that may not: two rows rather than two
+  // columns, because the panel is 260px wide and a two-column row of that width
+  // gives neither half enough.
+  grid-template-columns: 1fr auto;
+  align-items: baseline;
+  gap: 4px 10px;
+}
+
+.settings__label {
+  font-size: 11.5px;
+  color: t.$text-muted;
+  cursor: help;
+}
+
+.settings__value {
+  margin: 0;
+  font-family: t.$font-mono;
+  font-size: 11.5px;
+  color: t.$text-normal;
+  text-align: right;
+  // A path is the one value that can be wider than the panel, and it is also
+  // the one value where the tail is the part that identifies it.
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 170px;
+}
+
+.settings__note {
+  display: flex;
+  align-items: flex-start;
+  gap: 6px;
+  margin: 0;
+  padding: 8px 10px;
+  border-left: 2px solid t.$focus-border;
+  background: t.$editor-bg;
+  color: t.$text-muted;
+  font-size: 11.5px;
+  line-height: 1.55;
+}

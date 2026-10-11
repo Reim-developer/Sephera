@@ -1,9 +1,14 @@
-// The workbench grid: activity bar, sidebar, editor, status bar.
+// The workbench grid: navigation bar, side panel, content column.
 //
-// This is the part that has to stay hand-written. It is a four-region layout
+// This is the part that has to stay hand-written. It is a three-region layout
 // with one resizable track, and a component library's grid is not going to
-// express "the right column is a panel that can be 240px or 4 Careful editing
-// without fighting the library's own assumptions.
+// express "the right column is a panel that can be 240px or 800px wide" without
+// fighting the library's own assumptions.
+//
+// The navigation bar used to be two rows of the content area, and the rail that
+// chose the side panel was a column of icons down the left. Both are here now as
+// rows across the top: one shell row that never moves, so opening a file does not
+// take the counting controls with it.
 
 @use "tokens" as t;
 
@@ -21,114 +26,52 @@
 
 .workbench {
   display: grid;
-  grid-template-columns: auto auto minmax(0, 1fr);
-  grid-template-rows: minmax(0, 1fr) t.$status-bar-height;
+  // The navigation bar is a single row that takes what it needs, and everything
+  // else shares one row that is allowed to shrink.
+  grid-template-rows: auto minmax(0, 1fr);
   height: 100%;
 }
 
+.workbench__body {
+  grid-row: 2;
+  display: flex;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
 .workbench__main {
-  grid-column: 3;
-  grid-row: 1;
+  flex: 1 1 auto;
   display: grid;
-  // The controls, the tabs, then the split. Three rows, and only the last one
-  // is allowed to grow, so the controls never move when a table does.
-  grid-template-rows: auto 35px minmax(0, 1fr);
+  // One row, and it is the one that grows: the tables take what is left after
+  // the panels, so they never push the shell wider than the window.
+  grid-template-rows: minmax(0, 1fr);
   min-width: 0;
   background: t.$editor-bg;
 }
 
-.workbench__status {
-  grid-column: 1 / -1;
-  grid-row: 2;
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 0 10px;
-  background: t.$status-bar-bg;
-  color: t.$text-bright;
-  font-size: 12px;
-  white-space: nowrap;
-  overflow: hidden;
-
-  // The right-hand slot is pushed to the edge without a spacer element, which
-  // would otherwise need to exist only to hold `margin-left: auto`.
-  > :last-child {
-    margin-left: auto;
-  }
-}
-
-// ---- activity bar --------------------------------------------------------
-
-.activityBar {
-  grid-column: 1;
-  grid-row: 1;
-  width: t.$activity-bar-width;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  padding: 6px 0;
-  gap: 4px;
-  @include panel(t.$activity-bar-bg);
-}
-
-.activityBar__item {
-  width: t.$activity-bar-width;
-  height: t.$activity-bar-width;
-  display: grid;
-  place-items: center;
-  border: 0;
-  background: transparent;
-  color: t.$text-muted;
-  cursor: pointer;
-  position: relative;
-
-  &:hover:not(:disabled) {
-    color: t.$text-bright;
-  }
-
-  // The selected rail is a two-pixel left bar rather than a filled tile: that is
-  // how the editor marks it, and a filled tile reads as a button rather than a
-  // selected view.
-  &[aria-pressed="true"] {
-    color: t.$text-bright;
-
-    &::before {
-      content: "";
-      position: absolute;
-      left: 0;
-      top: 0;
-      bottom: 0;
-      width: 2px;
-      background: t.$text-bright;
-    }
-  }
-
-  &:disabled {
-    color: t.$text-disabled;
-    cursor: default;
-  }
-}
-
-// ---- sidebar -------------------------------------------------------------
+// ---- side panel ----------------------------------------------------------
+// One slot for whichever panel is open: the explorer's tree, or the settings.
+// Absent entirely when neither is, and the content column takes the width.
 
 .sidebar {
-  grid-column: 2;
-  grid-row: 1;
+  flex: 0 0 auto;
   width: t.$sidebar-default;
   min-width: t.$sidebar-min;
   max-width: t.$sidebar-max;
   display: grid;
-  grid-template-rows: 22px minmax(0, 1fr);
+  grid-template-rows: auto minmax(0, 1fr);
   background: t.$side-bar-bg;
   border-right: 1px solid t.$panel-border;
   position: relative;
+  overflow: hidden;
 }
 
 .sidebar__title {
   display: flex;
   align-items: center;
   gap: 5px;
-  padding: 0 10px;
+  padding: 8px 10px 6px;
   font-size: 11px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
@@ -138,6 +81,7 @@
 .sidebar__body {
   @include scrollable;
   padding: 2px 0 8px;
+  min-height: 0;
 }
 
 // A real drag handle, not a border: `cursor: col-resize` and a hit area wider
@@ -242,7 +186,7 @@
 
 .split {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 320px;
+  grid-template-columns: minmax(0, 1fr) var(--panel-width, 320px);
   min-height: 0;
   overflow: hidden;
 }

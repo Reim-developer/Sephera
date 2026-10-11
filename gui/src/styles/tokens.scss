@@ -15,7 +15,6 @@ $editor-bg: #1e1e1e;
 $tabs-bg: #252526;
 $tab-active-bg: #1e1e1e;
 $tab-inactive-bg: #2d2d2d;
-$status-bar-bg: #007acc;
 $input-bg: #3c3c3c;
 
 // ---- borders -------------------------------------------------------------
@@ -49,12 +48,12 @@ $git-removed: #f14c4c;
 $scrollbar-thumb: rgba($text-muted, 0.4);
 
 // ---- geometry ------------------------------------------------------------
-// VS Code's density: 13px body, 48px activity bar, 22px status bar, 35px tabs.
+// VS Code's density: 13px body, 48px activity bar, 35px tabs. The status bar's
+// 22px is gone with the bar itself.
 $font-size: 13px;
 $line-height: 1.45;
 
 $activity-bar-width: 48px;
-$status-bar-height: 22px;
 $tab-height: 35px;
 
 $sidebar-min: 180px;
