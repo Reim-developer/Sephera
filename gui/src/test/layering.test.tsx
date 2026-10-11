@@ -1,6 +1,7 @@
 import { act, render, screen } from "@testing-library/react";
 import { beforeEach, describe, expect, it } from "vitest";
 
+import { FileViewer } from "@/components/FileViewer";
 import { LocView } from "@/views/LocView";
 import { SymbolsView } from "@/views/SymbolsView";
 import { useClient } from "@/state/store";
@@ -174,5 +175,83 @@ describe("the store, with the registry replaced", () => {
     expect(calls.cancel).toHaveBeenCalled();
     expect(useClient.getState().loc.busy).toBe(false);
     expect(useClient.getState().loc.data).toBeNull();
+  });
+});
+
+describe("FileViewer", () => {
+  /** Read the viewer's numbers, as a reader sees them. */
+  function numbers(): string[] {
+    return screen.getAllByText(/^\d+$/).map((node) => node.textContent ?? "");
+  }
+
+  /** Seed the store and render, in that order. */
+  function show(selected: string): void {
+    useClient.setState((state) => ({
+      ...state,
+      root: "/project",
+      selected,
+    }));
+    render(<FileViewer />);
+  }
+
+  it("numbers every line from one", async () => {
+    const calls = installServices();
+    // A file whose text ends on its own newline: three lines of source, and the
+    // split's trailing empty string is not a fourth.
+    calls.viewer.mockResolvedValue({
+      text: "fn a() {}\nfn b() {}\nfn c() {}\n",
+      bytes: 30,
+      total: 30,
+    });
+
+    await act(async () => {
+      show("src/a.rs");
+    });
+
+    expect(numbers()).toEqual(["1", "2", "3"]);
+  });
+
+  it("loads more, and the numbering continues across the seam", async () => {
+    const calls = installServices();
+    let reads = 0;
+    calls.viewer.mockImplementation(async () => {
+      reads += 1;
+      return reads === 1
+        ? { text: "first\nsecond", bytes: 11, total: 18 }
+        : {
+            // The seam falls *inside* a line: the second window starts with what
+            // finishes it. Joined as strings, the newline lands exactly where the
+            // file put it.
+            text: " line\nthird\n",
+            bytes: 18,
+            total: 18,
+          };
+    });
+
+    await act(async () => {
+      show("src/a.rs");
+    });
+    expect(numbers()).toEqual(["1", "2"]);
+
+    await act(async () => {
+      screen.getByText(/Load \d+ KiB more/).click();
+    });
+
+    // Three lines, and the second one is the line the seam cut into. Splitting
+    // each window into its own array would have produced four lines, with the
+    // numbering one ahead of the file from there on.
+    expect(numbers()).toEqual(["1", "2", "3"]);
+    expect(screen.getByText("second line")).toBeTruthy();
+  });
+
+  it("shows the read failure rather than a blank panel", async () => {
+    const calls = installServices();
+    calls.viewer.mockRejectedValue(new Error("cannot open src/a.rs"));
+
+    await act(async () => {
+      show("src/a.rs");
+    });
+
+    expect(screen.getByText(/cannot open src\/a.rs/)).toBeTruthy();
   });
 });

@@ -1,68 +1,36 @@
-import { useEffect, useRef, useState } from "react";
 import { AlertTriangle } from "lucide-react";
 
-import { readFileChunk } from "@/lib/tauri";
+import { useFileViewer } from "@/hooks/useFileViewer";
 import { useClient } from "@/state/store";
 import styles from "@/styles/viewer.module.scss";
 
-/** How many bytes the first read takes, and what "load more" adds.
+/** How many bytes one read takes, and what "load more" adds.
  *
- * A source file is a few kilobytes and a log can be a gigabyte, so the first
- * read is deliberately small: the panel opens with something readable in it
- * rather than stalling on a file that may never be read to the end.
- */
-const INITIAL_BYTES = 64 * 1024;
-const STEP_BYTES = 64 * 1024;
-
-/** How far a chunk may be split across a UTF-8 boundary. */
-const MAX_CHUNK = STEP_BYTES;
+ * Kept here rather than in the hook because it is a display decision: how much
+ * text the panel shows before asking, and how much it adds when it asks. The
+ * hook's job is where the offset is, not how big it should be. */
+const CHUNK_BYTES = 64 * 1024;
 
 /**
- * The selected file's text, read in chunks.
+ * The selected file's text, one line at a time, numbered.
  *
  * This is what the workbench shows when a single file is selected and nothing
  * else: a file's contents, not a table about it. The three analyses answer
  * questions about a *directory*; once the reader has narrowed to one file the
  * question is simply what it says.
  *
- * The read goes through the host, which owns the filesystem, rather than
- * through `fetch("file://")` -- the webview's file access is its own policy
- * and a command is what the rest of the client already talks to.
+ * Rendering only. The reading, the offset and the failure live in
+ * `useFileViewer`, because a component that fetches has no seam a test can
+ * substitute -- which is the whole reason `hooks/` exists as a layer.
+ *
+ * The text is held whole and split at render, rather than accumulated as an array
+ * of lines. That is the only way a chunk boundary is invisible: two chunks joined
+ * as strings preserve every newline exactly, where joining them as arrays needs a
+ * rule for the seam, and a rule for the seam is a rule that can be wrong.
  */
 export function FileViewer() {
+  const { text, loaded, total, error, loadMore } = useFileViewer();
   const selected = useClient((state) => state.selected);
-  const root = useClient((state) => state.root);
-  const [text, setText] = useState("");
-  const [loaded, setLoaded] = useState(0);
-  const [total, setTotal] = useState(0);
-  const [error, setError] = useState<string | null>(null);
-  const scroller = useRef<HTMLDivElement>(null);
-
-  // A new file resets the read. The dependency is the selection, and a stale
-  // chunk from the previous file would otherwise sit above the new one.
-  useEffect(() => {
-    if (!selected) return;
-    let cancelled = false;
-    setText("");
-    setLoaded(0);
-    setError(null);
-
-    void (async () => {
-      try {
-        const start = await readFileChunk(root, selected, 0, INITIAL_BYTES);
-        if (cancelled) return;
-        setText(start.text);
-        setLoaded(start.bytes);
-        setTotal(start.total);
-      } catch (cause) {
-        if (!cancelled) setError(String(cause));
-      }
-    })();
-
-    return () => {
-      cancelled = true;
-    };
-  }, [root, selected]);
 
   if (!selected) return null;
 
@@ -75,30 +43,48 @@ export function FileViewer() {
     );
   }
 
+  if (!text) return null;
+
   const hasMore = loaded < total;
 
   return (
-    <div className={styles.viewer} ref={scroller}>
-      <pre className={styles.viewer__pre}>{text}</pre>
+    <div className={styles.viewer}>
+      <div className={styles.viewer__scroll}>
+        {lines(text).map((line, index) => (
+          <div className={styles.viewer__line} key={index}>
+            <span className={styles.viewer__number} aria-hidden="true">
+              {index + 1}
+            </span>
+            <span className={styles.viewer__text}>{line}</span>
+          </div>
+        ))}
+      </div>
+
       {hasMore ? (
         <button
           type="button"
           className={styles.viewer__more}
-          onClick={() => {
-            void (async () => {
-              const step = Math.min(total - loaded, MAX_CHUNK);
-              const more = await readFileChunk(root, selected, loaded, step);
-              setText((previous) => previous + more.text);
-              setLoaded(more.bytes);
-            })();
-          }}
+          onClick={loadMore}
         >
-          Load {(Math.min(total - loaded, MAX_CHUNK) / 1024).toFixed(0)} KiB more
-          ({(loaded / 1024).toFixed(0)} of {(total / 1024).toFixed(0)} KiB read)
+          Load {(Math.min(total - loaded, CHUNK_BYTES) / 1024).toFixed(0)} KiB
+          more ({(loaded / 1024).toFixed(0)} of{" "}
+          {(total / 1024).toFixed(0)} KiB read)
         </button>
-      ) : (
-        <p className={styles.viewer__end}>End of file</p>
-      )}
+      ) : null}
     </div>
   );
+}
+
+/**
+ * The file's lines, in order.
+ *
+ * The trailing empty string of a split is not a line: a file ending in a newline
+ * ends *on* that newline, and the editor that wrote it would say it has one line
+ * rather than two. Dropping exactly one is the rule, because `"a\n\n"` really
+ * does have an empty second line.
+ */
+function lines(text: string): string[] {
+  const split = text.split("\n");
+  if (split.length > 1 && split[split.length - 1] === "") split.pop();
+  return split;
 }

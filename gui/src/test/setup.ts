@@ -171,9 +171,14 @@ export function installServices(): Record<string, ReturnType<typeof vi.fn>> {
   const graph = stamped(dependents());
   const explorer = vi.fn().mockResolvedValue(treeLevel());
   const file = vi.fn().mockResolvedValue(fileDetail());
+  const viewer = vi.fn().mockResolvedValue({
+    text: "fn a() {}\n",
+    bytes: 10,
+    total: 10,
+  });
   const cancel = vi.fn().mockResolvedValue(undefined);
 
-  const calls = { loc, symbols, graph, explorer, file, cancel };
+  const calls = { loc, symbols, graph, explorer, file, viewer, cancel };
 
   withServices({
     loc: { count: loc } as unknown as ServiceRegistry["loc"],
@@ -183,6 +188,7 @@ export function installServices(): Record<string, ReturnType<typeof vi.fn>> {
     } as unknown as ServiceRegistry["graph"],
     explorer: { list: explorer } as unknown as ServiceRegistry["explorer"],
     file: { detail: file } as unknown as ServiceRegistry["file"],
+    viewer: { readChunk: viewer } as unknown as ServiceRegistry["viewer"],
     dialog: { cancel } as unknown as ServiceRegistry["dialog"],
   });
 

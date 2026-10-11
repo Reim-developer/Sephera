@@ -32,6 +32,16 @@ export interface LocView {
   config_source: string | null;
 }
 
+/** One window of a file, as the viewer reads them. */
+export interface FileChunk {
+  /** The decoded text of this window. */
+  text: string;
+  /** The offset the next window should start at. */
+  bytes: number;
+  /** The file's size in bytes. */
+  total: number;
+}
+
 /** One node of the sidebar's file tree. */
 export interface TreeNode {
   path: string;
@@ -146,6 +156,7 @@ export const COMMANDS = {
   dependencyGraph: "dependency_graph",
   listTree: "list_tree",
   fileDetail: "file_detail",
+  readFileChunk: "read_file_chunk",
   cancelCurrent: "cancel_current",
 } as const;
 
