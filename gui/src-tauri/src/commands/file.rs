@@ -69,29 +69,32 @@ pub async fn file_detail(root: String, path: String) -> Result<FileDetail, Strin
         .to_string_lossy()
         .replace('\\', "/");
 
-    // The whole file is read rather than a prefix: comment and empty counts are
-    // properties of the last line as much as the first, and a truncated read
-    // understates all three.
-    let bytes = std::fs::read(&absolute)
-        .map_err(|error| format!("cannot read {path}: {error}"))?;
+    super::blocking(move || {
+        // The whole file is read rather than a prefix: comment and empty counts
+        // are properties of the last line as much as the first, and a truncated
+        // read understates all three.
+        let bytes = std::fs::read(&absolute)
+            .map_err(|error| format!("cannot read {path}: {error}"))?;
 
-    let matched = sephera_core::language_data::language_for_path(&absolute);
-    let metrics = matched.as_ref().map_or_else(
-        sephera_scan::LocMetrics::zero,
-        |(_, config)| scan_content(&bytes, config.comment_style),
-    );
+        let matched = sephera_core::language_data::language_for_path(&absolute);
+        let metrics = matched.as_ref().map_or_else(
+            sephera_scan::LocMetrics::zero,
+            |(_, config)| scan_content(&bytes, config.comment_style),
+        );
 
-    let declarations = declarations_of(&absolute);
+        let declarations = declarations_of(&absolute);
 
-    Ok(FileDetail {
-        path: relative,
-        code: metrics.code_lines,
-        comment: metrics.comment_lines,
-        empty: metrics.empty_lines,
-        size_bytes: metrics.size_bytes,
-        language: matched.map(|(_, config)| config.name.to_owned()),
-        declarations,
+        Ok(FileDetail {
+            path: relative,
+            code: metrics.code_lines,
+            comment: metrics.comment_lines,
+            empty: metrics.empty_lines,
+            size_bytes: metrics.size_bytes,
+            language: matched.map(|(_, config)| config.name.to_owned()),
+            declarations,
+        })
     })
+    .await
 }
 
 /// The declarations in one file, in source order.

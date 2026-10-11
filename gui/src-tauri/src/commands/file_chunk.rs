@@ -54,7 +54,11 @@ pub async fn read_file_chunk(
         .strip_prefix(&base)
         .map_err(|_| format!("{path} is outside {root}"))?;
 
-    read_window(&absolute, offset, length).map_err(|error| format!("cannot read {path}: {error}"))
+    super::blocking(move || {
+        read_window(&absolute, offset, length)
+            .map_err(|error| format!("cannot read {path}: {error}"))
+    })
+    .await
 }
 
 /// One window of one file, opened at `absolute`.

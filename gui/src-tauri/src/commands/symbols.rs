@@ -28,11 +28,14 @@ pub async fn count_declarations(
 ) -> Result<(sephera_symbols::SymbolReport, u64), String> {
     let resolved = resolve_path(&path);
     let began = state.0.begin();
-    let matcher =
-        IgnoreMatcher::from_patterns(&ignore).map_err(|e| e.to_string())?;
-    let report = SymbolAnalyzer::new(&resolved, matcher)
-        .analyze()
-        .map_err(|e| e.to_string())?;
+    let report = super::blocking(move || {
+        let matcher = IgnoreMatcher::from_patterns(&ignore)
+            .map_err(|error| error.to_string())?;
+        SymbolAnalyzer::new(&resolved, matcher)
+            .analyze()
+            .map_err(|error| error.to_string())
+    })
+    .await?;
     let epoch = if state.0.is_current(began) { epoch } else { 0 };
     Ok((report, epoch))
 }

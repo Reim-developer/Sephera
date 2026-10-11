@@ -35,7 +35,10 @@ pub async fn count_lines(
 ) -> Result<(LocView, u64), String> {
     let resolved = resolve_path(&path);
     let began = state.0.begin();
-    let view = sephera_gui::count(&resolved, &ignore).map_err(|e| e.to_string())?;
+    let view = super::blocking(move || {
+        sephera_gui::count(&resolved, &ignore).map_err(|error| error.to_string())
+    })
+    .await?;
     let epoch = if state.0.is_current(began) { epoch } else { 0 };
     Ok((view, epoch))
 }

@@ -60,14 +60,18 @@ pub struct TreeEntry {
 pub async fn list_tree(root: String, directory: String) -> Result<Vec<TreeEntry>, String> {
     let base = super::resolve_path(&root);
     let target = resolve_member(&base, &directory)?;
-    let mut entries = read_level(&base, &target)?;
-    entries.sort_by(|left, right| {
-        right
-            .is_dir
-            .cmp(&left.is_dir)
-            .then_with(|| left.path.cmp(&right.path))
-    });
-    Ok(entries)
+
+    super::blocking(move || {
+        let mut entries = read_level(&base, &target)?;
+        entries.sort_by(|left, right| {
+            right
+                .is_dir
+                .cmp(&left.is_dir)
+                .then_with(|| left.path.cmp(&right.path))
+        });
+        Ok(entries)
+    })
+    .await
 }
 
 /// The directory a member path names, resolved inside the root.
@@ -140,4 +144,58 @@ fn read_level(root: &Path, directory: &Path) -> Result<Vec<TreeEntry>, String> {
         }
     }
     Ok(entries)
+}
+
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use std::path::Path;
+
+    /// The base the guard is asked about, which is the analysis root.
+    fn base() -> PathBuf {
+        PathBuf::from("/project")
+    }
+
+    #[test]
+    fn the_root_itself_lists_the_root() {
+        assert_eq!(resolve_member(&base(), "").expect("the root"), base());
+    }
+
+    #[test]
+    fn a_child_stays_inside_the_root() {
+        let asked = resolve_member(&base(), "src").expect("a child");
+        assert_eq!(asked, Path::new("/project").join("src"));
+        // It is inside, which is what the next request depends on: a path
+        // escaping the root cannot be asked about again.
+        assert!(asked.starts_with(base()));
+    }
+
+    #[test]
+    fn an_escape_that_leaves_the_root_is_refused() {
+        // `..` past the root has nothing to pop, so the whole shard
+        // is refused rather than silently resolved to `/`.
+        for escape in ["..", "../..", "a/../../..", "src/../.."] {
+            let asked = resolve_member(&base(), escape);
+            assert!(
+                asked.is_err(),
+                "{escape} escaped the root and was not refused"
+            );
+        }
+    }
+
+    #[test]
+    fn an_escape_that_stays_inside_the_root_is_allowed() {
+        // `src/..` lands back on the root, which is a directory that exists and
+        // was already readable. Refusing it would refuse a legal request.
+        let asked = resolve_member(&base(), "src/..").expect("a trip that returns");
+        assert_eq!(asked, base());
+    }
+
+    #[test]
+    fn a_path_with_redundant_segments_is_still_the_root() {
+        let asked = resolve_member(&base(), "./src/./").expect("an untidy path");
+        assert_eq!(asked, Path::new("/project").join("src"));
+    }
 }
