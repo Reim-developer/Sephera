@@ -126,6 +126,34 @@ export interface GraphReport {
   metrics: GraphMetrics;
 }
 
+/**
+ * One token of a highlighted line, in both themes' colours.
+ *
+ * Both, not one: tokenising against a theme *map* costs the same as tokenising
+ * once, and a theme switch that re-tokenised is a theme switch that hangs for
+ * half a second on a large file. So each token carries both and the renderer
+ * picks.
+ */
+export interface Span {
+  /** The text, exactly as it appears in the file. */
+  text: string;
+  /** The dark palette's colour, or `null` for the default. */
+  dark: string | null;
+  /** The light palette's colour. */
+  light: string | null;
+  /** Whether the grammar asked for it to be italic. */
+  italic: boolean;
+  /** Whether the grammar asked for it to be bold. */
+  bold: boolean;
+}
+
+/** One line of a file, as its tokens.
+ *
+ * Named `Spans` rather than `Line` because it is not a line in the file -- it is
+ * the tokens a grammar made out of one. The viewer's own line count is the file's,
+ * and the two agree only when the grammar partitioned the text the same way. */
+export type Spans = Span[];
+
 /** One declaration inside a single file. */
 export interface FileDeclaration {
   name: string;

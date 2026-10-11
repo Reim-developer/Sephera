@@ -115,3 +115,4 @@ export const dialogService = {
 export { pickDirectory } from "./dialog";
 export { viewerService } from "./viewer";
 export { themeService } from "./theme";
+export { highlightService, tokenize, grammarFor } from "./highlight";

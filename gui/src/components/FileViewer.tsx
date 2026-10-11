@@ -1,7 +1,11 @@
 import { AlertTriangle } from "lucide-react";
 
 import { useFileViewer } from "@/hooks/useFileViewer";
+import { useSyntaxColours } from "@/hooks/useSyntaxColours";
+import { useTheme } from "@/hooks/useTheme";
 import { useClient } from "@/state/store";
+import type { ThemeId } from "@/lib/ipc";
+import type { Spans } from "@/lib/ipc";
 import styles from "@/styles/viewer.module.scss";
 
 /** How many bytes one read takes, and what "load more" adds.
@@ -20,8 +24,9 @@ const CHUNK_BYTES = 64 * 1024;
  * question is simply what it says.
  *
  * Rendering only. The reading, the offset and the failure live in
- * `useFileViewer`, because a component that fetches has no seam a test can
- * substitute -- which is the whole reason `hooks/` exists as a layer.
+ * `useFileViewer`, and the colour in `useSyntaxColours`, because a component that
+ * fetches has no seam a test can substitute -- which is the whole reason `hooks/`
+ * exists as a layer.
  *
  * The text is held whole and split at render, rather than accumulated as an array
  * of lines. That is the only way a chunk boundary is invisible: two chunks joined
@@ -31,6 +36,8 @@ const CHUNK_BYTES = 64 * 1024;
 export function FileViewer() {
   const { text, loaded, total, error, loadMore } = useFileViewer();
   const selected = useClient((state) => state.selected);
+  const colours = useSyntaxColours(text, selected);
+  const { theme } = useTheme();
 
   if (!selected) return null;
 
@@ -47,15 +54,25 @@ export function FileViewer() {
 
   const hasMore = loaded < total;
 
+  // The colours are used only when they describe the same file the plain text
+  // does. A count that disagrees means the highlighter partitioned the text into
+  // lines differently, and rendering the spans anyway would put file content
+  // under the wrong line number -- which is the one thing the numbers exist to
+  // prevent.
+  const shown = lines(text);
+  const painted = colours !== null && colours.length === shown.length ? colours : null;
+
   return (
     <div className={styles.viewer}>
       <div className={styles.viewer__scroll}>
-        {lines(text).map((line, index) => (
+        {shown.map((line, index) => (
           <div className={styles.viewer__line} key={index}>
             <span className={styles.viewer__number} aria-hidden="true">
               {index + 1}
             </span>
-            <span className={styles.viewer__text}>{line}</span>
+            <span className={styles.viewer__text}>
+              {painted ? <Painted spans={painted[index]} theme={theme} /> : line}
+            </span>
           </div>
         ))}
       </div>
@@ -72,6 +89,37 @@ export function FileViewer() {
         </button>
       ) : null}
     </div>
+  );
+}
+
+/** One line, painted.
+ *
+ * Each token carries both themes' colours and the active one is picked here, so a
+ * theme switch is a re-render rather than a re-tokenise. A token the grammar left
+ * uncoloured keeps the default, because the file's own colour is the one the
+ * viewer already shows and inventing one would be worse. */
+function Painted({
+  spans,
+  theme,
+}: {
+  spans: Spans;
+  theme: ThemeId;
+}) {
+  return (
+    <>
+      {spans.map((span, index) => (
+        <span
+          key={index}
+          style={{
+            color: (theme === "light" ? span.light : span.dark) ?? undefined,
+            fontStyle: span.italic ? "italic" : undefined,
+            fontWeight: span.bold ? 600 : undefined,
+          }}
+        >
+          {span.text}
+        </span>
+      ))}
+    </>
   );
 }
 

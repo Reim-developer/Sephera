@@ -18,6 +18,7 @@ import {
   fileService,
   graphService,
   locService,
+  highlightService,
   symbolsService,
   themeService,
   viewerService,
@@ -32,6 +33,7 @@ export interface ServiceRegistry {
   file: typeof fileService;
   viewer: typeof viewerService;
   theme: typeof themeService;
+  highlight: typeof highlightService;
   dialog: typeof dialogService;
 }
 
@@ -44,6 +46,7 @@ export const services: ServiceRegistry = {
   file: fileService,
   viewer: viewerService,
   theme: themeService,
+  highlight: highlightService,
   dialog: dialogService,
 };
 
