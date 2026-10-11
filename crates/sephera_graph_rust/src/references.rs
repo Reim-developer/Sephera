@@ -59,13 +59,13 @@ const DECLARATION_KINDS: [&str; 10] = [
     "macro_definition",
 ];
 
-/// Kinds that bring a name into scope without defining anything.
+/// The node a `mod foo;` body would be, and does not have.
 ///
-/// Their subtrees are skipped by the mention walk, because the names a `use`
-/// spells are recorded deliberately -- at their own lines, with their paths --
-/// rather than picked up as stray identifiers. `mod_item` is skipped outright: a
-/// module this file declares is not a module it depends on.
-const IMPORT_KINDS: [&str; 1] = ["mod_item"];
+/// The mention walk uses this to tell the two shapes of `mod_item` apart. Both
+/// were being skipped, and the inline one is where a project's test code lives:
+/// a 300-line file with an inline `mod tests` recorded 37 uses, because
+/// everything after the `mod` was never visited.
+const MODULE_BODY: &str = "declaration_list";
 
 /// Kinds that bind a name locally, inside a function or a block.
 ///
@@ -299,7 +299,15 @@ fn collect(
     // it spells were recorded deliberately -- at their own lines, with their
     // paths -- and picking them up again as stray identifiers would record the
     // same coupling twice with the evidence stripped off the second time.
-    if IMPORT_KINDS.contains(&node.kind()) || node.kind() == "use_declaration" {
+    if node.kind() == "use_declaration" {
+        return;
+    }
+
+    // `mod foo;` names a file and declares a name this file owns, so it is
+    // skipped. `mod tests { ... }` has a body, and the body is code -- skipping it
+    // hid every test in every file, which is where a large part of this
+    // repository's mentions were.
+    if node.kind() == "mod_item" && !is_inline_module(node) {
         return;
     }
 
@@ -335,6 +343,12 @@ fn collect(
 fn line_of(node: &Node<'_>) -> usize {
     let line = sephera_core::plugins::line_of_or(node, 0);
     usize::try_from(line).unwrap_or(0)
+}
+
+/// Whether a `mod_item` has a body rather than naming another file.
+fn is_inline_module(node: Node<'_>) -> bool {
+    node.children(&mut node.walk())
+        .any(|child| child.kind() == MODULE_BODY)
 }
 
 /// Whether this node is the `name` field of a declaration.
@@ -528,6 +542,34 @@ mod tests {
         // one -- and the name is the file's own, so nothing depends on it.
         let found = uses("mod foo;\nfn f() {}\n");
         assert!(found.is_empty(), "{found:?}");
+    }
+
+    #[test]
+    fn the_body_of_an_inline_module_is_walked() {
+        // `mod tests { ... }` is not a module declaration, it is a block of code.
+        // Skipping it hid every test in the repository: a 300-line file with one
+        // inline test module recorded 37 uses, because nothing after the `mod` was
+        // visited.
+        let found = uses(
+            "fn f() {}\nmod tests {\n  fn helper() {\n    let index = Widget::new();\n  }\n}\n",
+        );
+        let names: Vec<_> = found.iter().map(|u| u.name.as_str()).collect();
+        assert!(
+            names.contains(&"Widget"),
+            "inside an inline module: {names:?}"
+        );
+        assert!(names.contains(&"new"), "inside an inline module: {names:?}");
+    }
+
+    #[test]
+    fn an_inline_module_declaration_still_does_not_name_a_dependency() {
+        // Walking into `mod tests` must not make `tests` a use of something else.
+        let found = uses("mod tests {\n  fn helper() {}\n}\n");
+        assert!(
+            found.iter().all(|u| u.name != "tests"),
+            "the module's own name is still its own: {:?}",
+            found.iter().map(|u| &u.name).collect::<Vec<_>>()
+        );
     }
 
     #[test]

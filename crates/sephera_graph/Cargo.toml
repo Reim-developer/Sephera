@@ -42,4 +42,7 @@ sephera_scan = { path = "../sephera_scan", version = "0.7.1" }
 [dev-dependencies]
 criterion = { workspace = true }
 tempfile = "3.23.0"
+# The claim measurement reads Rust trees to tell a mention in code from a mention
+# in a comment. A test-only need -- the library itself names no grammar.
+tree-sitter-rust = "0.24"
 

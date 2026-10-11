@@ -10,7 +10,7 @@
 //!
 //! The second is the one with teeth. A flag that is threaded through and then
 //! ignored -- passed, stored, and never read by the plugin call -- would leave the
-//! graph identical and the index empty, and every test of the index alone would
+//! graph identical and the facts.references empty, and every test of the facts.references alone would
 //! pass against it.
 
 use std::fs;
@@ -68,7 +68,7 @@ fn asking_for_uses_does_not_change_the_graph() {
 #[test]
 fn a_references_run_indexes_what_the_files_use() {
     let dir = project();
-    let (_, index) = build_graph_with_references(
+    let (_, facts) = build_graph_with_references(
         dir.path(),
         &IgnoreMatcher::empty(),
         &[],
@@ -82,20 +82,21 @@ fn a_references_run_indexes_what_the_files_use() {
     // `Widget` reaches app.rs three ways: the import, the parameter's type, and
     // the call. One is enough to be in the radius, and the line list is what makes
     // the answer navigable.
-    let app: Vec<_> = index
+    let app: Vec<_> = facts
+        .references
         .users_of("Widget")
         .filter(|(file, _)| *file == "src/app.rs")
         .flat_map(|(_, lines)| lines.iter().copied())
         .collect();
     assert!(
         !app.is_empty(),
-        "app.rs uses Widget and the index missed it"
+        "app.rs uses Widget and the facts.references missed it"
     );
 
     // The method is the commonest form of coupling there is, and a file-level
     // graph does not see it at all.
     assert!(
-        index.files_using("spin") > 0,
+        facts.references.files_using("spin") > 0,
         "the method call is the coupling a module-level graph misses"
     );
 }
@@ -105,7 +106,7 @@ fn a_file_is_not_indexed_as_using_what_it_declares() {
     // `widget.rs` declares `Widget` and implements its method, so it mentions both
     // names. Neither is a dependency: the file is where they live.
     let dir = project();
-    let (_, index) = build_graph_with_references(
+    let (_, facts) = build_graph_with_references(
         dir.path(),
         &IgnoreMatcher::empty(),
         &[],
@@ -116,7 +117,8 @@ fn a_file_is_not_indexed_as_using_what_it_declares() {
     )
     .expect("the references run builds");
 
-    let own: Vec<_> = index
+    let own: Vec<_> = facts
+        .references
         .users_of("Widget")
         .filter(|(file, _)| *file == "src/widget.rs")
         .flat_map(|(_, lines)| lines.iter().copied())
@@ -126,15 +128,15 @@ fn a_file_is_not_indexed_as_using_what_it_declares() {
 
 #[test]
 fn a_project_with_no_uses_still_builds_an_index() {
-    // Five of the six languages answer `None`, so the common case is an index
-    // that is simply empty. It has to be an index, not a failure.
+    // Five of the six languages answer `None`, so the common case is an facts.references
+    // that is simply empty. It has to be an facts.references, not a failure.
     let dir = tempfile::tempdir().expect("a temp dir");
     fs::write(
         dir.path().join("main.go"),
         "package main\n\nfunc main() {}\n",
     )
     .expect("write");
-    let (_, index) = build_graph_with_references(
+    let (_, facts) = build_graph_with_references(
         dir.path(),
         &IgnoreMatcher::empty(),
         &[],
@@ -145,5 +147,9 @@ fn a_project_with_no_uses_still_builds_an_index() {
     )
     .expect("a Go project builds");
 
-    assert!(index.is_empty(), "Go has no use extractor yet: {index:?}");
+    assert!(
+        facts.references.is_empty(),
+        "Go has no use extractor yet: {:?}",
+        facts.references
+    );
 }

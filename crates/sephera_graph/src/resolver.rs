@@ -153,8 +153,8 @@ pub fn build_graph_with_references(
     query: Option<GraphQuery>,
     filters: EdgeFilters,
     progress: &dyn Progress,
-) -> Result<(GraphReport, ReferenceIndex)> {
-    let (report, uses) = build_graph_inner(
+) -> Result<(GraphReport, SymbolFacts)> {
+    let (report, facts) = build_graph_inner(
         base_path,
         ignore,
         focus_paths,
@@ -166,9 +166,24 @@ pub fn build_graph_with_references(
             collect_uses: true,
         },
     )?;
-    // The flag was set and the only plugin that answers returns an empty vector
-    // rather than `None` per file, so this is never the fallback it looks like.
-    Ok((report, uses.unwrap_or_default()))
+    Ok((report, facts))
+}
+
+/// The name tables a symbol question reads.
+///
+/// Both halves come from the one parse pass, and neither is reachable any other
+/// way: the use index exists only when the caller asked for it, and the
+/// declaration index was built for the resolver's own use and dropped when the
+/// report was assembled.
+#[derive(Debug, Clone, Default)]
+pub struct SymbolFacts {
+    /// Which files mention which name.
+    ///
+    /// Empty unless the run asked for it. Five of the six languages have no use
+    /// extractor yet, and they contribute nothing rather than a guess.
+    pub references: ReferenceIndex,
+    /// Which files declare which name.
+    pub declarations: declarations::DeclarationIndex,
 }
 
 /// As [`build_graph_with`], reporting progress through the parse phase.
@@ -185,7 +200,7 @@ pub fn build_graph_with_progress(
     filters: EdgeFilters,
     progress: &dyn Progress,
 ) -> Result<GraphReport> {
-    let (report, _) = build_graph_inner(
+    let (report, _facts) = build_graph_inner(
         base_path,
         ignore,
         focus_paths,
@@ -231,7 +246,7 @@ fn build_graph_inner(
     query: Option<GraphQuery>,
     filters: EdgeFilters,
     phase: &ParsePhase<'_>,
-) -> Result<(GraphReport, Option<ReferenceIndex>)> {
+) -> Result<(GraphReport, SymbolFacts)> {
     let ParsePhase {
         progress,
         collect_uses,
@@ -244,8 +259,12 @@ fn build_graph_inner(
 
     // Phase 1: Extract imports from all supported files, what each declares, and
     // -- when asked -- what each uses. All three come out of one parse.
-    let (mut all_file_imports, declarations, uses) =
+    let (mut all_file_imports, mut facts) =
         extract_all_imports(&project_files, progress, collect_uses)?;
+    // The resolver needs the declarations itself; the caller may want them back.
+    // Moved rather than cloned, and the struct keeps an empty index behind so the
+    // type stays `Default` rather than a three-armed `Option`.
+    let declarations = std::mem::take(&mut facts.declarations);
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
             file.imports.retain(|statement| !filters.rejects(statement));
@@ -263,7 +282,7 @@ fn build_graph_inner(
     // The manifests are read once here and used twice: resolution needs Go's
     // module path, and the metrics attribute each edge to a package.
     let manifests = manifests::ManifestIndex::discover(base_path);
-    let project = ResolutionInputs {
+    let mut project = ResolutionInputs {
         base_path: base_path.to_path_buf(),
         known_files,
         declarations,
@@ -284,6 +303,13 @@ fn build_graph_inner(
     // Phase 5: Build final nodes list.
     let nodes = build_node_list(&filtered_node_map);
 
+    // The declarations went into `project` for the resolver to read, and come
+    // back out so the caller asking a question about names has the table to ask
+    // it with. Leaving the struct's copy empty made every query answer
+    // `UnknownTarget`, which reads exactly like a file that does not declare the
+    // name -- so the failure looked like bad fixtures rather than a moved value.
+    facts.declarations = std::mem::take(&mut project.declarations);
+
     Ok((
         GraphReport {
             base_path: base_path.to_path_buf(),
@@ -297,7 +323,7 @@ fn build_graph_inner(
             edges: filtered_edges,
             metrics,
         },
-        uses,
+        facts,
     ))
 }
 
@@ -331,11 +357,7 @@ fn extract_all_imports(
     project_files: &[ProjectFile],
     progress: &dyn Progress,
     collect_uses: bool,
-) -> Result<(
-    Vec<FileImportData>,
-    declarations::DeclarationIndex,
-    Option<ReferenceIndex>,
-)> {
+) -> Result<(Vec<FileImportData>, SymbolFacts)> {
     progress.set_total(project_files.len() as u64);
 
     let extracted: Vec<ExtractedFile> = project_files
@@ -349,20 +371,22 @@ fn extract_all_imports(
     progress.advance(project_files.len() as u64);
 
     let mut results = Vec::with_capacity(extracted.len());
-    let mut declarations = declarations::DeclarationIndex::default();
-    let mut uses = collect_uses.then(ReferenceIndex::default);
+    let mut facts = SymbolFacts::default();
 
     for file in extracted {
         if let Some((path, declared)) = file.declared {
-            declarations.insert(&path, declared);
+            facts.declarations.insert(&path, declared);
         }
-        if let Some(index) = uses.as_mut() {
-            index.record(&file.data.file_path, &file.used);
+        // Outside the branch rather than inside it: the extractor already returned
+        // an empty vector for a language with no use extractor, so the flag here
+        // is only about not paying for the walk, not about what to record.
+        if collect_uses {
+            facts.references.record(&file.data.file_path, &file.used);
         }
         results.push(file.data);
     }
 
-    Ok((results, declarations, uses))
+    Ok((results, facts))
 }
 
 /// One file's imports, plus whatever it declares.
