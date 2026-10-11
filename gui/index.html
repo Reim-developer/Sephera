@@ -7,6 +7,26 @@
          second asset here would only be read by a browser this client never
          runs in. -->
     <title>Sephera</title>
+    <!-- The theme is applied here rather than in React, because a React effect
+         runs after paint and the reader would see one frame in the wrong
+         palette. The same two sources the theme service reads, in the same
+         order, so the two cannot disagree about which theme is showing. -->
+    <script>
+      (function () {
+        try {
+          var stored = localStorage.getItem("sephera.theme");
+          if (stored === "light" || stored === "dark") {
+            document.documentElement.dataset.theme = stored;
+          } else if (matchMedia("(prefers-color-scheme: light)").matches) {
+            document.documentElement.dataset.theme = "light";
+          }
+        } catch (error) {
+          // A webview with neither storage nor matchMedia keeps the dark
+          // attribute already in the tag, which is the theme this application
+          // was designed against.
+        }
+      })();
+    </script>
   </head>
   <body>
     <div id="root"></div>

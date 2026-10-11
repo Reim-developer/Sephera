@@ -1,55 +1,167 @@
-// Design tokens: the Visual Studio Code Dark+ palette, as the theme ships it.
+// Design tokens: the Visual Studio Code Dark+ and Light+ palettes, as the themes
+// ship them.
 //
-// Values taken from the theme's own JSON rather than sampled, because a hex two
+// Values taken from the themes' own JSON rather than sampled, because a hex two
 // percent off reads as "almost right" in a way that is worse than obviously
 // different. Names follow the theme's keys so a token can be looked up without
 // guessing what it is for.
 //
 // This is the one file that should need editing for a re-skin. Everything else
 // consumes tokens and nothing here knows about a component.
+//
+// Two halves, and they are two halves for one reason. The colour is a CSS custom
+// property, because a theme is chosen at *runtime* -- by a toggle and by
+// `prefers-color-scheme` -- and SCSS compiles once, so a SCSS variable cannot be
+// reassigned from the UI. The geometry below stays SCSS, because nothing changes
+// it at runtime and a custom property costs a `var()` lookup in every rule that
+// reads it.
+//
+// The SCSS half resolves `t.$name` to `var(--name)`, so every existing consumer is
+// unchanged: the file that writes `t.$editor-bg` still writes that, and it now
+// emits `var(--editor-bg)`. What changed is only *when* the value is decided.
 
-// ---- surfaces ------------------------------------------------------------
-$activity-bar-bg: #333333;
-$side-bar-bg: #181818;
-$editor-bg: #1e1e1e;
-$tabs-bg: #252526;
-$tab-active-bg: #1e1e1e;
-$tab-inactive-bg: #2d2d2d;
-$input-bg: #3c3c3c;
+// ---- the palettes --------------------------------------------------------
 
-// ---- borders -------------------------------------------------------------
-$panel-border: #2b2b2b;
-$widget-border: #454545;
-$border-subtle: rgba($widget-border, 0.45);
-$focus-border: #007fd4;
+// Dark+ is the default, and `:root` is where a page starts. A theme chosen by the
+// system is applied by the shell's own script before the first paint, so the
+// attribute is already there; this block is the fallback for when it is not.
+:root,
+[data-theme="dark"] {
+  // ---- surfaces ------------------------------------------------------------
+  --activity-bar-bg: #333333;
+  --side-bar-bg: #181818;
+  --editor-bg: #1e1e1e;
+  --tabs-bg: #252526;
+  --tab-active-bg: #1e1e1e;
+  --tab-inactive-bg: #2d2d2d;
+  --input-bg: #3c3c3c;
 
-// ---- text ----------------------------------------------------------------
-$text-normal: #cccccc;
-$text-bright: #ffffff;
-$text-muted: #858585;
-$text-disabled: #6b6b6b;
-$link-foreground: #3794ff;
+  // ---- borders -------------------------------------------------------------
+  --panel-border: #2b2b2b;
+  --widget-border: #454545;
+  --border-subtle: rgba(69, 69, 69, 0.45);
+  --focus-border: #007fd4;
 
-// ---- interaction ---------------------------------------------------------
-$list-hover-bg: #2a2d2e;
-$list-active-bg: #04395e;
-$selection-bg: #264f78;
-$selection-border: #0078d4;
+  // ---- text ----------------------------------------------------------------
+  --text-normal: #cccccc;
+  --text-bright: #ffffff;
+  --text-muted: #858585;
+  --text-disabled: #6b6b6b;
+  --link-foreground: #3794ff;
 
-// ---- semantic ------------------------------------------------------------
-$error-fg: #f14c4c;
-$warning-fg: #cca700;
-$git-added: #81b88b;
-$git-removed: #f14c4c;
+  // ---- interaction ---------------------------------------------------------
+  --list-hover-bg: #2a2d2e;
+  --list-active-bg: #04395e;
+  --selection-bg: #264f78;
+  --selection-border: #0078d4;
 
-// ---- derived -------------------------------------------------------------
-// `color-mix` is used rather than a flat hex because a border derived from a
-// surface stays correct when the surface is themed.
-$scrollbar-thumb: rgba($text-muted, 0.4);
+  // ---- semantic ------------------------------------------------------------
+  --error-fg: #f14c4c;
+  --warning-fg: #cca700;
+  --git-added: #81b88b;
+  --git-removed: #f14c4c;
+
+  // A border derived from a surface stays correct when the surface is themed, so
+  // this is a mix of the two rather than a third flat hex.
+  --scrollbar-thumb: rgba(133, 133, 133, 0.4);
+
+  // Shiki's own dark background, matched so the highlighted code and the panel
+  // holding it are the same surface rather than two close-but-different ones.
+  --syntax-bg: #1e1e1e;
+}
+
+// Light+, from the theme's own JSON.
+//
+// Several values are deliberately *not* the dark palette inverted: light is not
+// dark with the colours reversed, because contrast behaves differently at the two
+// ends. `--panel-border` stays mid-grey and thin rather than becoming white, since
+// a white border on a white panel is no border at all.
+[data-theme="light"] {
+  --activity-bar-bg: #f8f8f8;
+  --side-bar-bg: #f3f3f3;
+  --editor-bg: #ffffff;
+  --tabs-bg: #f8f8f8;
+  --tab-active-bg: #ffffff;
+  --tab-inactive-bg: #ececec;
+  --input-bg: #ffffff;
+
+  --panel-border: #d4d4d4;
+  --widget-border: #c4c4c4;
+  --border-subtle: rgba(196, 196, 196, 0.5);
+  --focus-border: #0060a0;
+
+  --text-normal: #3b3b3b;
+  --text-bright: #000000;
+  --text-muted: #6c6c6c;
+  --text-disabled: #9d9d9d;
+  --link-foreground: #00539f;
+
+  --list-hover-bg: #e8e8e8;
+  --list-active-bg: #d6ebff;
+  --selection-bg: #add6ff;
+  --selection-border: #0078d4;
+
+  --error-fg: #a1260d;
+  --warning-fg: #bf8803;
+  --git-added: #388a34;
+  --git-removed: #a1260d;
+
+  --scrollbar-thumb: rgba(108, 108, 108, 0.35);
+
+  --syntax-bg: #ffffff;
+}
+
+// ---- what every stylesheet actually consumes -----------------------------
+//
+// A name per custom property, and only the names. These are SCSS variables so
+// that `@use "tokens" as t` gives a stylesheet `t.$editor-bg`; each one resolves
+// to the custom property by the same name.
+//
+// Keeping the two lists in step is the cost of the split, and it is a real cost:
+// a token added to one block and not the other is a stylesheet that silently
+// emits `var(--undefined)`. That is why `scripts/check_gui_layers.py`-style
+// checking is worth having here, and why the pairing is one `for` loop in the
+// script rather than two hand-written lists.
+$activity-bar-bg: var(--activity-bar-bg);
+$side-bar-bg: var(--side-bar-bg);
+$editor-bg: var(--editor-bg);
+$tabs-bg: var(--tabs-bg);
+$tab-active-bg: var(--tab-active-bg);
+$tab-inactive-bg: var(--tab-inactive-bg);
+$input-bg: var(--input-bg);
+
+$panel-border: var(--panel-border);
+$widget-border: var(--widget-border);
+$border-subtle: var(--border-subtle);
+$focus-border: var(--focus-border);
+
+$text-normal: var(--text-normal);
+$text-bright: var(--text-bright);
+$text-muted: var(--text-muted);
+$text-disabled: var(--text-disabled);
+$link-foreground: var(--link-foreground);
+
+$list-hover-bg: var(--list-hover-bg);
+$list-active-bg: var(--list-active-bg);
+$selection-bg: var(--selection-bg);
+$selection-border: var(--selection-border);
+
+$error-fg: var(--error-fg);
+$warning-fg: var(--warning-fg);
+$git-added: var(--git-added);
+$git-removed: var(--git-removed);
+
+$scrollbar-thumb: var(--scrollbar-thumb);
+
+$syntax-bg: var(--syntax-bg);
 
 // ---- geometry ------------------------------------------------------------
-// VS Code's density: 13px body, 48px activity bar, 35px tabs. The status bar's
-// 22px is gone with the bar itself.
+// VS Code's density: 13px body, 48px activity bar, 35px tabs.
+//
+// SCSS and not custom properties, because nothing changes these at runtime. A
+// density setting would, and it does not exist -- and a custom property costs a
+// `var()` lookup in every rule that reads it, which is the wrong trade for a value
+// that never varies.
 $font-size: 13px;
 $line-height: 1.45;
 
@@ -60,11 +172,6 @@ $sidebar-min: 180px;
 $sidebar-default: 260px;
 $sidebar-max: 520px;
 
-$radius-small: 2px;
-$radius-medium: 4px;
-
-$spacing-unit: 4px;
-
 // ---- typography ----------------------------------------------------------
 // A monospace stack only for numeric columns. Numbers that do not line up
 // column-wise defeat the purpose of the table, and a proportional font destroys
@@ -72,3 +179,8 @@ $spacing-unit: 4px;
 $font-sans: "Segoe UI", Ubuntu, "Droid Sans", system-ui, sans-serif;
 $font-mono: "Cascadia Code", "JetBrains Mono", Consolas, "SF Mono",
   "DejaVu Sans Mono", monospace;
+
+$radius-small: 2px;
+$radius-medium: 4px;
+
+$spacing-unit: 4px;

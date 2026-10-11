@@ -1,11 +1,14 @@
 import {
   FolderSearch,
+  Moon,
   PanelLeft,
   RefreshCw,
   Settings,
+  Sun,
 } from "lucide-react";
 
 import { commandIds, run } from "@/platform/commands";
+import { useTheme } from "@/hooks/useTheme";
 import { useClient } from "@/state/store";
 import { VIEWS } from "@/views/registry";
 import { TabBar } from "@/components/TabBar";
@@ -35,6 +38,8 @@ export function TopNav() {
   const togglePanel = useClient((state) => state.togglePanel);
   const setView = useClient((state) => state.setView);
 
+  const { theme, toggle } = useTheme();
+
   return (
     <header className={styles.nav}>
       <div className={styles.nav__row}>
@@ -53,6 +58,20 @@ export function TopNav() {
             open={panel === "settings"}
             onToggle={() => togglePanel("settings")}
           />
+
+          <button
+            type="button"
+            className={styles.nav__iconButton}
+            aria-label={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+            title={theme === "dark" ? "Switch to the light theme" : "Switch to the dark theme"}
+            onClick={toggle}
+          >
+            {theme === "dark" ? (
+              <Sun size={16} strokeWidth={1.5} aria-hidden="true" />
+            ) : (
+              <Moon size={16} strokeWidth={1.5} aria-hidden="true" />
+            )}
+          </button>
         </div>
 
         <div className={styles.nav__group}>

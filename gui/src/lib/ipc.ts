@@ -52,6 +52,9 @@ export interface TreeNode {
 /** A declaration kind, as the Rust enum names it in snake case. */
 export type SymbolKind = "functions" | "types" | "enums" | "constants";
 
+/** Which palette the workbench is painted in. */
+export type ThemeId = "dark" | "light";
+
 /** Per-language declaration totals. */
 export interface LanguageSymbols {
   language: string;

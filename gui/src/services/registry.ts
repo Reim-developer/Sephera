@@ -19,6 +19,7 @@ import {
   graphService,
   locService,
   symbolsService,
+  themeService,
   viewerService,
 } from "@/services/index";
 
@@ -30,6 +31,7 @@ export interface ServiceRegistry {
   explorer: typeof explorerService;
   file: typeof fileService;
   viewer: typeof viewerService;
+  theme: typeof themeService;
   dialog: typeof dialogService;
 }
 
@@ -41,6 +43,7 @@ export const services: ServiceRegistry = {
   explorer: explorerService,
   file: fileService,
   viewer: viewerService,
+  theme: themeService,
   dialog: dialogService,
 };
 
