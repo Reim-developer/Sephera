@@ -155,6 +155,13 @@ pub struct ExtractedSource {
     /// `None` for every language but Rust, and that is the normal answer rather
     /// than a gap.
     pub declared: Option<crate::declarations::DeclaredNames>,
+
+    /// The names this file uses that it does not define.
+    ///
+    /// Empty unless the caller asked for them: collecting them is three walks of
+    /// the tree against the one the import descent already does, and a caller
+    /// whose question is about imports should not pay for a second answer.
+    pub uses: Vec<crate::references::NameUse>,
 }
 
 /// A context for a resolver test, with no lookup tables attached.
@@ -204,11 +211,17 @@ use tree_sitter::{Node, Parser, Tree};
 
 use crate::types::ImportStatement;
 
-/// Parse `source` once and return both what it imports and what it declares.
+/// Parse `source` once and return what it imports, declares and uses.
 ///
-/// The two used to be separate methods on the plugin, each building its own
+/// The first two used to be separate methods on the plugin, each building its own
 /// parser, so a Rust file was parsed twice to answer two questions about the same
 /// bytes.
+///
+/// `collect_uses` is false for callers that only want imports. The use extractor
+/// walks the tree three more times -- once for the names the file declares, once
+/// for the names it binds locally, once for the mentions -- and the questions it
+/// answers are the ones a graph does not have. A caller that does not ask should
+/// not pay.
 ///
 /// # Errors
 ///
@@ -218,6 +231,7 @@ pub fn walk_with_declarations(
     source: &[u8],
     parser: &mut Parser,
     extractor: &dyn ImportPlugin,
+    collect_uses: bool,
 ) -> Result<ExtractedSource> {
     let tree: Tree = parser
         .parse(source, None)
@@ -229,6 +243,11 @@ pub fn walk_with_declarations(
     Ok(ExtractedSource {
         imports,
         declared: extractor.collect_declarations(source, &tree),
+        uses: if collect_uses {
+            extractor.extract_uses(source, &tree).unwrap_or_default()
+        } else {
+            Vec::new()
+        },
     })
 }
 
@@ -354,7 +373,9 @@ pub fn imports_found_by(
     parser: &mut tree_sitter::Parser,
     plugin: &dyn ImportPlugin,
 ) -> Vec<ImportStatement> {
-    walk_with_declarations(source, parser, plugin)
+    // `false`: this asks what the file imports, and the uses would be three extra
+    // walks of every tree in the extractor's test suite to answer nothing.
+    walk_with_declarations(source, parser, plugin, false)
         .map(|extracted| extracted.imports)
         .unwrap_or_default()
 }

@@ -15,6 +15,7 @@ use rayon::prelude::*;
 use sephera_compression::{SupportedLanguage, with_parser};
 use sephera_core::plugins::walk_with_declarations;
 use sephera_core::progress::{NoProgress, Progress};
+use sephera_core::references::ReferenceIndex;
 use sephera_ignore::IgnoreMatcher;
 use sephera_scan::project_files::{ProjectFile, collect_project_files};
 
@@ -130,6 +131,46 @@ pub fn build_graph_with(
     )
 }
 
+/// As [`build_graph_with_progress`], also returning the names each file uses.
+///
+/// The second value is the index `references` queries and nothing else reads.
+/// Returning it from here rather than from a second pass is the point: the parse
+/// is the expensive part of a run, and this way `references` pays for one pass
+/// instead of two.
+///
+/// The flag is the other half of that. `extract_uses` walks the tree three more
+/// times per file, so making it unconditional would slow every `graph` and
+/// `impact` run to serve a command none of them is.
+///
+/// # Errors
+///
+/// Returns an error when project traversal or import extraction fails.
+pub fn build_graph_with_references(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+    focus_paths: &[PathBuf],
+    depth: Option<u32>,
+    query: Option<GraphQuery>,
+    filters: EdgeFilters,
+    progress: &dyn Progress,
+) -> Result<(GraphReport, ReferenceIndex)> {
+    let (report, uses) = build_graph_inner(
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        filters,
+        &ParsePhase {
+            progress,
+            collect_uses: true,
+        },
+    )?;
+    // The flag was set and the only plugin that answers returns an empty vector
+    // rather than `None` per file, so this is never the fallback it looks like.
+    Ok((report, uses.unwrap_or_default()))
+}
+
 /// As [`build_graph_with`], reporting progress through the parse phase.
 ///
 /// # Errors
@@ -144,15 +185,67 @@ pub fn build_graph_with_progress(
     filters: EdgeFilters,
     progress: &dyn Progress,
 ) -> Result<GraphReport> {
+    let (report, _) = build_graph_inner(
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        filters,
+        &ParsePhase {
+            progress,
+            collect_uses: false,
+        },
+    )?;
+    Ok(report)
+}
+
+/// How the parse phase should behave for one run.
+///
+/// Both settings describe the same phase and both are passed to every caller of
+/// the inner function together, which is what makes them one value rather than
+/// eight parameters. The second one is the reason this exists: adding
+/// `collect_uses` as an eighth argument tripped `too_many_arguments`, and
+/// `ResolutionInputs` further up is the same decision already taken once in this
+/// file for the same reason.
+struct ParsePhase<'a> {
+    /// Where progress is reported.
+    progress: &'a dyn Progress,
+    /// Whether to collect the names each file uses, not only its imports.
+    ///
+    /// Off for every caller but `references`. The use extractor is three extra
+    /// walks of the tree per file, and a graph's answer does not change with it.
+    collect_uses: bool,
+}
+
+/// What [`build_graph_with_progress`] and [`build_graph_with_references`] share.
+///
+/// # Errors
+///
+/// Returns an error when project traversal or import extraction fails.
+fn build_graph_inner(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+    focus_paths: &[PathBuf],
+    depth: Option<u32>,
+    query: Option<GraphQuery>,
+    filters: EdgeFilters,
+    phase: &ParsePhase<'_>,
+) -> Result<(GraphReport, Option<ReferenceIndex>)> {
+    let ParsePhase {
+        progress,
+        collect_uses,
+    } = *phase;
     let project_files = collect_project_files(base_path, ignore)?;
     let focus_set = build_focus_set(base_path, focus_paths);
     let query = query
         .map(|query| normalize_graph_query(base_path, query))
         .transpose()?;
 
-    // Phase 1: Extract imports from all supported files, and what each declares.
-    let (mut all_file_imports, declarations) =
-        extract_all_imports(&project_files, progress)?;
+    // Phase 1: Extract imports from all supported files, what each declares, and
+    // -- when asked -- what each uses. All three come out of one parse.
+    let (mut all_file_imports, declarations, uses) =
+        extract_all_imports(&project_files, progress, collect_uses)?;
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
             file.imports.retain(|statement| !filters.rejects(statement));
@@ -191,18 +284,21 @@ pub fn build_graph_with_progress(
     // Phase 5: Build final nodes list.
     let nodes = build_node_list(&filtered_node_map);
 
-    Ok(GraphReport {
-        base_path: base_path.to_path_buf(),
-        focus_paths: focus_paths
-            .iter()
-            .map(|p| p.to_string_lossy().to_string())
-            .collect(),
-        depth: selection.applied_depth,
-        query: selection.query,
-        nodes,
-        edges: filtered_edges,
-        metrics,
-    })
+    Ok((
+        GraphReport {
+            base_path: base_path.to_path_buf(),
+            focus_paths: focus_paths
+                .iter()
+                .map(|p| p.to_string_lossy().to_string())
+                .collect(),
+            depth: selection.applied_depth,
+            query: selection.query,
+            nodes,
+            edges: filtered_edges,
+            metrics,
+        },
+        uses,
+    ))
 }
 
 /// Collects import information from a single file.
@@ -234,12 +330,17 @@ struct FileImportData {
 fn extract_all_imports(
     project_files: &[ProjectFile],
     progress: &dyn Progress,
-) -> Result<(Vec<FileImportData>, declarations::DeclarationIndex)> {
+    collect_uses: bool,
+) -> Result<(
+    Vec<FileImportData>,
+    declarations::DeclarationIndex,
+    Option<ReferenceIndex>,
+)> {
     progress.set_total(project_files.len() as u64);
 
     let extracted: Vec<ExtractedFile> = project_files
         .par_iter()
-        .map(extract_one_file)
+        .map(|file| extract_one_file(file, collect_uses))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
@@ -249,15 +350,19 @@ fn extract_all_imports(
 
     let mut results = Vec::with_capacity(extracted.len());
     let mut declarations = declarations::DeclarationIndex::default();
+    let mut uses = collect_uses.then(ReferenceIndex::default);
 
     for file in extracted {
         if let Some((path, declared)) = file.declared {
             declarations.insert(&path, declared);
         }
+        if let Some(index) = uses.as_mut() {
+            index.record(&file.data.file_path, &file.used);
+        }
         results.push(file.data);
     }
 
-    Ok((results, declarations))
+    Ok((results, declarations, uses))
 }
 
 /// One file's imports, plus whatever it declares.
@@ -266,6 +371,9 @@ struct ExtractedFile {
     /// The file's path and the names it declares, kept beside the imports so
     /// the declaration index can be built in one ordered pass.
     declared: Option<(String, declarations::DeclaredNames)>,
+    /// The names it uses, when the caller asked. The file is already on `data`,
+    /// so the index does not repeat it here.
+    used: Vec<sephera_core::references::NameUse>,
 }
 
 /// Extracts from one file, or reports that it has nothing to extract.
@@ -275,6 +383,7 @@ struct ExtractedFile {
 /// a file that should have been analysed was silently dropped otherwise.
 fn extract_one_file(
     project_file: &ProjectFile,
+    collect_uses: bool,
 ) -> Result<Option<ExtractedFile>> {
     // Only an oversized file is skipped. A zero-byte file is not.
     //
@@ -336,6 +445,7 @@ fn extract_one_file(
                 imports: Vec::new(),
             },
             declared: None,
+            used: Vec::new(),
         }));
     }
 
@@ -351,7 +461,7 @@ fn extract_one_file(
         return Ok(None);
     };
     let mut extracted = with_parser(ts_language, source.len(), |parser| {
-        walk_with_declarations(&source, parser, plugin)
+        walk_with_declarations(&source, parser, plugin, collect_uses)
     })
     .unwrap_or_default();
 
@@ -371,6 +481,7 @@ fn extract_one_file(
             imports: extracted.imports,
         },
         declared,
+        used: extracted.uses,
     }))
 }
 
