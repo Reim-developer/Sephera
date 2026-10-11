@@ -86,18 +86,38 @@ export function grammarFor(path: string): string | null {
  *
  * A module-level promise rather than a field on the store, because it is a
  * capability the same way the directory dialog is one: it has no state a reader
- * would change, and the only caller cares whether it is ready. Keeping a failed
- * promise would mean a grammar that cannot load is a grammar that can never load
- * again, so `null` is restored on failure and the next file tries again. */
+ * would change, and the only caller cares whether it is ready.
+ *
+ * The JavaScript regex engine, chosen over Shiki's default. The default is
+ * Oniguruma, which loads a **Wasm** binary before it will tokenise anything; a
+ * webview that cannot fetch or compile it gets no colour, and the previous
+ * version turned that into plain text with nothing said -- the reported failure
+ * was a silent one. The JS engine implements the same interface with no Wasm
+ * anywhere, and it reaches its first token sooner.
+ *
+ * A failed load resolves to `null` and is *reported*, not swallowed: the fallback
+ * to plain text stays, because a highlighter that cannot load must not stop a
+ * file being read, but an error nobody can see is an error nobody can fix. The
+ * promise is left in place so the next file does not pay for the attempt again. */
 let loading: Promise<Highlighter | null> | null = null;
 
 async function highlighter(): Promise<Highlighter | null> {
   if (!loading) {
-    loading = import("shiki")
-      .then(({ createHighlighter: create }) =>
-        create({ langs: [...GRAMMARS], themes: [...new Set(Object.values(THEMES))] }),
+    loading = Promise.all([
+      import("shiki"),
+      import("shiki/engine/javascript"),
+    ])
+      .then(([{ createHighlighter }, { createJavaScriptRegexEngine }]) =>
+        createHighlighter({
+          engine: createJavaScriptRegexEngine(),
+          langs: [...GRAMMARS],
+          themes: [...new Set(Object.values(THEMES))],
+        }),
       )
-      .catch(() => null);
+      .catch((error: unknown) => {
+        console.error("sephera: the syntax highlighter could not load", error);
+        return null;
+      });
   }
   // A failed load resolves to `null` and leaves the promise in place, so the
   // next file does not pay for the attempt again -- but a transient failure of

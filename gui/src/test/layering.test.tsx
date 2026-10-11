@@ -152,24 +152,36 @@ describe("the store, with the registry replaced", () => {
   it("cancel discards a reply that arrives after it", async () => {
     const calls = installServices();
 
-    // A reply that lands after the cancel, so the epoch comparison is the only
-    // thing that stops it. A store that trusted its reply would be a store where
-    // Cancel only closes the dialog and the number still arrives.
+    // A reply the *test* resolves, so the ordering is the test's and not the
+    // timer's. The previous version resolved on `setTimeout(0)` and asserted
+    // `busy === true` straight after `act` -- but `act`'s async form awaits
+    // pending microtasks and the timer can fire inside that window, so the reply
+    // sometimes landed before the assertion and the test failed at random.
+    let release: (reply: [unknown, number]) => void = () => {};
     calls.loc.mockImplementation(
       async (_root: unknown, _ignore: unknown, epoch: number) =>
         new Promise<[unknown, number]>((resolve) => {
-          setTimeout(() => resolve([twoLanguageLoc(), epoch]), 0);
+          release = resolve;
+          void epoch;
         }),
     );
 
     await act(async () => {
       useClient.getState().recompute();
     });
+    // Still running, because nothing has resolved it yet -- and the reason is
+    // that the test is the one holding it.
     expect(useClient.getState().loc.busy).toBe(true);
 
     await act(async () => {
       useClient.getState().cancel();
-      await new Promise((resolve) => setTimeout(resolve, 0));
+    });
+    // The dialog closed on the click, without waiting for the reply.
+    expect(useClient.getState().loc.busy).toBe(false);
+
+    await act(async () => {
+      release([twoLanguageLoc(), 1]);
+      await Promise.resolve();
     });
 
     // The host was told, the dialog closed, and the late reply changed nothing.

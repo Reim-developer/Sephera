@@ -29,6 +29,14 @@
   // The navigation bar is a single row that takes what it needs, and everything
   // else shares one row that is allowed to shrink.
   grid-template-rows: auto minmax(0, 1fr);
+  // One column, and it is `minmax(0, 1fr)` rather than the implicit `auto`
+  // this grid used to have. That distinction is the whole fix for content
+  // overflowing into the panel: an `auto` track's growth limit is its items'
+  // max-content, so a file line four thousand characters wide made the column
+  // four thousand characters wide -- the box stayed at 100% while its column
+  // ran off the right edge and took the panel with it. `minmax(0, 1fr)` cannot
+  // exceed the container whatever is inside it.
+  grid-template-columns: minmax(0, 1fr);
   height: 100%;
 }
 
@@ -46,6 +54,10 @@
   // One row, and it is the one that grows: the tables take what is left after
   // the panels, so they never push the shell wider than the window.
   grid-template-rows: minmax(0, 1fr);
+  // And one column, for the reason `.workbench` has one: an implicit `auto`
+  // column sizes to its items' max-content, and the content is a file with
+  // arbitrarily long lines.
+  grid-template-columns: minmax(0, 1fr);
   min-width: 0;
   background: t.$editor-bg;
 }
@@ -192,6 +204,9 @@
   // a hit area.
   grid-template-columns: minmax(0, 1fr) 5px var(--panel-width, 320px);
   min-height: 0;
+  min-width: 0;
+  // Both axes, and the horizontal one matters: the file viewer scrolls sideways
+  // rather than wrapping, so the box is where that overflow is contained.
   overflow: hidden;
 }
 
@@ -210,11 +225,15 @@
 
 .split__scroll {
   min-height: 0;
+  min-width: 0;
+  // A plain scroller, where Radix's ScrollArea used to be. Radix wraps its
+  // content in a `min-width: 100%; display: table` element, and a table sizes to
+  // its content -- which is how a long line came to set the width of a column
+  // three levels up. `base.scss` styles `::-webkit-scrollbar` globally, so a
+  // native scroller looks the same as the Radix one did.
+  overflow: auto;
 }
 
-.split__viewport {
-  min-height: 0;
-}
 
 // The drag handle between the two columns. Full height and no gap at the top, so
 // the pointer does not have to be aimed, and a cursor that says what it does.
@@ -224,6 +243,10 @@
   border: 0;
   padding: 0;
   align-self: stretch;
+  // The pointer belongs to the drag, not to a scroll gesture. Without this, a
+  // trackpad that reads the press as a scroll takes over halfway and the handle
+  // stops following the cursor.
+  touch-action: none;
 
   &:hover,
   &[data-resizing="true"] {

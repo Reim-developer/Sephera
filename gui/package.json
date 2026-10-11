@@ -13,11 +13,7 @@
     "check:layers": "python ../scripts/check_gui_layers.py"
   },
   "dependencies": {
-    "@radix-ui/react-dialog": "^1.1.0",
-    "@radix-ui/react-scroll-area": "^1.2.0",
-    "@radix-ui/react-separator": "^1.1.0",
     "@radix-ui/react-tabs": "^1.1.0",
-    "@radix-ui/react-tooltip": "^1.2.0",
     "@tauri-apps/api": "^2.12.1",
     "@tauri-apps/plugin-dialog": "^2.4.0",
     "@types/react-icons": "^2.2.7",

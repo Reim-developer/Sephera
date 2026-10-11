@@ -37,6 +37,10 @@ export function TopNav() {
   const panel = useClient((state) => state.panel);
   const togglePanel = useClient((state) => state.togglePanel);
   const setView = useClient((state) => state.setView);
+  // A file being read replaces all three directory analyses, so the tab row that
+  // chooses between them has nothing to choose. The controls above it stay: the
+  // folder and the patterns apply whatever is selected.
+  const selected = useClient((state) => state.selected);
 
   const { theme, toggle } = useTheme();
 
@@ -102,7 +106,13 @@ export function TopNav() {
 
       {/* No root means no analysis to switch between, so the tab row appears with
           the first scan rather than sitting there disabled. */}
-      {root ? (
+      {/* The tab row appears once there is something to switch between, and hides
+          again while a file is open. The three tabs choose between three
+          *directory* analyses, and the viewer has replaced all three; the
+          controls above stay, because the folder and the patterns apply whatever
+          is selected. Clearing the selection brings the row back, which is also
+          how a reader returns to those views. */}
+      {root && !selected ? (
         <TabBar
           tabs={VIEWS.map((entry) => ({ id: entry.id, label: entry.label }))}
           active={view}

@@ -1,6 +1,5 @@
 import type { CSSProperties } from "react";
 import { useEffect } from "react";
-import * as ScrollArea from "@radix-ui/react-scroll-area";
 
 import { EmptyState } from "@/components/EmptyState";
 import { FilePanel } from "@/components/FilePanel";
@@ -113,18 +112,19 @@ export function App() {
                     is how that analysis is addressed rather than the shell's
                     directory field, which applies to all three alike. */}
                 {view === "graph" && !selected ? <QueryRow /> : null}
-                <ScrollArea.Root className={styles.split__scroll}>
-                  <ScrollArea.Viewport className={styles.split__viewport}>
-                    {selected ? (
-                      <FileViewer />
-                    ) : (
-                      <Active generation={generation} />
-                    )}
-                  </ScrollArea.Viewport>
-                  <ScrollArea.Scrollbar orientation="vertical">
-                    <ScrollArea.Thumb />
-                  </ScrollArea.Scrollbar>
-                </ScrollArea.Root>
+                {/* A plain scroller, not Radix's ScrollArea. Radix's Viewport
+                    wraps its children in a `display: table` element that sizes
+                    to its content, and a file's long lines are content -- so the
+                    table set the width of a column three levels up and the panel
+                    beside it was pushed out of the window. The scrollbars are
+                    styled globally in base.scss, so this looks the same. */}
+                <div className={styles.split__scroll}>
+                  {selected ? (
+                    <FileViewer />
+                  ) : (
+                    <Active generation={generation} />
+                  )}
+                </div>
               </section>
 
               <PanelResizer />
