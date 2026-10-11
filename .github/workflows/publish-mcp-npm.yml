@@ -1,0 +1,109 @@
+name: Publish MCP server to npm
+
+# The CLI is published to crates.io by `publish.yml`. This is the other half of
+# the same distribution question: an MCP server a user has to compile before
+# trying it is an MCP server most people will not try, and `npx` is how MCP
+# servers are actually installed.
+#
+# Trusted publishing, so there is no long-lived token in this repository to leak
+# or rotate. npm checks the workflow's identity against what is configured on
+# npmjs.com for this repository and refuses anything else -- which is why the job
+# needs `id-token: write` and why a missing npm-side configuration fails loudly
+# here rather than silently at the user's install.
+
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: Version to publish, matching package.json
+        required: true
+      dry_run:
+        description: Pack only, publish nothing
+        required: true
+        default: true
+        type: boolean
+
+# One at a time. Two runs racing the same version means one fails on a version
+# that already exists, which is a confusing way to learn a tag was reused.
+concurrency:
+  group: publish-npm-sephera
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  # The only reason this line exists. Without it the job gets no OIDC token,
+  # npm's exchange fails, and the error names authentication rather than the
+  # permission that was missing.
+  id-token: write
+
+jobs:
+  publish:
+    name: Publish sephera-mcp
+    runs-on: ubuntu-latest
+    environment: release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "22"
+          registry-url: https://registry.npmjs.org
+
+      # The package has no dependencies, so there is nothing to install and no
+      # lockfile to keep in step. `npm ci` would fail for want of one, and a
+      # lockfile that lists nothing is a file to go stale for no benefit.
+
+      # The whole point of the job is that the version on npm is the version the
+      # installer will download assets for. A package published as 0.7.1 whose
+      # installer fetches assets named for 0.8.0 fails on the user's machine at
+      # install time with a 404 that reads as a network fault.
+      - name: Refuse a version that does not match the release
+        shell: bash
+        run: |
+          set -euo pipefail
+          if [ -n "${{ inputs.version }}" ]; then
+            VERSION="${{ inputs.version }}"
+          else
+            VERSION="${GITHUB_REF_NAME#v}"
+          fi
+          DECLARED="$(node -p "require('./npm/sephera-mcp/package.json').version")"
+          echo "release implies ${VERSION}; package.json declares ${DECLARED}"
+          if [ "$VERSION" != "$DECLARED" ]; then
+            echo "::error::bump npm/sephera-mcp/package.json to ${VERSION} before tagging"
+            exit 1
+          fi
+          echo "VERSION=${VERSION}" >> "$GITHUB_ENV"
+
+      - name: Dry run
+        if: ${{ inputs.dry_run == true }}
+        run: npm --prefix npm/sephera-mcp pack --dry-run
+
+      # A version already on npm cannot be replaced, so this is also the check
+      # that the release tag is new.
+      - name: Publish
+        if: ${{ inputs.dry_run != true }}
+        run: npm --prefix npm/sephera-mcp publish --provenance --access public
+
+      # The published package is only correct if the asset it will download
+      # exists. That is the one thing this workflow can check after the fact,
+      # and it is the failure a user would otherwise hit at their own install.
+      - name: Verify the installer resolves its own asset
+        if: ${{ inputs.dry_run != true }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          node -e "
+            const p = require('./npm/sephera-mcp/lib/platform.js');
+            const build = p.buildForCurrentMachine();
+            if (!build) { console.log('no published build for this runner'); process.exit(0); }
+            const url = p.archiveUrl(build, process.env.VERSION);
+            console.log('installers on ' + p.supportedSummary() + ' will fetch:', url);
+            fetch(url, { method: 'HEAD' }).then((r) => {
+              if (r.status !== 200) { console.error('asset missing: ' + r.status); process.exit(1); }
+              console.log('asset reachable');
+            });
+          "

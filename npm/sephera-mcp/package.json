@@ -1,0 +1,40 @@
+{
+  "name": "sephera-mcp",
+  "version": "0.7.1",
+  "description": "Coupling analysis for coding agents: what breaks if this symbol or file changes. No language server required.",
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "static-analysis",
+    "coupling",
+    "blast-radius",
+    "refactoring",
+    "ai-agent",
+    "rust",
+    "tree-sitter"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/Reim-developer/Sephera",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Reim-developer/Sephera.git"
+  },
+  "bugs": {
+    "url": "https://github.com/Reim-developer/Sephera/issues"
+  },
+  "bin": {
+    "sephera-mcp": "bin/sephera-mcp.js"
+  },
+  "files": [
+    "bin/",
+    "lib/",
+    "postinstall.js",
+    "README.md"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "scripts": {
+    "postinstall": "node postinstall.js"
+  }
+}
