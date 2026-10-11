@@ -257,3 +257,37 @@ mod tests {
         );
     }
 }
+
+/// The references to one or more declarations.
+///
+/// Its own tool rather than something an agent assembles from `graph` and
+/// `symbols`, for the reason `impact` is one: the symbol-level radius is the
+/// question a tool like this exists to answer, and assembling it from a node array
+/// means the agent cannot tell a short answer from an incomplete one.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReferencesInput {
+    /// Declarations to report on, written `PATH::NAME`. One or more.
+    ///
+    /// The path is required and the tool rejects a bare name. A name alone is
+    /// ambiguous -- many projects declare the same name in two crates -- so
+    /// `Cli` would be several questions at once.
+    pub symbols: Vec<String>,
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Report only users inside these paths, matched as a path or a `/` prefix.
+    pub focus: Option<Vec<String>>,
+    /// Ignore patterns applied while walking the repository.
+    pub ignore: Option<Vec<String>>,
+    /// Skip the repository's own `.gitignore`.
+    pub no_gitignore: Option<bool>,
+    /// How many hops of re-export a reference may be from the declaration.
+    pub depth: Option<u32>,
+    /// Output format: `json` or `markdown`.
+    pub format: Option<String>,
+}

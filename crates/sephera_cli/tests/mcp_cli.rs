@@ -256,7 +256,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
 
     assert_eq!(
         names,
-        vec!["context", "graph", "impact", "loc", "symbols"],
+        vec!["context", "graph", "impact", "loc", "references", "symbols",],
         "the protocol must advertise exactly the documented tools"
     );
 }

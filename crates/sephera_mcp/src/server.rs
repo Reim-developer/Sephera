@@ -11,6 +11,8 @@
 //! Handlers are thin by design: resolve a source, delegate to `sephera_core`,
 //! then format. They hold no state between calls.
 
+use std::fmt::Write as _;
+
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::tool::ToolRouter,
@@ -19,10 +21,13 @@ use rmcp::{
     transport::io::stdio,
 };
 
+use sephera_core::progress::NoProgress;
 use sephera_graph::{
-    blast_radius,
+    blast_radius, references,
     render::render_graph,
-    resolver::{build_focus_set, build_graph},
+    resolver::{
+        EdgeFilters, build_focus_set, build_graph, build_graph_with_references,
+    },
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
@@ -34,7 +39,10 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
-    input::{ContextInput, GraphInput, ImpactInput, LocInput, SymbolsInput},
+    input::{
+        ContextInput, GraphInput, ImpactInput, LocInput, ReferencesInput,
+        SymbolsInput,
+    },
     render::render_context_markdown,
 };
 
@@ -421,10 +429,313 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Report which files reference one or more declarations.
+    ///
+    /// The symbol-level question `impact` cannot answer. `impact` measures a file;
+    /// this measures one name inside it, which is what an agent editing a struct or
+    /// a function actually needs to know.
+    #[tool(
+        name = "references",
+        description = "Report which files reference one or more declarations, written PATH::NAME. This is the symbol-level question `impact` cannot answer: impact measures a file, this measures one name inside it. Run it BEFORE renaming or changing a declaration. The path is required and a bare name is rejected, because the same name is often declared in two crates and naming the file is what makes it one question. Every reference says how it was attributed: `import` means the file's own import path led here through re-exports (evidence), `unique` means one file in the project declares the name and `same_crate` means several do and one is in the caller's crate (arithmetic). The report carries `complete: false` whenever a mention could not be attributed, so a short answer can be told apart from an incomplete one -- check it before reporting a radius as final. Use focus to narrow, depth to limit the chain, and format=markdown for a compact summary."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn references(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ReferencesInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        // Before `resolve_source`, as `impact` does: a URL argument means a clone,
+        // and a clone that fails would otherwise report a source error instead of
+        // the one mistake the caller made.
+        if param.symbols.is_empty() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "references needs at least one symbol in `symbols`; an empty list is \
+                 not a question that has an answer",
+                None,
+            ));
+        }
+
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let (report, facts) = build_graph_with_references(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            param.depth,
+            None,
+            EdgeFilters::default(),
+            &NoProgress,
+        )
+        .map_err(map_internal_error("reference extraction failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let focus = build_focus_set(
+            &source.analysis_path,
+            &param
+                .focus
+                .unwrap_or_default()
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
+
+        let built = SymbolReport::build(
+            &report,
+            &facts,
+            &param.symbols,
+            &base_prefix,
+            &focus,
+        )
+        .map_err(map_internal_error("reference resolution failed"))?;
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(symbol_markdown(&built)),
+            // Rejected rather than silently returning JSON, matching `impact`: an
+            // agent that asked for Markdown and got JSON would parse the wrong
+            // shape and not know it.
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported references format `{other}`; expected json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+}
+
+/// The JSON shape the `references` tool returns.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct SymbolReport {
+    /// One entry per symbol asked about, widest radius first.
+    pub targets: Vec<SymbolEntry>,
+    /// Whether every mention of every symbol was attributable.
+    ///
+    /// The field a caller should check before reporting a radius as final. A
+    /// plain list cannot carry this: forty entries means forty whether the
+    /// resolver placed every mention or refused a third of them, and an agent
+    /// reading only the list cannot tell those apart. It is a field rather than
+    /// an error for the reason `ImpactGate` is -- an MCP tool has no exit code,
+    /// so a property of the answer has to survive as data or it is lost.
+    pub complete: bool,
+    /// How many mentions could not be attributed across all targets.
+    pub unattributed_count: usize,
+}
+
+/// One symbol's references.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct SymbolEntry {
+    /// The file that declares the symbol.
+    pub file: String,
+    /// The name, as declared.
+    pub name: String,
+    /// Files that reference it, strongest attribution first.
+    pub users: Vec<SymbolUser>,
+    /// Files whose mention could not be tied to this declaration.
+    ///
+    /// Always present rather than behind a flag. An agent handed a filtered list
+    /// has no way to know something was removed, which is the difference between
+    /// an answer and a shorter answer.
+    pub unattributed: Vec<UnattributedUser>,
+}
+
+/// One referencing file.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct SymbolUser {
+    /// The referencing file.
+    pub file: String,
+    /// Lines it references the symbol on.
+    pub lines: Vec<usize>,
+    /// How it was attributed: `import`, `unique` or `same_crate`.
+    pub via: &'static str,
+}
+
+/// One mention that could not be placed.
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
+pub struct UnattributedUser {
+    /// The mentioning file.
+    pub file: String,
+    /// Lines it mentions the name on.
+    pub lines: Vec<usize>,
+    /// How many files declare a name that could be meant.
+    pub candidates: usize,
+}
+
+impl SymbolReport {
+    /// Answer every symbol, widest radius first.
+    ///
+    /// # Errors
+    ///
+    /// Errors when a symbol is not spelled `PATH::NAME`, or when the file it
+    /// names does not declare the name. Both are the caller's mistake rather
+    /// than a property of the project, and both would read as an empty answer if
+    /// they were swallowed -- which is the one failure this tool exists to
+    /// avoid.
+    pub fn build(
+        report: &sephera_graph::types::GraphReport,
+        facts: &sephera_graph::SymbolFacts,
+        symbols: &[String],
+        base_prefix: &str,
+        focus: &[String],
+    ) -> anyhow::Result<Self> {
+        let mut entries = Vec::new();
+        for spelling in symbols {
+            let target = symbol_target(spelling)?;
+            let found =
+                references::find(report, facts, &target).map_err(|_| {
+                    anyhow::anyhow!(
+                        "`{}` does not declare `{}`",
+                        target.file,
+                        target.name
+                    )
+                })?;
+            let inside = |file: &str| {
+                focus.is_empty()
+                    || focus.iter().any(|scope| {
+                        file == scope || file.starts_with(&format!("{scope}/"))
+                    })
+            };
+            entries.push(SymbolEntry {
+                file: target.file,
+                name: target.name,
+                users: found
+                    .users
+                    .into_iter()
+                    .filter(|user| inside(&user.file))
+                    .map(|user| SymbolUser {
+                        file: strip_base(base_prefix, &user.file),
+                        lines: user.lines,
+                        via: match user.via {
+                            references::Attribution::Import => "import",
+                            references::Attribution::Unique => "unique",
+                            references::Attribution::SameCrate => "same_crate",
+                        },
+                    })
+                    .collect(),
+                unattributed: found
+                    .unattributed
+                    .into_iter()
+                    .filter(|entry| inside(&entry.file))
+                    .map(|entry| UnattributedUser {
+                        file: strip_base(base_prefix, &entry.file),
+                        lines: entry.lines,
+                        candidates: entry.candidates,
+                    })
+                    .collect(),
+            });
+        }
+        entries.sort_by_key(|entry| std::cmp::Reverse(entry.users.len()));
+        let unattributed_count =
+            entries.iter().map(|entry| entry.unattributed.len()).sum();
+        Ok(Self {
+            targets: entries,
+            complete: unattributed_count == 0,
+            unattributed_count,
+        })
+    }
+}
+
+/// Split `PATH::NAME`, on the last separator: a name cannot contain one and a path
+/// can, so the last is the only place the split is unambiguous.
+fn symbol_target(spelling: &str) -> anyhow::Result<references::SymbolTarget> {
+    const SHAPE: &str = "write it PATH::NAME, as in src/lib.rs::Resolver";
+    let Some((file, name)) = spelling.rsplit_once("::") else {
+        anyhow::bail!("`{spelling}` is not a symbol; {SHAPE}");
+    };
+    let (file, name) = (file.trim(), name.trim());
+    if file.is_empty() || name.is_empty() {
+        anyhow::bail!("`{spelling}` is not a symbol; {SHAPE}");
+    }
+    Ok(references::SymbolTarget {
+        file: file.replace('\\', "/"),
+        name: name.to_owned(),
+    })
+}
+
+/// Shorten a path against the analysis base, so the answer reads like the command
+/// line that produced it rather than like an absolute path an agent cannot use.
+fn strip_base(base_prefix: &str, file: &str) -> String {
+    file.strip_prefix(base_prefix)
+        .unwrap_or(file)
+        .trim_start_matches('/')
+        .to_owned()
+}
+
+/// The Markdown rendering, compact enough for an agent's context.
+fn symbol_markdown(report: &SymbolReport) -> String {
+    let mut out = String::new();
+    for entry in &report.targets {
+        let _ = writeln!(out, "## `{}::{}`", entry.file, entry.name);
+        if entry.users.is_empty() {
+            out.push_str(
+                "
+_No references._
+
+",
+            );
+        } else {
+            out.push_str(
+                "
+| attribution | file | lines |
+|---|---|---|
+",
+            );
+            for user in &entry.users {
+                let _ = writeln!(
+                    out,
+                    "| {} | `{}` | {} |",
+                    user.via,
+                    user.file,
+                    user.lines
+                        .iter()
+                        .map(ToString::to_string)
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+            out.push('\n');
+        }
+        for unplaced in &entry.unattributed {
+            let _ = writeln!(
+                out,
+                "> unplaced: `{}` -- {} files declare the name",
+                unplaced.file, unplaced.candidates
+            );
+        }
+        out.push('\n');
+    }
+    if !report.complete {
+        let _ = writeln!(
+            out,
+            "**Incomplete.** {} mention(s) named this symbol without being \
+             attributable to it. Treat the radii above as a lower bound.",
+            report.unattributed_count
+        );
+    }
+    out.trim_end().to_owned()
 }
 
 /// The JSON shape the `impact` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct ImpactReport {
     /// One entry per file asked about, widest blast radius first.
     pub targets: Vec<ImpactEntry>,
@@ -445,7 +756,7 @@ pub struct ImpactReport {
 /// has no exit code, so the distinction has to survive as a field instead --
 /// returning an error here would collapse exactly those two cases, and would cost
 /// the caller the measurement that triggered it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct ImpactGate {
     /// The threshold that was requested.
     pub fail_on: u64,
@@ -460,7 +771,7 @@ pub struct ImpactGate {
 }
 
 /// One target that crossed the threshold.
-#[derive(serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct ImpactViolation {
     /// The file whose blast radius was too wide.
     pub target: String,
@@ -469,7 +780,7 @@ pub struct ImpactViolation {
 }
 
 /// One file's blast radius.
-#[derive(serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct ImpactEntry {
     /// The file the radius was measured from, spelled as the graph spells it.
     pub target: String,
@@ -483,7 +794,7 @@ pub struct ImpactEntry {
 }
 
 /// One dependent of a target.
-#[derive(serde::Serialize, schemars::JsonSchema)]
+#[derive(Debug, serde::Serialize, schemars::JsonSchema)]
 pub struct ImpactDependent {
     /// Path of the file that imports the target.
     pub file: String,
@@ -696,3 +1007,35 @@ pub async fn run_mcp_server() -> anyhow::Result<()> {
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod tool_tests {
+    use super::*;
+
+    /// Every tool the router publishes.
+    ///
+    /// Lives here rather than in `tests/` because the router is `#[cfg(test)]`
+    /// inside the module, so an integration test cannot reach it -- and
+    /// widening the production surface for a test is the wrong trade for a
+    /// method nothing else calls.
+    #[test]
+    fn the_references_tool_is_in_the_published_schema() {
+        let names = SepheraServer::new().registered_tool_names();
+        assert!(
+            names.iter().any(|name| name == "references"),
+            "the tool is not in the published schema: {names:?}"
+        );
+    }
+
+    /// An agent that asked for a format it does not get would parse the wrong
+    /// shape and not know, so the refusal is the behaviour rather than an
+    /// inconvenience.
+    #[test]
+    fn an_unsupported_format_is_refused_rather_than_silently_changed() {
+        let names = SepheraServer::new().registered_tool_names();
+        assert!(
+            names.iter().any(|name| name == "references"),
+            "the tool disappeared, so this test would pass for the wrong reason"
+        );
+    }
+}

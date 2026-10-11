@@ -1,21 +1,23 @@
 //! MCP (Model Context Protocol) server for Sephera.
 //!
 //! This crate exposes Sephera's core capabilities -- line-of-code analysis,
-//! declaration counts, context pack generation, dependency graph analysis, and
-//! blast-radius reporting -- as MCP tools over a `stdio` transport.
+//! declaration counts, context pack generation, dependency graph analysis,
+//! blast-radius reporting, and symbol-level reference resolution -- as MCP tools
+//! over a `stdio` transport.
 //!
 //! AI agents such as Claude Desktop, Cursor, and other MCP-capable clients can
 //! discover and invoke these tools through the standard Model Context Protocol.
 //!
 //! # Supported tools
 //!
-//! | Tool      | Description                                       |
-//! |-----------|---------------------------------------------------|
-//! | `loc`     | Count lines of code per language in a directory    |
-//! | `symbols` | Count declarations per language from parse trees  |
-//! | `context` | Build an LLM-ready context pack                    |
-//! | `graph`   | Map file dependencies and answer reverse queries   |
-//! | `impact`  | Report what breaks if one or more files change     |
+//! | Tool         | Description                                       |
+//! |--------------|---------------------------------------------------|
+//! | `loc`        | Count lines of code per language in a directory    |
+//! | `symbols`    | Count declarations per language from parse trees  |
+//! | `context`    | Build an LLM-ready context pack                    |
+//! | `graph`      | Map file dependencies and answer reverse queries   |
+//! | `impact`     | Report what breaks if one or more files change     |
+//! | `references` | Report which files reference one declaration       |
 //!
 //! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
 //! the CLI exactly: the same arguments produce the same file set, because an
@@ -27,6 +29,19 @@
 //! meant the most actionable question the tool can answer was the hardest one
 //! to ask. The counting lives in `sephera_graph::blast_radius` and
 //! is shared with the `impact` command, so the two cannot disagree.
+//!
+//! `references` is the same idea one level down. `impact` measures a file; this
+//! measures one name inside it, which is the question an agent actually has when
+//! it is about to change a struct or a function rather than a whole module. The
+//! symbol is spelled `PATH::NAME` and a bare name is refused, because the same
+//! name is often declared in two crates and naming the file is what makes it one
+//! question. The report carries `complete: false` whenever a mention could not be
+//! attributed, so a short answer can be told apart from an incomplete one -- which
+//! is the difference an agent needs before reporting a radius as final.
+//!
+//! Both tools share their analysis with the CLI: `sephera_graph::blast_radius`
+//! and `sephera_graph::references` respectively, so a terminal and an agent asking
+//! the same question get the same answer rather than two that may drift.
 //!
 //! # Quick start
 //!
@@ -50,7 +65,7 @@ mod input;
 mod render;
 mod server;
 
-pub use server::{SepheraServer, run_mcp_server};
+pub use server::{SepheraServer, SymbolReport, run_mcp_server};
 
 #[cfg(test)]
 mod tests {
