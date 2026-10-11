@@ -38,6 +38,7 @@ export function FileViewer() {
   const selected = useClient((state) => state.selected);
   const colours = useSyntaxColours(text, selected);
   const { theme } = useTheme();
+  const setCaret = useClient((state) => state.setCaret);
 
   if (!selected) return null;
 
@@ -59,9 +60,17 @@ export function FileViewer() {
 
   return (
     <div className={styles.viewer}>
-      <div className={styles.viewer__scroll}>
+      <div
+        className={styles.viewer__scroll}
+        onMouseMove={(event) => onMove(event, setCaret)}
+        onMouseLeave={() => setCaret({ line: 1, column: 1 })}
+      >
         {shown.map((line, index) => (
-          <div className={styles.viewer__line} key={index}>
+          <div
+            className={styles.viewer__line}
+            key={index}
+            data-line={index + 1}
+          >
             <span className={styles.viewer__number} aria-hidden="true">
               {index + 1}
             </span>
@@ -119,21 +128,28 @@ function Painted({
 }
 
 /**
- * The colours that describe the same lines `shown` numbers.
+ * The colours that describe the same lines `shown` numbers, or `null` if none do.
  *
- * Two partitions of one file, and they differ by one in the ordinary case. The
- * highlighter splits on `\n` and keeps the empty line a file's final newline
- * creates -- so `"fn f() {}\n"` is two arrays to it. This viewer's numbering drops
- * that empty, because an editor does not number it. Comparing one against the
- * other directly meant the guard was never satisfied for a file ending in a
- * newline, which is nearly every source file: the viewer fell back to plain text
- * every time, and no amount of correct highlighting would have shown it.
+ * Three partitions of one file have to agree before any of it is safe to draw, and
+ * the first two are the ones that cost a real bug:
  *
- * So the trailing empty is dropped from the colour side, once, and only when the
- * text really does end on a newline. The count is then checked rather than
- * assumed: a highlighter that partitions the text some *genuinely* different way
- * still yields `null`, and the viewer shows plain text rather than putting file
- * content under the wrong line number.
+ * - The highlighter splits on `\n` and *keeps* the empty line a file's final
+ *   newline creates, so `"fn f() {}\n"` is two arrays to it. The viewer's
+ *   numbering drops that empty, because an editor does not number it. Comparing the
+ *   two directly meant this never matched for a file ending in a newline -- nearly
+ *   every source file -- and no amount of correct highlighting would have shown.
+ *   Hence the trim.
+ * - A file with `\r\n` endings has its `\r` dropped by the highlighter, which
+ *   strips it as part of the line break. Normalising those away on the way in is
+ *   what makes the two sides describe the same text.
+ * - And a count that agrees is not a partition that agrees: two sequences of equal
+ *   length can still be offset by a line, and a one-line offset is exactly the
+ *   reported symptom -- a comment's colour sitting on the code beneath it. So each
+ *   line's text is checked, not just how many lines there are.
+ *
+ * The fallback is plain text, and it is reported once. A silent fallback is a
+ * fallback nobody can fix, and this one exists because a failure here is invisible
+ * until somebody reads a file and sees the wrong colour.
  */
 function alignSpans(
   text: string,
@@ -141,8 +157,71 @@ function alignSpans(
   shown: readonly string[],
 ): Spans[] | null {
   if (colours === null || colours.length === 0) return null;
+
   const aligned = text.endsWith("\n") ? colours.slice(0, -1) : colours;
-  return aligned.length === shown.length ? aligned : null;
+  if (aligned.length !== shown.length) return null;
+
+  for (let index = 0; index < aligned.length; index += 1) {
+    const joined = aligned[index].map((span) => span.text).join("");
+    if (joined !== shown[index]) {
+      console.warn(
+        `sephera: the highlight for line ${index + 1} does not match its text; ` +
+          "showing the file without colour.",
+      );
+      return null;
+    }
+  }
+  return aligned;
+}
+
+/** Where the pointer is, as a line and a column.
+ *
+ * The row under the pointer gives the line; `caretRangeFromPoint` gives the offset
+ * into it, and the offset is the column. Both APIs are Chromium/WebKit's, which is
+ * what Tauri ships on Windows and Linux -- the one place this runs.
+ *
+ * A row that is empty still reports a column, because the pointer landed
+ * somewhere: column 1 is the only honest answer for a line with nothing in it. */
+function onMove(
+  event: React.MouseEvent<HTMLDivElement>,
+  setCaret: (caret: { line: number; column: number }) => void,
+): void {
+  const row = (event.target as HTMLElement).closest("[data-line]");
+  if (!(row instanceof HTMLElement)) return;
+
+  const line = Number(row.dataset.line);
+  const text = row.querySelector("[class*=viewer__text]");
+  const column = columnAt(text, event.clientX, event.clientY);
+  if (Number.isFinite(line) && column > 0) setCaret({ line, column });
+}
+
+/** The 1-based column at the pointer's position inside one line's text.
+ *
+ * Both coordinates, not just x: `caretRangeFromPoint` needs the point, and a y of
+ * 0 asks about the top of the document, which is some other line entirely. */
+function columnAt(
+  box: Element | null,
+  clientX: number,
+  clientY: number,
+): number {
+  if (!box) return 0;
+  const range = document.caretRangeFromPoint(clientX, clientY);
+  if (!range) return 0;
+
+  // The offset is into whatever text node the point landed in, which for a
+  // highlighted line is one token span's text. Walking the line's text nodes and
+  // summing the ones before it is what turns that into a column.
+  let column = 0;
+  const walker = document.createTreeWalker(box, NodeFilter.SHOW_TEXT);
+  let node = walker.nextNode();
+  while (node) {
+    if (node === range.startContainer) {
+      return column + range.startOffset + 1;
+    }
+    column += node.textContent?.length ?? 0;
+    node = walker.nextNode();
+  }
+  return column + 1;
 }
 
 /**

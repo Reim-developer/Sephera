@@ -1,0 +1,40 @@
+// The status bar, at the foot of the workbench.
+//
+// Three readings and a file name, in the order a reader scans them: what is open,
+// what it is written in, how its lines end, and where the pointer is. Nothing
+// here is clickable -- this is a read-only tool, and a bar of buttons at the
+// bottom of a read-only window is a bar of things that do nothing.
+//
+// The colour is the accent border rather than a filled panel: a filled bar at the
+// bottom of a dark window is the loudest thing in it, and this bar is a caption.
+
+@use "tokens" as t;
+
+.status {
+  display: flex;
+  align-items: center;
+  gap: 18px;
+  height: 22px;
+  padding: 0 10px;
+  border-top: 1px solid t.$panel-border;
+  background: t.$tabs-bg;
+  color: t.$text-muted;
+  font-size: 11.5px;
+  // The bar is one row, and a long file name is elided rather than wrapped: a
+  // status bar that changes height is a status bar that moves the content above it.
+  white-space: nowrap;
+  overflow: hidden;
+}
+
+.status__item {
+  // A reading, not a label: no uppercase transform, because the numbers are what
+  // matters and shouting them makes them harder to read.
+  font-variant-numeric: tabular-nums;
+
+  &:last-child {
+    // The pointer position is the one a reader looks for last and returns to, so
+    // it sits at the far edge where a cursor is already resting.
+    margin-left: auto;
+    color: t.$text-normal;
+  }
+}

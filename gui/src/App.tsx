@@ -8,6 +8,7 @@ import { PanelResizer } from "@/components/PanelResizer";
 import { FileViewer } from "@/components/FileViewer";
 import { ProgressModal } from "@/components/ProgressModal";
 import { SettingsPanel } from "@/components/SettingsPanel";
+import { StatusBar } from "@/components/StatusBar";
 import { TopNav } from "@/components/TopNav";
 import { QueryRow } from "@/views/QueryRow";
 import { useGeneration } from "@/hooks/useAnalysis";
@@ -141,6 +142,8 @@ export function App() {
           )}
         </main>
       </div>
+
+      <StatusBar />
 
       <ProgressModal label={LABELS[view] ?? "Working…"} />
     </div>

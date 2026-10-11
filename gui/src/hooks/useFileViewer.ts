@@ -44,6 +44,21 @@ export interface FileViewerData {
  * wheel. */
 const CHUNK_BYTES = 64 * 1024;
 
+/** One file's text, with `\r\n` written as `\n`.
+ *
+ * A file with Windows endings is one the highlighter reads differently: it treats
+ * `\r\n` as the line break and drops the `\r`, so a line the viewer would call
+ * `"code\r"` arrives as `"code"`. Every line then disagrees with its own colour
+ * -- which is a mismatch the line *count* cannot see, because both sides count the
+ * same number of lines.
+ *
+ * A lone `\r` is left alone: it is either a line ending from before OS X, which no
+ * grammar here speaks, or a carriage return inside a string literal, which is the
+ * file's business. */
+function normaliseEndings(text: string): string {
+  return text.includes("\r") ? text.replace(/\r\n/g, "\n") : text;
+}
+
 /**
  * Read the selected file, a window at a time.
  *
@@ -81,7 +96,7 @@ export function useFileViewer(): FileViewerData {
           CHUNK_BYTES,
         );
         if (cancelled) return;
-        setText(first.text);
+        setText(normaliseEndings(first.text));
         setLoaded(first.bytes);
         setTotal(first.total);
       } catch (cause) {
@@ -106,7 +121,10 @@ export function useFileViewer(): FileViewerData {
           loaded,
           step,
         );
-        setText((previous) => previous + next.text);
+        // The new chunk is normalised as it arrives, so the two halves join
+        // cleanly: a CRLF pair split across a chunk boundary would otherwise
+        // survive as a stray carriage return beside a newline.
+        setText((previous) => previous + normaliseEndings(next.text));
         setLoaded(next.bytes);
       } catch (cause) {
         setError(String(cause));

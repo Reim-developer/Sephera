@@ -62,6 +62,8 @@ export interface ClientState {
   view: ViewId;
   /** How wide the declarations panel is, in pixels. */
   panelWidth: number;
+  /** Where the pointer is in the file being read, for the status bar. */
+  caret: { line: number; column: number };
   /** Which side panel is showing, or `null` for none. */
   panel: PanelId | null;
 
@@ -86,6 +88,8 @@ export interface ClientState {
   togglePanel: (panel: PanelId) => void;
   /** How wide the declarations panel is. */
   setPanelWidth: (width: number) => void;
+  /** Move the caret the status bar reports. */
+  setCaret: (caret: { line: number; column: number }) => void;
   /** Run the showing analysis again. */
   recompute: () => void;
   /** Run every analysis, for a directory or pattern change. */
@@ -259,6 +263,7 @@ export const useClient = create<ClientState>((set, get) => ({
   view: "loc",
   panel: null,
   panelWidth: 320,
+  caret: { line: 1, column: 1 },
   loc: never<LocView>(),
   symbols: never<SymbolReport>(),
   graph: never<GraphReport>(),
@@ -319,6 +324,8 @@ export const useClient = create<ClientState>((set, get) => ({
     const { panel: current } = get();
     set({ panel: current === panel ? null : panel });
   },
+
+  setCaret: (caret) => set({ caret }),
 
   setPanelWidth: (width) => {
     // Clamped here rather than at the drag site, so a caller that is not a drag

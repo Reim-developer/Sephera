@@ -53,8 +53,6 @@ export function FilePanel() {
 
   if (!data) return null;
 
-  const share = data.code ? 100 : 0;
-
   return (
     <div className={styles.panel}>
       <header className={styles.panel__header}>
@@ -115,10 +113,6 @@ export function FilePanel() {
           No declarations found in this file.
         </p>
       )}
-
-      <div className={styles.panel__bar}>
-        <span>{share}% of this file is code</span>
-      </div>
     </div>
   );
 }

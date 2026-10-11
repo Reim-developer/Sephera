@@ -55,16 +55,29 @@ function show(path: string) {
   return render(<FileViewer />);
 }
 
-/** The inline style of the token bearing `text`, as the browser holds it. */
+/** The inline style of the token bearing `text`, as the browser holds it.
+ *
+ * The first of them, because the viewer renders one row per line and `getByText`
+ * would ask for one match where a file has many. A whitespace-only token is not
+ * addressable this way at all, so the fixtures avoid them. */
 function styleOf(text: string): string {
-  return screen.getByText(text).getAttribute("style") ?? "";
+  return screen.getAllByText(text)[0].getAttribute("style") ?? "";
 }
 
-/** One line, two tokens, a different colour in each theme. */
+/** One line, three tokens, a different colour in each theme.
+ *
+ * The text is exactly the source line it stands for -- the guard now checks that,
+ * so a fixture that does not spell the line correctly would fail the guard rather
+ * than the assertion, and the failure would read as a highlighter bug rather than
+ * as a stale fixture.
+ *
+ * There is no whitespace-only token, because `getByText` normalises whitespace and
+ * an element holding only a space matches nothing. */
 function oneColouredLine(): Spans {
   return [
     { text: "let", dark: "#569cd6", light: "#0000ff", italic: false, bold: false },
-    { text: "s", dark: "#d4d4d4", light: "#000000", italic: false, bold: false },
+    { text: " ", dark: "#d4d4d4", light: "#000000", italic: false, bold: false },
+    { text: "s = 1;", dark: "#4fc1ff", light: "#0070c1", italic: false, bold: false },
   ];
 }
 
@@ -119,7 +132,7 @@ describe("the viewer's highlighting", () => {
     // React writes `#569cd6` as `rgb(86, 156, 214)`, so the hex form is not what
     // the attribute holds.
     expect(styleOf("let")).toContain("color: rgb(86, 156, 214)");
-    expect(styleOf("s")).toContain("color: rgb(212, 212, 212)");
+    expect(styleOf("s = 1;")).toContain("color: rgb(79, 193, 255)");
   });
 
   it("paints in the light theme's colour when that is the theme", async () => {
@@ -143,6 +156,7 @@ describe("the viewer's highlighting", () => {
     withColours("src/a.rs", [
       [
         { text: "fn", dark: "#569cd6", light: "#0000ff", italic: false, bold: false },
+        { text: " ", dark: "#d4d4d4", light: "#000000", italic: false, bold: false },
         { text: "f", dark: null, light: null, italic: true, bold: true },
       ],
       [],

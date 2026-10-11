@@ -33,6 +33,12 @@ pub struct FileDetail {
     pub size_bytes: u64,
     /// The language it was counted as, or `None` when the extension is unknown.
     pub language: Option<String>,
+    /// `LF` or `CRLF`: how the file ends its lines.
+    ///
+    /// Read from the first line ending found, because that is the convention the
+    /// file follows. A file with no line ending at all is reported as `LF`, which
+    /// is what a reader's own convention almost always is.
+    pub eol: String,
     /// Its declarations, in source order.
     pub declarations: Vec<FileDeclaration>,
 }
@@ -91,6 +97,7 @@ pub async fn file_detail(root: String, path: String) -> Result<FileDetail, Strin
             empty: metrics.empty_lines,
             size_bytes: metrics.size_bytes,
             language: matched.map(|(_, config)| config.name.to_owned()),
+            eol: line_ending(&bytes).to_owned(),
             declarations,
         })
     })
@@ -141,6 +148,20 @@ fn declarations_of(absolute: &Path) -> Vec<FileDeclaration> {
     declarations.sort_by_key(|declaration| declaration.line);
     declarations
 }
+/// How a file's lines end, from the first line ending it contains.
+///
+/// The first one, rather than the last or the majority: a file that opens with
+/// CRLF is a Windows file, and a stray LF somewhere in the middle does not change
+/// that.
+fn line_ending(bytes: &[u8]) -> &'static str {
+    for pair in bytes.windows(2) {
+        if pair == b"\r\n" {
+            return "CRLF";
+        }
+    }
+    "LF"
+}
+
 /// The per-file command's own tests.
 ///
 /// One test, and it is the bug that shipped. `declarations_of` filtered the
@@ -196,6 +217,31 @@ mod tests {
         // The relative path is what the caller held, and it is not what the
         // filter compares against any more.
         assert!(relative.contains('/'), "{relative}");
+    }
+
+    #[test]
+    fn a_file_with_lf_endings_reports_lf() {
+        assert_eq!(line_ending(b"fn a() {}\nfn b() {}\n"), "LF");
+    }
+
+    #[test]
+    fn a_file_with_crlf_endings_reports_crlf() {
+        assert_eq!(line_ending(b"fn a() {}\r\nfn b() {}\r\n"), "CRLF");
+    }
+
+    /// The bug that shipped: checking only for `\n` reported `CRLF` for every file
+    /// that had one, which is every file.
+    #[test]
+    fn the_carriage_return_is_what_makes_the_difference() {
+        assert_ne!(
+            line_ending(b"fn a() {}\n"),
+            line_ending(b"fn a() {}\r\n"),
+        );
+    }
+
+    #[test]
+    fn a_file_with_no_line_ending_reports_lf() {
+        assert_eq!(line_ending(b"fn a() {}"), "LF");
     }
 
     #[test]

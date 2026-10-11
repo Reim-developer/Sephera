@@ -26,9 +26,12 @@
 
 .workbench {
   display: grid;
-  // The navigation bar is a single row that takes what it needs, and everything
-  // else shares one row that is allowed to shrink.
-  grid-template-rows: auto minmax(0, 1fr);
+  // Three rows: the navigation bar, the body, and the status bar. Only the middle
+  // one may grow, so the bars stay where they are whatever the content does.
+  //
+  // The status bar lives in the shell rather than in the content area, so opening
+  // a file does not take it with it -- the same reason the navigation bar is here.
+  grid-template-rows: auto minmax(0, 1fr) auto;
   // One column, and it is `minmax(0, 1fr)` rather than the implicit `auto`
   // this grid used to have. That distinction is the whole fix for content
   // overflowing into the panel: an `auto` track's growth limit is its items'

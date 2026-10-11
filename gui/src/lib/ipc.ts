@@ -172,6 +172,8 @@ export interface FileDetail {
   size_bytes: number;
   /** `null` when the extension is not a bundled language. */
   language: string | null;
+  /** `LF` or `CRLF`: how the file ends its lines. */
+  eol: string;
   declarations: FileDeclaration[];
 }
 

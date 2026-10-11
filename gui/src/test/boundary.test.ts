@@ -80,6 +80,13 @@ describe("the Rust side and the TypeScript side", () => {
     expect(tsFields("GraphReport")).toEqual(fieldsOf(source, "GraphReport"));
   });
 
+  it("FileDetail's JSON keys are the keys ipc.ts reads", () => {
+    // The struct the per-file panel reads, which no other interface was checked
+    // against -- and the one that grew an `eol` field, so the parity matters.
+    const source = rust("gui/src-tauri/src/commands/file.rs");
+    expect(tsFields("FileDetail")).toEqual(fieldsOf(source, "FileDetail"));
+  });
+
   it("every command Rust registers is one the services call", () => {
     const host = [
       "crates/sephera_gui/src",

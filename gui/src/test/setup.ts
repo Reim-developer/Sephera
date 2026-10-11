@@ -133,6 +133,7 @@ export function fileDetail(): FileDetail {
     empty: 4,
     size_bytes: 220,
     language: "Rust",
+    eol: "LF",
     declarations: [
       { name: "Widget", kind: "types", line: 4 },
       { name: "run", kind: "functions", line: 12 },

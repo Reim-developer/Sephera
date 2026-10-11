@@ -51,11 +51,16 @@ function show(path: string) {
 function styleOf(text: string): string {
   return screen.getAllByText(text)[0].getAttribute("style") ?? "";
 }
-/** Two tokens, a different colour in each theme. */
-function token(dark: string, light: string) {
+/** One line's tokens, spelled exactly as the source line.
+ *
+ * The guard checks each painted line against its own text, so a fixture that does
+ * not spell the line correctly fails the guard rather than the assertion -- and
+ * the failure reads as a highlighter bug rather than as a stale fixture. */
+function token(name: string, dark = "#569cd6", light = "#0000ff") {
   return [
-    { text: "fn", dark, light, italic: false, bold: false },
-    { text: "f", dark: "#d4d4d4", light: "#000000", italic: false, bold: false },
+    { text: "fn ", dark, light, italic: false, bold: false },
+    { text: name, dark: "#dcdcaa", light: "#795e26", italic: false, bold: false },
+    { text: "() {}", dark: "#d4d4d4", light: "#000000", italic: false, bold: false },
   ];
 }
 beforeEach(() => {
@@ -74,7 +79,7 @@ describe("the viewer, painting a file that ends in a newline", () => {
     // *three* arrays: the second line, the empty line after the last newline, and
     // nothing else. The viewer numbers two.
     oneRead("fn f() {}\nfn g() {}\n");
-    withColours("src/a.rs", [token("#569cd6", "#0000ff"), token("#569cd6", "#0000ff"), []]);
+    withColours("src/a.rs", [token("f"), token("g"), []]);
     await act(async () => {
       show("src/a.rs");
     });
@@ -90,7 +95,7 @@ describe("the viewer, painting a file that ends in a newline", () => {
     // Three arrays for two lines and no trailing empty: the count is now
     // genuinely off, and the guard has to hold.
     oneRead("fn f() {}\nfn g() {}\n");
-    withColours("src/a.rs", [token("#569cd6", "#0000ff"), token("#569cd6", "#0000ff")]);
+    withColours("src/a.rs", [token("f"), token("g"), [], []]);
     await act(async () => {
       show("src/a.rs");
     });
@@ -102,7 +107,7 @@ describe("the viewer, painting a file that ends in a newline", () => {
     // The other side of the same rule: no final newline, so the highlighter
     // agrees without anything being dropped.
     oneRead("fn f() {}\nfn g() {}");
-    withColours("src/a.rs", [token("#569cd6", "#0000ff"), token("#569cd6", "#0000ff")]);
+    withColours("src/a.rs", [token("f"), token("g")]);
     await act(async () => {
       show("src/a.rs");
     });
