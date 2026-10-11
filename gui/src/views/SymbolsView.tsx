@@ -1,5 +1,10 @@
 import { AlertTriangle } from "lucide-react";
 
+import {
+  DataTable,
+  SYMBOL_COLUMNS,
+  type DataRow,
+} from "@/components/DataTable";
 import { ProgressBar } from "@/components/ProgressBar";
 import { useGeneration, useSymbols } from "@/hooks/useAnalysis";
 import type { SymbolReport } from "@/lib/ipc";
@@ -20,6 +25,12 @@ const KINDS = [
  * rows the CLI prints. The reason to care in a GUI is the *shape*: a language's
  * four counts side by side say how a codebase divides between behaviour and
  * vocabulary, which a line count cannot.
+ *
+ * It renders through the shared `DataTable`, which it did not do before. The view
+ * hand-built its own `<table>` -- thirteen lines of header and cell markup -- and
+ * so had no frozen header, no share bar, and no way to reorder the languages. All
+ * three come from the component now, and the markup that got the table is the
+ * mapping that got deleted.
  */
 export function SymbolsView() {
   const { data, error, busy } = useSymbols();
@@ -48,7 +59,16 @@ export function SymbolsView() {
     );
   }
   if (!data) return null;
+
+  // The generation is read here rather than in a dependency array, because there
+  // is no effect to depend on anything. Its value is what makes the render happen.
   void generation;
+
+  // The share is of *declarations*, not of code: a language holding a quarter of
+  // every `fn` in the tree is a different claim from a quarter of its lines, and
+  // conflating the two is how a share column comes to lie. The table never learns
+  // which total it is dividing by.
+  const all = sumOf(data.totals) || 1;
 
   return (
     <div className={styles.view}>
@@ -63,63 +83,51 @@ export function SymbolsView() {
         </p>
       </header>
 
-      {data.by_language.length === 0 ? (
-        <p className={styles.table__empty}>No declarations found.</p>
-      ) : (
-        <table className={styles.table}>
-          <caption className="sr-only">Declarations by language</caption>
-          <thead>
-            <tr>
-              <th scope="col">Language</th>
-              {KINDS.map((entry) => (
-                <th key={entry.kind} scope="col" className="numeric">
-                  {entry.label}
-                </th>
-              ))}
-              <th scope="col" className="numeric">
-                Total
-              </th>
-            </tr>
-          </thead>
-          <tbody>
-            {data.by_language.map((language) => (
-              <tr key={language.language}>
-                <td>{language.language}</td>
-                {KINDS.map((entry) => (
-                  <td key={entry.kind} className="numeric">
-                    {(language.counts[entry.kind] ?? 0).toLocaleString()}
-                  </td>
-                ))}
-                <td className="numeric">
-                  {total(language).toLocaleString()}
-                </td>
-              </tr>
-            ))}
-            <tr className={styles.table__totals}>
-              <td>Totals</td>
-              {KINDS.map((entry) => (
-                <td key={entry.kind} className="numeric">
-                  {(data.totals[entry.kind] ?? 0).toLocaleString()}
-                </td>
-              ))}
-              <td className="numeric">
-                {KINDS.reduce(
-                  (sum, entry) => sum + (data.totals[entry.kind] ?? 0),
-                  0,
-                ).toLocaleString()}
-              </td>
-            </tr>
-          </tbody>
-        </table>
-      )}
+      <DataTable
+        caption="Declarations by language"
+        firstColumn="Language"
+        columns={SYMBOL_COLUMNS}
+        rows={data.by_language.map(toLanguageRow)}
+        totals={{
+          label: "Totals",
+          values: valuesOf(data.totals),
+        }}
+        emptyMessage="No declarations found."
+        shareOf={(row) => (row.values.total ?? 0) / all}
+        shareLabel="Share of declarations"
+      />
     </div>
   );
 }
 
-/** A language's four kinds summed, for its own total column. */
-function total(language: SymbolReport["by_language"][number]): number {
-  return KINDS.reduce(
-    (sum, entry) => sum + (language.counts[entry.kind] ?? 0),
-    0,
-  );
+/** The four kinds summed, for the share divisor. */
+function sumOf(counts: Partial<Record<string, number>>): number {
+  return KINDS.reduce((sum, { kind }) => sum + (counts[kind] ?? 0), 0);
 }
+
+/** A per-language row in the shape the shared table renders. */
+function toLanguageRow(
+  language: SymbolReport["by_language"][number],
+): DataRow {
+  return { label: language.language, values: valuesOf(language.counts) };
+}
+
+/**
+ * The four kinds, plus their sum, in the shape the table reads.
+ *
+ * `total` is a fifth key rather than something the table computes, because the
+ * table has no opinion about what a row's numbers sum to -- and the share column
+ * needs it as a number it can divide, not as a heading it would have to re-add.
+ */
+function valuesOf(counts: Partial<Record<string, number>>): Record<string, number> {
+  const values: Record<string, number> = {};
+  let sum = 0;
+  for (const { kind } of KINDS) {
+    const count = counts[kind] ?? 0;
+    values[kind] = count;
+    sum += count;
+  }
+  values.total = sum;
+  return values;
+}
+

@@ -10,6 +10,10 @@
 // a header that is visually distinct from the body, numeric columns that align
 // digit-for-digit, a totals row that reads as the sum of what is above it, and a
 // row separation that a long table needs and a short one does not object to.
+//
+// Sortable, so the header is a control rather than a caption. That is what the
+// `.head__button` rules below are for: a header that can be clicked and does not
+// look it is a header that has to be discovered.
 
 @use "tokens" as t;
 
@@ -39,6 +43,9 @@ $row-rule: 1px solid t.$border-subtle;
     font-size: 11px;
     text-transform: uppercase;
     letter-spacing: 0.05em;
+    // Right-aligned by the column, left-aligned by the header: the header is a
+    // label and the label belongs to the side of the column that is not the
+    // digits.
     text-align: left;
     white-space: nowrap;
     border-bottom: 1px solid t.$widget-border;
@@ -85,6 +92,51 @@ $row-rule: 1px solid t.$border-subtle;
 .table__empty {
   padding: 28px 4px;
   color: t.$text-muted;
+}
+
+// ---- sortable headers ----------------------------------------------------
+
+// The header's clickable area. A `<button>` rather than a click on the `<th>`,
+// because a click handler on a `<th>` is announced to nobody: no focus, no
+// keyboard, no role. The button carries all three and costs nothing.
+.head__button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  border: 0;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  letter-spacing: inherit;
+  text-transform: inherit;
+  cursor: pointer;
+
+  // Right-aligned columns sort on a button that is also right-aligned, so the
+  // arrow lands at the digit end rather than floating in the middle.
+  .numeric & {
+    justify-content: flex-end;
+  }
+
+  &:hover {
+    color: t.$text-bright;
+  }
+
+  &:focus-visible {
+    outline: 1px solid t.$focus-border;
+    outline-offset: 2px;
+  }
+}
+
+// The arrow, absent from the flow until it means something: an un-sorted column
+// shows a faint up-down glyph, and the sorted one shows a solid direction. Both
+// are `aria-hidden` and the state is on the header's `aria-sort` instead, so a
+// screen reader reads the state and a sighted reader sees the shape.
+.head__arrow {
+  font-size: 9px;
+  opacity: 0.55;
 }
 
 // A numeric column, right-aligned. Applied as a class rather than through

@@ -1,6 +1,10 @@
 import { AlertTriangle } from "lucide-react";
 
-import { DataTable, type DataRow } from "@/components/DataTable";
+import {
+  DataTable,
+  LOC_COLUMNS,
+  type DataRow,
+} from "@/components/DataTable";
 import { ProgressBar } from "@/components/ProgressBar";
 import { useGeneration, useLoc } from "@/hooks/useAnalysis";
 import type { LocView } from "@/lib/ipc";
@@ -50,7 +54,10 @@ export function LocView() {
   // is no effect to depend on anything. Its value is what makes the render happen.
   void generation;
 
+  // The share of code each language holds. `|| 1` because a report with no code
+  // has nothing to divide by, and `Infinity%` is not an answer.
   const total = data.totals.code || 1;
+
 
   return (
     <div className={styles.view}>
@@ -65,10 +72,11 @@ export function LocView() {
       <DataTable
         caption="Lines of code by language"
         firstColumn="Language"
+        columns={LOC_COLUMNS}
         rows={data.rows.map(toDataRow)}
         totals={toDataRow(data.totals)}
         emptyMessage="No source files found."
-        shareOf={(row) => row.code / total}
+        shareOf={(row) => (row.values.code ?? 0) / total}
         shareLabel="Share of code"
       />
     </div>
@@ -78,10 +86,12 @@ export function LocView() {
 /** A view-model row in the shape the shared table renders. */
 function toDataRow(row: LocView["rows"][number]): DataRow {
   return {
-    language: row.language,
-    code: row.code,
-    comment: row.comment,
-    empty: row.empty,
-    bytes: row.size_bytes,
+    label: row.language,
+    values: {
+      code: row.code,
+      comment: row.comment,
+      empty: row.empty,
+      size: row.size_bytes,
+    },
   };
 }
