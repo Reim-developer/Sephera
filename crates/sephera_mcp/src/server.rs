@@ -437,7 +437,7 @@ impl SepheraServer {
     /// a function actually needs to know.
     #[tool(
         name = "references",
-        description = "Report which files reference one or more declarations, written PATH::NAME. This is the symbol-level question `impact` cannot answer: impact measures a file, this measures one name inside it. Run it BEFORE renaming or changing a declaration. The path is required and a bare name is rejected, because the same name is often declared in two crates and naming the file is what makes it one question. Every reference says how it was attributed: `import` means the file's own import path led here through re-exports (evidence), `unique` means one file in the project declares the name and `same_crate` means several do and one is in the caller's crate (arithmetic). The report carries `complete: false` whenever a mention could not be attributed, so a short answer can be told apart from an incomplete one -- check it before reporting a radius as final. Use focus to narrow, depth to limit the chain, and format=markdown for a compact summary."
+        description = "Report which files reference one or more declarations, written PATH::NAME. This is the symbol-level question `impact` cannot answer: impact measures a file, this measures one name inside it. Run it BEFORE renaming or changing a declaration. RUST ONLY: five of the six supported languages have no use extractor, so a non-Rust path is refused rather than answered with nothing -- use `impact` on the file for a file-level radius that works across all six. The path is required and a bare name is rejected, because the same name is often declared in two crates and naming the file is what makes it one question. Every reference says how it was attributed: `import` means the file's own import path led here through re-exports (evidence), `unique` means one file in the project declares the name and `same_crate` means several do and one is in the caller's crate (arithmetic). The report carries `complete: false` whenever a mention could not be attributed, so a short answer can be told apart from an incomplete one -- check it before reporting a radius as final. Use focus to narrow, depth to limit the chain, and format=markdown for a compact summary."
     )]
     #[allow(
         clippy::unused_self,
@@ -600,14 +600,30 @@ impl SymbolReport {
         let mut entries = Vec::new();
         for spelling in symbols {
             let target = symbol_target(spelling)?;
-            let found =
-                references::find(report, facts, &target).map_err(|_| {
+            let found = references::find(report, facts, &target).map_err(|_| {
+                // Two failures wear the same mask here. The file really may not
+                // declare the name, and it may not be Rust at all -- five of the
+                // six languages have no use extractor, so nothing declares
+                // anything in a JavaScript repository. Telling the second apart
+                // matters: an agent that hears "does not declare `init`" concludes
+                // the symbol does not exist and goes looking for it elsewhere,
+                // which is a confident wrong answer that survives review.
+                if is_rust(&target.file) {
+                    // The ordinary failure: right language, wrong name.
                     anyhow::anyhow!(
                         "`{}` does not declare `{}`",
                         target.file,
                         target.name
                     )
-                })?;
+                } else {
+                    anyhow::anyhow!(
+                        "`{}` is not a Rust file, so its names cannot be resolved \\
+                         yet: `references` covers Rust only. Use `impact` on the file \\
+                         for a file-level radius, which works across all six languages.",
+                        target.file
+                    )
+                }
+            })?;
             let inside = |file: &str| {
                 focus.is_empty()
                     || focus.iter().any(|scope| {
@@ -652,6 +668,20 @@ impl SymbolReport {
             unattributed_count,
         })
     }
+}
+
+/// Whether a path is a Rust file, on any platform.
+///
+/// Case-insensitively, because a Windows path may be written `FOO.RS` and a file
+/// named that way is a Rust file. The extension check is the whole of what the
+/// caller can know -- the alternative is to look at the declaration table, which
+/// would make a JavaScript repository look like a tool bug rather than like a
+/// language this tool does not cover yet.
+fn is_rust(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
 }
 
 /// Split `PATH::NAME`, on the last separator: a name cannot contain one and a path

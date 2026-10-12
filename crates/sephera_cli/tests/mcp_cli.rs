@@ -176,6 +176,18 @@ impl Mcp {
         self.stdin.flush().expect("stdin should flush");
     }
 
+    /// Send one line exactly as given, malformed or not.
+    ///
+    /// A JSON-RPC server's first job is to survive bytes it did not choose. An
+    /// agent that crashes mid-edit and reconnects can send a truncated frame, and
+    /// the server has to answer with a protocol error and keep serving rather
+    /// than close the connection -- a close looks like a transport failure to the
+    /// client, and the client has no way to know the payload was at fault.
+    fn send_raw(&mut self, line: &str) {
+        writeln!(self.stdin, "{line}").expect("stdin should accept a line");
+        self.stdin.flush().expect("stdin should flush");
+    }
+
     /// The next line, or `None` when the server closes the connection.
     fn next_line(&mut self) -> Option<String> {
         match self.lines.recv_timeout(REPLY_TIMEOUT) {
@@ -393,5 +405,222 @@ fn the_server_closes_the_connection_when_the_handshake_is_skipped() {
     assert_eq!(
         error["message"], "the server closed the connection",
         "expected a closed pipe rather than an answer: {error}"
+    );
+}
+
+// -- protocol hardening ------------------------------------------------------
+//
+// Everything above drives the requests the server was designed for. These drive
+// the rest of them, which is where a server that works in testing breaks in a
+// session: an agent that crashed mid-edit and reconnects sends a truncated
+// frame, a model writes an argument of the wrong type, and a hallucinated tool
+// name arrives as often as a real one.
+
+/// What the server does today with a malformed frame.
+///
+/// **Documented rather than fixed, and this is the one thing this file asks for a
+/// decision on.** rmcp's stdio transport treats a line it cannot parse as
+/// end-of-input, so the server exits 0 -- cleanly, quietly, mid-session. An agent
+/// that reconnects after a crash sends a truncated frame, gets a dead process,
+/// and reports a transport failure it has no way to attribute.
+///
+/// The fix is a `Transport` of our own whose `receive` reads lines and parses
+/// them, answering `{"error": {"code": -327, "id": null}}` and continuing. It
+/// cannot be a wrapper around `stdio`, because `receive()` returns an `Option`
+/// and a `None` from a parse failure is indistinguishable from a `None` from EOF.
+///
+/// Pinned rather than ignored: the behaviour is real, it is what ships, and a
+/// test that asserts the *desirable* behaviour instead would fail on every run
+/// and train a reader to skip it. The test that fails when this is fixed is the
+/// one below, which is ignored until someone writes the transport.
+#[test]
+fn a_malformed_frame_ends_the_session_quietly_today() {
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    // Three shapes of wrong: not JSON at all, truncated JSON-RPC, and a frame
+    // with no method. Any of them can arrive from a client that crashed mid-write
+    // and reconnected.
+    mcp.send_raw("this is not json");
+
+    let after = mcp.call("tools/list", json!({}));
+    assert!(
+        after.is_err(),
+        "the session does not survive a malformed frame today: {after:?}"
+    );
+}
+
+/// What should happen instead, and the test that fails when it does.
+#[test]
+#[ignore = "the gap is open: needs a custom Transport that survives a bad line"]
+fn a_malformed_frame_should_be_answered_and_the_server_should_keep_serving() {
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    mcp.send_raw("this is not json");
+
+    // A protocol error naming the parse failure, and a live connection after it.
+    let listed = mcp
+        .call("tools/list", json!({}))
+        .expect("the server should still answer after malformed input");
+    assert!(listed["result"]["tools"].is_array());
+}
+
+#[test]
+fn an_unknown_method_is_an_error_not_a_silence() {
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let error = mcp
+        .call("tools/summon", json!({}))
+        .expect_err("an unknown method should be refused");
+
+    // The JSON-RPC code, not just a message: a client distinguishes "this method
+    // does not exist" from "your arguments were wrong", and a tool that gives
+    // both the same string makes that impossible.
+    assert!(
+        error.get("code").is_some(),
+        "a method error carries a code, so a client can react: {error}"
+    );
+}
+
+#[test]
+fn an_unknown_tool_name_is_refused_rather_than_ignored() {
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    // The one an agent hallucinates. Reported as a tool error rather than a
+    // protocol error, because the request was well formed -- it named something
+    // that does not exist, which is a different mistake from a bad parameter.
+    let response = mcp
+        .call(
+            "tools/call",
+            json!({ "name": "refactors", "arguments": {} }),
+        )
+        .expect_err("an unknown tool should be refused");
+    assert!(
+        response.get("message").is_some(),
+        "a named error, so the model can retry with a real tool: {response}"
+    );
+}
+
+#[test]
+fn an_argument_of_the_wrong_type_is_refused_rather_than_coerced() {
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    // `files` is an array. A model that writes it as a string is wrong, and
+    // silently coercing would answer a question about a file called "a.rs b.rs"
+    // -- which is the kind of confident wrong answer that survives review.
+    //
+    // The assertion is that it is refused, not that the message names the field.
+    // The wording comes from the deserialiser this workspace does not own, and a
+    // test pinned to it would fail on a dependency bump without the behaviour
+    // changing.
+    let error = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "impact",
+                "arguments": { "files": "src/wide.rs", "path": "." }
+            }),
+        )
+        .expect_err("a string where an array is wanted should be refused");
+
+    let message = error["message"].as_str().unwrap_or_default();
+    assert!(
+        message.contains("expected a sequence"),
+        "the error should say the shape was wrong, so the model can fix it: {message}"
+    );
+}
+
+#[test]
+fn references_answers_over_the_protocol() {
+    // The one tool with no protocol-level test. Its unit tests passed while
+    // nothing checked that the frame it returns is one a client can parse --
+    // and `tool()` parses the content, so an unparseable body would have gone
+    // unnoticed until an agent hit it.
+    let (dir, _) = fixture();
+    write(
+        dir.path(),
+        "src/referencer.rs",
+        b"use crate::wide::w;\n\nfn caller() { w(); }\n",
+    );
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let answer = mcp.tool(
+        "references",
+        json!({
+            "symbols": ["src/wide.rs::w"],
+            "path": dir.path().to_str().expect("a utf-8 temp path"),
+        }),
+    );
+
+    // The flag a caller must check is in the payload, not only in the long help.
+    assert!(
+        answer.get("complete").is_some(),
+        "an agent reads `complete` before trusting the radius: {answer}"
+    );
+    assert!(
+        answer["targets"][0]["users"].is_array(),
+        "the references come back as a list: {answer}"
+    );
+}
+
+#[test]
+fn references_against_a_non_rust_repository_says_so_plainly() {
+    // Five of six languages have no use extractor, and the answer for them said
+    // "`lib/app.js` does not declare `init`" -- which reads as the caller's
+    // mistake when the truth is that the tool is Rust-only. An agent acted on
+    // that would conclude the symbol does not exist and go looking elsewhere.
+    let dir = tempfile::tempdir().expect("temp dir");
+    write(
+        dir.path(),
+        "lib/app.js",
+        b"exports.init = function init() { return 1; };\n",
+    );
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let error = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "references",
+                "arguments": {
+                    "symbols": ["lib/app.js::init"],
+                    "path": dir.path().to_str().expect("a utf-8 temp path"),
+                }
+            }),
+        )
+        .expect_err("a non-Rust symbol is refused, not answered empty");
+
+    let message = error["message"].as_str().unwrap_or_default().to_owned();
+    assert!(
+        message.contains("Rust"),
+        "the error should say what the tool supports, not that the file is wrong: {message}"
+    );
+}
+
+#[test]
+fn a_tool_called_twice_answers_as_well_the_second_time() {
+    // A session calls a tool repeatedly, and the server holding state between
+    // calls is the bug that only appears on the second one: a stale graph, a
+    // path from the first call, a counter that overflows a limit.
+    let (dir, target) = fixture();
+    let path = dir.path().to_str().expect("a utf-8 temp path").to_owned();
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let first = mcp.tool("impact", json!({ "files": [target], "path": path }));
+    let second = mcp.tool("impact", json!({ "files": [target], "path": path }));
+
+    // Not merely "both answered": the same answer. A second call that returned
+    // fewer dependents than the first would be a silent drop nobody notices.
+    assert_eq!(
+        first["targets"][0]["dependent_count"],
+        second["targets"][0]["dependent_count"],
+        "the second call is as wide as the first: {first} vs {second}"
     );
 }

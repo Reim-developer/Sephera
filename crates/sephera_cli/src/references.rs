@@ -83,11 +83,19 @@ pub fn measure_all(
         .map(|spelling| {
             let target = parse_symbol(spelling)?;
             let found = find(report, facts, &target).map_err(|_| {
-                anyhow::anyhow!(
-                    "`{}` does not declare `{}`",
-                    target.file,
-                    target.name
-                )
+                // The same two failures the MCP tool distinguishes, for the same
+                // reason: an agent that reads "does not declare `init`" about a
+                // JavaScript file concludes the symbol does not exist.
+                if is_rust(&target.file) {
+                    anyhow::anyhow!("`{}` does not declare `{}`", target.file, target.name)
+                } else {
+                    anyhow::anyhow!(
+                        "`{}` is not a Rust file, so its names cannot be resolved yet: \
+                         `references` covers Rust only. Use `impact` on the file for a \
+                         file-level radius, which works across all six languages.",
+                        target.file
+                    )
+                }
             })?;
 
             // Scoping narrows the answer, not the analysis: a symbol outside the
@@ -126,6 +134,20 @@ pub fn measure_all(
             })
         })
         .collect()
+}
+
+/// Whether a path is a Rust file, on any platform.
+///
+/// Case-insensitively, because a Windows path may be written `FOO.RS` and a file
+/// named that way is a Rust file. The extension check is the whole of what the
+/// caller can know -- the alternative is to look at the declaration table, which
+/// would make a JavaScript repository look like a tool bug rather than like a
+/// language this tool does not cover yet.
+fn is_rust(path: &str) -> bool {
+    std::path::Path::new(path)
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("rs"))
 }
 
 /// Split `PATH::NAME` into its halves.
