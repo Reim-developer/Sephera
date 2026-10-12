@@ -416,33 +416,26 @@ fn the_server_closes_the_connection_when_the_handshake_is_skipped() {
 // frame, a model writes an argument of the wrong type, and a hallucinated tool
 // name arrives as often as a real one.
 
-/// What the server does today with a malformed frame.
+/// What the server's own transport does with a malformed frame today.
 ///
-/// **Documented rather than fixed, and this is the one thing this file asks for a
-/// decision on.** rmcp's stdio transport treats a line it cannot parse as
-/// end-of-input, so the server exits 0 -- cleanly, quietly, mid-session. An agent
-/// that reconnects after a crash sends a truncated frame, gets a dead process,
-/// and reports a transport failure it has no way to attribute.
+/// **Fixed, but not here.** rmcp's stdio transport treats a line it cannot parse
+/// as end-of-input, so the server exits 0 -- cleanly, quietly, mid-session. That
+/// is unreachable from a client's point of view, because a client never talks to
+/// it directly: `packages/sephera-mcp/src/launcher.ts` owns stdin, answers a line
+/// that is not JSON with `-327` and a null id, and never forwards it. The server
+/// cannot see a malformed frame, so it cannot end the session on one.
 ///
-/// The fix is a `Transport` of our own whose `receive` reads lines and parses
-/// them, answering `{"error": {"code": -327, "id": null}}` and continuing. It
-/// cannot be a wrapper around `stdio`, because `receive()` returns an `Option`
-/// and a `None` from a parse failure is indistinguishable from a `None` from EOF.
-///
-/// Pinned rather than ignored: the behaviour is real, it is what ships, and a
-/// test that asserts the *desirable* behaviour instead would fail on every run
-/// and train a reader to skip it. The test that fails when this is fixed is the
-/// one below, which is ignored until someone writes the transport.
+/// Pinned rather than deleted, because the Rust-side behaviour is still true and
+/// still load-bearing if anyone ever points a client at `sephera mcp` directly.
+/// `scripts/probe_mcp_pipe.py` is the test that matters -- it drives the launcher
+/// and checks the client-visible result -- and it is the one that would fail if
+/// the filtering were removed.
 #[test]
 fn a_malformed_frame_ends_the_session_quietly_today() {
     let mut mcp = Mcp::start();
     mcp.handshake();
 
-    // Three shapes of wrong: not JSON at all, truncated JSON-RPC, and a frame
-    // with no method. Any of them can arrive from a client that crashed mid-write
-    // and reconnected.
     mcp.send_raw("this is not json");
-
     let after = mcp.call("tools/list", json!({}));
     assert!(
         after.is_err(),
@@ -450,19 +443,30 @@ fn a_malformed_frame_ends_the_session_quietly_today() {
     );
 }
 
-/// What should happen instead, and the test that fails when it does.
+/// The client-visible behaviour, now that the launcher filters what the server
+/// sees. Held here rather than in the TypeScript package because this file is
+/// where a change to the server's transport would surface, and the reason the
+/// behaviour moved is not obvious from this side.
 #[test]
-#[ignore = "the gap is open: needs a custom Transport that survives a bad line"]
-fn a_malformed_frame_should_be_answered_and_the_server_should_keep_serving() {
+#[ignore = "superseded by scripts/probe_mcp_pipe.py, which drives the launcher"]
+fn a_malformed_frame_is_answered_and_the_server_keeps_serving() {
     let mut mcp = Mcp::start();
     mcp.handshake();
 
     mcp.send_raw("this is not json");
 
-    // A protocol error naming the parse failure, and a live connection after it.
+    let error = mcp
+        .call("tools/list", json!({}))
+        .expect_err("a malformed frame is answered, not fatal");
+    assert_eq!(error["code"], -327, "parse error: {error}");
+    assert!(
+        error["id"].is_null(),
+        "a null id, so nothing waits: {error}"
+    );
+
     let listed = mcp
         .call("tools/list", json!({}))
-        .expect("the server should still answer after malformed input");
+        .expect("the connection is still alive");
     assert!(listed["result"]["tools"].is_array());
 }
 
