@@ -71,3 +71,7 @@ packages/sephera-mcp/dist/
 packages/sephera-mcp/bin/sephera
 packages/sephera-mcp/bin/sephera.exe
 packages/sephera-mcp/*.tgz
+
+# Throwaway scripts: work-in-progress probes and one-off operators.
+# Everything here is gitignored and exists to be run then deleted.
+tmp/
