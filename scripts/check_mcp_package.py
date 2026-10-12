@@ -22,15 +22,6 @@ serves nothing looks identical to a working one from a shell; the difference onl
 appears when a client sends `initialize`. So this starts the server, writes a real
 JSON-RPC request to its stdin, and reads the answer back. That is the only check
 that distinguishes "starts" from "works".
-
-It packs a tarball first and installs that, rather than pointing `npm install` at
-the source directory, because a directory install copies everything and a tarball
-respects the `files` field -- which is what a user actually gets. A check that
-irned missed files would pass on a package that fails for everyone else.
-
-Run it with the repository root as the working directory:
-
-    python scripts/check_mcp_package.py
 """
 
 from __future__ import annotations
@@ -52,14 +43,18 @@ CANDIDATES = [
     r"D:\nodejs\npm.cmd",
 ]
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+from subproc import stderr_of, stdout_of, write_line
+
 
 def pnpm() -> str:
     """The pnpm executable, resolved the way npm is: not via the shell's PATH.
 
-    pnpm is installed under the npm global prefix and is on the shell's PATH and
-    not on a subprocess's, because the Windows PATH and the bash PATH are
-    different things. A hard-coded path would make this pass on the machine it
-    was written on, which is the one outcome worse than not having the check.
+    pnpm is installed under the npm global prefix and is on the shell's PATH
+    and not on a subprocess's, because the Windows PATH and the bash PATH are
+    different things. A hard-coded path would make this check pass on the
+    machine it was written on, which is the one outcome worse than not having
+    the check.
     """
     found = shutil.which("pnpm")
     if found:
@@ -91,9 +86,9 @@ def find_npm() -> str:
     """The npm executable, or a clear failure.
 
     npm is on the shell's PATH and not on a subprocess's, because the Windows
-    PATH and the bash PATH are different things. Hard-coding a path would make
+    PATH and the bash PATH are different things. A hard-coded path would make
     this check pass on the machine it was written on, which is the one outcome
-    worse than not having it.
+    worse than not having the check.
     """
     for candidate in CANDIDATES:
         if pathlib.Path(candidate).is_file():
@@ -136,14 +131,13 @@ def probe(launcher: pathlib.Path) -> tuple[bool, str]:
         errors="replace",
     )
     try:
-        process.stdin.write(json.dumps(request) + "\n")
-        process.stdin.flush()
+        write_line(process, json.dumps(request))
         deadline = time.monotonic() + 60
         while time.monotonic() < deadline:
-            line = process.stdout.readline()
+            line = stdout_of(process).readline()
             if not line:
                 if process.poll() is not None:
-                    return False, f"exited early: {process.stderr.read()[:300]}"
+                    return False, f"exited early: {stderr_of(process).read()[:300]}"
                 continue
             try:
                 answer = json.loads(line)

@@ -1,10 +1,16 @@
 """Does the malformed frame reach the server now, and does the session survive?
 
-The unit tests pin the launcher's rule on lines. This pins what a client sees:
-a malformed frame answered with `-327` and the connection still usable. It is
-the only check that distinguishes "the rule is right" from "the rule is wired",
-and the first attempt at this fix in Rust passed the first and failed the second --
-it built, linted clean, and the server never spoke at all.
+The launcher answers a bad line itself and never forwards it, so the server cannot
+see a malformed frame -- which is the whole point of putting the filter there.
+This drives the launcher and checks the client-visible result.
+
+It is the only check that distinguishes "the rule is right" from "the rule is
+wired", and the first attempt at this fix in Rust passed the first and failed the
+second: it built, linted clean, and the server never spoke at all.
+
+Run with the package built:
+
+    pnpm --filter sephera-mcp build && python scripts/probe_mcp_pipe.py
 """
 
 from __future__ import annotations
@@ -16,7 +22,13 @@ import sys
 import tempfile
 import time
 
+sys.path.insert(0, str(pathlib.Path(__file__).resolve().parent))
+
+from jsonio import object_of, parse, size_of, text_of, whole_of  # noqa: E402
+from subproc import read_line, write_line  # noqa: E402
+
 LAUNCHER = pathlib.Path("packages/sephera-mcp/dist/launcher.js").resolve()
+
 INITIALIZE = {
     "jsonrpc": "2.0",
     "id": 1,
@@ -28,20 +40,32 @@ INITIALIZE = {
     },
 }
 
+# The three shapes of wrong a client can produce: a line that was never JSON, a
+# truncated write, and a frame with no method.
+MALFORMED = [
+    "this is not json",
+    '{"jsonrpc":"2.0","id":1,"method":"tools/lis"',
+]
 
-def read_response(process, timeout=60.0):
+
+def read_response(process: subprocess.Popen[str], timeout: float = 60.0) -> dict[str, object]:
+    """The next line that parses, skipping the ones that do not.
+
+    Skips rather than fails, because the frames this reads include a notification
+    that carries no id -- and waiting for a specific id means skipping anything
+    that is not it.
+    """
     deadline = time.monotonic() + timeout
     while time.monotonic() < deadline:
-        line = process.stdout.readline()
-        if not line:
-            return None
+        line = read_line(process)
+        if line is None:
+            return {}
         if not line.strip():
             continue
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            continue
-    return None
+        answer = parse(line)
+        if answer:
+            return answer
+    return {}
 
 
 def main() -> int:
@@ -62,44 +86,51 @@ def main() -> int:
     )
 
     try:
-        process.stdin.write(json.dumps(INITIALIZE) + "\n")
-        process.stdin.flush()
+        write_line(process, json.dumps(INITIALIZE))
         answer = read_response(process)
-        if not answer or answer.get("id") != 1:
+        if whole_of(answer, "id") != 1:
             print(f"FAIL initialize: {answer}")
             return 1
-        info = answer.get("result", {}).get("serverInfo", {})
-        print(f"initialize          : {info.get('name')} {info.get('version')}")
+        info = object_of(answer, "result")
+        server = object_of(info, "serverInfo")
+        print(f"initialize          : {text_of(server, 'name')} {text_of(server, 'version')}")
 
-        process.stdin.write(
-            json.dumps({"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}})
-            + "\n"
+        write_line(
+            process,
+            json.dumps(
+                {"jsonrpc": "2.0", "method": "notifications/initialized", "params": {}}
+            ),
         )
-        process.stdin.write("this is not json\n")
-        process.stdin.write('{"jsonrpc":"2.0","id":1,"method":"tools/lis"\n')
-        process.stdin.write("\n")
-        process.stdin.flush()
+        for line in MALFORMED:
+            write_line(process, line)
+        # A blank line too: a client padding its frames is not making a mistake
+        # worth an error frame per line.
+        write_line(process, "")
 
-        # Two parse errors, in order, and no answer to the blank line.
-        for label in ["first", "second"]:
-            answer = read_response(process)
-            error = (answer or {}).get("error", {})
-            code = error.get("code")
-            identifier = (answer or {}).get("id", "<absent>")
-            print(f"malformed #{label:8}: code={code} id={identifier!r}")
-            if code != -327 or identifier is not None:
-                print(f"FAIL expected -327 with a null id, got {answer}")
+        for label in ("first", "second"):
+            frame = read_response(process)
+            error = object_of(frame, "error")
+            code = whole_of(error, "code")
+            # On the frame, not in the error object -- and null for a parse
+            # error, which is the point: a null id is the one shape a client
+            # will not treat as a reply to something it sent.
+            identifier = whole_of(frame, "id", -1)
+            print(f"malformed #{label:8}: code={code} id={identifier}")
+            if code != -327:
+                print(f"FAIL expected -327, got {error}")
+                return 1
+            if identifier != -1:
+                print(f"FAIL the id should be null, got {identifier}")
                 return 1
 
-        # And the session still answers a real request.
-        process.stdin.write(
-            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}) + "\n"
+        write_line(
+            process,
+            json.dumps({"jsonrpc": "2.0", "id": 2, "method": "tools/list", "params": {}}),
         )
-        process.stdin.flush()
         answer = read_response(process)
-        tools = (answer or {}).get("result", {}).get("tools", [])
-        print(f"after malformed     : {len(tools)} tools still listed")
-        if not tools:
+        tools = size_of(object_of(answer, "result"), "tools")
+        print(f"after malformed     : {tools} tools still listed")
+        if tools == 0:
             print(f"FAIL the session did not survive: {answer}")
             return 1
 

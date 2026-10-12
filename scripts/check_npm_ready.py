@@ -9,12 +9,14 @@ that authorises it stays closed.
 from __future__ import annotations
 
 import json
-import os
 import pathlib
 import re
 import subprocess
+import sys
+import urllib.error
 import urllib.request
 
+ROOT = pathlib.Path(__file__).resolve().parent.parent
 
 
 def npm() -> str:
@@ -39,8 +41,6 @@ def run(label: str, command: list[str]) -> None:
     print(f"  exit {done.returncode}")
     out = (done.stdout or "").strip()
     err = (done.stderr or "").strip()
-    # A token in output has to be redacted, not filtered: `npm config get
-    # _authToken` returns one, and this check prints whatever it is handed.
     redacted = re.sub(
         r"(npm_[A-Za-z0-9]{6})[A-Za-z0-9]+", r"\1<redacted>", out + "\n" + err
     )
@@ -62,18 +62,19 @@ def main() -> int:
             headers={"User-Agent": "sephera-check"},
         )
         with urllib.request.urlopen(request, timeout=30) as response:
-            payload = json.load(response)
+            payload: dict[str, object] = json.load(response)
         name = payload.get("name", "sephera-mcp")
-        versions = payload.get("versions", {})
+        versions: dict[str, object] = payload.get("versions", {})
         print(f"=== the name `{name}` ===")
         print(f"  TAKEN by someone else; {len(versions)} versions published")
         print("  an unscoped name that is taken cannot be published without asking")
     except urllib.error.HTTPError as error:
-        if error.code == 404:
+        code: int = error.code
+        if code == 404:
             print("=== the name `sephera-mcp` ===")
             print("  FREE -- nobody has published it")
         else:
-            print(f"=== the name `sephera-mcp` ===\n  registry said {error.code}")
+            print(f"=== the name `sephera-mcp` ===\n  registry said {code}")
 
     # 3. Is an `.npmrc` present, and does it point at the public registry rather
     #    than a private one? A scoped-private registry would publish somewhere
@@ -86,6 +87,37 @@ def main() -> int:
 
     run("registry", [npm(), "config", "get", "registry"])
     return 0
+
+
+def run(label: str, command: list[str]) -> None:
+    done = subprocess.run(command, capture_output=True, text=True, check=False)
+    print(f"=== {label} ===")
+    print(f"  exit {done.returncode}")
+    out = (done.stdout or "").strip()
+    err = (done.stderr or "").strip()
+    redacted = re.sub(
+        r"(npm_[A-Za-z0-9]{6})[A-Za-z0-9]+", r"\1<redacted>", out + "\n" + err
+    )
+    for line in redacted.splitlines():
+        if line.strip():
+            print(f"  {line[:160]}")
+    print()
+
+
+def npm() -> str:
+    import shutil
+
+    found = shutil.which("npm")
+    if found:
+        return found
+    for candidate in [
+        r"C:\Program Files\nodejs\npm.cmd",
+        r"C:\Users\reim\AppData\Roaming\npm\npm.cmd",
+        r"D:\nodejs\npm.cmd",
+    ]:
+        if pathlib.Path(candidate).is_file():
+            return candidate
+    raise SystemExit("npm was not found")
 
 
 if __name__ == "__main__":

@@ -31,16 +31,15 @@ STEPS = [
 
 
 def main() -> int:
+    import pathlib
     import shutil
 
     def resolve(command: list[str]) -> list[str]:
         """Give `pnpm` a full path, because the bare name is not executable.
 
-        `shutil.which("pnpm")` finds `pnpm.CMD`, but `subprocess` on Windows calls
-        `CreateProcess` and that will not start a bare command name with a `.CMD`
-        extension -- it needs the path. The same mistake cost a gate run before:
-        the reported failure was `FileNotFoundError`, which reads as a missing
-        pnpm rather than as a pnpm this script could not invoke.
+        The Windows PATH and the bash PATH are different things, and `pnpm` is on
+        the bash one. A gate that cannot find its own tools reports a missing
+        pnpm rather than a failing check, which is not a useful signal.
         """
         if command[0] != "pnpm":
             return command
@@ -56,7 +55,7 @@ def main() -> int:
                 return [candidate, *command[1:]]
         raise SystemExit("pnpm was not found")
 
-    failed = []
+    failed: list[str] = []
     for label, command in STEPS:
         print(f"=== {label} ===", flush=True)
         done = subprocess.run(
