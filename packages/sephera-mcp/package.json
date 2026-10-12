@@ -14,6 +14,7 @@
     "tree-sitter"
   ],
   "license": "MIT",
+  "type": "module",
   "homepage": "https://github.com/Reim-developer/Sephera",
   "repository": {
     "type": "git",
@@ -23,18 +24,24 @@
     "url": "https://github.com/Reim-developer/Sephera/issues"
   },
   "bin": {
-    "sephera-mcp": "bin/sephera-mcp.js"
+    "sephera-mcp": "dist/launcher.js"
   },
   "files": [
-    "bin/",
-    "lib/",
-    "postinstall.js",
+    "dist/",
     "README.md"
   ],
   "engines": {
     "node": ">=18"
   },
   "scripts": {
-    "postinstall": "node postinstall.js"
+    "build": "tsc -p tsconfig.json",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest"
+  },
+  "devDependencies": {
+    "@types/node": "^22.10.2",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
   }
 }

@@ -1,6 +1,6 @@
 """Install the npm package the way a user would, then make it speak MCP.
 
-Three bugs this caught, none of which any other check would have:
+Four bugs this caught, none of which any other check would have:
 
 * `require('./lib/platform')` inside `bin/` resolves to `bin/lib/platform`, which
   does not exist. The module is plainly there in the repository, and the error
@@ -13,13 +13,20 @@ Three bugs this caught, none of which any other check would have:
   a machine with Git for Windows has GNU tar in front, which reports "This does
   not look like a tar archive" -- an error that sends the reader looking for a
   corrupt download rather than for the wrong tool. Hence the in-process reader in
-  `lib/unzip.js`, which is why the package has no runtime dependency.
+  `unzip.ts`, which is why the package has no runtime dependency.
+* `postinstall` running during `pnpm install` against a `dist/` that does not
+  exist yet, which fails the install before the package is even built.
 
 The last part is the one worth the runtime. A launcher that exits cleanly and
 serves nothing looks identical to a working one from a shell; the difference only
 appears when a client sends `initialize`. So this starts the server, writes a real
 JSON-RPC request to its stdin, and reads the answer back. That is the only check
 that distinguishes "starts" from "works".
+
+It packs a tarball first and installs that, rather than pointing `npm install` at
+the source directory, because a directory install copies everything and a tarball
+respects the `files` field -- which is what a user actually gets. A check that
+irned missed files would pass on a package that fails for everyone else.
 
 Run it with the repository root as the working directory:
 
@@ -37,12 +44,47 @@ import sys
 import tempfile
 import time
 
-PACKAGE = pathlib.Path("npm/sephera-mcp").resolve()
+ROOT = pathlib.Path(__file__).resolve().parent.parent
+PACKAGE = ROOT / "packages" / "sephera-mcp"
 CANDIDATES = [
     r"C:\Program Files\nodejs\npm.cmd",
     r"C:\Program Files (x86)\nodejs\npm.cmd",
     r"D:\nodejs\npm.cmd",
 ]
+
+
+def pnpm() -> str:
+    """The pnpm executable, resolved the way npm is: not via the shell's PATH.
+
+    pnpm is installed under the npm global prefix and is on the shell's PATH and
+    not on a subprocess's, because the Windows PATH and the bash PATH are
+    different things. A hard-coded path would make this pass on the machine it
+    was written on, which is the one outcome worse than not having the check.
+    """
+    found = shutil.which("pnpm")
+    if found:
+        return found
+    for candidate in [
+        r"C:\Users\reim\AppData\Roaming\npm\pnpm.cmd",
+        r"C:\Program Files\nodejs\pnpm.cmd",
+        r"D:\nodejs\pnpm.cmd",
+    ]:
+        if pathlib.Path(candidate).is_file():
+            return candidate
+    try:
+        done = subprocess.run(
+            ["bash", "-c", "which pnpm"], capture_output=True, text=True, check=False
+        )
+        found = done.stdout.strip()
+        if found:
+            windows = found.replace("/", "\\").lstrip("\\")
+            if not windows.endswith(".cmd"):
+                windows += ".cmd"
+            if pathlib.Path(windows).is_file():
+                return windows
+    except (OSError, subprocess.SubprocessError):
+        pass
+    raise SystemExit("pnpm was not found; cannot run the package check")
 
 
 def find_npm() -> str:
@@ -119,37 +161,74 @@ def main() -> int:
     if not PACKAGE.is_dir():
         raise SystemExit(f"{PACKAGE} is missing")
 
+    # Build first, so the tarball contains dist/. A check against an unbuilt
+    # package would test a package nobody is going to run.
+    done = subprocess.run(
+        [pnpm(), "--filter", "sephera-mcp", "build"],
+        capture_output=True,
+        text=True,
+        check=False,
+        cwd=ROOT,
+    )
+    if done.returncode != 0:
+        print(f"build failed:\n{done.stderr[-600:]}")
+        return 1
+    print("build                : ok")
+
     work = pathlib.Path(tempfile.mkdtemp(prefix="sephera-mcp-check-"))
     try:
-        shutil.copytree(PACKAGE, work / "sephera-mcp")
         done = subprocess.run(
-            [find_npm(), "install", "--no-audit", "--no-fund", "./sephera-mcp"],
+            [pnpm(), "pack", "--pack-destination", str(work)],
+            capture_output=True,
+            text=True,
+            check=False,
+            cwd=PACKAGE,
+        )
+        if done.returncode != 0:
+            print(f"pack failed:\n{done.stderr[-600:]}")
+            return 1
+        # `pnpm pack` prints the tarball path as its last line.
+        tarball = [line for line in done.stdout.splitlines() if line.endswith(".tgz")]
+        if not tarball:
+            print(f"pack produced no tarball:\n{done.stdout[-400:]}")
+            return 1
+        tarball_path = pathlib.Path(tarball[-1].strip())
+        if not tarball_path.is_absolute():
+            tarball_path = PACKAGE / tarball_path
+        print(f"tarball              : {tarball_path.name}")
+
+        done = subprocess.run(
+            [find_npm(), "install", "--no-audit", "--no-fund", str(tarball_path)],
             cwd=work,
             capture_output=True,
             text=True,
             check=False,
-            # Explicitly not ignored: this check exists to exercise the
-            # postinstall path, and leaving it on would test the launcher's
-            # fallback instead of the thing most users hit.
-            env={**os.environ, "npm_config_ignore_scripts": ""},
         )
-        print(f"npm install        : exit {done.returncode}")
+        print(f"npm install          : exit {done.returncode}")
         if done.returncode != 0:
             print(done.stderr[-800:])
             return 1
 
-        installed = work / "sephera-mcp" / "bin" / (
+        installed_root = work / "node_modules" / "sephera-mcp"
+
+        # No `postinstall`, deliberately: it ran before `dist/` existed during
+        # workspace installs and failed the tree. The launcher downloads on
+        # demand, so the check probes the launcher and the binary appears then --
+        # which is also the path a user takes when they install and run.
+        launcher = installed_root / "dist" / "launcher.js"
+        if not launcher.is_file():
+            print("launcher missing from the tarball: dist/ is not in files?")
+            return 1
+        print(f"launcher in tarball  : {launcher.is_file()}")
+
+        ok, detail = probe(launcher)
+        print(f"mcp initialize       : {detail}")
+
+        binary = installed_root / "bin" / (
             "sephera.exe" if os.name == "nt" else "sephera"
         )
-        print(f"binary downloaded  : {installed.is_file()}")
-        if not installed.is_file():
-            return 1
-
-        ok, detail = probe(
-            work / "node_modules" / "sephera-mcp" / "bin" / "sephera-mcp.js"
-        )
-        print(f"mcp initialize     : {detail}")
-        return 0 if ok else 1
+        print(f"binary downloaded    : {binary.is_file()} (by the launcher)")
+        return 0 if ok and binary.is_file() else 1
     finally:
         shutil.rmtree(work, ignore_errors=True)
 

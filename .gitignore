@@ -59,3 +59,15 @@ npm/sephera-mcp/bin/sephera.exe
 
 # npm's pack output, from `npm pack`.
 npm/sephera-mcp/*.tgz
+
+# Node: monorepo (pnpm workspace).
+node_modules/
+packages/*/node_modules/
+packages/sephera-mcp/dist/
+.pnpm-store/
+*.tsbuildinfo
+
+# The binary the launcher downloads on first run, and the packed tarball.
+packages/sephera-mcp/bin/sephera
+packages/sephera-mcp/bin/sephera.exe
+packages/sephera-mcp/*.tgz

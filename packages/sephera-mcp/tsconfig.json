@@ -1,0 +1,26 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022"],
+    "module": "Node16",
+    "moduleResolution": "Node16",
+    "rootDir": "src",
+    "outDir": "dist",
+    "strict": true,
+    // The one thing worth turning off for an installer: the code parses bytes at
+    // fixed offsets, and `noUncheckedIndexedAccess` would demand a check at every
+    // one of them. The bounds are checked where they matter -- once, before the
+    // read loop, against the buffer's length -- and that is the check a reader
+    // wants, rather than forty that make the offset arithmetic unreadable.
+    "noUncheckedIndexedAccess": false,
+    "noImplicitOverride": true,
+    "noFallthroughCasesInSwitch": true,
+    "declaration": false,
+    "sourceMap": true,
+    "esModuleInterop": true,
+    "forceConsistentCasingInFileNames": true,
+    "skipLibCheck": true
+  },
+  "include": ["src/**/*.ts"],
+  "exclude": ["node_modules", "dist", "test"]
+}

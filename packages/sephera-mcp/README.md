@@ -159,9 +159,22 @@ no index. The same question answered with `cargo check` takes minutes.
 - **Cross-language symbol references.** `graph` and `impact` cover six languages.
   `references` is Rust only — the other five languages have no use extractor yet,
   so they return nothing rather than a guess.
-- **Recall is not 100%.** On this repository, measured: 100% precision (every
-  claim is a real reference) and 60% recall. The gap is names several files
-  legitimately declare, and the tool reports those rather than guessing.
+- **Recall is not 100%.** On the Sephera repository itself, measured: 100%
+  precision (every claim is a real reference) and 60% recall. The gap is names
+  several files legitimately declare, and the tool reports those rather than
+  guessing.
+
+## Supported platforms
+
+| | |
+|---|---|
+| Windows x64 | `x86_64-pc-windows-msvc` (zip) |
+| macOS Intel | `x86_64-apple-darwin` (tar.gz) |
+| macOS Apple Silicon | `aarch64-apple-darwin` (tar.gz) |
+| Linux x64 | `x86_64-unknown-linux-musl` (tar.gz) |
+
+Anything else reports which platforms are supported rather than downloading the
+wrong binary.
 
 ## Links
 
