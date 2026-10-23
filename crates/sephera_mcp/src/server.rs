@@ -34,7 +34,10 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
-    input::{ContextInput, GraphInput, ImpactInput, LocInput, SymbolsInput},
+    input::{
+        AffectedTestsInput, ContextInput, GraphInput, ImpactInput, LocInput,
+        SymbolsInput,
+    },
     render::render_context_markdown,
 };
 
@@ -421,6 +424,241 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Report which tests one or more files have to answer for.
+    ///
+    /// The follow-up an agent needs after `impact`: not just what breaks,
+    /// but what to run. The counting is `sephera_graph::affected_tests`',
+    /// shared with the `affected-tests` command, so the two cannot disagree.
+    #[tool(
+        name = "affected_tests",
+        description = "Report which test files would notice a change to one or more files: the blast radius filtered to test files, each with its distance from the target, closest first. Run this BEFORE editing to know what to verify with, and after editing to run exactly the tests that answer for the change. Accepts one or more files plus exactly one of path or url, and an optional ref for repo URLs. Use depth to limit how far the reach travels, focus to report only tests inside a subtree, and format=markdown for a compact summary or json for affected_test_count as a number."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn affected_tests(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<AffectedTestsInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+        // Refused before anything else, as the `impact` tool refuses it and
+        // for the same reason: an empty answer reads as "no test answers
+        // for anything", which no caller meant to ask.
+        if param.files.is_empty() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "affected_tests needs at least one file in `files`; an \
+                 empty list is not a question that has an answer",
+                None,
+            ));
+        }
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let focus = build_focus_set(
+            &source.analysis_path,
+            &param
+                .focus
+                .unwrap_or_default()
+                .into_iter()
+                .map(std::path::PathBuf::from)
+                .collect::<Vec<_>>(),
+        )
+        .into_iter()
+        .collect::<Vec<_>>();
+
+        let impacts = sephera_graph::affected_tests::measure_tests_all(
+            &report,
+            &param.files,
+            &base_prefix,
+            param.depth,
+            &focus,
+        )
+        .map_err(map_internal_error("affected test measurement failed"))?;
+
+        let built = AffectedTestsReport::new(&impacts);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(affected_tests_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported affected_tests format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+}
+
+/// The JSON shape the `affected_tests` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AffectedTestsReport {
+    /// One entry per file asked about, most affected first.
+    pub targets: Vec<TestImpactEntry>,
+}
+
+/// One file's affected tests.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct TestImpactEntry {
+    /// The file the impact is measured from, spelled as the graph spells it.
+    pub target: String,
+    /// How many test files would notice a change. The number worth acting
+    /// on without walking the list -- and the one that is zero for an
+    /// unwitnessed change.
+    pub affected_test_count: u64,
+    /// The depth limit applied, if any.
+    pub depth: Option<u32>,
+    /// The affected test files, closest first.
+    pub tests: Vec<AffectedTestEntry>,
+}
+
+/// One affected test file.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct AffectedTestEntry {
+    /// Path of the test file.
+    pub file: String,
+    /// Hops from the target along the shortest resolved path. 0 when the
+    /// test file is the target itself.
+    pub distance: u32,
+    /// Import paths naming the target. Empty for a test that reaches the
+    /// target transitively and for the target itself.
+    pub imports: Vec<String>,
+}
+
+impl AffectedTestsReport {
+    fn new(impacts: &[sephera_graph::affected_tests::TestImpact]) -> Self {
+        Self {
+            targets: impacts
+                .iter()
+                .map(|impact| TestImpactEntry {
+                    target: impact.target.clone(),
+                    affected_test_count:
+                        sephera_graph::affected_tests::affected_test_count(
+                            impact,
+                        ),
+                    depth: impact.depth,
+                    tests: impact
+                        .tests
+                        .iter()
+                        .map(|test| AffectedTestEntry {
+                            file: test.file.clone(),
+                            distance: test.distance,
+                            imports: test.imports.clone(),
+                        })
+                        .collect(),
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render affected tests as Markdown for an agent's context window.
+///
+/// One `#` title for the document and `##` per target when there are
+/// several, matching the `impact` tool's Markdown.
+fn affected_tests_markdown(report: &AffectedTestsReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let several = report.targets.len() > 1;
+
+    if several {
+        let _ = writeln!(
+            output,
+            "# Affected tests for {} files\n",
+            report.targets.len()
+        );
+        let _ = writeln!(output, "Most affected first.");
+    }
+
+    for entry in &report.targets {
+        let count = entry.affected_test_count;
+        if several {
+            let _ = writeln!(
+                output,
+                "\n## Affected tests for `{}`\n",
+                entry.target
+            );
+        } else {
+            let _ =
+                writeln!(output, "# Affected tests for `{}`\n", entry.target);
+        }
+        let _ = writeln!(
+            output,
+            "{}",
+            match count {
+                0 => "No test file reaches this one.".to_owned(),
+                1 => "1 test file would notice a change here.".to_owned(),
+                other => {
+                    format!("{other} test files would notice a change here.")
+                }
+            }
+        );
+        if let Some(depth) = entry.depth {
+            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
+        }
+        if entry.tests.is_empty() {
+            continue;
+        }
+        let sub = if several { "###" } else { "##" };
+        let _ = writeln!(output, "\n{sub} Test files\n");
+        for test in &entry.tests {
+            if test.distance == 0 {
+                let _ = writeln!(
+                    output,
+                    "- `{}` (the changed file itself)",
+                    test.file
+                );
+            } else if test.imports.is_empty() {
+                let _ = writeln!(
+                    output,
+                    "- `{}` ({} hop(s) away)",
+                    test.file, test.distance
+                );
+            } else {
+                let names: Vec<String> = test
+                    .imports
+                    .iter()
+                    .map(|name| format!("`{name}`"))
+                    .collect();
+                let _ = writeln!(
+                    output,
+                    "- `{}` imports {}",
+                    test.file,
+                    names.join(", ")
+                );
+            }
+        }
+        output.push('\n');
+    }
+
+    output
 }
 
 /// The JSON shape the `impact` tool returns.

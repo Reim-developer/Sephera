@@ -16,6 +16,7 @@
 //! | `context` | Build an LLM-ready context pack                    |
 //! | `graph`   | Map file dependencies and answer reverse queries   |
 //! | `impact`  | Report what breaks if one or more files change     |
+//! | `affected_tests` | Report which tests a change has to answer for |
 //!
 //! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
 //! the CLI exactly: the same arguments produce the same file set, because an
