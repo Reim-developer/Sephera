@@ -1419,6 +1419,7 @@ dependencies = [
  "sephera_core",
  "sephera_symbols",
  "serde",
+ "toml",
  "tree-sitter",
  "tree-sitter-rust",
 ]

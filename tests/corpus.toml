@@ -99,13 +99,18 @@ files = 307
 # prelude; the module walks found no directory by those names and filed
 # 1066 such imports as third-party dependencies -- plausible, because the
 # dependencies are real and sit in `Cargo.toml`, and wrong, because the
-# couplings are the workspace's own. 883 of them now resolve. The rest name
-# proc-macro derives, `#[macro_export]` macros, or the `http` crate through
-# axum's re-export of it: names that live in a root file the declaration
-# index does not record, or in another crate entirely. The evidence a name
+# couplings are the workspace's own. 948 of them now resolve -- 883 to
+# modules and re-exported items, and 65 to proc-macro derives, whose names
+# the declaration index records from the `proc_macro_derive` attribute
+# that declares them (the name lives in the attribute, not on the function
+# it annotates). What is left names the `http` and `headers` crates
+# through axum's re-exports of them, a crate the tree does not contain
+# (axum-server), or `#[macro_export]` macros, whose names are declared in
+# the file that defines them but are hoisted to the crate root by a rule
+# the index does not model. The evidence a name
 # is the project's own is a manifest on disk declaring it; a name no
 # manifest in the tree declares still stays external.
-internal_edges = 1528
+internal_edges = 1593
 self_references = 70
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
