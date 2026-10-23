@@ -1502,6 +1502,7 @@ dependencies = [
  "sephera_core",
  "sephera_symbols",
  "serde",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-java",
 ]

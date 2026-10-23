@@ -2,7 +2,9 @@
 //!
 //! Java imports are fully-qualified package paths while a project usually stores
 //! sources under a build prefix such as `src/main/java`, so the full path is
-//! tried first and then progressively fewer leading segments.
+//! tried first and then progressively fewer leading segments. A dropped form is
+//! a guess, and it is only taken on the word of the file it lands on: that
+//! file's `package` statement has to declare the type the import names.
 //!
 //! Two forms put a name after the file, and both are handled by dropping exactly
 //! one trailing segment. A static import says so with a keyword; an on-demand
@@ -60,19 +62,67 @@ fn resolve_import(
         return None;
     }
 
-    let mut candidates = Vec::new();
     if let Some(shortened) = shortened_candidate(&parts, &context) {
-        candidates.push(shortened);
-    }
-    candidates.extend(leading_drops(&parts));
-
-    for candidate in &candidates {
-        if let Some(found) = first_existing(&context, candidate) {
+        if let Some(found) = first_existing(&context, &shortened) {
             return Some(found);
         }
     }
 
-    None
+    // Dropping leading segments is a guess: it supposes the import carries
+    // a prefix the source tree does not. The guess is sometimes right, and
+    // unverified it also adopts external classes whose package tail a local
+    // class happens to share -- so a dropped candidate is only taken when
+    // the file it lands on declares the type the import names.
+    leading_drops(&parts).into_iter().find_map(|candidate| {
+        let found = first_existing(&context, &candidate)?;
+        names_the_imported_type(&context, &found, import_path).then_some(found)
+    })
+}
+
+/// Whether `file` declares the type `import_path` names.
+///
+/// The evidence is the file's own `package` statement plus its name, which
+/// together are the fully-qualified name of its public type. The import
+/// names that type when it is the name itself, names a nested type or a
+/// member inside it (the name is a prefix), or ends with it once a guessed
+/// leading prefix comes off. Anything else is a different type that
+/// shares a tail, and a blast radius built on it would claim a coupling
+/// no compiler agrees with: gson's corpus run bound
+/// `com.fasterxml.jackson.core.JsonToken` and
+/// `com.google.common.reflect.TypeToken` to gson's own `JsonToken` and
+/// `TypeToken` this way, inventing dependencies on Jackson and Guava.
+///
+/// A file that cannot be read, or declares no package, verifies nothing,
+/// and the guess is refused rather than taken on faith.
+fn names_the_imported_type(
+    context: &ResolveContext<'_>,
+    file: &str,
+    import_path: &str,
+) -> bool {
+    let Ok(contents) = std::fs::read_to_string(context.base_path.join(file))
+    else {
+        return false;
+    };
+    let Some(package) = declared_package(&contents) else {
+        return false;
+    };
+
+    let name = paths::file_name(file);
+    let stem = name.strip_suffix(".java").unwrap_or(name);
+    let qualified = format!("{package}.{stem}");
+
+    import_path == qualified
+        || import_path.starts_with(&format!("{qualified}."))
+        || import_path.ends_with(&format!(".{qualified}"))
+}
+
+/// The package a Java source file declares, from its `package` statement.
+fn declared_package(contents: &str) -> Option<String> {
+    contents.lines().find_map(|line| {
+        let rest = line.trim().strip_prefix("package ")?;
+        let name = rest.trim().trim_end_matches(';').trim();
+        (!name.is_empty()).then(|| name.to_owned())
+    })
 }
 
 /// The path without its last segment, when that segment names a member or a
@@ -261,5 +311,94 @@ mod tests {
         let files = ["com/example/util/NotHelper.java"];
 
         assert_eq!(resolve("com.example.util.Helper", &files), None);
+    }
+
+    /// Resolve against files that exist on disk, as a real analysis sees
+    /// them.
+    ///
+    /// A dropped-prefix match is verified against the file it lands on,
+    /// so a fixture of bare names -- what `test_context` builds -- can
+    /// only ever refuse one. These tests write the files instead, under a
+    /// temporary root that plays the part of the project.
+    fn resolve_on_disk(
+        import_path: &str,
+        files: &[(&str, &str)],
+    ) -> Option<String> {
+        let directory = tempfile::tempdir().expect("a writable directory");
+        let mut known = BTreeSet::new();
+        for (path, contents) in files {
+            let full = directory.path().join(path);
+            std::fs::create_dir_all(
+                full.parent().expect("a file has a parent"),
+            )
+            .expect("the tree is written");
+            std::fs::write(&full, contents).expect("the file is written");
+            known.insert((*path).to_owned());
+        }
+        let context = ResolveContext {
+            source_file: "src/Main.java",
+            known_files: &known,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
+            declarations: None,
+            manifests: None,
+            base_path: directory.path(),
+        };
+        JavaPlugin.resolve(import_path, context)
+    }
+
+    #[test]
+    fn a_dropped_prefix_does_not_adopt_an_external_class_sharing_a_tail() {
+        // The two edges gson's corpus run invented. Both imports name
+        // classes from other libraries whose package tail a gson class
+        // shares, and dropping leading segments until something matched
+        // bound them to gson's own files -- a coupling no compiler agrees
+        // with, reported as fact.
+        let guava = [(
+            "gson/src/main/java/com/google/gson/reflect/TypeToken.java",
+            "package com.google.gson.reflect;\n\npublic class TypeToken<T> {}\n",
+        )];
+        assert_eq!(
+            resolve_on_disk("com.google.common.reflect.TypeToken", &guava),
+            None,
+            "Guava's TypeToken is not gson's, however the tails rhyme"
+        );
+
+        let jackson = [(
+            "gson/src/main/java/com/google/gson/stream/JsonToken.java",
+            "package com.google.gson.stream;\n\npublic enum JsonToken {}\n",
+        )];
+        assert_eq!(
+            resolve_on_disk("com.fasterxml.jackson.core.JsonToken", &jackson),
+            None,
+            "Jackson's JsonToken is not gson's either"
+        );
+    }
+
+    #[test]
+    fn a_dropped_prefix_resolves_when_the_file_declares_the_imported_type() {
+        // The case dropping exists for: the import carries a leading
+        // segment the tree does not -- a module prefix in the path that
+        // is not part of the package the file declares.
+        let files = [(
+            "example/util/Helper.java",
+            "package example.util;\n\npublic class Helper {}\n",
+        )];
+
+        assert_eq!(
+            resolve_on_disk("com.example.util.Helper", &files),
+            Some("example/util/Helper.java".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_dropped_prefix_is_refused_when_the_match_cannot_be_verified() {
+        // `test_context` puts nothing on disk, so the dropped match here
+        // cannot be checked against a `package` statement. An unchecked
+        // guess is how the external classes above were adopted, so it is
+        // refused rather than taken on faith.
+        let files = ["com/example/util/Helper.java"];
+
+        assert_eq!(resolve("vendor.com.example.util.Helper", &files), None);
     }
 }
