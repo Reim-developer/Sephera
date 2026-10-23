@@ -19,7 +19,9 @@ sephera impact a.rs b.rs c.rs                     # several files, one graph bui
 The counting rules, because the number is only as good as they are:
 
 - the target is never a dependent of itself, even though `use super::*;`
-  resolves to the file it is written in;
+  inside an inline module resolves to the file it is written in (at the top
+  of a separate child file it resolves to the parent module that declares
+  it, which is a different file and counts);
 - a file reaching the target two ways is counted once;
 - only resolved edges count, so a path the resolver could not place never
   becomes a claimed coupling;
@@ -38,6 +40,8 @@ knowing before they read the diff.
 | command | when |
 |---|---|
 | `sephera impact <FILE>` | before editing an imported file |
+| `sephera affected-tests <FILE>` | which tests answer for a change, and the commands that run them |
+| `sephera guard --max-dependents N` | a harness hook judging one edit before it happens (also an MCP tool pair: `impact` / `affected_tests`) |
 | `sephera context --path . --focus <DIR> --budget 32k` | you need to read code you were not given |
 | `sephera graph --path . --what-depends-on <FILE>` | you want the full report, not just the radius |
 | `sephera graph --path . --diff origin/main` | what this branch's change reaches |

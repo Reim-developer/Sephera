@@ -70,6 +70,48 @@ impl ResolverPlugin for RustPlugin {
         import_path: &str,
         context: ResolveContext<'_>,
     ) -> Option<String> {
+        // A glob of a qualifier alone -- `use super::*;`, `use crate::*;` --
+        // is recorded as the qualifier itself, with nothing after it to
+        // walk. Each names a module rather than an item, so each has a
+        // direct answer:
+        //
+        // - `self` is the file's own module, which is the file.
+        // - `crate` is the crate root module, which is the root file.
+        // - `super` is the parent module -- and which file that is depends
+        //   on where the reference sits. Inside an inline `mod tests { }`
+        //   the parent of the inline module is the file's own module, so
+        //   the answer is the file itself: 41 of axum's 65 self-references
+        //   are exactly this, and they are real. At the top of a *child
+        //   file* -- `src/core/tests.rs`, declared by `mod tests;` in
+        //   `src/core.rs` -- the parent module is the declaring file, and
+        //   landing on the file itself instead loses the one edge that
+        //   says the test module answers for its parent. The two cases are
+        //   separated by `module_depth`, the same subtraction the `super::`
+        //   walk below already makes.
+        if import_path == "self" {
+            return Some(context.source_file.to_owned());
+        }
+        if import_path == "crate" {
+            return crate_root_file(context, context.source_file);
+        }
+        if import_path.split("::").all(|segment| segment == "super") {
+            let levels = import_path.split("::").count();
+            let levels =
+                levels.saturating_sub(usize::from(context.module_depth));
+            if levels == 0 {
+                return Some(context.source_file.to_owned());
+            }
+            let mut base = module_path(context.source_file);
+            for _ in 0..levels {
+                let parent = shared_paths::parent(&base);
+                if parent.is_empty() {
+                    break;
+                }
+                base = parent;
+            }
+            return first_existing(context, &base, true);
+        }
+
         // `super::` climbs the module hierarchy. A file's module is its path without
         // the extension, so each `super::` removes one module segment. Levels
         // are counted rather than stripped once so that `super::super::x`
@@ -471,6 +513,64 @@ mod tests {
         let files = ["src/main.rs"];
 
         assert_eq!(resolve("self::missing", "src/main.rs", &files), None);
+    }
+
+    #[test]
+    fn a_super_glob_at_the_top_of_a_child_file_names_the_declaring_file() {
+        // `use super::*;` is recorded as bare `super`. In `src/core/tests.rs`
+        // -- a file, declared by `mod tests;` in `src/core.rs` -- the parent
+        // module is `core`, so the answer is the declaring file. It used to
+        // come back as the test file itself, which erased the edge between a
+        // test module and the module it tests.
+        let files = ["src/core.rs", "src/core/tests.rs"];
+
+        assert_eq!(
+            resolve("super", "src/core/tests.rs", &files),
+            Some("src/core.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_super_glob_inside_an_inline_module_names_the_file_itself() {
+        // The same words one level down mean the opposite file: inside
+        // `mod tests { }` the parent module is the file's own, so the
+        // reference is a self-reference and stays one.
+        let files = ["src/core.rs", "src/core/tests.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let context = sephera_core::plugins::ResolveContext {
+            module_depth: 1,
+            ..sephera_core::plugins::test_context("src/core.rs", &known)
+        };
+
+        assert_eq!(
+            RustPlugin.resolve("super", context),
+            Some("src/core.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_super_super_glob_climbs_twice() {
+        let files = ["src/core.rs", "src/core/graph/parser.rs"];
+
+        assert_eq!(
+            resolve("super::super", "src/core/graph/parser.rs", &files),
+            Some("src/core.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_crate_glob_names_the_root_file_and_a_self_glob_the_file() {
+        let files = ["src/lib.rs", "src/core/tests.rs"];
+
+        assert_eq!(
+            resolve("crate", "src/core/tests.rs", &files),
+            Some("src/lib.rs".to_owned())
+        );
+        assert_eq!(
+            resolve("self", "src/core/tests.rs", &files),
+            Some("src/core/tests.rs".to_owned())
+        );
     }
 
     #[test]
