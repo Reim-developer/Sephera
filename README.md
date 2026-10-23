@@ -339,6 +339,42 @@ means the analysis could not run. A broken install and a violated rule look the
 same in a log otherwise, and that is where someone adds `--ignore-failures` to
 the workflow and then never notices either.
 
+### `affected-tests` — which tests answer for a change *(new in 2.0)*
+
+The follow-up question: not just what breaks, but what to run. The same walk,
+filtered to test files, each with its distance from the changed file — plus the
+commands that run them.
+
+```bash
+# Which test files would notice a change here, closest first?
+sephera affected-tests crates/sephera_graph/src/blast_radius.rs
+
+# Fail the build when a change reaches no test at all
+sephera affected-tests crates/sephera_graph/src/blast_radius.rs --require-tests
+
+# Machine-readable, plan included
+sephera affected-tests crates/sephera_graph/src/blast_radius.rs --format json
+```
+
+`--run` executes the plan: Cargo targets for Rust integration tests, package
+directories for Go, files for pytest. Ecosystems with no honest mapping are
+listed as manual rather than given an invented command.
+
+### `guard` — a seatbelt for coding agents *(new in 2.0)*
+
+Wire it as a `PreToolUse` hook and every agent edit is measured before it
+happens. The hook payload comes in on stdin; the decision — allow, or deny when
+the blast radius reaches the limit — goes out as JSON on stdout, and a denial
+also exits **2**.
+
+```bash
+# Judge one file by hand, the way a harness would
+sephera guard --file crates/sephera_graph/src/blast_radius.rs --path . --max-dependents 25
+```
+
+Both measurements are also MCP tools (`impact`, `affected_tests`), so an agent
+can ask before editing — `guard` exists for the moment before it thinks to ask.
+
 ### `graph` — dependency structure and blast radius
 
 Works on Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.
