@@ -274,20 +274,16 @@ impl ManifestIndex {
         self.module_path = Some(module_path.to_owned());
     }
 
-    /// Whether an import names this project's own Go module root package.
+    /// The module path `go.mod` declares, if it declares one.
     ///
-    /// Go maps the module path to the directory holding `go.mod`, and the root
-    /// package's files sit directly in it. An import of the bare module path is
-    /// therefore a reference to that directory, which no directory-name match
-    /// can find: `example.com/app` names package `app`, and there is no
-    /// directory called `app`.
-    ///
-    /// Returns a flag rather than a path because the graph's file list holds
-    /// paths relative to the project root, so the directory it names is the root
-    /// itself.
+    /// Go maps the module path to the directory holding `go.mod`, which
+    /// this index reads at the project root -- so an import inside the
+    /// module names a package whose directory is the import path with
+    /// the module path taken off the front, and an import of the bare
+    /// module path is the root package whose files sit at the top level.
     #[must_use]
-    pub fn is_go_module_root(&self, import_path: &str) -> bool {
-        self.module_path.as_deref() == Some(import_path)
+    pub fn go_module_path(&self) -> Option<&str> {
+        self.module_path.as_deref()
     }
 
     /// Go `replace` directives from `go.mod`.
@@ -701,8 +697,8 @@ impl sephera_core::plugins::ModuleManifestLookup for ManifestIndex {
         self.go_replaces()
     }
 
-    fn is_go_module_root(&self, import_path: &str) -> bool {
-        self.is_go_module_root(import_path)
+    fn go_module_path(&self) -> Option<&str> {
+        self.go_module_path()
     }
 }
 
