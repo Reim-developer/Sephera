@@ -67,7 +67,7 @@ files, not a guess at coverage.
 The report ends with the commands that run the tests, where a mapping exists:
 
 - Rust integration tests (a file directly under a `tests/` directory) become
-  one `cargo test --test <name>` invocation;
+  one `cargo test` invocation aimed at that file's target;
 - any other Rust test file means the tests live inside source files or a layout
   Cargo decides, so the honest command is a whole `cargo test`;
 - Go test files become `go test` over their package directories;
