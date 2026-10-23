@@ -109,7 +109,27 @@ impl ResolverPlugin for RustPlugin {
                 }
                 base = parent;
             }
-            return first_existing(context, &base, true);
+            return first_existing(context, &base, true).or_else(|| {
+                // The climb can land on the crate root itself, whose file
+                // sits *inside* the directory the climb lands on --
+                // `src/main.rs`, `src/lib.rs` -- a shape `first_existing`
+                // has no candidate for: it looks for `src.rs` and
+                // `src/mod.rs`. So `use super::*;` at the top of
+                // `src/tests.rs`, declared by `mod tests;` in `src/main.rs`,
+                // came back unresolved even though its parent module is the
+                // most ordinary one there is.
+                //
+                // The directory decides whether the climb landed on the
+                // root, and `crate_root_file` already knows the names a
+                // root file can have. Asking only on equality keeps the
+                // root file from being volunteered for a directory that
+                // merely sits above it.
+                if crate_root(context.source_file) == base {
+                    crate_root_file(context, context.source_file)
+                } else {
+                    None
+                }
+            });
         }
 
         // `super::` climbs the module hierarchy. A file's module is its path without
@@ -570,6 +590,50 @@ mod tests {
         assert_eq!(
             resolve("self", "src/core/tests.rs", &files),
             Some("src/core/tests.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_super_glob_in_a_child_of_a_binary_crate_root_names_the_root_file() {
+        // The parent module of a first-level child is the crate root, and a
+        // binary crate's root file sits *inside* the directory the climb
+        // lands on: `src/main.rs`, not `src.rs` or `src/mod.rs`. axum's
+        // compression example is this shape -- `mod tests;` in
+        // `examples/compression/src/main.rs`, `use super::*;` at the top of
+        // `examples/compression/src/tests.rs` -- and the glob came back
+        // unresolved there, so the test module answered for nothing.
+        let files = [
+            "examples/compression/src/main.rs",
+            "examples/compression/src/tests.rs",
+        ];
+
+        assert_eq!(
+            resolve("super", "examples/compression/src/tests.rs", &files),
+            Some("examples/compression/src/main.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_super_glob_in_a_child_of_a_library_crate_root_names_the_root_file() {
+        // The same shape with the other root spelling.
+        let files = ["src/lib.rs", "src/tests.rs"];
+
+        assert_eq!(
+            resolve("super", "src/tests.rs", &files),
+            Some("src/lib.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_super_glob_below_the_root_does_not_reach_for_the_root_file() {
+        // The root fallback answers only when the climb lands on the root.
+        // One level down the parent is an ordinary module file, and the
+        // root file sitting in the tree must not be volunteered for it.
+        let files = ["src/lib.rs", "src/core.rs", "src/core/tests.rs"];
+
+        assert_eq!(
+            resolve("super", "src/core/tests.rs", &files),
+            Some("src/core.rs".to_owned())
         );
     }
 

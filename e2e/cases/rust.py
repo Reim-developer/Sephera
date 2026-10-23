@@ -178,6 +178,18 @@ CASES: Final[tuple[Case, ...]] = (
         kind="namespace",
     ),
     Case(
+        id="rust/super_glob_in_a_child_of_the_crate_root_names_the_root_file",
+        source=f"{R}/root_child.rs",
+        import_path="super",
+        why="`use super::*;` in a file the crate root declares names the "
+        "root module, whose file sits inside the directory the climb "
+        "lands on -- `lib.rs`, not `src.rs` or `src/mod.rs`. Answering "
+        "nothing leaves a first-level module answering for no file at "
+        "all, which is what axum's compression example showed.",
+        resolves_to=f"{R}/lib.rs",
+        kind="namespace",
+    ),
+    Case(
         id="rust/namespace_import_of_the_standard_library",
         source=f"{R}/glob.rs",
         import_path="std::collections",

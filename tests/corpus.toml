@@ -17,7 +17,7 @@
 # `cycles - structural_cycles` are worth acting on. It is zero everywhere now:
 # a parent referring to its own child is excluded whatever way it is spelled.
 #
-# `self_references` was 65 and is 60, and `python
+# `self_references` was 65, then 60, and is 70, and `python
 # e2e/where_self_edges_come_from.py` says where they come from -- which changed
 # what the number meant three times over. 41 of the 65 are `use super::*;`
 # inside a test module, which is a reference the counting rules call real, and
@@ -69,8 +69,31 @@ language = "Rust"
 # the same reason and neither is a behaviour change.
 unresolved_local = 6
 files = 307
-internal_edges = 646
-self_references = 60
+# Was 646 internal and 60 self-references before a qualifier-only path
+# (`use super::*;` recorded as the bare word `super`) learned to answer at
+# all. Both numbers moved, in opposite directions, for three reasons --
+# every one of them a correction, and listed because a figure that moves
+# during a correctness fix needs its new value justified, not accepted.
+#
+# Nine of the ten new self-references are example crates whose `main.rs`
+# carries `#[cfg(test)] mod tests { use super::*; }`. The glob names the
+# root module, which is the file itself, so the reference is real -- but
+# the old fall-through left all nine unresolved and counted nowhere.
+#
+# Two more are in `axum/src/routing/tests/get_to_head.rs`, which has three
+# globs. The one at its top names `routing::tests` and still lands on
+# `tests/mod.rs`; the two inside its inline modules name the file's own
+# module, and the old walk sent all three to `mod.rs`. Those two edges
+# moved from internal to self-references, which is most of why internal
+# falls.
+#
+# The tenth went the other way. `examples/compression/src/tests.rs`
+# glob-imports its parent, which is the crate root in `main.rs`; the old
+# walk landed it on the file itself, where it sat as one of the 60. It now
+# resolves to `main.rs` -- one self-reference becomes an internal edge,
+# which is why internal falls by one net (646 - 2 + 1) rather than two.
+internal_edges = 645
+self_references = 70
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
 # a dependency a default build does not have.

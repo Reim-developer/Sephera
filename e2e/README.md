@@ -7,16 +7,16 @@ expectation about what resolving it should produce, and checked against a real
 ## Status
 
 ```
-accuracy over local imports: 45/45 resolved (100.0%)
+accuracy over local imports: 46/46 resolved (100.0%)
 external imports left alone: 18/30
-75 import cases, 16 file cases, 0 known defects
+76 import cases, 16 file cases, 0 known defects
 ```
 
 All eight bundled languages are covered.
 
 | language | cases | known defects |
 |---|---:|---:|
-| Rust | 25 | 0 |
+| Rust | 26 | 0 |
 | Python | 17 | 0 |
 | JavaScript | 8 | 0 |
 | Go, Java, TypeScript | 15 | 0 |
