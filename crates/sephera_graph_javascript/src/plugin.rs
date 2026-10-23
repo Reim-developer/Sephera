@@ -10,7 +10,7 @@
 //! produced `..` and then `/index.js`, a path no project has, and 46 `../`, 22
 //! `..` and 12 `../..` imports on express's own examples were reported
 //! unresolved.
-
+//!
 use sephera_compression::SupportedLanguage;
 
 use sephera_core::{
@@ -21,9 +21,30 @@ use sephera_core::{
 /// Suffixes tried in order when a specifier names a file without an extension.
 ///
 /// An empty suffix comes first so an explicit extension in the specifier wins
-/// over a guess.
-const EXTENSION_CANDIDATES: &[&str] =
-    &["", ".ts", ".tsx", ".js", ".jsx", "/index.ts", "/index.js"];
+/// over a guess. The order after it is TypeScript's own: a `.ts` source beats
+/// its `.d.ts` shadow, which beats the compiled `.js` beside both -- and a
+/// declaration file is a real target, because a `./utils` that only exists as
+/// `utils.d.ts` is an import of a file this project holds, not a gap.
+const EXTENSION_CANDIDATES: &[&str] = &[
+    "",
+    ".ts",
+    ".tsx",
+    ".d.ts",
+    ".mts",
+    ".cts",
+    ".js",
+    ".jsx",
+    ".mjs",
+    ".cjs",
+    ".vue",
+    "/index.ts",
+    "/index.tsx",
+    "/index.d.ts",
+    "/index.js",
+    "/index.jsx",
+    "/index.mjs",
+    "/index.cjs",
+];
 
 /// JavaScript or TypeScript import extraction and resolution.
 #[derive(Debug, Clone, Copy)]
@@ -57,6 +78,12 @@ fn resolve_import(
     import_path: &str,
     context: ResolveContext<'_>,
 ) -> Option<String> {
+    // A bundler query (`./data?raw`, `./worker?worker`) is an instruction to
+    // the loader, not part of the path; the file it names is.
+    let import_path = import_path
+        .find(['?', '#'])
+        .map_or(import_path, |index| &import_path[..index]);
+
     // Bare specifiers (`react`, `lodash/fp`) name packages, not project files.
     // Only `./` and `../` can be resolved locally.
     if !import_path.starts_with('.') {
@@ -67,13 +94,21 @@ fn resolve_import(
     let escaped = paths::resolve_relative(&base, import_path);
     let resolved = clamp_to_root(&escaped);
 
-    if let Some(entry) = package_entry_point(&context, &resolved) {
+    resolve_path_base(&context, &resolved)
+}
+
+/// Try a resolved path as a file, then as a directory with an entry point.
+fn resolve_path_base(
+    context: &ResolveContext<'_>,
+    resolved: &str,
+) -> Option<String> {
+    if let Some(entry) = package_entry_point(context, resolved) {
         return Some(entry);
     }
 
     EXTENSION_CANDIDATES
         .iter()
-        .map(|suffix| join_candidate(&resolved, suffix))
+        .map(|suffix| join_candidate(resolved, suffix))
         .find(|candidate| context.contains(candidate))
 }
 
@@ -309,6 +344,30 @@ mod tests {
         assert_eq!(
             resolve("./b.ts", "src/a.ts", &files),
             Some("src/b.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_declaration_file_is_a_target() {
+        // dts-test suites import `./utils` where only `utils.d.ts`
+        // exists. A declaration file is a file this project holds; the
+        // candidate list never tried its suffix, so every such import
+        // was a resolver gap.
+        let files = ["src/a.ts", "src/utils.d.ts"];
+
+        assert_eq!(
+            resolve("./utils", "src/a.ts", &files),
+            Some("src/utils.d.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_bundler_query_is_not_part_of_the_path() {
+        let files = ["src/a.ts", "src/data.ts"];
+
+        assert_eq!(
+            resolve("./data?raw", "src/a.ts", &files),
+            Some("src/data.ts".to_owned())
         );
     }
 }
