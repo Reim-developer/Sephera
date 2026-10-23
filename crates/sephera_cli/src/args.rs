@@ -148,6 +148,18 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera impact src/core/graph/resolver.rs\n  sephera impact src/lib.rs --depth 1\n  sephera impact src/core/ignore.rs --format json\n  sephera impact src/lib.rs --fail-on 40\n  sephera impact crates/sephera_core/src/core/graph.rs --fail-on 10 --output impact.md"
     )]
     Impact(ImpactArgs),
+    /// Report which tests a change to one file has to answer for
+    #[command(
+        long_about = "Report which tests a change to one file has to answer for.\n\nThe blast radius says what breaks; this says which tests would notice. It is the same reachability walk, filtered to test files -- files under a `tests` directory and the test naming conventions of every supported language -- with each test's distance from the changed file, closest first. The report ends with the commands that run those tests where a mapping exists: Cargo test targets for Rust integration tests, package directories for Go, files for pytest. Other ecosystems are listed without an invented command.\n\nWith `--run` the commands are executed. With `--require-tests` the run fails when a changed file reaches no test at all, which is the CI form of the question: not \"is the radius wide\" but \"is this change unwitnessed\".",
+        after_long_help = "Examples:\n  sephera affected-tests src/lib.rs\n  sephera affected-tests src/lib.rs src/parser.rs --format json\n  sephera affected-tests src/lib.rs --run\n  sephera affected-tests src/lib.rs --require-tests"
+    )]
+    AffectedTests(AffectedTestsArgs),
+    /// Judge one agent edit before it happens, from a hook payload on stdin
+    #[command(
+        long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
+        after_long_help = "Examples:\n  sephera guard --path . --max-dependents 25\n  sephera guard --file src/lib.rs --path ."
+    )]
+    Guard(GuardArgs),
 }
 
 tree_command_args!(
@@ -748,6 +760,132 @@ pub enum ImpactOutputFormat {
     Json,
 }
 
+tree_command_args!(
+    #[doc = "Report which tests a change has to answer for."]
+    AffectedTestsArgs {
+        /// Files whose affected tests to report
+    #[arg(
+        value_name = "FILE",
+        required = true,
+        num_args = 1..,
+        help = "File whose affected tests to report. Repeat for several.",
+        long_help = "Path of the file whose affected tests to report, relative to the analysis base. Repeat the flag or pass several paths to ask about more than one; the graph is built once and every path is measured against it. Paths are listed most affected first. A path that matches nothing in the analysis is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
+    )]
+    pub files: Vec<String>,
+
+    /// Maximum distance from the file whose tests are reported
+    #[arg(
+        long,
+        value_name = "DEPTH",
+        help = "Maximum distance to report.",
+        long_help = "How many hops away a test may be. 1 reports only tests that import this file directly; 2 also reports tests that import those importers. Omit for the whole transitive closure."
+    )]
+    pub depth: Option<u32>,
+
+    /// Restrict the reported tests to a subtree
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Report only the tests inside this path. Repeat for several.",
+        long_help = "Report only the tests inside this path, which matches a path exactly or as a directory prefix at a `/` boundary. Repeat the flag to accept several scopes. This narrows the answer, not the analysis: the target itself is reported wherever it lives. Without this flag every test in the repository is considered."
+    )]
+    pub focus: Vec<PathBuf>,
+
+    /// Drop imports that describe types rather than runtime dependencies
+    #[arg(
+        long,
+        help = "Exclude type aliases and wildcard imports from the analysis.",
+        long_help = "Exclude type aliases and wildcard imports from the analysis. A `type X = Y` alias or an `import ... .*` wildcard names a namespace rather than a runtime dependency, so the edges they create never fail at runtime and the tests behind them are not answering for a change."
+    )]
+    pub exclude_types: bool,
+
+    /// Run the planned test commands after reporting them
+    #[arg(
+        long,
+        help = "Run the planned test commands after reporting them.",
+        long_help = "Execute the commands in the report's plan, from the analysis base, in plan order. Test output is the runner's own. The first failing command stops the run and fails this command, because a plan whose first suite failed has already answered. Test files with no automatic runner mapping are listed and skipped, never silently counted as run."
+    )]
+    pub run: bool,
+
+    /// Fail with exit code 2 when a target reaches no test file
+    #[arg(
+        long,
+        help = "Fail with exit code 2 when a target reaches no test file.",
+        long_help = "Exit with code 2 when any one of the targets has no affected test. Every unwitnessed target is named, because a run that violates the rule three times should not take three CI runs to discover. The report is still printed; only the exit code changes."
+    )]
+    pub require_tests: bool,
+
+    /// Output format for the test plan
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the test plan. Supports markdown and json.",
+        long_help = "Output format for the test plan. Supports markdown and json."
+    )]
+    pub format: TestImpactOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestImpactOutputFormat {
+    /// Markdown list of test files with the commands that run them.
+    #[value(name = "markdown", help = "Render the test plan as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the test plan as JSON.")]
+    Json,
+}
+
+/// Arguments for `sephera guard`.
+///
+/// Not built by `tree_command_args!`: the guard analyses one local project
+/// named by `--path` and nothing else. There is no report to write to a
+/// file -- stdout is the harness's decision channel -- and no remote source
+/// a hook could be pointed at, so the shared groups' URL, output, and
+/// settings fields would be flags that parse and do nothing.
+#[derive(Debug, Args)]
+pub struct GuardArgs {
+    /// Project directory to analyse
+    #[arg(
+        long,
+        value_name = "PATH",
+        help = "Path to the project directory to analyze.",
+        long_help = "Path to the project directory to analyze, resolved from the current working directory. The edited file is matched against this project's graph."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Judge this file instead of reading a hook payload from stdin
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Judge this file instead of reading a hook payload from stdin.",
+        long_help = "Path of the file to judge, absolute or relative to the project. Skips stdin entirely, which is how a pre-commit hook or a curious person runs the same judgement a harness would get."
+    )]
+    pub file: Option<String>,
+
+    /// Maximum distance from the file to measure
+    #[arg(
+        long,
+        value_name = "DEPTH",
+        help = "Maximum distance to measure.",
+        long_help = "How many hops away a dependent may be when measuring the edited file's blast radius. Omit for the whole transitive closure."
+    )]
+    pub depth: Option<u32>,
+
+    /// Deny the edit at this many dependents
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Deny the edit at this many dependents.",
+        long_help = "Deny the edit when at least this many files depend on the edited file, and exit 2. The limit is the first failing value, so `--max-dependents 25` denies the twenty-fifth dependent, not the twenty-sixth. Without this flag every edit is allowed and the guard is a report only."
+    )]
+    pub max_dependents: Option<u64>,
+}
+
 #[cfg(test)]
 mod tests {
     use clap::{CommandFactory, Parser};
@@ -755,8 +893,15 @@ mod tests {
     use super::{Cli, Commands, ContextFormat};
 
     /// Commands that walk a tree, and so must accept the shared groups.
-    const TREE_COMMANDS: [&str; 6] =
-        ["loc", "symbols", "context", "graph", "impact", "watch"];
+    const TREE_COMMANDS: [&str; 7] = [
+        "loc",
+        "symbols",
+        "context",
+        "graph",
+        "impact",
+        "affected-tests",
+        "watch",
+    ];
 
     /// Flags every tree-walking command must accept.
     ///

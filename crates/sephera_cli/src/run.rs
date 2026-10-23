@@ -1,3 +1,4 @@
+use std::io::Read as _;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -15,18 +16,20 @@ use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
+    affected_tests,
     args::{
-        Cli, Commands, ContextArgs, GraphArgs, GraphOutputFormat, IgnoreArgs,
-        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
-        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs, WatchArgs,
-        WatchTarget,
+        AffectedTestsArgs, Cli, Commands, ContextArgs, GraphArgs,
+        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
+        ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, SettingsArgs,
+        SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
+        WatchArgs, WatchTarget,
     },
     change_impact, configure,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
     gate::{self, Gate},
-    impact,
+    guard, impact,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
         print_symbol_report, print_symbols_by_file, render_context_json,
@@ -114,6 +117,10 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
             unreachable!("`watch` is dispatched before the runtime starts")
         }
         Commands::Impact(arguments) => run_impact(&arguments).await,
+        Commands::AffectedTests(arguments) => {
+            run_affected_tests(&arguments).await
+        }
+        Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
 }
@@ -586,6 +593,236 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     progress.finish();
     emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
     Ok(gates)
+}
+
+/// Report which tests one or more files have to answer for.
+///
+/// The graph build and the scope normalisation are `run_impact`'s, step for
+/// step: the two commands are one analysis with two filters, and a reader
+/// comparing them should never have to wonder whether the difference is in
+/// the answer or in how the question was built.
+async fn run_affected_tests(
+    arguments: &AffectedTestsArgs,
+) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Finding affected tests...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        arguments.depth,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: arguments.exclude_types,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let focus = build_focus_set(&source.analysis_path, &arguments.focus)
+        .into_iter()
+        .collect::<Vec<_>>();
+
+    let impacts = sephera_graph::affected_tests::measure_tests_all(
+        &report,
+        &arguments.files,
+        "",
+        arguments.depth,
+        &focus,
+    )?;
+
+    let plan = affected_tests::runner_plan(&impacts);
+    let rendered = match arguments.format {
+        TestImpactOutputFormat::Markdown => {
+            affected_tests::render_report(&impacts, &plan)
+        }
+        TestImpactOutputFormat::Json => {
+            affected_tests::render_report_json(&impacts, &plan)
+        }
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    if arguments.run {
+        // Said out loud rather than folded into the plan's success: a file
+        // listed as manual was *not* run, and a green run that quietly
+        // skipped a third of the plan is the failure this command exists to
+        // prevent.
+        for file in &plan.manual {
+            eprintln!(
+                "note: `{file}` has no automatic runner mapping and was not run"
+            );
+        }
+        affected_tests::execute_plan(&plan, &source.analysis_path)?;
+    }
+
+    // One gate per unwitnessed target, as `impact` names one per wide
+    // target. The measurement is inverted deliberately: a gate crosses when
+    // its count reaches its limit, and the rule here is "this change is
+    // unwitnessed", so the count is of unwitnessed changes -- one, for the
+    // target named.
+    let gates = if arguments.require_tests {
+        impacts
+            .iter()
+            .filter(|impact| impact.tests.is_empty())
+            .map(|impact| {
+                Gate::new(
+                    format!("unwitnessed change to `{}`", impact.target),
+                    1,
+                    1,
+                )
+            })
+            .collect()
+    } else {
+        Vec::new()
+    };
+
+    Ok(gates)
+}
+
+/// Judge one agent edit before it happens.
+///
+/// Reads the hook payload, measures the edited file, prints the decision
+/// JSON on stdout and the reasoning on stderr. Every outcome that is not a
+/// denial is an allow, including "no file could be found in the payload"
+/// and "the file is not in the graph": a guard that blocked edits it could
+/// not judge would block them all the first time it was misconfigured, and
+/// be removed by lunch. See [`crate::guard`].
+/// The file a guard run judges: the one named by `--file`, or the one the
+/// hook payload on stdin names.
+///
+/// # Errors
+///
+/// Errors when stdin cannot be read. A payload that names no file is not an
+/// error -- it is the common case of a hook firing for a non-edit tool.
+fn guard_target(arguments: &GuardArgs) -> Result<Option<String>> {
+    if let Some(file) = &arguments.file {
+        return Ok(Some(file.clone()));
+    }
+    let mut payload = String::new();
+    std::io::stdin()
+        .read_to_string(&mut payload)
+        .context("failed to read the hook payload from stdin")?;
+    Ok(guard::file_path_from_hook_input(&payload))
+}
+
+async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
+    let edited = guard_target(arguments)?;
+
+    let Some(edited) = edited else {
+        eprintln!(
+            "sephera guard: no edited file in the hook payload; allowing"
+        );
+        println!(
+            "{}",
+            guard::decision_json(false, "no edited file in the hook payload")
+        );
+        return Ok(Vec::new());
+    };
+
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &SettingsArgs::default(),
+        &[],
+        false,
+    )?;
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        arguments.depth,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&CliProgress::start("Measuring the edit...")),
+    )?;
+
+    let spelled = guard::graph_spelling(&source.analysis_path, &edited);
+    let Some(canonical) = impact::match_path(&report, &spelled, "") else {
+        eprintln!(
+            "sephera guard: `{spelled}` is not in the analysed graph; allowing"
+        );
+        println!(
+            "{}",
+            guard::decision_json(
+                false,
+                "the edited file is not in the analysed graph"
+            )
+        );
+        return Ok(Vec::new());
+    };
+
+    let radius = impact::measure(&report, &canonical, arguments.depth)?;
+    let dependents = impact::dependent_count(&radius);
+    let tests = sephera_graph::affected_tests::measure_tests(
+        &report,
+        &canonical,
+        arguments.depth,
+        &[],
+    )?;
+    let test_count = sephera_graph::affected_tests::affected_test_count(&tests);
+
+    eprintln!(
+        "sephera guard: `{canonical}` has {dependents} dependent(s) and \
+         {test_count} affected test(s)"
+    );
+
+    let blocked = arguments
+        .max_dependents
+        .is_some_and(|limit| dependents >= limit);
+    let reason = if blocked {
+        format!(
+            "`{canonical}` has {dependents} dependents, at or over the limit \
+             of {}. Measure it with `sephera impact {canonical}` and get a \
+             person's agreement before editing it.",
+            arguments.max_dependents.unwrap_or_default()
+        )
+    } else {
+        format!(
+            "`{canonical}` has {dependents} dependent(s) and {test_count} \
+             affected test(s)"
+        )
+    };
+    println!("{}", guard::decision_json(blocked, &reason));
+
+    if blocked {
+        Ok(vec![Gate::new(
+            format!("files depending on `{canonical}`"),
+            dependents,
+            arguments.max_dependents.unwrap_or_default(),
+        )])
+    } else {
+        Ok(Vec::new())
+    }
 }
 
 /// Report what a change reaches, rather than what the repository depends on.
