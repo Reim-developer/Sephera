@@ -178,6 +178,18 @@ CASES: Final[tuple[Case, ...]] = (
         kind="namespace",
     ),
     Case(
+        id="rust/a_sibling_crate_named_in_a_path_resolves_to_its_files",
+        source=f"{R}/uses_leaf.rs",
+        import_path="leaf::widget::Widget",
+        why="A path whose head names a sibling crate -- a manifest in "
+        "the tree declares `leaf`, and its lib target is in the graph "
+        "-- names that crate's files through the extern prelude. No "
+        "directory under the importing crate is called `leaf`, so the "
+        "module walks cannot see it, and the import was filed as a "
+        "third-party dependency.",
+        resolves_to="rust/crates/leaf/src/widget.rs",
+    ),
+    Case(
         id="rust/super_glob_in_a_child_of_the_crate_root_names_the_root_file",
         source=f"{R}/root_child.rs",
         import_path="super",

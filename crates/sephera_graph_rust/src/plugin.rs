@@ -18,7 +18,7 @@ use tree_sitter::Node;
 
 use sephera_core::types::{ImportKind, ImportStatement};
 
-use crate::names::{crate_root_file, names_a_crate_outside};
+use crate::names::{crate_root_file, is_qualifier, names_a_crate_outside};
 use crate::paths::{crate_root, module_path, qualify};
 use sephera_core::{
     path_utils as shared_paths,
@@ -186,6 +186,7 @@ impl ResolverPlugin for RustPlugin {
         // Trying the local directory first is what the compiler does too, and
         // without it every such import was reported as an external dependency.
         resolve_qualified(context, &children, import_path, false)
+            .or_else(|| resolve_by_crate_name(context, import_path))
     }
 
     /// Whether a name the crate root re-exports is an external crate.
@@ -302,6 +303,148 @@ fn resolve_qualified(
     }
 
     None
+}
+
+/// Resolve a path whose head names one of the project's own crates.
+///
+/// Rust names sibling crates by name -- `use axum_core::extract::...`
+/// inside axum, `use sephera::...` inside an integration test -- through
+/// Cargo's extern prelude, not through any module path in the importing
+/// crate. The walks above cannot see it: no directory under the importing
+/// file is called `axum_core`, so every such import was filed as a
+/// dependency on a third-party package of that name. On axum that is
+/// 1066 imports, more than the 645 internal edges the graph did find:
+/// the coupling between a workspace's members was the largest single
+/// hole in the graph, hidden by the dependencies being real ones --
+/// they sit in `Cargo.toml`, so the report looked plausible.
+///
+/// The evidence that a name is one of the project's own is the strongest
+/// the tree offers, and it is the only evidence taken: a `Cargo.toml` on
+/// disk declares the name, and the lib target it names is in the file
+/// set. Directory names are never evidence -- a crate whose directory is
+/// `sephera_cli` and whose lib is `sephera` is found by the manifest,
+/// not by the directory. A name no manifest in the tree declares stays
+/// external, which is what keeps `serde::Serialize` a dependency.
+fn resolve_by_crate_name(
+    context: ResolveContext<'_>,
+    import_path: &str,
+) -> Option<String> {
+    let (head, rest) =
+        import_path.split_once("::").unwrap_or((import_path, ""));
+    if head.is_empty() || is_qualifier(head) {
+        return None;
+    }
+    let root_file = named_crate_root(context, head)?;
+    if rest.is_empty() {
+        return Some(root_file);
+    }
+    let root_dir = shared_paths::parent(&root_file);
+
+    // The steps below mirror `resolve_qualified` with its qualified
+    // checks, anchored at the named crate's root rather than the
+    // importing file's. It cannot simply call that function: its
+    // declaration fallback asks the *importing* crate's root whether it
+    // reaches the leaf name, and the root that must answer here is the
+    // named one -- asking the other is how an unqualified path once
+    // invented 934 self-edges on axum.
+    if let Some(found) =
+        first_existing(context, &qualify(&root_dir, rest), true)
+    {
+        return Some(found);
+    }
+
+    let index = context.declarations?;
+    let (prefix, name) = rest.rsplit_once("::").unwrap_or(("", rest));
+    if !prefix.is_empty()
+        && let Some(module_file) =
+            first_existing(context, &qualify(&root_dir, prefix), true)
+        && index.file_declares(&module_file, name)
+    {
+        return Some(module_file);
+    }
+    if index.file_reaches(&root_file, name) {
+        return Some(root_file);
+    }
+    None
+}
+
+/// The lib root of the crate a manifest in the tree declares as `name`.
+///
+/// Candidates are the lib targets in the file set (`src/lib.rs`). Each
+/// candidate's manifest is read from disk -- the graph's file set holds
+/// no manifests -- and the name it declares is compared with hyphens
+/// folded to underscores, which is how a package called `axum-core` is
+/// named in a path (`axum_core`). A `[lib] path` replaces `src/lib.rs`
+/// as the root when the file it names is in the set.
+fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
+    context
+        .files()
+        .filter(|known| {
+            known.as_str() == "src/lib.rs" || known.ends_with("/src/lib.rs")
+        })
+        .find_map(|lib_rs| {
+            let crate_dir = shared_paths::parent(&shared_paths::parent(lib_rs));
+            let manifest = if crate_dir.is_empty() {
+                "Cargo.toml".to_owned()
+            } else {
+                format!("{crate_dir}/Cargo.toml")
+            };
+            let text =
+                std::fs::read_to_string(context.base_path.join(&manifest))
+                    .ok()?;
+            let declared = declared_crate(&text)?;
+            if declared.name.replace('-', "_") != name {
+                return None;
+            }
+            if let Some(custom) = &declared.lib_path {
+                let root = if crate_dir.is_empty() {
+                    custom.clone()
+                } else {
+                    format!("{crate_dir}/{custom}")
+                };
+                if context.contains(&root) {
+                    return Some(root);
+                }
+            }
+            Some(lib_rs.clone())
+        })
+}
+
+/// What a manifest declares about its lib target.
+struct DeclaredCrate {
+    /// `[lib] name` when present, else the `[package]` name: the name a
+    /// path uses for this crate.
+    name: String,
+    /// A `[lib] path`, when the lib target does not sit at `src/lib.rs`.
+    lib_path: Option<String>,
+}
+
+/// Read the crate a `Cargo.toml` declares, with a real TOML parser.
+///
+/// Parsed properly rather than scanned, for the reason `manifests.rs`
+/// records: a hand-rolled read of this format failed silently once
+/// before, and the failure mode here would be invisible -- the crate
+/// simply stays external.
+fn declared_crate(manifest: &str) -> Option<DeclaredCrate> {
+    let value = toml::from_str::<toml::Value>(manifest).ok()?;
+    let lib = value.get("lib");
+    let name = lib
+        .and_then(|lib| lib.get("name"))
+        .and_then(toml::Value::as_str)
+        .or_else(|| {
+            value
+                .get("package")
+                .and_then(|package| package.get("name"))
+                .and_then(toml::Value::as_str)
+        })?;
+    let lib_path = lib
+        .and_then(|lib| lib.get("path"))
+        .and_then(toml::Value::as_str)
+        .map(str::to_owned);
+    Some(DeclaredCrate {
+        name: name.to_owned(),
+        lib_path,
+    })
 }
 
 /// Try the file spellings a Rust module path can take.
@@ -715,5 +858,178 @@ mod tests {
             resolve("crate::util", "crates/inner/src/lib.rs", &files),
             Some("crates/inner/src/util.rs".to_owned())
         );
+    }
+
+    /// Resolve with a real directory behind the context, as an analysis
+    /// has.
+    ///
+    /// A crate's name lives in its `Cargo.toml`, which is read from
+    /// disk, so a fixture of bare names -- what `test_context` builds --
+    /// can never present one. These write the manifests into a
+    /// temporary root and point the context at it.
+    fn resolve_on_disk(
+        directory: &std::path::Path,
+        import_path: &str,
+        source_file: &str,
+        files: &[&str],
+    ) -> Option<String> {
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let context = sephera_core::plugins::ResolveContext {
+            base_path: directory,
+            ..sephera_core::plugins::test_context(source_file, &known)
+        };
+        RustPlugin.resolve(import_path, context)
+    }
+
+    fn write_manifest(
+        directory: &std::path::Path,
+        crate_dir: &str,
+        contents: &str,
+    ) {
+        let path = directory.join(crate_dir).join("Cargo.toml");
+        std::fs::create_dir_all(path.parent().expect("a parent"))
+            .expect("the tree is written");
+        std::fs::write(path, contents).expect("the manifest is written");
+    }
+
+    #[test]
+    fn a_sibling_crate_named_by_its_manifest_resolves() {
+        // axum's shape: one member's files name another member in
+        // paths, and the name is a manifest fact -- package
+        // `axum-core`, path head `axum_core` -- not a directory fact.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_manifest(
+            directory.path(),
+            "crates/axum_core",
+            "[package]\nname = \"axum-core\"\n",
+        );
+        write_manifest(
+            directory.path(),
+            "crates/axum",
+            "[package]\nname = \"axum\"\n",
+        );
+        let files = [
+            "crates/axum/src/lib.rs",
+            "crates/axum_core/src/lib.rs",
+            "crates/axum_core/src/extract.rs",
+        ];
+
+        assert_eq!(
+            resolve_on_disk(
+                directory.path(),
+                "axum_core::extract",
+                "crates/axum/src/lib.rs",
+                &files,
+            ),
+            Some("crates/axum_core/src/extract.rs".to_owned())
+        );
+        assert_eq!(
+            resolve_on_disk(
+                directory.path(),
+                "axum_core",
+                "crates/axum/src/lib.rs",
+                &files,
+            ),
+            Some("crates/axum_core/src/lib.rs".to_owned()),
+            "the bare name is the crate's root module"
+        );
+        assert_eq!(
+            resolve_on_disk(
+                directory.path(),
+                "serde::Serialize",
+                "crates/axum/src/lib.rs",
+                &files,
+            ),
+            None,
+            "a name no manifest in the tree declares stays external"
+        );
+    }
+
+    #[test]
+    fn an_integration_test_names_its_crate_by_the_lib_name() {
+        // Sephera's own shape: the directory is `sephera_cli`, the
+        // package is `sephera-cli`, and the lib an integration test
+        // imports is `sephera` -- three different strings, and only
+        // the manifest knows the third.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_manifest(
+            directory.path(),
+            "crates/sephera_cli",
+            "[package]\nname = \"sephera-cli\"\n\n[lib]\nname = \"sephera\"\n",
+        );
+        let files = [
+            "crates/sephera_cli/src/lib.rs",
+            "crates/sephera_cli/src/render.rs",
+            "crates/sephera_cli/tests/api.rs",
+        ];
+
+        assert_eq!(
+            resolve_on_disk(
+                directory.path(),
+                "sephera::render",
+                "crates/sephera_cli/tests/api.rs",
+                &files,
+            ),
+            Some("crates/sephera_cli/src/render.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_name_the_named_root_reexports_resolves_to_that_root() {
+        // `use axum::Router;` names a type the root re-exports, not a
+        // file. The declaration steps are anchored at the named
+        // crate's root -- the only root that may answer for the name --
+        // and a name that root does not reach stays unresolved rather
+        // than landing somewhere plausible.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_manifest(
+            directory.path(),
+            "crates/axum",
+            "[package]\nname = \"axum\"\n",
+        );
+        write_manifest(
+            directory.path(),
+            "crates/app",
+            "[package]\nname = \"app\"\n",
+        );
+        let files = [
+            "crates/app/src/main.rs",
+            "crates/axum/src/lib.rs",
+            "crates/axum/src/routing.rs",
+        ];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let mut index = sephera_core::declarations::DeclarationIndex::default();
+        index.insert(
+            "crates/axum/src/lib.rs",
+            sephera_core::declarations::DeclaredNames::from_names_and_reexports(
+                [],
+                ["Router"],
+            ),
+        );
+        let context = sephera_core::plugins::ResolveContext {
+            base_path: directory.path(),
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context(
+                "crates/app/src/main.rs",
+                &known,
+            )
+        };
+
+        assert_eq!(
+            RustPlugin.resolve("axum::Router", context),
+            Some("crates/axum/src/lib.rs".to_owned())
+        );
+
+        let context = sephera_core::plugins::ResolveContext {
+            base_path: directory.path(),
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context(
+                "crates/app/src/main.rs",
+                &known,
+            )
+        };
+        assert_eq!(RustPlugin.resolve("axum::Nonexistent", context), None);
     }
 }

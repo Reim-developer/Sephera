@@ -16,7 +16,7 @@ All eight bundled languages are covered.
 
 | language | cases | known defects |
 |---|---:|---:|
-| Rust | 26 | 0 |
+| Rust | 27 | 0 |
 | Python | 17 | 0 |
 | JavaScript | 8 | 0 |
 | Go, Java, TypeScript | 15 | 0 |

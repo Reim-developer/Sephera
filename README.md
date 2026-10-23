@@ -115,12 +115,13 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Metric | Value |
 |--------|-------|
-| Files analyzed | 8 |
-| Internal edges | 48 |
-| External edges | 31 |
-| Declared dependencies | 8 |
-| Local crate edges | 13 |
-| Standard library edges | 10 |
+| Files analyzed | 43 |
+| Internal edges | 233 |
+| External edges | 128 |
+| Self-references (excluded above) | 16 |
+| Declared dependencies | 39 |
+| Local crate edges | 0 |
+| Standard library edges | 55 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -137,75 +138,153 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | `crates/sephera_context/src/lib.rs` | `self::types`, `types::ContextDiffMetadata`, `types::ContextDiffSelection`, `types::ContextExcerpt`, `types::ContextFile`, `types::ContextGroupKind`, `types::ContextGroupSummary`, `types::ContextLanguageSummary`, `types::ContextMetadata`, `types::ContextReport`, `types::SelectionClass` |
 | `crates/sephera_context/src/ranker.rs` | `super::types::SelectionClass` |
 
+**35 further files reach them indirectly**, through the files above.
+
 ## Dependencies
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 10 |
-| `anyhow` | declared | 1.0.102 | 7 |
-| `sepheracompression` | workspace | unknown | 5 |
-| `sepherascan` | workspace | unknown | 4 |
-| `sepheracore` | workspace | unknown | 2 |
-| `sepheraignore` | workspace | unknown | 2 |
+| `std` | stdlib | unknown | 55 |
+| `anyhow` | declared | 1.0.102 | 19 |
+| `context` | undeclared | unknown | 9 |
+| `rmcp` | declared | 1.3.0 | 9 |
+| `tempfile` | declared | 3.27.0 | 9 |
+| `settings` | undeclared | unknown | 6 |
+| `source` | undeclared | unknown | 5 |
+| `arbitrary` | undeclared | unknown | 4 |
+| `interrupt` | undeclared | unknown | 4 |
+| `libfuzzersys` | undeclared | unknown | 3 |
+| `clap` | declared | 4.6.0 | 1 |
 | `serde` | declared | 1.0.228 | 1 |
 
 ## Most Imported Files
 
 | File | Imported by |
 |------|-------------|
+| `crates/sephera_context/src/lib.rs` | 40 |
+| `crates/sephera_runtime/src/lib.rs` | 32 |
 | `crates/sephera_context/src/types.rs` | 27 |
+| `crates/sephera_symbols/src/lib.rs` | 24 |
+| `crates/sephera_cli/src/output.rs` | 17 |
+| `crates/sephera_runtime/src/context.rs` | 10 |
+| `crates/sephera_cli/src/context_config.rs` | 6 |
 | `crates/sephera_context/src/candidate.rs` | 6 |
-| `crates/sephera_context/src/focus.rs` | 5 |
-| `crates/sephera_context/src/excerpt.rs` | 4 |
-| `crates/sephera_context/src/builder.rs` | 2 |
-| `crates/sephera_context/src/grouping.rs` | 2 |
-| `crates/sephera_context/src/ranker.rs` | 2 |
+| `crates/sephera_gui/src/loc.rs` | 6 |
+| `crates/sephera_cli/src/output/symbols.rs` | 5 |
 
 ## Most Importing Files
 
 | File | Imports |
 |------|---------|
+| `crates/sephera_cli/src/run.rs` | 29 |
 | `crates/sephera_context/src/lib.rs` | 18 |
 | `crates/sephera_context/src/builder.rs` | 17 |
-| `crates/sephera_context/src/excerpt.rs` | 4 |
-| `crates/sephera_context/src/candidate.rs` | 3 |
-| `crates/sephera_context/src/grouping.rs` | 3 |
-| `crates/sephera_context/src/ranker.rs` | 2 |
-| `crates/sephera_context/src/focus.rs` | 1 |
+| `crates/sephera_cli/src/output.rs` | 11 |
+| `crates/sephera_mcp/src/render/tests.rs` | 10 |
+| `crates/sephera_mcp/src/server.rs` | 10 |
+| `crates/sephera_runtime/src/lib.rs` | 10 |
+| `crates/sephera_cli/src/lib.rs` | 9 |
+| `crates/sephera_cli/src/output/symbols.rs` | 9 |
+| `crates/sephera_mcp/src/render.rs` | 9 |
 
 ## Dependency Diagram
 
 ```mermaid
 graph LR
-    n0["builder.rs"]
-    n1["candidate.rs"]
-    n2["excerpt.rs"]
-    n3["focus.rs"]
-    n4["grouping.rs"]
-    n5["lib.rs"]
-    n6["ranker.rs"]
-    n7["types.rs"]
-    n0 --> n1
-    n0 --> n2
-    n0 --> n3
-    n0 --> n4
-    n0 --> n6
-    n0 --> n7
-    n1 --> n3
-    n1 --> n7
+    n0["configure.rs"]
+    n1["context_config.rs"]
+    n2["lib.rs"]
+    n3["output.rs"]
+    n4["context_json.rs"]
+    n5["context_markdown.rs"]
+    n6["profiles.rs"]
+    n7["symbols.rs"]
+    n8["run.rs"]
+    n9["loc_table.rs"]
+    n10["builder.rs"]
+    n11["candidate.rs"]
+    n12["excerpt.rs"]
+    n13["focus.rs"]
+    n14["grouping.rs"]
+    n15["lib.rs"]
+    n16["ranker.rs"]
+    n17["types.rs"]
+    n18["context_builder.rs"]
+    n19["context_line_range.rs"]
+    n20["lib.rs"]
+    n21["loc.rs"]
+    n22["lib.rs"]
+    n23["render.rs"]
+    n24["excerpt.rs"]
+    n25["groups.rs"]
+    n26["metadata.rs"]
+    n27["tests.rs"]
+    n28["server.rs"]
+    n29["tests.rs"]
+    n30["context.rs"]
+    n31["lib.rs"]
+    n32["runtime.rs"]
+    n33["lib.rs"]
+    n34["lookup.rs"]
+    n35["tests.rs"]
+    n36["build_context_report.rs"]
+    n37["render_context_markdown.rs"]
+    n38["render_loc_table.rs"]
+    n39["loc.rs"]
+    n40["mod.rs"]
+    n41["symbols.rs"]
+    n42["main.rs"]
+    n0 --> n31
+    n1 --> n31
+    n2 --> n0
     n2 --> n1
-    n2 --> n7
+    n2 --> n3
+    n2 --> n8
+    n3 --> n4
+    n3 --> n5
+    n3 --> n6
     n3 --> n7
-    n4 --> n7
-    n5 --> n0
-    n5 --> n1
-    n5 --> n2
-    n5 --> n3
-    n5 --> n4
-    n5 --> n6
-    n5 --> n7
+    n4 --> n15
+    n5 --> n15
     n6 --> n1
-    n6 --> n7
+    n7 --> n33
+    n8 --> n31
+    n8 --> n33
+    n8 --> n0
+    n8 --> n1
+    n8 --> n3
+    n9 --> n2
+    n10 --> n11
+    n10 --> n12
+    n10 --> n13
+    n10 --> n14
+    n10 --> n16
+    n10 --> n17
+    n11 --> n13
+    n11 --> n17
+    n12 --> n11
+    n12 --> n17
+    n13 --> n17
+    n14 --> n17
+    n15 --> n10
+    n15 --> n11
+    n15 --> n12
+    n15 --> n13
+    n15 --> n14
+    n15 --> n16
+    n15 --> n17
+    n16 --> n11
+    n16 --> n17
+    n18 --> n15
+    n19 --> n15
+    n20 --> n21
+    n21 --> n31
+    n22 --> n23
+    n22 --> n28
+    n23 --> n15
+    n23 --> n24
+    n23 --> n25
+    %% ... and 35 more edges
 ```
 ````
 
@@ -318,10 +397,10 @@ The question a reviewer or a pre-commit hook asks before an edit. Answers it
 directly, so you do not have to know that `graph` has a flag for it.
 
 ```bash
-# What transitively imports this file? 9 files do.
+# What transitively imports this file? 42 files do.
 sephera impact crates/sephera_context/src/types.rs
 
-# Only the 5 files that import it directly
+# Only the 7 files that import it directly
 sephera impact crates/sephera_context/src/types.rs --depth 1
 
 # Several files at once, widest first; the graph is built once
@@ -330,8 +409,8 @@ sephera impact crates/sephera_context/src/types.rs crates/sephera_cli/src/run.rs
 # Machine-readable, for a script
 sephera impact crates/sephera_context/src/types.rs --format json
 
-# Fail the build when one file reaches more than 40 dependents
-sephera impact crates/sephera_context/src/types.rs --fail-on 40
+# Fail the build when one file reaches more than 50 dependents
+sephera impact crates/sephera_context/src/types.rs --fail-on 50
 ```
 
 `--fail-on` exits **2**, which is deliberately different from the **1** that

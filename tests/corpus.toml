@@ -92,7 +92,20 @@ files = 307
 # walk landed it on the file itself, where it sat as one of the 60. It now
 # resolves to `main.rs` -- one self-reference becomes an internal edge,
 # which is why internal falls by one net (646 - 2 + 1) rather than two.
-internal_edges = 645
+#
+# Was 645 before a path whose head names one of the project's own crates
+# learned to resolve. `use axum_core::...` inside axum, and `use axum::...`
+# inside axum-core's tests, name sibling crates through Cargo's extern
+# prelude; the module walks found no directory by those names and filed
+# 1066 such imports as third-party dependencies -- plausible, because the
+# dependencies are real and sit in `Cargo.toml`, and wrong, because the
+# couplings are the workspace's own. 883 of them now resolve. The rest name
+# proc-macro derives, `#[macro_export]` macros, or the `http` crate through
+# axum's re-export of it: names that live in a root file the declaration
+# index does not record, or in another crate entirely. The evidence a name
+# is the project's own is a manifest on disk declaring it; a name no
+# manifest in the tree declares still stays external.
+internal_edges = 1528
 self_references = 70
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
@@ -107,7 +120,10 @@ cfg_gated_edges = 86
 # modules, e.g. `response/mod.rs` has `use crate::test_helpers::*;` while
 # `test_helpers/mod.rs` has `use crate::{extract::Request, response::Response, serve};`.
 # The other eighteen still hold.
-cycles = 19
+#
+# Twenty now. The added ring is `routing/mod.rs` and `boxed.rs`, two files
+# that name each other; it is counted once every edge on it resolves.
+cycles = 20
 structural_cycles = 0
 
 [[corpus]]
