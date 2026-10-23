@@ -117,11 +117,11 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 |--------|-------|
 | Files analyzed | 43 |
 | Internal edges | 233 |
-| External edges | 128 |
+| External edges | 129 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 39 |
 | Local crate edges | 0 |
-| Standard library edges | 55 |
+| Standard library edges | 56 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -144,7 +144,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 55 |
+| `std` | stdlib | unknown | 56 |
 | `anyhow` | declared | 1.0.102 | 19 |
 | `context` | undeclared | unknown | 9 |
 | `rmcp` | declared | 1.3.0 | 9 |
@@ -439,6 +439,26 @@ sephera affected-tests crates/sephera_graph/src/blast_radius.rs --format json
 directories for Go, files for pytest. Ecosystems with no honest mapping are
 listed as manual rather than given an invented command.
 
+### `why` — why one file depends on another *(new in 2.0)*
+
+The follow-up to `impact`: the radius says a file is in it, this says through
+which imports. The shortest chain connecting two files, with the import path
+as written at every hop — Bazel's `somepath` question, asked of a source
+tree.
+
+```bash
+# Why does the CLI's runner depend on the declaration index?
+sephera why crates/sephera_cli/src/run.rs crates/sephera_core/src/declarations.rs
+
+# Machine-readable: connected, hop_count, and every hop with its imports
+sephera why crates/sephera_cli/src/run.rs crates/sephera_core/src/declarations.rs --format json
+```
+
+The chain is the shortest one on purpose. A longer route also connects the
+files, but it is not why they are coupled — the coupling would survive its
+removal. When no chain exists the command says so and still succeeds; a path
+that matches no file in the analysis is the error.
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it
@@ -451,8 +471,9 @@ also exits **2**.
 sephera guard --file crates/sephera_graph/src/blast_radius.rs --path . --max-dependents 25
 ```
 
-Both measurements are also MCP tools (`impact`, `affected_tests`), so an agent
-can ask before editing — `guard` exists for the moment before it thinks to ask.
+The measurements are also MCP tools (`impact`, `affected_tests`, `why`), so
+an agent can ask before editing — `guard` exists for the moment before it
+thinks to ask.
 
 ### `graph` — dependency structure and blast radius
 

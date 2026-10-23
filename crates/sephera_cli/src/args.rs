@@ -154,6 +154,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera affected-tests src/lib.rs\n  sephera affected-tests src/lib.rs src/parser.rs --format json\n  sephera affected-tests src/lib.rs --run\n  sephera affected-tests src/lib.rs --require-tests"
     )]
     AffectedTests(AffectedTestsArgs),
+    /// Show why one file depends on another, as the shortest import chain
+    #[command(
+        long_about = "Show why one file depends on another: the shortest chain of imports connecting them.\n\n`impact` answers what breaks with a set of files; the question that follows it in a review is why one particular file is in that set. This is that question as a command. The chain is the shortest one -- a longer route also connects the files, but it is not why they are coupled, because the coupling would survive its removal -- and every hop names the import path as written, so each link can be checked in the source and, if the coupling is unwanted, broken at a chosen link.\n\nThis is Bazel's `somepath` question asked of a source tree instead of a build graph. When no chain exists the command says so and still succeeds: two files that never touch are the normal case, not an error. A path that matches no file in the analysis is an error, as it is everywhere else.",
+        after_long_help = "Examples:\n  sephera why src/main.rs src/lib.rs\n  sephera why crates/sephera_cli/src/run.rs crates/sephera_graph/src/types.rs\n  sephera why src/run.rs src/types.rs --format json"
+    )]
+    Why(WhyArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -836,6 +842,57 @@ pub enum TestImpactOutputFormat {
     Markdown,
     /// Structured JSON.
     #[value(name = "json", help = "Render the test plan as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Show the shortest import chain between two files."]
+    WhyArgs {
+        /// The dependent file: the one that ends up needing the other
+    #[arg(
+        value_name = "FROM",
+        help = "File that depends on the other. The chain starts here.",
+        long_help = "Path of the dependent file, relative to the analysis base. The reported chain starts at this file and follows its imports, so `sephera why a.rs b.rs` reads as \"a depends on b because a imports ..., which imports b\". Reverse the pair to ask the reverse question."
+    )]
+    pub from_file: String,
+
+    /// The dependency: the file the chain ends at
+    #[arg(
+        value_name = "TO",
+        help = "File the first one depends on. The chain ends here.",
+        long_help = "Path of the dependency, relative to the analysis base. Changing this file reaches FROM through exactly the chain reported, which is why it belongs in FROM's blast radius."
+    )]
+    pub to_file: String,
+
+    /// Drop imports that describe types rather than runtime dependencies
+    #[arg(
+        long,
+        help = "Exclude type aliases and wildcard imports from the chain.",
+        long_help = "Exclude type aliases and wildcard imports from the chain. A `type X = Y` alias or an `import ... .*` wildcard names a namespace rather than a runtime dependency, so a chain through one never fails at runtime."
+    )]
+    pub exclude_types: bool,
+
+    /// Output format for the chain
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the chain. Supports markdown and json.",
+        long_help = "Output format for the chain. Supports markdown and json."
+    )]
+    pub format: WhyOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum WhyOutputFormat {
+    /// Markdown chain of imports.
+    #[value(name = "markdown", help = "Render the chain as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the chain as JSON.")]
     Json,
 }
 

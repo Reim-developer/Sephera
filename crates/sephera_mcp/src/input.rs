@@ -216,6 +216,41 @@ pub struct AffectedTestsInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `why` tool.
+///
+/// Why one file depends on another, as the shortest chain of imports
+/// connecting them. The follow-up to `impact` when one entry in the
+/// radius needs explaining: the radius says the file is in it, this
+/// says through which imports. Both endpoints are required, because a
+/// chain has two ends and an empty endpoint is not a question.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct WhyInput {
+    /// The dependent file: the one that ends up needing the other. The
+    /// chain starts here and follows its imports.
+    pub from: String,
+    /// The dependency: the file the chain ends at. Changing it reaches
+    /// `from` through exactly the reported imports.
+    pub to: String,
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

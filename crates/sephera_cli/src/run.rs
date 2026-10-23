@@ -22,7 +22,7 @@ use crate::{
         GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
         ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, SettingsArgs,
         SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
-        WatchArgs, WatchTarget,
+        WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
     change_impact, configure,
     context_config::{
@@ -37,7 +37,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    watch,
+    watch, why,
 };
 
 #[must_use]
@@ -120,6 +120,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::AffectedTests(arguments) => {
             run_affected_tests(&arguments).await
         }
+        Commands::Why(arguments) => run_why(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -593,6 +594,78 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     progress.finish();
     emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
     Ok(gates)
+}
+
+/// Show why one file depends on another.
+///
+/// The graph build is `run_impact`'s, step for step: the whole
+/// repository, no query. A `DependsOn` query would leave the report
+/// holding only one file's dependents, and a chain can pass through
+/// any file at all, so a narrowed report could report "no path" for a
+/// coupling that exists outside the narrowing.
+async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Finding the dependency chain...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: arguments.exclude_types,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let path =
+        why::explain(&report, &arguments.from_file, &arguments.to_file, "")?;
+
+    // `explain` refuses a path that matches nothing, so both of these
+    // resolve; the fallback only spells the request back, and exists
+    // because rendering needs a spelling either way.
+    let canonical = |raw: &str| {
+        impact::match_path(&report, raw, "").unwrap_or_else(|| raw.to_owned())
+    };
+    let (from, to) = path.as_ref().map_or_else(
+        || {
+            (
+                canonical(&arguments.from_file),
+                canonical(&arguments.to_file),
+            )
+        },
+        |path| (path.from.clone(), path.to.clone()),
+    );
+
+    let rendered = match arguments.format {
+        WhyOutputFormat::Markdown => {
+            why::render_markdown(path.as_ref(), &from, &to)
+        }
+        WhyOutputFormat::Json => why::render_json(path.as_ref(), &from, &to),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
 }
 
 /// Report which tests one or more files have to answer for.

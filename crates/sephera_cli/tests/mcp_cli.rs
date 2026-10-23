@@ -262,7 +262,8 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "graph",
             "impact",
             "loc",
-            "symbols"
+            "symbols",
+            "why"
         ],
         "the protocol must advertise exactly the documented tools"
     );

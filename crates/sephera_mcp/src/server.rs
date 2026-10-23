@@ -20,7 +20,7 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius,
+    blast_radius, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
     types::{GraphFormat, GraphQuery},
@@ -36,7 +36,7 @@ use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
         AffectedTestsInput, ContextInput, GraphInput, ImpactInput, LocInput,
-        SymbolsInput,
+        SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -514,6 +514,98 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Explain why one file depends on another.
+    ///
+    /// The follow-up an agent needs after `impact` names a file it did
+    /// not expect: not what breaks, but through which imports the
+    /// coupling runs. The search is `sephera_graph::dependency_path`',
+    /// shared with the `why` command, so the two cannot disagree.
+    #[tool(
+        name = "why",
+        description = "Explain why one file depends on another: the shortest chain of imports connecting them, each hop naming the import path as written. Run this when `impact` or `affected_tests` names a file you did not expect, to see the exact links responsible and where the coupling could be broken. The chain is the shortest one; a longer route is not why the files are coupled, because the coupling would survive its removal. When no chain exists the answer says so (connected=false) rather than failing -- a path that matches no file in the analysis is the error case. Accepts from and to plus exactly one of path or url, and an optional ref for repo URLs. Use format=markdown for a compact summary or json for the hops as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn why(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<WhyInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+        // Refused before anything else, as the other tools refuse an
+        // empty question: a chain has two ends, and an empty endpoint
+        // would come back as "no path" -- an answer that reads as fact
+        // about the repository when it is really about the request.
+        if param.from.is_empty() || param.to.is_empty() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "why needs both `from` and `to`; a dependency chain has \
+                 two ends",
+                None,
+            ));
+        }
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let path = dependency_path::explain(
+            &report,
+            &param.from,
+            &param.to,
+            &base_prefix,
+        )
+        .map_err(map_internal_error("dependency path search failed"))?;
+
+        // `explain` refuses a path that matches nothing, so both of
+        // these resolve; the fallback only spells the request back, and
+        // exists because the no-chain answer still needs its endpoints
+        // spelled the graph's way.
+        let canonical = |raw: &str| {
+            blast_radius::match_path(&report, raw, &base_prefix)
+                .unwrap_or_else(|| raw.to_owned())
+        };
+        let (from, to) = match &path {
+            Some(path) => (path.from.clone(), path.to.clone()),
+            None => (canonical(&param.from), canonical(&param.to)),
+        };
+
+        let built = WhyReport::new(path.as_ref(), &from, &to);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(why_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported why format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -576,6 +668,127 @@ impl AffectedTestsReport {
                 .collect(),
         }
     }
+}
+
+/// The JSON shape the `why` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WhyReport {
+    /// The dependent file, spelled as the graph spells it.
+    pub from: String,
+    /// The dependency, spelled as the graph spells it.
+    pub to: String,
+    /// Whether a chain connects them. `false` is an answer, not a
+    /// failure: the two files never touch.
+    pub connected: bool,
+    /// How many edges the chain crosses. `null` when there is no
+    /// chain, matching how absence is spelled elsewhere in these
+    /// reports rather than inventing a second convention.
+    pub hop_count: Option<usize>,
+    /// Whether `from` imports `to` with no file in between.
+    pub direct: bool,
+    /// Every file on the chain, `from` first and `to` last. Empty
+    /// when there is no chain.
+    pub hops: Vec<WhyHopEntry>,
+}
+
+/// One file on a dependency chain.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct WhyHopEntry {
+    /// The file this hop lands on.
+    pub file: String,
+    /// Import paths written in the previous file that name this one.
+    /// Empty on the first hop, which has no predecessor.
+    pub via: Vec<String>,
+}
+
+impl WhyReport {
+    fn new(
+        path: Option<&dependency_path::DependencyPath>,
+        from: &str,
+        to: &str,
+    ) -> Self {
+        path.map_or_else(
+            || Self {
+                from: from.to_owned(),
+                to: to.to_owned(),
+                connected: false,
+                hop_count: None,
+                direct: false,
+                hops: Vec::new(),
+            },
+            |path| Self {
+                from: path.from.clone(),
+                to: path.to.clone(),
+                connected: true,
+                hop_count: Some(path.hop_count()),
+                direct: path.is_direct(),
+                hops: path
+                    .hops
+                    .iter()
+                    .map(|hop| WhyHopEntry {
+                        file: hop.file.clone(),
+                        via: hop.via.clone(),
+                    })
+                    .collect(),
+            },
+        )
+    }
+}
+
+/// Render a dependency chain as Markdown for an agent's context window.
+///
+/// The same rendering the `why` command prints, kept in step with it:
+/// an agent reading the tool's answer and a person reading the
+/// terminal should be looking at the same explanation.
+fn why_markdown(report: &WhyReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Why `{}` depends on `{}`\n",
+        report.from, report.to
+    );
+
+    if !report.connected {
+        let _ = writeln!(
+            output,
+            "No dependency path: `{}` does not import `{}`, directly \
+             or through any other file in the analysis.",
+            report.from, report.to
+        );
+        return output;
+    }
+
+    if report.hop_count == Some(0) {
+        let _ = writeln!(
+            output,
+            "The same file. No import is involved; a file is its own \
+             starting point."
+        );
+        return output;
+    }
+
+    let _ = writeln!(
+        output,
+        "Shortest chain: {} hop(s). Changing `{}` reaches `{}` \
+         through exactly these imports:\n",
+        report.hop_count.unwrap_or_default(),
+        report.to,
+        report.from
+    );
+    for pair in report.hops.windows(2) {
+        let names: Vec<String> =
+            pair[1].via.iter().map(|name| format!("`{name}`")).collect();
+        let _ = writeln!(
+            output,
+            "- `{}` imports {}",
+            pair[0].file,
+            names.join(", ")
+        );
+    }
+    let _ = writeln!(output, "- `{}`", report.to);
+    output
 }
 
 /// Render affected tests as Markdown for an agent's context window.

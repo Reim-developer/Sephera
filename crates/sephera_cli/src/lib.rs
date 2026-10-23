@@ -13,6 +13,7 @@ mod output;
 mod progress;
 mod run;
 mod watch;
+mod why;
 
 #[doc(hidden)]
 pub use output::{
