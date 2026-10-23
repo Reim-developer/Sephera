@@ -11,6 +11,13 @@
 //! `..` and 12 `../..` imports on express's own examples were reported
 //! unresolved.
 //!
+//! A bare specifier is a package name -- except the ones the project's
+//! tsconfig maps into the tree with `paths`. Monorepos import themselves by
+//! name (`@vue/shared` is `packages/shared/src`), and those are local
+//! couplings in a package's clothes: vue's tree carries 425 of them, and
+//! filing them as external dependencies erased the graph that holds the
+//! monorepo together.
+
 use sephera_compression::SupportedLanguage;
 
 use sephera_core::{
@@ -84,10 +91,11 @@ fn resolve_import(
         .find(['?', '#'])
         .map_or(import_path, |index| &import_path[..index]);
 
-    // Bare specifiers (`react`, `lodash/fp`) name packages, not project files.
-    // Only `./` and `../` can be resolved locally.
+    // Bare specifiers (`react`, `lodash/fp`) name packages, not project
+    // files -- except the ones the project's own tsconfig maps into the
+    // tree, which are local imports wearing a package's clothes.
     if !import_path.starts_with('.') {
-        return None;
+        return resolve_alias(import_path, &context);
     }
 
     let base = paths::parent(context.source_file);
@@ -169,6 +177,306 @@ fn join_candidate(directory: &str, suffix: &str) -> String {
     } else {
         format!("{directory}{suffix}")
     }
+}
+
+/// Resolve a bare specifier through the project's tsconfig `paths`.
+///
+/// A specifier no mapping claims stays external: `react` is still not a
+/// project file, and this returns `None` for it exactly as before.
+fn resolve_alias(
+    import_path: &str,
+    context: &ResolveContext<'_>,
+) -> Option<String> {
+    TsconfigPaths::load(context)?.resolve(import_path, context)
+}
+
+/// The `paths` mappings of the tsconfig that governs a source file.
+///
+/// Selected the way TypeScript selects a project: the nearest
+/// `tsconfig.json` at or above the source file, then its `extends` chain,
+/// with the first `paths` block found along the way. Targets hang from the
+/// directory of the config that declares them, shifted by the chain's
+/// `baseUrl` when one is declared -- which is where TypeScript resolves
+/// them from.
+/// One config's `paths` block: `(pattern, targets)` pairs, where a
+/// pattern carries at most one `*`.
+type PathMappings = Vec<(String, Vec<String>)>;
+
+struct TsconfigPaths {
+    /// Directory the targets hang from, relative to the analysis root.
+    origin: String,
+    /// The mappings of the config that declared them.
+    mappings: PathMappings,
+}
+
+impl TsconfigPaths {
+    fn load(context: &ResolveContext<'_>) -> Option<Self> {
+        let mut dir = paths::parent(context.source_file);
+        loop {
+            let config = if dir.is_empty() {
+                "tsconfig.json".to_owned()
+            } else {
+                format!("{dir}/tsconfig.json")
+            };
+            if let Some(found) = Self::load_chain(context, &config) {
+                return Some(found);
+            }
+            if dir.is_empty() {
+                return None;
+            }
+            dir = paths::parent(&dir);
+        }
+    }
+
+    /// Read one config and its `extends` chain, nearest first.
+    fn load_chain(context: &ResolveContext<'_>, config: &str) -> Option<Self> {
+        let mut chain: Vec<(String, serde_json::Value)> = Vec::new();
+        let mut current = Some(config.to_owned());
+        for _ in 0..8 {
+            let Some(relative) = current.take() else {
+                break;
+            };
+            let Ok(text) =
+                std::fs::read_to_string(context.base_path.join(&relative))
+            else {
+                break;
+            };
+            let Some(value) = parse_jsonc(&text) else {
+                break;
+            };
+            let dir = paths::parent(&relative);
+            current = extends_target(&value, &dir);
+            chain.push((dir, value));
+        }
+        if chain.is_empty() {
+            return None;
+        }
+
+        let mut declared: Option<(&String, PathMappings)> = None;
+        for (dir, value) in &chain {
+            let Some(paths_object) = value
+                .get("compilerOptions")
+                .and_then(|options| options.get("paths"))
+                .and_then(serde_json::Value::as_object)
+            else {
+                continue;
+            };
+            let mappings: Vec<(String, Vec<String>)> = paths_object
+                .iter()
+                .map(|(pattern, targets)| {
+                    let targets: Vec<String> = targets
+                        .as_array()
+                        .map(|entries| {
+                            entries
+                                .iter()
+                                .filter_map(serde_json::Value::as_str)
+                                .map(str::to_owned)
+                                .collect()
+                        })
+                        .unwrap_or_default();
+                    (pattern.clone(), targets)
+                })
+                .filter(|(_, targets)| !targets.is_empty())
+                .collect();
+            if !mappings.is_empty() {
+                declared = Some((dir, mappings));
+                break;
+            }
+        }
+        let (declared_dir, mappings) = declared?;
+
+        // `baseUrl`, wherever along the chain it is declared, is what the
+        // targets are relative to; without one they hang from the config
+        // that declared the paths themselves.
+        let mut origin = declared_dir.clone();
+        for (dir, value) in &chain {
+            let Some(base_url) = value
+                .get("compilerOptions")
+                .and_then(|options| options.get("baseUrl"))
+                .and_then(serde_json::Value::as_str)
+            else {
+                continue;
+            };
+            origin = clamp_to_root(&paths::resolve_relative(dir, base_url));
+            break;
+        }
+
+        Some(Self { origin, mappings })
+    }
+
+    fn resolve(
+        &self,
+        import_path: &str,
+        context: &ResolveContext<'_>,
+    ) -> Option<String> {
+        let mut targets: Vec<String> = Vec::new();
+
+        // An exact pattern names one specifier outright and beats every
+        // wildcard that would also match it: `@vue/compat` is not
+        // `@vue/*` with `compat` captured, however the files are laid out.
+        for (pattern, mapped) in &self.mappings {
+            if !pattern.contains('*') && pattern == import_path {
+                targets.extend(mapped.iter().cloned());
+            }
+        }
+
+        // Among wildcards the longest prefix wins, which is TypeScript's
+        // own rule for the same reason: it is the most specific claim.
+        let mut wildcards: Vec<&(String, Vec<String>)> = self
+            .mappings
+            .iter()
+            .filter(|(pattern, _)| pattern.contains('*'))
+            .collect();
+        wildcards.sort_by_key(|(pattern, _)| {
+            std::cmp::Reverse(pattern.split('*').next().map_or(0, str::len))
+        });
+        for (pattern, mapped) in wildcards {
+            let Some(captured) = match_pattern(pattern, import_path) else {
+                continue;
+            };
+            targets.extend(
+                mapped.iter().map(|target| target.replace('*', &captured)),
+            );
+        }
+
+        targets.iter().find_map(|target| {
+            let joined =
+                clamp_to_root(&paths::resolve_relative(&self.origin, target));
+            resolve_path_base(context, &joined)
+        })
+    }
+}
+
+/// The text a wildcard pattern captures from a specifier, if it matches.
+///
+/// A pattern carries at most one `*`; what stands between its prefix and
+/// its suffix is the capture.
+fn match_pattern(pattern: &str, specifier: &str) -> Option<String> {
+    let (prefix, suffix) = pattern.split_once('*')?;
+    if specifier.len() < prefix.len() + suffix.len()
+        || !specifier.starts_with(prefix)
+        || !specifier.ends_with(suffix)
+    {
+        return None;
+    }
+    Some(specifier[prefix.len()..specifier.len() - suffix.len()].to_owned())
+}
+
+/// The next config a tsconfig's `extends` names, as a path from the root.
+///
+/// Only relative extends are followed: a package name (`@vue/tsconfig`)
+/// names a config outside the tree this analysis can see. A missing
+/// `.json` suffix is supplied, as authors write both spellings.
+fn extends_target(value: &serde_json::Value, dir: &str) -> Option<String> {
+    let extends = value.get("extends")?;
+    let raw = match extends {
+        serde_json::Value::String(name) => name.clone(),
+        serde_json::Value::Array(entries) => entries
+            .iter()
+            .find_map(serde_json::Value::as_str)
+            .map(str::to_owned)?,
+        _ => return None,
+    };
+    if !raw.starts_with('.') {
+        return None;
+    }
+    let joined = clamp_to_root(&paths::resolve_relative(dir, &raw));
+    Some(if joined.to_ascii_lowercase().ends_with(".json") {
+        joined
+    } else {
+        format!("{joined}.json")
+    })
+}
+
+/// Parse a tsconfig, which is JSON with opinions.
+///
+/// Real tsconfig files carry `//` and `/* */` comments and trailing
+/// commas, and `serde_json` wants neither. Both are removed here, with
+/// string contents left alone -- a `//` inside a quoted path is text,
+/// not a comment.
+fn parse_jsonc(text: &str) -> Option<serde_json::Value> {
+    let uncommented = strip_comments(text);
+    let mut cleaned = String::with_capacity(uncommented.len());
+    let chars: Vec<char> = uncommented.chars().collect();
+    let mut in_string = false;
+    let mut escaped = false;
+    for (index, &ch) in chars.iter().enumerate() {
+        if in_string {
+            cleaned.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                cleaned.push(ch);
+            }
+            ',' => {
+                // A comma whose next meaningful character closes the
+                // object or array is a trailing comma; drop it.
+                let next =
+                    chars[index + 1..].iter().find(|c| !c.is_whitespace());
+                if !matches!(next, Some('}' | ']')) {
+                    cleaned.push(ch);
+                }
+            }
+            _ => cleaned.push(ch),
+        }
+    }
+    serde_json::from_str(&cleaned).ok()
+}
+
+/// Remove `//` and `/* */` comments, leaving string contents untouched.
+fn strip_comments(text: &str) -> String {
+    let mut cleaned = String::with_capacity(text.len());
+    let mut chars = text.chars().peekable();
+    let mut in_string = false;
+    let mut escaped = false;
+    while let Some(ch) = chars.next() {
+        if in_string {
+            cleaned.push(ch);
+            if escaped {
+                escaped = false;
+            } else if ch == '\\' {
+                escaped = true;
+            } else if ch == '"' {
+                in_string = false;
+            }
+            continue;
+        }
+        match ch {
+            '"' => {
+                in_string = true;
+                cleaned.push(ch);
+            }
+            '/' if chars.peek() == Some(&'/') => {
+                for next in chars.by_ref() {
+                    if next == '\n' {
+                        cleaned.push('\n');
+                        break;
+                    }
+                }
+            }
+            '/' if chars.peek() == Some(&'*') => {
+                chars.next();
+                let mut previous = '\0';
+                for next in chars.by_ref() {
+                    if previous == '*' && next == '/' {
+                        break;
+                    }
+                    previous = next;
+                }
+            }
+            _ => cleaned.push(ch),
+        }
+    }
+    cleaned
 }
 
 #[cfg(test)]
@@ -368,6 +676,201 @@ mod tests {
         assert_eq!(
             resolve("./data?raw", "src/a.ts", &files),
             Some("src/data.ts".to_owned())
+        );
+    }
+
+    /// Resolve with a real directory behind the context, as an analysis
+    /// has.
+    ///
+    /// A tsconfig is read from disk, so a fixture of bare names -- what
+    /// `test_context` builds -- can never present one. These write the
+    /// config into a temporary root instead and point the context at it.
+    fn resolve_in(
+        directory: &std::path::Path,
+        import_path: &str,
+        source_file: &str,
+        files: &[&str],
+    ) -> Option<String> {
+        let known: BTreeSet<String> =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let context = ResolveContext {
+            source_file,
+            known_files: &known,
+            module_depth: 0,
+            kind: sephera_core::types::ImportKind::Dependency,
+            declarations: None,
+            manifests: None,
+            base_path: directory,
+        };
+        JavaScriptPlugin {
+            language: SupportedLanguage::TypeScript,
+        }
+        .resolve(import_path, context)
+    }
+
+    fn write_file(directory: &std::path::Path, path: &str, contents: &str) {
+        let full = directory.join(path);
+        std::fs::create_dir_all(full.parent().expect("a parent"))
+            .expect("the tree is written");
+        std::fs::write(full, contents).expect("the file is written");
+    }
+
+    #[test]
+    fn a_tsconfig_wildcard_alias_resolves_into_the_package_it_names() {
+        // Vue's own shape: `@vue/*` is `./packages/*/src`, a directory
+        // whose index is the package. Read as a package name, every such
+        // import was an external dependency and the couplings between
+        // the monorepo's own packages left the graph -- 425 of them on
+        // vue's tree.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_file(
+            directory.path(),
+            "tsconfig.json",
+            r#"{
+                "compilerOptions": {
+                    "paths": {
+                        "@vue/*": ["./packages/*/src"],
+                        "vue": ["./packages/vue/src"]
+                    }
+                }
+            }"#,
+        );
+        let files = [
+            "packages/shared/src/index.ts",
+            "packages/vue/src/index.ts",
+            "packages/runtime-core/src/index.ts",
+        ];
+        let source = "packages/runtime-core/src/index.ts";
+
+        assert_eq!(
+            resolve_in(directory.path(), "@vue/shared", source, &files),
+            Some("packages/shared/src/index.ts".to_owned())
+        );
+        assert_eq!(
+            resolve_in(directory.path(), "vue", source, &files),
+            Some("packages/vue/src/index.ts".to_owned())
+        );
+        assert_eq!(
+            resolve_in(directory.path(), "react", source, &files),
+            None,
+            "a specifier no mapping claims is still a package"
+        );
+    }
+
+    #[test]
+    fn an_exact_alias_beats_the_wildcard_that_would_also_match() {
+        // `@vue/compat` lives in `packages/vue-compat`; the wildcard
+        // alone would name `packages/compat`, which is not a place.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_file(
+            directory.path(),
+            "tsconfig.json",
+            r#"{
+                "compilerOptions": {
+                    "paths": {
+                        "@vue/compat": ["./packages/vue-compat/src"],
+                        "@vue/*": ["./packages/*/src"]
+                    }
+                }
+            }"#,
+        );
+        let files = [
+            "packages/vue-compat/src/index.ts",
+            "packages/runtime-core/src/index.ts",
+        ];
+
+        assert_eq!(
+            resolve_in(
+                directory.path(),
+                "@vue/compat",
+                "packages/runtime-core/src/index.ts",
+                &files,
+            ),
+            Some("packages/vue-compat/src/index.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn alias_paths_are_found_through_an_extends_chain() {
+        // A package config extends the root one, and the paths live at
+        // the root. The targets are the root's, so they hang from the
+        // root's directory, not the package's.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_file(
+            directory.path(),
+            "tsconfig.json",
+            r#"{
+                "compilerOptions": {
+                    "paths": { "@lib/*": ["./src/lib/*"] }
+                }
+            }"#,
+        );
+        write_file(
+            directory.path(),
+            "packages/app/tsconfig.json",
+            r#"{ "extends": "../../tsconfig.json" }"#,
+        );
+        let files = ["src/lib/util.ts", "packages/app/src/main.ts"];
+
+        assert_eq!(
+            resolve_in(
+                directory.path(),
+                "@lib/util",
+                "packages/app/src/main.ts",
+                &files,
+            ),
+            Some("src/lib/util.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_tsconfig_with_comments_and_trailing_commas_still_loads() {
+        // Tsconfig is JSONC in the wild; a strict parser reads this as
+        // an error and the mappings silently never happen.
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_file(
+            directory.path(),
+            "tsconfig.json",
+            r#"{
+                // where the shared code lives
+                "compilerOptions": {
+                    "paths": {
+                        "@/*": ["./src/*"],
+                    },
+                },
+            }"#,
+        );
+        let files = ["src/util.ts", "src/main.ts"];
+
+        assert_eq!(
+            resolve_in(directory.path(), "@/util", "src/main.ts", &files),
+            Some("src/util.ts".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_base_url_shifts_where_alias_targets_hang_from() {
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_file(
+            directory.path(),
+            "tsconfig.json",
+            r#"{
+                "compilerOptions": {
+                    "baseUrl": "src",
+                    "paths": { "@/*": ["./*"] }
+                }
+            }"#,
+        );
+        let files = ["src/lib/util.ts", "src/app/main.ts"];
+
+        assert_eq!(
+            resolve_in(
+                directory.path(),
+                "@/lib/util",
+                "src/app/main.ts",
+                &files,
+            ),
+            Some("src/lib/util.ts".to_owned())
         );
     }
 }
