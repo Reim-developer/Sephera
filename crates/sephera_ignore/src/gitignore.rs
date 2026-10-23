@@ -252,18 +252,28 @@ fn base_glob(pattern: &str) -> String {
 /// matches but is not a readable file -- a directory called `.gitignore`, a
 /// broken symlink -- behaves as it always did rather than as this optimization
 /// decides it should.
+///
+/// The entries say which of the files exist; they do not decide the order the
+/// files are read in. That order is the precedence: the repository's file is
+/// read first and this tool's own file after it, so a `.sepheraignore` negation
+/// can re-include what the `.gitignore` excluded. A directory listing arrives
+/// in whatever order the filesystem keeps, and a precedence that followed it
+/// would be a coin flip -- the same tree analysed twice could keep different
+/// files.
 pub fn read_directory_rules<'a>(
     directory: &Path,
     entries: impl IntoIterator<Item = &'a std::fs::DirEntry>,
 ) -> IgnoreRules {
     let mut rules = IgnoreRules::default();
 
-    for entry in entries {
-        let Some(name) = entry.file_name().to_str().map(ToOwned::to_owned)
-        else {
-            continue;
-        };
-        if !IGNORE_FILE_NAMES.contains(&name.as_str()) {
+    let present: Vec<String> = entries
+        .into_iter()
+        .filter_map(|entry| entry.file_name().to_str().map(ToOwned::to_owned))
+        .filter(|name| IGNORE_FILE_NAMES.contains(&name.as_str()))
+        .collect();
+
+    for name in IGNORE_FILE_NAMES {
+        if !present.iter().any(|held| held == name) {
             continue;
         }
 
@@ -457,6 +467,33 @@ mod tests {
             rules.matched("secret/keep", false),
             Some(Decision::Include),
             "and the Sephera file must be able to re-include inside it"
+        );
+    }
+
+    #[test]
+    fn directory_rules_do_not_depend_on_the_listing_order() {
+        // The same directory as `directory_rules_are_read_from_a_directory`,
+        // with the listing handed over in the opposite order. A precedence
+        // that followed the listing would read the `.sepheraignore` first,
+        // the repository's `secret/` would then land after the negation and
+        // win, and the re-include would be lost -- which is exactly what
+        // filesystems that do not list in creation order used to cause.
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(dir.path().join(".gitignore"), "secret/\n").unwrap();
+        std::fs::write(dir.path().join(".sepheraignore"), "!secret/keep\n")
+            .unwrap();
+
+        let mut entries = entries_of(dir.path());
+        entries.sort_by_key(|entry| {
+            std::cmp::Reverse(entry.file_name().to_string_lossy().into_owned())
+        });
+        let rules = read_directory_rules(dir.path(), &entries);
+
+        assert_eq!(
+            rules.matched("secret/keep", false),
+            Some(Decision::Include),
+            "the Sephera file must re-include inside the ignored directory \
+             whatever order the entries arrived in"
         );
     }
 
