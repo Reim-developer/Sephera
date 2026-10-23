@@ -22,10 +22,14 @@ anyhow = "1.0.102"
 phf = { version = "0.11.3", features = ["macros"] }
 rayon = "1.11.0"
 serde = { version = "1.0.228", features = ["derive"] }
+toml = "0.9.8"
 tree-sitter = "0.26"
 tree-sitter-rust = "0.24"
 
-sephera_core = { path = "../sephera_core", version = "0.7.1" }
-sephera_compression = { path = "../sephera_compression", version = "0.7.1" }
+sephera_core = { path = "../sephera_core", version = "2.0.0" }
+sephera_compression = { path = "../sephera_compression", version = "2.0.0" }
 
-sephera_symbols = { path = "../sephera_symbols", version = "0.7.1" }
+sephera_symbols = { path = "../sephera_symbols", version = "2.0.0" }
+
+[dev-dependencies]
+tempfile = "3.23.0"

@@ -166,6 +166,42 @@ CASES: Final[tuple[Case, ...]] = (
         kind="namespace",
     ),
     Case(
+        id="rust/super_glob_in_a_child_file_names_the_parent_module",
+        source=f"{R}/core/child_tests.rs",
+        import_path="super",
+        why="`use super::*;` at the top of a child file names the parent "
+        "module -- the file that declares it. Inside an inline `mod tests` "
+        "the same words name the file itself; in a separate file they name "
+        "the parent, and resolving them to the file itself erases the edge "
+        "between a test module and the module it tests.",
+        resolves_to=f"{R}/core/mod.rs",
+        kind="namespace",
+    ),
+    Case(
+        id="rust/a_sibling_crate_named_in_a_path_resolves_to_its_files",
+        source=f"{R}/uses_leaf.rs",
+        import_path="leaf::widget::Widget",
+        why="A path whose head names a sibling crate -- a manifest in "
+        "the tree declares `leaf`, and its lib target is in the graph "
+        "-- names that crate's files through the extern prelude. No "
+        "directory under the importing crate is called `leaf`, so the "
+        "module walks cannot see it, and the import was filed as a "
+        "third-party dependency.",
+        resolves_to="rust/crates/leaf/src/widget.rs",
+    ),
+    Case(
+        id="rust/super_glob_in_a_child_of_the_crate_root_names_the_root_file",
+        source=f"{R}/root_child.rs",
+        import_path="super",
+        why="`use super::*;` in a file the crate root declares names the "
+        "root module, whose file sits inside the directory the climb "
+        "lands on -- `lib.rs`, not `src.rs` or `src/mod.rs`. Answering "
+        "nothing leaves a first-level module answering for no file at "
+        "all, which is what axum's compression example showed.",
+        resolves_to=f"{R}/lib.rs",
+        kind="namespace",
+    ),
+    Case(
         id="rust/namespace_import_of_the_standard_library",
         source=f"{R}/glob.rs",
         import_path="std::collections",

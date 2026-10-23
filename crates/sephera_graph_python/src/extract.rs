@@ -57,12 +57,40 @@ pub fn declared_names(
         },
     );
     collect_module_level_assignments(source, tree.root_node(), &mut declared);
+    collect_module_level_imports(source, tree.root_node(), &mut declared);
     declared
+}
+
+/// The statements that run at module level, looking through `try`.
+///
+/// A `try` at the top of a module is the optional-import idiom, and
+/// the names it binds are module attributes whichever branch runs:
+/// pytest's `__init__` binds `__version__` from a generated module in
+/// the `try` and its fallback string in the `except`. Looking only at
+/// the module's direct children misses both. An `if` is not looked
+/// through -- a name bound under `if TYPE_CHECKING:` is not a runtime
+/// attribute -- and neither is a function or class body, whose block
+/// holds locals and attributes of their own.
+fn module_level_statements(module: Node<'_>) -> Vec<Node<'_>> {
+    fn collect<'a>(node: Node<'a>, out: &mut Vec<Node<'a>>) {
+        let mut cursor = node.walk();
+        for child in node.named_children(&mut cursor) {
+            match child.kind() {
+                "try_statement" | "block" | "except_clause"
+                | "finally_clause" => collect(child, out),
+                _ => out.push(child),
+            }
+        }
+    }
+
+    let mut statements = Vec::new();
+    collect(module, &mut statements);
+    statements
 }
 
 /// Record every name assigned at module level.
 ///
-/// Only the module's own statements are visited, which is what makes these
+/// Only module-level statements are visited, which is what makes these
 /// names reachable by an import: a `block` below it holds a function's locals,
 /// and `from module import name` does not reach into one. Reading the depth
 /// instead would take the same two levels for a statement and for a local and
@@ -72,9 +100,7 @@ fn collect_module_level_assignments(
     module: Node<'_>,
     declared: &mut DeclaredNames,
 ) {
-    let mut cursor = module.walk();
-
-    for statement in module.named_children(&mut cursor) {
+    for statement in module_level_statements(module) {
         if statement.kind() != "expression_statement" {
             continue;
         }
@@ -113,6 +139,69 @@ fn assignment_targets(assignment: Node<'_>) -> Vec<Node<'_>> {
             .filter(|element| element.kind() == "identifier")
             .collect(),
         _ => Vec::new(),
+    }
+}
+
+/// Record the names bound by module-level import statements.
+///
+/// A name a module imports is a name the module has. `from
+/// .terminalwriter import TerminalWriter` in a package's `__init__` is
+/// precisely what makes `from pkg import TerminalWriter` work, and
+/// leaving imports out of the declared names made every such reference
+/// unanswerable: the file that binds the name could not say so. Only
+/// module-level statements are visited, for the reason the
+/// assignment pass gives -- an import inside a function binds a local,
+/// and `from module import name` cannot reach one.
+fn collect_module_level_imports(
+    source: &[u8],
+    module: Node<'_>,
+    declared: &mut DeclaredNames,
+) {
+    for statement in module_level_statements(module) {
+        match statement.kind() {
+            "import_statement" => {
+                let mut children = statement.walk();
+                for part in statement.named_children(&mut children) {
+                    bind_imported_name(source, part, declared);
+                }
+            }
+            "import_from_statement" => {
+                let mut children = statement.walk();
+                // The first named child names the module the names are
+                // read from; the rest are the names themselves.
+                for part in statement.named_children(&mut children).skip(1) {
+                    bind_imported_name(source, part, declared);
+                }
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Bind the name one part of an import statement introduces.
+///
+/// `import a.b` binds `a`; `import a.b as c` binds `c`; a from-import's
+/// part binds the name it names, or its alias. A wildcard binds nothing
+/// enumerable, and anything unrecognised binds nothing rather than
+/// binding the statement's whole text.
+fn bind_imported_name(
+    source: &[u8],
+    part: Node<'_>,
+    declared: &mut DeclaredNames,
+) {
+    match part.kind() {
+        "aliased_import" => {
+            let mut cursor = part.walk();
+            if let Some(alias) = part.named_children(&mut cursor).last() {
+                declared.declare(node_text(source, &alias));
+            }
+        }
+        "dotted_name" => {
+            let text = node_text(source, &part);
+            let first = text.split('.').next().unwrap_or(&text);
+            declared.declare(first);
+        }
+        _ => {}
     }
 }
 
@@ -240,6 +329,63 @@ mod tests {
     /// Every path one Python file imports, in order.
     fn paths(source: &[u8]) -> Vec<String> {
         imports(source).into_iter().map(|s| s.raw_path).collect()
+    }
+
+    /// The names one Python file declares, sorted for comparison.
+    fn declared(source: &[u8]) -> Vec<String> {
+        with_parser(SupportedLanguage::Python, source.len(), |parser| {
+            let tree = parser.parse(source, None).expect("the source parses");
+            Ok(declared_names(source, &tree).into_sorted_vec())
+        })
+        .expect("a parser exists")
+    }
+
+    #[test]
+    fn an_import_binds_the_name_it_introduces() {
+        // `from pkg import TerminalWriter` can only name TerminalWriter
+        // because some module binds it -- and in a package's `__init__`
+        // that binding is itself an import. A declarations pass that saw
+        // only definitions and assignments could not say the `__init__`
+        // has the name, so every reference through it stayed
+        // unanswerable.
+        let found = declared(
+            b"from .terminalwriter import TerminalWriter\n\
+              import os.path\n\
+              import sys as system\n\
+              from collections import OrderedDict as OD\n\
+              \n\
+              def helper():\n\
+              \x20   import json\n",
+        );
+
+        assert!(found.contains(&"TerminalWriter".to_owned()), "{found:?}");
+        assert!(found.contains(&"os".to_owned()), "{found:?}");
+        assert!(found.contains(&"system".to_owned()), "{found:?}");
+        assert!(found.contains(&"OD".to_owned()), "{found:?}");
+        assert!(!found.contains(&"sys".to_owned()), "{found:?}");
+        assert!(!found.contains(&"OrderedDict".to_owned()), "{found:?}");
+        assert!(!found.contains(&"json".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn a_name_bound_in_a_module_level_try_is_declared() {
+        // The optional-import idiom, which is how pytest's `__init__`
+        // gets its version: the name is a module attribute whichever
+        // branch runs, so both the import in the `try` and the
+        // fallback assignment in the `except` declare it. A name bound
+        // under a module-level `if` is not followed -- a
+        // `TYPE_CHECKING` import is not a runtime attribute.
+        let found = declared(
+            b"try:\n\
+              \x20   from ._version import version as __version__\n\
+              except ImportError:\n\
+              \x20   __version__ = \"unknown\"\n\
+              if TYPE_CHECKING:\n\
+              \x20   from .types import OnlyTypes\n",
+        );
+
+        assert!(found.contains(&"__version__".to_owned()), "{found:?}");
+        assert!(!found.contains(&"OnlyTypes".to_owned()), "{found:?}");
     }
 
     #[test]

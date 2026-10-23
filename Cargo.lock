@@ -1346,7 +1346,7 @@ checksum = "d767eb0aabc880b29956c35734170f26ed551a859dbd361d140cdbeca61ab1e2"
 
 [[package]]
 name = "sephera"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "clap",
@@ -1373,7 +1373,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_compression"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "memchr",
@@ -1394,7 +1394,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_context"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "sephera_compression",
@@ -1408,7 +1408,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_core"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1438,7 +1438,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_graph"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1465,7 +1465,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_graph_cpp"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rayon",
@@ -1480,7 +1480,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_graph_go"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rayon",
@@ -1494,7 +1494,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_graph_java"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rayon",
@@ -1502,13 +1502,14 @@ dependencies = [
  "sephera_core",
  "sephera_symbols",
  "serde",
+ "tempfile",
  "tree-sitter",
  "tree-sitter-java",
 ]
 
 [[package]]
 name = "sephera_graph_javascript"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rayon",
@@ -1525,7 +1526,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_graph_python"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rayon",
@@ -1539,7 +1540,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_graph_rust"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "phf",
@@ -1548,13 +1549,15 @@ dependencies = [
  "sephera_core",
  "sephera_symbols",
  "serde",
+ "tempfile",
+ "toml",
  "tree-sitter",
  "tree-sitter-rust",
 ]
 
 [[package]]
 name = "sephera_gui"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "sephera_runtime",
@@ -1566,7 +1569,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_ignore"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "globset",
@@ -1580,7 +1583,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_mcp"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "rmcp",
@@ -1601,7 +1604,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_runtime"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "sephera_compression",
@@ -1620,7 +1623,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_scan"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "criterion",
@@ -1641,7 +1644,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_symbols"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "memchr",
@@ -1660,7 +1663,7 @@ dependencies = [
 
 [[package]]
 name = "sephera_tools"
-version = "0.7.1"
+version = "2.0.0"
 dependencies = [
  "anyhow",
  "clap",

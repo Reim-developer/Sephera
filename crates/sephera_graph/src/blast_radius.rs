@@ -105,27 +105,13 @@ pub fn measure_scoped(
 
     let reachable = reachable_dependents(report, &target, depth);
 
-    // Edges are the only place the imported *name* survives; the node list says
-    // who is reachable but not what they wrote to reach it.
-    let mut direct: std::collections::BTreeMap<String, Vec<String>> =
-        std::collections::BTreeMap::new();
-    for edge in &report.edges {
-        if edge.to.as_deref() == Some(target.as_str()) && edge.resolved {
-            direct
-                .entry(edge.from.clone())
-                .or_default()
-                .push(edge.import_path.clone());
-        }
-    }
+    let direct = direct_imports(report, &target);
 
     let dependents = reachable
         .into_iter()
         .filter(|file| in_scope(file, focus))
         .map(|file| {
-            let mut imports = direct.remove(&file).unwrap_or_default();
-            // Sorted so two runs over the same tree produce identical results.
-            imports.sort();
-            imports.dedup();
+            let imports = direct.get(&file).cloned().unwrap_or_default();
             Dependent { file, imports }
         })
         .collect();
@@ -135,6 +121,36 @@ pub fn measure_scoped(
         dependents,
         depth,
     })
+}
+
+/// The names each direct dependent imports from `target`, by dependent file.
+///
+/// Edges are the only place the imported *name* survives; the node list says
+/// who is reachable but not what they wrote to reach it. Shared with
+/// `affected_tests`, which needs the same names for the same reason: two
+/// modules rebuilding this map separately is how the two answers drift.
+///
+/// Values are sorted and deduplicated, so two runs over the same tree produce
+/// identical results. Only resolved edges count, as everywhere in this module.
+pub(crate) fn direct_imports(
+    report: &GraphReport,
+    target: &str,
+) -> std::collections::BTreeMap<String, Vec<String>> {
+    let mut direct: std::collections::BTreeMap<String, Vec<String>> =
+        std::collections::BTreeMap::new();
+    for edge in &report.edges {
+        if edge.to.as_deref() == Some(target) && edge.resolved {
+            direct
+                .entry(edge.from.clone())
+                .or_default()
+                .push(edge.import_path.clone());
+        }
+    }
+    for imports in direct.values_mut() {
+        imports.sort();
+        imports.dedup();
+    }
+    direct
 }
 
 /// How many files depend on the target.
@@ -288,6 +304,28 @@ fn reachable_dependents(
     target: &str,
     depth: Option<u32>,
 ) -> Vec<String> {
+    reachable_dependents_with_distance(report, target, depth)
+        .into_iter()
+        .map(|(file, _distance)| file)
+        .collect()
+}
+
+/// As [`reachable_dependents`], with each file's distance from the target.
+///
+/// Distance is the length of the *shortest* resolved path from the file back
+/// to the target, in hops: 1 for a direct importer. The walk is breadth-first
+/// over an unweighted graph, so the first time a file is reached is by a
+/// shortest path and the distance recorded then is the one kept.
+///
+/// This is the one walk both the blast radius and the affected-test analysis
+/// use. Two breadth-first searches that disagree about which files reach a
+/// target would be the failure this module's header describes -- a radius
+/// that depends on which entry point asked -- with distances attached.
+pub(crate) fn reachable_dependents_with_distance(
+    report: &GraphReport,
+    target: &str,
+    depth: Option<u32>,
+) -> Vec<(String, u32)> {
     let mut imported_by: std::collections::BTreeMap<&str, Vec<&str>> =
         std::collections::BTreeMap::new();
 
@@ -300,8 +338,8 @@ fn reachable_dependents(
         }
     }
 
-    let mut seen: std::collections::BTreeSet<&str> =
-        std::collections::BTreeSet::new();
+    let mut seen: std::collections::BTreeMap<&str, u32> =
+        std::collections::BTreeMap::new();
     let mut queue: std::collections::VecDeque<(&str, u32)> =
         std::collections::VecDeque::new();
     queue.push_back((target, 0));
@@ -320,13 +358,17 @@ fn reachable_dependents(
             if *dependent == target {
                 continue;
             }
-            if seen.insert(dependent) {
-                queue.push_back((dependent, distance.saturating_add(1)));
+            if !seen.contains_key(dependent) {
+                let next = distance.saturating_add(1);
+                seen.insert(dependent, next);
+                queue.push_back((dependent, next));
             }
         }
     }
 
-    seen.into_iter().map(str::to_owned).collect()
+    seen.into_iter()
+        .map(|(file, distance)| (file.to_owned(), distance))
+        .collect()
 }
 
 /// Whether a dependent belongs in the requested scope.
@@ -336,7 +378,9 @@ fn reachable_dependents(
 /// `--focus` is compared in the graph's spelling rather than against its own. An
 /// empty scope means everything, which is what makes scoping optional rather than
 /// something every caller has to supply.
-fn in_scope(path: &str, focus: &[String]) -> bool {
+///
+/// Shared with `affected_tests` so a scope means one thing in both reports.
+pub(crate) fn in_scope(path: &str, focus: &[String]) -> bool {
     if focus.is_empty() {
         return true;
     }

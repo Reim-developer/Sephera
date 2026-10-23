@@ -1,16 +1,19 @@
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
+mod affected_tests;
 mod args;
 mod budget;
 mod change_impact;
 pub(crate) mod configure;
 pub(crate) mod context_config;
 mod gate;
+mod guard;
 mod impact;
 mod output;
 mod progress;
 mod run;
 mod watch;
+mod why;
 
 #[doc(hidden)]
 pub use output::{

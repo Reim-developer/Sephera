@@ -5,7 +5,7 @@ name = "sephera_gui_tauri"
 # WebKitGTK's system requirements into `cargo test --workspace`, and every CI job
 # building the Rust tests would need Node and a GTK toolchain. It therefore has
 # its own version, which `scripts/check_version.py` keeps in step with the root.
-version = "0.7.1"
+version = "2.0.0"
 edition = "2024"
 description = "The Tauri host for Sephera's graphical front-end."
 # Not published. It is a shell around crates that are, and a build script that

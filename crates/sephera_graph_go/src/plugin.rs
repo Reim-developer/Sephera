@@ -1,9 +1,17 @@
 //! Go module resolution.
 //!
-//! Go import paths are package paths, not file paths, so the import's final
-//! package segment is matched against the directory that holds the package's
-//! files. A Go file inside `internal/store/` is package `store` whatever the
-//! file is called, which is how a package is identified in Go.
+//! Go import paths are package paths, not file paths. When `go.mod` is in
+//! reach its module path decides membership, and membership decides the
+//! directory exactly: a package path inside the module is a directory path
+//! inside the tree. Matching only the import's final segment cannot tell
+//! `io/fs` from a project's own `internal/fs` -- on gin it bound the
+//! standard library package to the project's own directory and reported
+//! a file as a dependency of itself.
+//!
+//! Without a manifest there is nothing to decide membership with, and
+//! the final-segment match is what remains: a Go file inside
+//! `internal/store/` is package `store` whatever the file is called,
+//! which is how a package is identified in Go.
 
 /// Go import extraction and resolution.
 ///
@@ -54,36 +62,35 @@ fn resolve_import(
                 } else {
                     format!("{replacement}/{rest}")
                 };
-                // The replacement path is relative to the go.mod directory (project
-                // root). Find a Go file in that directory.
-                let package = paths::file_name(&replaced);
-                if !package.is_empty() {
-                    return context
-                        .files()
-                        .filter(|known| is_go_file(known))
-                        .find(|known| {
-                            known.rsplit_once('/').is_some_and(|(dir, _)| {
-                                paths::file_name(dir) == package
-                            })
-                        })
-                        .cloned();
+                // The replacement path is relative to the go.mod directory
+                // (project root), and it names a directory, exactly: the
+                // package is the files in it, not the files in any other
+                // directory that shares its name.
+                let directory = replaced.trim_start_matches("./");
+                if !directory.is_empty() {
+                    return package_in_dir(&context, directory);
                 }
             }
         }
     }
 
-    // `import "example.com/app"` is a reference to the package at the project
-    // root, which `go.mod` names by the module path. Falling through to the
-    // directory match below looked for a directory called `app` and found none,
-    // because the root package's files sit directly in the project root rather
-    // than in a directory named after the module.
-    if context
-        .manifests
-        .is_some_and(|index| index.is_go_module_root(import_path))
+    // With a module path known, membership decides, and it decides
+    // exactly. An import in the module names a package whose directory
+    // is the import path with the module path taken off the front -- the
+    // root package for the bare module path, whose files sit at the top
+    // level rather than in a directory named after the module. An import
+    // outside it names another module, and another module is not this
+    // tree, however its final segment reads.
+    if let Some(module) =
+        context.manifests.and_then(|index| index.go_module_path())
     {
-        if let Some(root_package) = root_package(&context) {
-            return Some(root_package);
+        if import_path == module {
+            return root_package(&context);
         }
+        return import_path
+            .strip_prefix(module)
+            .and_then(|rest| rest.strip_prefix('/'))
+            .and_then(|directory| package_in_dir(&context, directory));
     }
 
     let package = paths::file_name(import_path);
@@ -98,6 +105,26 @@ fn resolve_import(
             known
                 .rsplit_once('/')
                 .is_some_and(|(dir, _)| paths::file_name(dir) == package)
+        })
+        .cloned()
+}
+
+/// The first file of the package that lives in `directory`.
+///
+/// Which file is returned is the set's order, as with every package
+/// match here: an import names a package, and any of its files carries
+/// the coupling.
+fn package_in_dir(
+    context: &ResolveContext<'_>,
+    directory: &str,
+) -> Option<String> {
+    context
+        .files()
+        .filter(|known| is_go_file(known))
+        .find(|known| {
+            known
+                .rsplit_once('/')
+                .is_some_and(|(dir, _)| dir == directory)
         })
         .cloned()
 }
@@ -158,8 +185,8 @@ mod tests {
             &self.replaces
         }
 
-        fn is_go_module_root(&self, import_path: &str) -> bool {
-            self.module_path == Some(import_path)
+        fn go_module_path(&self) -> Option<&str> {
+            self.module_path
         }
     }
 
@@ -267,6 +294,54 @@ mod tests {
                 context_for(&files, Some(&manifests))
             ),
             None
+        );
+    }
+
+    #[test]
+    fn a_standard_library_path_is_not_adopted_by_a_like_named_package() {
+        // gin's own shape: `internal/fs/fs.go` imports `io/fs`, the
+        // standard library package. Matching on the final segment alone
+        // bound it to the project's own `internal/fs` directory and
+        // reported the file as a dependency of itself.
+        let files = known(&["internal/fs/fs.go", "gin.go"]);
+        let manifests = GoMod::new("github.com/gin-gonic/gin");
+
+        assert_eq!(
+            GoPlugin.resolve("io/fs", context_for(&files, Some(&manifests))),
+            None
+        );
+    }
+
+    #[test]
+    fn an_import_from_another_module_is_not_adopted() {
+        // A local directory called `json` does not make every other
+        // module's `json` package a local coupling.
+        let files = known(&["internal/json/json.go", "main.go"]);
+        let manifests = GoMod::new("example.com/app");
+
+        assert_eq!(
+            GoPlugin.resolve(
+                "github.com/other/json",
+                context_for(&files, Some(&manifests))
+            ),
+            None
+        );
+    }
+
+    #[test]
+    fn inside_the_module_the_directory_is_exact() {
+        // Two packages called `store`. The import names one of them by
+        // its full path inside the module, and the other -- which the
+        // file set visits first -- is not an answer to it.
+        let files = known(&["a/store/x.go", "b/store/y.go", "main.go"]);
+        let manifests = GoMod::new("example.com/app");
+
+        assert_eq!(
+            GoPlugin.resolve(
+                "example.com/app/b/store",
+                context_for(&files, Some(&manifests))
+            ),
+            Some("b/store/y.go".to_owned())
         );
     }
 

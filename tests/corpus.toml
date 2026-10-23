@@ -17,7 +17,7 @@
 # `cycles - structural_cycles` are worth acting on. It is zero everywhere now:
 # a parent referring to its own child is excluded whatever way it is spelled.
 #
-# `self_references` was 65 and is 60, and `python
+# `self_references` was 65, then 60, and is 70, and `python
 # e2e/where_self_edges_come_from.py` says where they come from -- which changed
 # what the number meant three times over. 41 of the 65 are `use super::*;`
 # inside a test module, which is a reference the counting rules call real, and
@@ -69,8 +69,49 @@ language = "Rust"
 # the same reason and neither is a behaviour change.
 unresolved_local = 6
 files = 307
-internal_edges = 646
-self_references = 60
+# Was 646 internal and 60 self-references before a qualifier-only path
+# (`use super::*;` recorded as the bare word `super`) learned to answer at
+# all. Both numbers moved, in opposite directions, for three reasons --
+# every one of them a correction, and listed because a figure that moves
+# during a correctness fix needs its new value justified, not accepted.
+#
+# Nine of the ten new self-references are example crates whose `main.rs`
+# carries `#[cfg(test)] mod tests { use super::*; }`. The glob names the
+# root module, which is the file itself, so the reference is real -- but
+# the old fall-through left all nine unresolved and counted nowhere.
+#
+# Two more are in `axum/src/routing/tests/get_to_head.rs`, which has three
+# globs. The one at its top names `routing::tests` and still lands on
+# `tests/mod.rs`; the two inside its inline modules name the file's own
+# module, and the old walk sent all three to `mod.rs`. Those two edges
+# moved from internal to self-references, which is most of why internal
+# falls.
+#
+# The tenth went the other way. `examples/compression/src/tests.rs`
+# glob-imports its parent, which is the crate root in `main.rs`; the old
+# walk landed it on the file itself, where it sat as one of the 60. It now
+# resolves to `main.rs` -- one self-reference becomes an internal edge,
+# which is why internal falls by one net (646 - 2 + 1) rather than two.
+#
+# Was 645 before a path whose head names one of the project's own crates
+# learned to resolve. `use axum_core::...` inside axum, and `use axum::...`
+# inside axum-core's tests, name sibling crates through Cargo's extern
+# prelude; the module walks found no directory by those names and filed
+# 1066 such imports as third-party dependencies -- plausible, because the
+# dependencies are real and sit in `Cargo.toml`, and wrong, because the
+# couplings are the workspace's own. 948 of them now resolve -- 883 to
+# modules and re-exported items, and 65 to proc-macro derives, whose names
+# the declaration index records from the `proc_macro_derive` attribute
+# that declares them (the name lives in the attribute, not on the function
+# it annotates). What is left names the `http` and `headers` crates
+# through axum's re-exports of them, a crate the tree does not contain
+# (axum-server), or `#[macro_export]` macros, whose names are declared in
+# the file that defines them but are hoisted to the crate root by a rule
+# the index does not model. The evidence a name
+# is the project's own is a manifest on disk declaring it; a name no
+# manifest in the tree declares still stays external.
+internal_edges = 1593
+self_references = 70
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
 # a dependency a default build does not have.
@@ -84,7 +125,10 @@ cfg_gated_edges = 86
 # modules, e.g. `response/mod.rs` has `use crate::test_helpers::*;` while
 # `test_helpers/mod.rs` has `use crate::{extract::Request, response::Response, serve};`.
 # The other eighteen still hold.
-cycles = 19
+#
+# Twenty now. The added ring is `routing/mod.rs` and `boxed.rs`, two files
+# that name each other; it is counted once every edge on it resolves.
+cycles = 20
 structural_cycles = 0
 
 [[corpus]]
@@ -105,7 +149,19 @@ language = "Python"
 # The three that remain are `from . import Flask` in `cli.py`, twice -- which
 # binds the name against the package and so has no parent to ask -- and
 # `from . import app` in an example whose `app.py` genuinely is missing.
-unresolved_local = 3
+#
+# Zero now, and one of the three was never what the note above says.
+# `from . import app` in js_example names a package attribute -- the
+# example binds `app` in its own `__init__.py` -- not a missing file.
+# What was missing, in all three, was the answer to "does the file
+# this path's parent resolves to bind the name?", which the gap rule
+# asks the declarations. Two things kept it from being answered.
+# Import statements did not count among what a Python file declares,
+# and `from .app import Flask` is how `flask/__init__.py` binds most
+# of its names. And for a path that is one dot and a name, the split
+# that finds the parent sliced at the dot and left it empty -- the
+# package itself is the parent, and it is asked now.
+unresolved_local = 0
 # Up from 80 when a zero-byte file stopped being dropped from the graph. The
 # three are the empty `__init__.py` files under `tests/`, which are the thing
 # that makes each of those directories a package -- and this resolver already
@@ -159,4 +215,141 @@ internal_edges = 159
 self_references = 0
 cfg_gated_edges = 0
 cycles = 0
+structural_cycles = 0
+[[corpus]]
+name = "vue"
+language = "TypeScript"
+# A pnpm monorepo that imports itself by name: `@vue/*` and `vue` are
+# tsconfig `paths` for the packages under `packages/`. Those imports were
+# filed as external dependencies until the resolver learned to read the
+# mappings, and they are most of the internal count -- the graph that holds
+# the monorepo together was the part that went missing.
+#
+# The 27 that remain are not resolver gaps. Twenty-six import built bundles
+# (`./dist/*.cjs.js`, `../dist/*.prod`) from package index shims and
+# benchmarks: a source checkout does not contain build output, and no
+# resolver should invent it. The last is the sfc-playground's template
+# importing the `App.vue` of the project the template generates when copied
+# out; no such file stands beside it in this tree.
+#
+# Files is 527 rather than 524 because the playground's three template
+# assets (index.html, package.json, README.md) became nodes when the
+# `?raw` imports naming them started resolving.
+unresolved_local = 27
+files = 527
+internal_edges = 1890
+self_references = 0
+cfg_gated_edges = 0
+cycles = 205
+structural_cycles = 0
+
+[[corpus]]
+name = "gin"
+language = "Golang"
+# Zero unresolved, and the interesting history is in what is *not* counted.
+# Final-segment matching invented five edges here: `io/fs` bound to gin's
+# own `internal/fs` from three files (one of them `internal/fs/fs.go`
+# itself, the self-reference this entry used to carry), and the standard
+# library's `encoding/json` bound to gin's own `codec/json` package from
+# two more. Module membership decides now. The surviving 31 were checked
+# against the module's layout by hand.
+unresolved_local = 0
+files = 99
+internal_edges = 31
+self_references = 0
+cfg_gated_edges = 0
+cycles = 0
+structural_cycles = 0
+
+[[corpus]]
+name = "gson"
+language = "Java"
+# Zero unresolved. The audit that produced this entry read every resolved
+# import against the package its target file declares and found two
+# inventions among 1087: Jackson's `com.fasterxml.jackson.core.JsonToken`
+# and Guava's `com.google.common.reflect.TypeToken`, both bound to gson's
+# own classes by dropping leading segments until a tail matched. A dropped
+# match is verified against the file's `package` statement now, and the
+# internal count is 1085 without them.
+unresolved_local = 0
+files = 264
+internal_edges = 1085
+self_references = 0
+cfg_gated_edges = 0
+cycles = 25
+structural_cycles = 0
+
+[[corpus]]
+name = "fmt"
+language = "C++"
+# The four unresolved are Abseil headers (`absl/...`) quoted by the
+# vendored googletest: an external dependency this checkout does not
+# contain, spelled with quotes because gtest spells its includes that
+# way. fmt's own headers are included with angle brackets
+# (`#include <fmt/format.h>`) and resolve through the unique-suffix
+# rule -- eighty import statements of them.
+unresolved_local = 4
+files = 78
+internal_edges = 158
+self_references = 0
+cfg_gated_edges = 0
+cycles = 2
+structural_cycles = 0
+
+[[corpus]]
+name = "curl"
+language = "C"
+# Three unresolved, all of one family: headers the build generates --
+# `curl_config.h` from configure, `cipher.mih` and `unitprotos.h` from
+# their generators -- which a source checkout legitimately does not
+# hold.
+#
+# There were seven. The other four were Python, not C: `from . import
+# CurlClient` and its siblings in `tests/http/testenv`, naming names
+# the package's `__init__` binds by importing them. They were called
+# a floor here; they were the same unasked question flask's entry
+# documents, and they are excused now that an import counts among
+# what a Python file declares and the gap rule can ask the package
+# about a name bound against it. No edge moved -- the module halves
+# carried those couplings all along. Only the gap count was wrong.
+unresolved_local = 3
+files = 1125
+internal_edges = 3087
+self_references = 0
+cfg_gated_edges = 0
+cycles = 7
+structural_cycles = 0
+
+[[corpus]]
+name = "pytest"
+language = "Python"
+# The second Python repository, added because flask could not exhibit
+# the shape: a large package under `src/` whose modules name each
+# other's items through the package -- `from _pytest._io import
+# TerminalWriter`. The couplings were never missing: the module half
+# of every such statement already edged the module it names, which
+# is why internal_edges is unremarkable. What was missing was the
+# answer to "does the file this path's parent resolves to bind the
+# name?" -- the question the gap rule asks the declarations, and
+# the declarations did not count the names an import binds, which
+# in an `__init__` is most of them. Fifty statements were counted
+# as resolver gaps on that account; eight are.
+#
+# The eight, in two families. Seven name `_pytest._version`, a
+# module setuptools_scm generates at build time; a source checkout
+# legitimately does not hold it, and `src/_pytest/__init__.py` says
+# so itself by catching the ImportError. (The names that `__init__`
+# binds in the `try` and the `except` are declared, which is why
+# `__version__` itself is not among the eight.) The eighth is
+# `_pytest._argcomplete.filescompleter`: the name is bound under
+# `if os.environ.get("_ARGCOMPLETE"):` in `_argcomplete.py`, a
+# runtime-conditional definition. The declarations do not look
+# through a module-level `if` -- the same restraint that keeps
+# `if TYPE_CHECKING:` names out -- so this one stays a floor.
+unresolved_local = 8
+files = 274
+internal_edges = 870
+self_references = 4
+cfg_gated_edges = 0
+cycles = 91
 structural_cycles = 0

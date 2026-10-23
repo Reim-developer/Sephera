@@ -1,6 +1,7 @@
 //! A crate small enough to read, with every import shape Rust has.
 
 pub mod core;
+pub mod root_child;
 pub mod facade;
 pub mod sibling;
 pub mod inline_tests;

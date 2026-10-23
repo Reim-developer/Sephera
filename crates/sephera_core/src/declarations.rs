@@ -419,6 +419,19 @@ fn walk(
         declared.insert(node_text(source, name).to_owned());
     }
 
+    // A derive macro's name lives in its attribute, not on the item it
+    // annotates: `#[proc_macro_derive(FromRequest)] pub fn
+    // derive_from_request(...)` declares `FromRequest`, which is the
+    // name a path uses -- `axum_macros::FromRequest`. Recording only
+    // the function's name left every derive in a workspace's own
+    // proc-macro crate unresolvable by name. The attribute kind is a
+    // Rust-grammar node, so other languages' walks never meet it.
+    if node.kind() == "attribute_item"
+        && let Some(name) = derive_macro_name(source, node)
+    {
+        declared.insert(name);
+    }
+
     if rules.reexport_kinds.contains(&node.kind()) {
         collect_reexported_names(source, node, reexported);
         // A re-export statement's own subtree is fully handled here; recursing
@@ -435,6 +448,51 @@ fn walk(
 
 fn node_text<'a>(source: &'a [u8], node: tree_sitter::Node<'_>) -> &'a str {
     node.utf8_text(source).unwrap_or_default()
+}
+
+/// The name a `proc_macro_derive` attribute declares, if this attribute
+/// is one.
+///
+/// The argument list opens with the derive's name --
+/// `#[proc_macro_derive(FromRequest, attributes(from_request))]` -- and
+/// everything after the first comma names helper attributes, not
+/// macros. A plain `#[derive(...)]` is a different attribute and
+/// declares nothing here.
+fn derive_macro_name(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+) -> Option<String> {
+    let mut cursor = node.walk();
+    let outer: Vec<tree_sitter::Node<'_>> =
+        node.named_children(&mut cursor).collect();
+    // The grammar interposes an `attribute` node between the item and
+    // its parts: `attribute_item[ attribute[ identifier, token_tree ] ]`.
+    let parts: Vec<tree_sitter::Node<'_>> =
+        if outer.len() == 1 && outer[0].kind() == "attribute" {
+            let mut inner = outer[0].walk();
+            outer[0].named_children(&mut inner).collect()
+        } else {
+            outer
+        };
+    if parts.first().map(|child| node_text(source, *child))
+        != Some("proc_macro_derive")
+    {
+        return None;
+    }
+    let arguments = node_text(source, *parts.get(1)?);
+    let name = arguments
+        .trim()
+        .trim_start_matches('(')
+        .split(',')
+        .next()?
+        .trim();
+    let mut characters = name.chars();
+    let valid = !name.is_empty()
+        && characters
+            .next()
+            .is_some_and(|first| first.is_alphabetic() || first == '_')
+        && characters.all(|rest| rest.is_alphanumeric() || rest == '_');
+    valid.then(|| name.to_owned())
 }
 
 /// Whether a `use` statement re-exports rather than binding privately.
@@ -528,6 +586,26 @@ mod tests {
         let found = reexports_of("pub use a::{B, C};\n");
 
         assert_eq!(found, vec!["B".to_owned(), "C".to_owned()]);
+    }
+
+    #[test]
+    fn a_proc_macro_derive_declares_the_derive_name() {
+        // The derive's name is in the attribute, not on the function:
+        // `axum_macros::FromRequest` names `FromRequest`, and a lookup
+        // that only recorded `derive_from_request` could never answer
+        // for it. The helper attributes after the comma are not names,
+        // and neither is a plain `#[derive(...)]` on an ordinary item.
+        let found = names_of(
+            "#[proc_macro_derive(FromRequest, attributes(from_request))]\n\
+             pub fn derive_from_request() {}\n\
+             #[derive(Debug)]\n\
+             pub struct Plain;\n",
+        );
+
+        assert!(found.contains(&"FromRequest".to_owned()), "{found:?}");
+        assert!(found.contains(&"derive_from_request".to_owned()));
+        assert!(!found.contains(&"from_request".to_owned()), "{found:?}");
+        assert!(!found.contains(&"Debug".to_owned()), "{found:?}");
     }
 
     #[test]

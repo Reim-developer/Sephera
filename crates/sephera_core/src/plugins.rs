@@ -48,9 +48,12 @@ pub trait ModuleManifestLookup {
     /// The `replace` directives from `go.mod`, in declaration order.
     fn go_replaces(&self) -> &std::collections::BTreeMap<String, String>;
 
-    /// Whether `import_path` is the module path declared by this project's
-    /// `go.mod`, rather than a package inside it.
-    fn is_go_module_root(&self, import_path: &str) -> bool;
+    /// The module path this project's `go.mod` declares, if it declares one.
+    ///
+    /// Membership is the caller's arithmetic: an import is in the module
+    /// when it is this path or stands under it, and the remainder is the
+    /// package's directory inside the tree.
+    fn go_module_path(&self) -> Option<&str>;
 }
 
 /// Everything a resolver needs to look at besides the import itself.

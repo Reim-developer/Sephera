@@ -48,9 +48,12 @@ by path alone rather than given an import that does not exist.
 
 The rules matter, because `--fail-on` compares against this number:
 
-- **The target is never a dependent of itself.** A `use super::*;` resolves to
-  the file it is written in. That is a self-reference, counted separately in the
-  graph metrics, and it does not add one to the radius.
+- **The target is never a dependent of itself.** A `use super::*;` inside an
+  inline test module resolves to the file it is written in. That is a
+  self-reference, counted separately in the graph metrics, and it does not add
+  one to the radius. (At the top of a separate child file, the same words name
+  the parent module that declares it — a real edge to a different file, and
+  counted as one.)
 - **A file is counted once, not once per path that reaches it.** Two files
   depending on one, through two different chains, is one dependent.
 - **Only resolved edges count.** An edge the resolver could not place is a path

@@ -31,8 +31,8 @@ tempfile = "3.23.0"
 # no OS path types.
 serde = { version = "1.0", features = ["derive"] }
 
-sephera_scan = { path = "../sephera_scan", version = "0.7.1" }
-sephera_runtime = { path = "../sephera_runtime", version = "0.7.1" }
+sephera_scan = { path = "../sephera_scan", version = "2.0.0" }
+sephera_runtime = { path = "../sephera_runtime", version = "2.0.0" }
 
 
 [dev-dependencies]

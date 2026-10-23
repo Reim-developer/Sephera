@@ -256,7 +256,15 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
 
     assert_eq!(
         names,
-        vec!["context", "graph", "impact", "loc", "symbols"],
+        vec![
+            "affected_tests",
+            "context",
+            "graph",
+            "impact",
+            "loc",
+            "symbols",
+            "why"
+        ],
         "the protocol must advertise exactly the documented tools"
     );
 }
@@ -300,6 +308,36 @@ fn impact_answers_a_blast_radius_over_the_protocol() {
 
     assert_eq!(report["targets"][0]["target"], "src/wide.rs");
     assert_eq!(report["targets"][0]["dependent_count"], 3);
+}
+
+#[test]
+fn affected_tests_answers_over_the_protocol() {
+    // The tool an agent calls after `impact`, over the same protocol: the
+    // fixture's `wide.rs` gains a test module file that names it through
+    // `super::`, which is the edge that makes the change witnessed.
+    let (dir, target) = fixture();
+    write(
+        dir.path(),
+        "src/wide.rs",
+        b"pub fn w() {}\n\n#[cfg(test)]\nmod tests;\n",
+    );
+    write(dir.path(), "src/wide/tests.rs", b"use super::w;\n");
+
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let report = mcp.tool(
+        "affected_tests",
+        json!({ "path": dir.path().to_string_lossy(), "files": [target] }),
+    );
+
+    assert_eq!(report["targets"][0]["target"], "src/wide.rs");
+    assert_eq!(report["targets"][0]["affected_test_count"], 1);
+    assert_eq!(
+        report["targets"][0]["tests"][0]["file"],
+        "src/wide/tests.rs"
+    );
+    assert_eq!(report["targets"][0]["tests"][0]["distance"], 1);
 }
 
 #[test]

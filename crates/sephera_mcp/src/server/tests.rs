@@ -1064,3 +1064,107 @@ async fn tools_reject_ref_without_url_and_blob_urls() {
         .await;
     assert!(blob_error.is_err(), "blob URLs should fail");
 }
+
+#[tokio::test]
+async fn why_tool_explains_the_chain() {
+    // The follow-up to `impact`: not just that a file is in the radius,
+    // but through which imports. c reaches a only through b, so the
+    // chain has to name both links as written.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(
+        temp_dir.path(),
+        "src/lib.rs",
+        b"pub mod a;\npub mod b;\npub mod c;\n",
+    );
+    write_file(temp_dir.path(), "src/a.rs", b"pub fn thing() {}\n");
+    write_file(
+        temp_dir.path(),
+        "src/b.rs",
+        b"use crate::a::thing;\npub fn go() { thing(); }\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/c.rs",
+        b"use crate::b::go;\npub fn start() { go(); }\n",
+    );
+
+    let result = server
+        .why(param_for(WhyInput {
+            from: "src/c.rs".to_owned(),
+            to: "src/a.rs".to_owned(),
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            format: None,
+        }))
+        .await;
+
+    let output = result.expect("why tool should succeed for a temp dir");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("why output must be JSON");
+
+    assert_eq!(parsed["connected"], true);
+    assert_eq!(parsed["hop_count"], 2);
+    assert_eq!(parsed["direct"], false);
+    assert_eq!(parsed["hops"][1]["file"], "src/b.rs");
+    assert_eq!(parsed["hops"][1]["via"][0], "crate::b::go");
+    assert_eq!(parsed["hops"][2]["file"], "src/a.rs");
+    assert_eq!(parsed["hops"][2]["via"][0], "crate::a::thing");
+}
+
+#[tokio::test]
+async fn why_tool_reports_no_chain_as_an_answer() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(temp_dir.path(), "src/other.rs", b"pub fn c() {}\n");
+
+    let result = server
+        .why(param_for(WhyInput {
+            from: "src/other.rs".to_owned(),
+            to: "src/lib.rs".to_owned(),
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            format: None,
+        }))
+        .await;
+
+    let output = result.expect("no chain is an answer, not an error");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("why output must be JSON");
+
+    assert_eq!(parsed["connected"], false);
+    assert!(parsed["hop_count"].is_null());
+    assert_eq!(parsed["hops"].as_array().map(Vec::len), Some(0));
+}
+
+#[tokio::test]
+async fn why_tool_rejects_a_path_that_is_not_in_the_graph() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+
+    let result = server
+        .why(param_for(WhyInput {
+            from: "src/ghost.rs".to_owned(),
+            to: "src/lib.rs".to_owned(),
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            format: None,
+        }))
+        .await;
+
+    assert!(
+        result.is_err(),
+        "a mistyped path must not come back as 'no chain': {result:?}"
+    );
+}
