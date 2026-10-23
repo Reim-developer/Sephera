@@ -1305,6 +1305,18 @@ fn names_a_declared_symbol(
         return false;
     };
 
+    // The parent may not be the importing file itself. A name the
+    // importing file declares is the claim under test, not evidence
+    // for it: `from . import DEEP` in the file that declares `DEEP`
+    // reaches for the package's binding, and its own declaration
+    // cannot supply one. The same shape in an `__init__` -- `from pkg
+    // import absent`, where the only binding of `absent` is that very
+    // statement -- vouched for a name that does not exist until this
+    // condition refused it.
+    if parent_file == file_data.file_path {
+        return false;
+    }
+
     project.declarations.file_reaches(&parent_file, &name)
 }
 
@@ -1324,8 +1336,22 @@ fn split_trailing_name(import_path: &str) -> Option<(String, String)> {
     let name = &import_path[separator + 1..];
     let parent = &import_path[..separator];
 
-    if name.is_empty() || parent.is_empty() || parent.ends_with(['.', '/', ':'])
-    {
+    if name.is_empty() {
+        return None;
+    }
+
+    // A path that is only a leading dot and a name -- `.Flask` -- has
+    // the package itself for a parent, and slicing at the separator
+    // leaves that parent empty, which read as no parent at all. The
+    // three longest-standing gaps on flask were this shape, and no
+    // parent was ever asked about them.
+    if parent.is_empty() {
+        return import_path
+            .starts_with('.')
+            .then(|| (".".to_owned(), name.to_owned()));
+    }
+
+    if parent.ends_with(['.', '/', ':']) {
         return None;
     }
 
@@ -2202,12 +2228,26 @@ mod tests {
     }
 
     #[test]
-    fn a_name_against_the_package_itself_is_still_an_unresolved_local_path() {
-        // `from . import Flask` binds the name straight against the package, so
-        // the path has no parent to split and nothing to ask. It stays a gap,
-        // which is the two edges flask still reports after this fix.
+    fn a_name_against_the_package_itself_is_answered_by_the_package() {
+        // `from . import Flask` binds the name straight against the
+        // package, and the package is a parent like any other: its
+        // `__init__` declares the name or it does not. This test
+        // asserted the opposite for as long as the split could not
+        // produce the parent -- the path is one dot and a name, and
+        // slicing at the dot left the parent empty, which read as
+        // nothing to ask. That reading, not the language, is what
+        // kept the two edges flask reported as gaps after every other
+        // shape was excused.
         let report = graph_for(&[
             ("pkg/__init__.py", "class Flask:\n    pass\n"),
+            ("pkg/cli.py", "from . import Flask\n"),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 0);
+
+        // A name the package does not declare stays a gap.
+        let report = graph_for(&[
+            ("pkg/__init__.py", ""),
             ("pkg/cli.py", "from . import Flask\n"),
         ]);
 

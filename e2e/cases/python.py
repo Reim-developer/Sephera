@@ -98,6 +98,22 @@ CASES: Final[tuple[Case, ...]] = (
         resolves_to=f"{P}/sibling.py",
         count=2,
     ),
+    Case(
+        id="python/a_from_import_names_an_item_the_package_binds",
+        source=f"{P}/consumer.py",
+        import_path="pkg.Helper",
+        why="`from pkg import Helper` names a class `helper.py` defines "
+        "and the package's `__init__` binds by importing it. No file is "
+        "called Helper, so the item half names no file -- the module "
+        "half beside it carries the edge to the `__init__`. What the "
+        "item half must not be is a resolver gap: the name is there, "
+        "in the file the path resolves to, bound by an import. "
+        "Counting it as missing was fifty gaps on pytest, whose "
+        "`__init__` files bind most of their names exactly this way.",
+        resolves_to=None,
+        resolved=False,
+        local_gap=False,
+    ),
     # ---- escaping the package ----------------------------------------------
     Case(
         id="python/too_many_dots_is_a_gap",
@@ -112,16 +128,20 @@ CASES: Final[tuple[Case, ...]] = (
     ),
     # ---- a name rather than a module ---------------------------------------
     Case(
-        id="python/a_relative_name_that_is_not_reachable",
+        id="python/a_relative_name_the_package_declares_is_not_a_gap",
         source=f"{P}/sub/deep.py",
         import_path=".DEEP",
-        why="`from . import DEEP` looks for `DEEP` in `pkg/sub`, and `DEEP` is "
-        "declared in this very file rather than in `pkg/sub/__init__.py`. The "
-        "import cannot succeed, so it belongs in the gap count rather than in "
-        "the external count.",
+        why="`from . import DEEP` asks the package for the name, and "
+        "`pkg/sub/__init__.py` declares it -- `DEEP = \"deep\"` is right "
+        "there, so the import succeeds and the statement is not a gap. "
+        "This case asserted the opposite, on a reading of the fixture "
+        "that put the declaration in the wrong file, for as long as "
+        "the gap rule could not ask the package about a name bound "
+        "against it: the split that finds the parent left it empty "
+        "on a path that is one dot and a name.",
         resolves_to=None,
         resolved=False,
-        local_gap=True,
+        local_gap=False,
     ),
     Case(
         id="python/a_class_the_module_declares_is_not_a_gap",

@@ -149,7 +149,19 @@ language = "Python"
 # The three that remain are `from . import Flask` in `cli.py`, twice -- which
 # binds the name against the package and so has no parent to ask -- and
 # `from . import app` in an example whose `app.py` genuinely is missing.
-unresolved_local = 3
+#
+# Zero now, and one of the three was never what the note above says.
+# `from . import app` in js_example names a package attribute -- the
+# example binds `app` in its own `__init__.py` -- not a missing file.
+# What was missing, in all three, was the answer to "does the file
+# this path's parent resolves to bind the name?", which the gap rule
+# asks the declarations. Two things kept it from being answered.
+# Import statements did not count among what a Python file declares,
+# and `from .app import Flask` is how `flask/__init__.py` binds most
+# of its names. And for a path that is one dot and a name, the split
+# that finds the parent sliced at the dot and left it empty -- the
+# package itself is the parent, and it is asked now.
+unresolved_local = 0
 # Up from 80 when a zero-byte file stopped being dropped from the graph. The
 # three are the empty `__init__.py` files under `tests/`, which are the thing
 # that makes each of those directories a package -- and this resolver already
@@ -287,17 +299,57 @@ structural_cycles = 0
 [[corpus]]
 name = "curl"
 language = "C"
-# Seven unresolved, in two families. Three are headers the build
-# generates -- `curl_config.h` from configure, `cipher.mih` and
-# `unitprotos.h` from their generators -- which a source checkout
-# legitimately does not hold. Four are Python, not C: `from . import
-# CurlClient` and its siblings in `tests/http/testenv`, which bind a
-# name the package's `__init__` re-exports -- the same shape flask's
-# entry documents, and a floor for the same reason.
-unresolved_local = 7
+# Three unresolved, all of one family: headers the build generates --
+# `curl_config.h` from configure, `cipher.mih` and `unitprotos.h` from
+# their generators -- which a source checkout legitimately does not
+# hold.
+#
+# There were seven. The other four were Python, not C: `from . import
+# CurlClient` and its siblings in `tests/http/testenv`, naming names
+# the package's `__init__` binds by importing them. They were called
+# a floor here; they were the same unasked question flask's entry
+# documents, and they are excused now that an import counts among
+# what a Python file declares and the gap rule can ask the package
+# about a name bound against it. No edge moved -- the module halves
+# carried those couplings all along. Only the gap count was wrong.
+unresolved_local = 3
 files = 1125
 internal_edges = 3087
 self_references = 0
 cfg_gated_edges = 0
 cycles = 7
+structural_cycles = 0
+
+[[corpus]]
+name = "pytest"
+language = "Python"
+# The second Python repository, added because flask could not exhibit
+# the shape: a large package under `src/` whose modules name each
+# other's items through the package -- `from _pytest._io import
+# TerminalWriter`. The couplings were never missing: the module half
+# of every such statement already edged the module it names, which
+# is why internal_edges is unremarkable. What was missing was the
+# answer to "does the file this path's parent resolves to bind the
+# name?" -- the question the gap rule asks the declarations, and
+# the declarations did not count the names an import binds, which
+# in an `__init__` is most of them. Fifty statements were counted
+# as resolver gaps on that account; eight are.
+#
+# The eight, in two families. Seven name `_pytest._version`, a
+# module setuptools_scm generates at build time; a source checkout
+# legitimately does not hold it, and `src/_pytest/__init__.py` says
+# so itself by catching the ImportError. (The names that `__init__`
+# binds in the `try` and the `except` are declared, which is why
+# `__version__` itself is not among the eight.) The eighth is
+# `_pytest._argcomplete.filescompleter`: the name is bound under
+# `if os.environ.get("_ARGCOMPLETE"):` in `_argcomplete.py`, a
+# runtime-conditional definition. The declarations do not look
+# through a module-level `if` -- the same restraint that keeps
+# `if TYPE_CHECKING:` names out -- so this one stays a floor.
+unresolved_local = 8
+files = 274
+internal_edges = 870
+self_references = 4
+cfg_gated_edges = 0
+cycles = 91
 structural_cycles = 0

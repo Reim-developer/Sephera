@@ -37,6 +37,13 @@ from pathlib import Path
 # name (vue), a module whose own directories rhyme with the standard library
 # (gin), same-named classes in other libraries' packages (gson), angle-bracket
 # self-includes (fmt), and generated headers (curl).
+#
+# pytest joins the first three rather than the second five: Python already
+# had a real repository, and flask could not exhibit the shape that mattered
+# -- a large package under `src/` whose modules name each other's items
+# through the package (`from _pytest._io import TerminalWriter`), with the
+# bindings themselves made by imports in `__init__` files. Flask's examples
+# showed the same shape from outside; pytest is it, at scale, from inside.
 REPOSITORIES: dict[str, tuple[str, str]] = {
     "axum": ("https://github.com/tokio-rs/axum", "853067671a38632ceab12cc6227c046152db779c"),
     "flask": ("https://github.com/pallets/flask", "d73fa1cdcbd8b1465c151db8924ba58b1dd14e35"),
@@ -46,6 +53,7 @@ REPOSITORIES: dict[str, tuple[str, str]] = {
     "gson": ("https://github.com/google/gson", "881d2b55de74dd6c2fded7b2cb307b048117af97"),
     "fmt": ("https://github.com/fmtlib/fmt", "0fc31633e7d53ac895ae0a688b83b7d44f0b0c1f"),
     "curl": ("https://github.com/curl/curl", "41efc22158c765b9d961c2d532cc83ec9edf34df"),
+    "pytest": ("https://github.com/pytest-dev/pytest", "4088e1a84ef1cb8ba80aac4e75449459fc092c12"),
 }
 
 def corpus_dir() -> Path:
