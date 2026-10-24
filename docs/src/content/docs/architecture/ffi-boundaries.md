@@ -1,6 +1,6 @@
 ---
 title: Cross-language boundaries (FFI)
-description: How the graph connects code across a PyO3 boundary.
+description: How the graph connects code across PyO3 and JNI boundaries.
 ---
 
 # Cross-language boundaries (FFI)
@@ -13,8 +13,11 @@ language. The Python import reads as an external dependency, the Rust file
 looks imported by nobody, and a blast radius computed from that graph is
 wrong in both directions.
 
-Sephera closes the hole for PyO3 by harvesting the boundary from the Rust
-side and joining the Python side onto it.
+Sephera closes the hole two ways, because boundaries come in two shapes.
+PyO3 is a *module* boundary: one side imports a name the other side
+exposes, so the join rewrites the import onto the exposing file. JNI is a
+*symbol* boundary: neither side imports anything, so the join pairs two
+harvested spellings and adds the edge itself.
 
 ## What is harvested
 
@@ -53,10 +56,28 @@ Python module of the same name wins over the join by resolving first, the
 precedence Python's own import order gives it. A module name claimed by
 two Rust files is ambiguous and joins nothing.
 
+## JNI: pairing two spellings
+
+A Java `native` method's implementation is a C function whose name is the
+method's, mangled by a fixed rule: `Java_` + the escaped package, class
+(nesting included) and method — `Java_com_acme_Native_add`. Neither file
+imports the other; the mangled name is the whole connection.
+
+The Java side harvests each `native` method under its mangled name; the
+C/C++ side harvests each function whose name starts with `Java_`. Where
+both spellings exist, the graph gains an edge from the Java file to the C
+file, `import_path` the mangled name, kind `ffi` — one edge per symbol, so
+two methods implemented in one C file are two edges. An overloaded
+method's implementation carries a signature suffix (`…_add__II`) and pairs
+with the short declared name. A symbol only one side evidences pairs with
+nothing, and a name claimed by two files on either side is ambiguous and
+pairs with nothing, for the same reason as an ambiguous module name.
+
 ## Limits, stated plainly
 
-- PyO3 is the boundary the join covers today. wasm-bindgen, cgo and JNI
-  are harvested by nobody yet; imports across them still read as external.
+- PyO3 and JNI are the boundaries the join covers today. wasm-bindgen and
+  cgo exports are recorded by nobody yet, so code behind them still reads
+  as unreached by `dead` and unconnected in the graph.
 - A rename (`#[pyfunction(name = "…")]`) is honoured when the definition
   is in the same file as the registration. A function defined in another
   file and renamed there keeps its Rust name in the exposed set, so an

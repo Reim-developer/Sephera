@@ -461,9 +461,12 @@ the Rust file looks imported by nobody, and both blast radii are wrong.
 Sephera harvests the boundary from the Rust side — the `#[pymodule]` name
 and the names it registers (`wrap_pyfunction!`, `add_class`) — and joins
 Python imports onto it. `import myext` lands on the file declaring the
-module; `from myext import add` lands on the file declaring `add`. The
-edges carry kind `ffi`, and every command above — `impact`, `why`,
-`review`, `dead` — crosses the boundary without knowing it is there.
+module; `from myext import add` lands on the file declaring `add`. JNI is
+the other shape: no import on either side, just a Java `native` method and
+a C function sharing a mangled name (`Java_com_acme_Native_add`) — the two
+spellings are paired and the edge is added. The edges carry kind `ffi`,
+and every command above — `impact`, `why`, `review`, `dead` — crosses the
+boundary without knowing it is there.
 
 ### `affected-tests` — which tests answer for a change *(new in 2.0)*
 

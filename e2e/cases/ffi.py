@@ -1,13 +1,17 @@
-"""Cross-language boundary cases: Python importing a PyO3 extension.
+"""Cross-language boundary cases: PyO3 modules and JNI pairs.
 
-The fixture is one small project in two languages. `myext` exists only as
-compiled Rust -- no Python file by that name exists -- so inside Python
-alone every import of it is unresolvable, and inside Rust alone nothing
-imports anything. The correct answers below come from what PyO3 means:
-the `#[pymodule]` name is what Python imports, the names the module
+The PyO3 fixture is one small project in two languages. `myext` exists
+only as compiled Rust -- no Python file by that name exists -- so inside
+Python alone every import of it is unresolvable, and inside Rust alone
+nothing imports anything. The correct answers below come from what PyO3
+means: the `#[pymodule]` name is what Python imports, the names the module
 registers are what a from-import can reach, and a registered function
 belongs to the file that declares it, which need not be the file that
 registers it.
+
+The JNI fixture is the other shape a boundary takes: no import statement
+on either side. A Java `native` method and a C function share only a
+mangled name, and the pairing of the two spellings is the whole edge.
 """
 
 from __future__ import annotations
@@ -63,6 +67,29 @@ CASES: Final[tuple[Case, ...]] = (
         why="`Point` is both registered and declared in `lib.rs`, so the "
         "item edge and the module edge agree on the target.",
         resolves_to=LIB,
+        kind="ffi",
+    ),
+    Case(
+        id="ffi/a_jni_native_method_resolves_to_its_c_implementation",
+        source=f"{FFI}/jni/Native.java",
+        import_path="Java_com_acme_Native_add",
+        why="A Java `native` method and the C function of the same "
+        "mangled name are one symbol across a boundary: the Java file "
+        "depends on the C file, because calling the method requires the "
+        "implementation. Neither file imports the other, so this edge "
+        "exists only because both spellings were harvested and paired. "
+        "Its import path is the mangled name itself.",
+        resolves_to=f"{FFI}/jni/native_impl.c",
+        kind="ffi",
+    ),
+    Case(
+        id="ffi/a_second_native_method_pairs_with_the_same_c_file",
+        source=f"{FFI}/jni/Native.java",
+        import_path="Java_com_acme_Native_reset",
+        why="Pairing is per symbol, not per file: two native methods "
+        "implemented in one C file produce two edges to it, one per "
+        "mangled name, the way two import statements would.",
+        resolves_to=f"{FFI}/jni/native_impl.c",
         kind="ffi",
     ),
     Case(
