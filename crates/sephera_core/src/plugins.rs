@@ -67,6 +67,26 @@ pub trait ModuleManifestLookup {
     fn go_module_path(&self) -> Option<&str>;
 }
 
+/// Reads a project file's text during one analysis.
+///
+/// Resolution repeatedly needs the same few files from disk: a
+/// `tsconfig.json` for every bare import under its directory, a
+/// `Cargo.toml` for every crate named in a path, a `package.json`
+/// for every directory import. Reading them per import multiplies
+/// the disk work by the import count, and the files do not change
+/// during an analysis, so the graph carries one cache per analysis
+/// and hands it to every resolver through the context. The cache
+/// belongs to the analysis rather than the process: a long-lived
+/// server that cached across analyses would resolve a second tree
+/// with the first tree's configs.
+pub trait FileTextLookup: Send + Sync {
+    /// The text of the project-relative file, or `None` when it
+    /// cannot be read. A miss is an answer, not an error: most
+    /// directories hold no `package.json`, and that absence is what
+    /// the caller needed to know.
+    fn read_text(&self, relative_path: &str) -> Option<String>;
+}
+
 /// Everything a resolver needs to look at besides the import itself.
 ///
 /// Hand-written `Debug` rather than derived: the two lookups are trait objects,
@@ -113,6 +133,33 @@ pub struct ResolveContext<'a> {
     /// working directory, which is a different directory whenever `--path` was
     /// given.
     pub base_path: &'a std::path::Path,
+
+    /// This analysis' cache of project files' text.
+    ///
+    /// Absent outside a full analysis (a unit test resolving one
+    /// import), where [`Self::read_project_file`] falls back to
+    /// reading the disk directly -- the same answer, uncached.
+    pub file_text: Option<&'a dyn FileTextLookup>,
+}
+
+impl ResolveContext<'_> {
+    /// The text of a project-relative file, through this analysis'
+    /// cache when it carries one.
+    ///
+    /// The one door resolvers read project files through, so the
+    /// per-analysis cache cannot be bypassed by a resolver that
+    /// reaches for the disk itself -- the re-reads this cache exists
+    /// to end were each a direct `read_to_string` in a plugin.
+    #[must_use]
+    pub fn read_project_file(&self, relative_path: &str) -> Option<String> {
+        match self.file_text {
+            Some(cache) => cache.read_text(relative_path),
+            None => {
+                std::fs::read_to_string(self.base_path.join(relative_path))
+                    .ok()
+            }
+        }
+    }
 }
 
 impl std::fmt::Debug for ResolveContext<'_> {
@@ -193,6 +240,7 @@ pub fn test_context<'a>(
         declarations: None,
         manifests: None,
         base_path: std::path::Path::new(""),
+        file_text: None,
     }
 }
 
