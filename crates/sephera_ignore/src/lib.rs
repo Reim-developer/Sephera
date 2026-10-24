@@ -7,7 +7,8 @@ use regex::Regex;
 mod gitignore;
 
 pub use gitignore::{
-    Decision, IGNORE_FILE_NAMES, IgnoreRules, read_directory_rules,
+    Decision, IGNORE_FILE_NAMES, IgnoreRules, path_is_ignored,
+    read_directory_rules,
 };
 
 #[derive(Debug)]

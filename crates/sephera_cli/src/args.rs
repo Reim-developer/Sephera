@@ -160,6 +160,30 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera why src/main.rs src/lib.rs\n  sephera why crates/sephera_cli/src/run.rs crates/sephera_graph/src/types.rs\n  sephera why src/run.rs src/types.rs --format json"
     )]
     Why(WhyArgs),
+    /// Find file pairs that change together but share no import between them
+    #[command(
+        long_about = "Find hidden coupling: file pairs that change together in the commit history but share no import between them.\n\nThe graph says what a file declares it depends on; history says what actually moves together. A pair that commit after commit changes in the same commit while neither imports the other is coupled in a way no source analysis can see, because there is no statement to read -- and it is exactly the coupling that breaks a change whose author only knew about one of the two files. The report intersects the last `--commits` commits with the graph of the current tree: pairs joined by an import in either direction are excluded, because their coupling is already the graph's to report, and commits touching more than fifty files in the tree are skipped, because a mass reformat couples everything and means nothing.\n\nThe analysis needs a git history. A tree that is not a git repository is an error, not an empty report.",
+        after_long_help = "Examples:\n  sephera coupling --path .\n  sephera coupling --path . --commits 1000 --min-co-changes 5\n  sephera coupling --path . --format json"
+    )]
+    Coupling(CouplingArgs),
+    /// Review a change before it lands: blast radius, affected tests, and coupling warnings for the files it touches
+    #[command(
+        long_about = "Review a change before it lands: for each file the change touches, its blast radius, the tests that reach it, and a warning for every file that history keeps changing with it but the change does not touch.\n\nThe change is the working tree read against a reference -- HEAD by default, so staged edits, unstaged edits, deletions, and untracked files all count; `--against` names another reference to compare the working tree with, which is how a whole branch is reviewed before it is pushed. Dependents and tests are measured with the same walks `impact` and `affected-tests` use, and the coupling warnings come from the same measurement as `coupling`, read against the changed set: a pair where both sides changed is history working as it should and does not warn.\n\nA changed file the graph does not hold -- deleted by the change, or outside the analysis base -- is reported as absent rather than dropped: a deletion is the change whose dependents matter most, and the report says the graph cannot name them instead of implying there are none.\n\nThe analysis needs a git history for the coupling warnings. A tree that is not a git repository is an error, not an empty report.",
+        after_long_help = "Examples:\n  sephera review --path .\n  sephera review --path . --against master\n  sephera review --path . --format json"
+    )]
+    Review(ReviewArgs),
+    /// Rank the files where a change is most likely to hurt
+    #[command(
+        long_about = "Rank the files where a change is most likely to hurt, by the three readings of a tree that each name a different danger: how much depends on the file (the graph), how often it changes (the history), and how many hidden partners its changes drag along (the coupling the graph cannot see).\n\nThe score is a product -- dependents × churn × (1 + coupled partners) -- because the danger compounds rather than adds, and the coupling term amplifies rather than creates: a file nothing depends on is not made risky by its partners. Every factor is printed beside the score, and each is a count the other commands also report, so a row can be audited against `impact`, the history, and `coupling` rather than taken on faith.\n\nChurn is counted over the same commits `coupling` counts, under the same rule. A file is listed only when it is both depended on and in motion inside the window: stable infrastructure and churning leaves are each safe in their own way, and a ranking that listed them would be warning about files whose changes cannot hurt anyone, or cannot happen.\n\nThe analysis needs a git history. A tree that is not a git repository is an error, not an empty ranking.",
+        after_long_help = "Examples:\n  sephera risk --path .\n  sephera risk --path . --limit 10\n  sephera risk --path . --commits 1000 --format json"
+    )]
+    Risk(RiskArgs),
+    /// Find the files no entry point reaches
+    #[command(
+        long_about = "Find the files no entry point reaches: the part of the tree that is compiled, bundled, shipped, and reviewed as if it were alive, while nothing that runs ever imports it.\n\nThe walk starts from the tree's entry points and follows import edges forward. Roots are read off the paths by the conventions ecosystems agree on: test files, files named `main.*`, `lib.rs`, or `build.rs`, Python's `__main__.py`, files under a `bin`, `cmd`, `examples`, `benches`, or `scripts` directory, and `index.*` files. A file with no importers is not a root by that fact alone -- an orphaned cluster imports itself happily, and this analysis exists to refuse that reading: dead means unreachable from positive evidence of entry.\n\nThe report lists the roots it used, so a verdict can always be checked against the entry points it was measured from. Entry points a path cannot show -- a Java entry class, a plugin loaded by name, a file a framework scans for -- are named with `--root`, one per file.\n\nA dead file's importers and imports are printed with it: imported by nobody and importing nothing is one orphaned file; imported by three and importing five is an abandoned subsystem, and the second kind deserves a look before anything is deleted.",
+        after_long_help = "Examples:\n  sephera dead --path .\n  sephera dead --path . --root src/worker.rs\n  sephera dead --path . --format json"
+    )]
+    Dead(DeadArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -487,6 +511,7 @@ tree_command_args!(
         conflicts_with = "budget",
         conflicts_with = "format",
         conflicts_with = "output",
+        conflicts_with = "closure",
         help = "List available context profiles and exit.",
         long_help = "List available context profiles from the resolved `.sephera.toml` file and exit. Sephera uses either `--config <FILE>` or the normal auto-discovery rules. This mode does not build a context pack."
     )]
@@ -509,6 +534,14 @@ tree_command_args!(
         long_help = "Pack only the declaration with this name, rather than its whole file. Repeat this flag to pack several declarations. The name is matched case-insensitively and partially, so `resolve` also finds `resolve_source`. A name matching several declarations is reported rather than guessed; a name matching none is reported while the rest of the pack still builds. Cannot be combined with `--diff`, which selects whole changed files."
     )]
     pub focus_symbol: Vec<String>,
+
+    /// Pack each file's in-project dependencies directly behind it
+    #[arg(
+        long,
+        help = "Pack each file's in-project dependencies directly behind it.",
+        long_help = "Build the import graph and pack each file's dependency chain directly behind it, ahead of unrelated files that ranked below it -- so a file in the pack is accompanied by what it imports, instead of its dependencies competing as general files and losing on size to files nothing in the pack needs. The pack's metadata counts the files closure pulled in. Costs one graph build. Cannot be combined with `--focus-symbol`, which packs parts of files rather than whole files behind importers."
+    )]
+    pub closure: bool,
 
     /// Git diff source used to prioritize changed files in the context pack.
     #[arg(
@@ -732,13 +765,22 @@ tree_command_args!(
     )]
     pub exclude_types: bool,
 
+    /// Narrow the report to one exported name in the file
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Report only the files that use this name from the target.",
+        long_help = "Narrow the report from the file to one name it exports: the files that import that name from the target, the files that import the target's namespace wholesale (they may use the name without naming it, and are reported apart rather than counted as users), and the files downstream of those. A file that imports the target only for a different name is not in this report at all. With `--fail-on`, the threshold compares against the files that name the symbol. The name is matched as the importing statements spell it -- an item path's last segment, or the names a JavaScript import clause records -- so it is the name as declared in the target, not a local alias for it."
+    )]
+    pub symbol: Option<String>,
+
     /// Fail with exit code 2 when this many or more files depend on a target
     #[arg(
         long,
         value_name = "COUNT",
         value_parser = clap::value_parser!(u64).range(1..),
         help = "Fail with exit code 2 at this many dependents.",
-        long_help = "Exit with code 2 when at least this many files depend on any one of the targets. With several targets, every target at or over the limit is named, because a run that violates three rules should not take three CI runs to discover. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth."
+        long_help = "Exit with code 2 when at least this many files depend on any one of the targets. With several targets, every target at or over the limit is named, because a run that violates three rules should not take three CI runs to discover. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth. With `--symbol`, the count compared is the files that name the symbol."
     )]
     pub fail_on: Option<u64>,
 
@@ -886,6 +928,212 @@ tree_command_args!(
     }
 );
 
+tree_command_args!(
+    #[doc = "Find file pairs that change together but share no import between them."]
+    CouplingArgs {
+        /// How many commits of history to read
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits.",
+        long_help = "How far back the history window reaches, in commits. The window bounds every count in the report: a pair's co-changes are counted inside it, and a coupling that stopped happening before the window starts is not reported, which is the right answer for a report about how the tree changes now. Larger windows are slower to read and likelier to include a period when the tree was shaped differently."
+    )]
+    pub commits: u32,
+
+    /// Minimum shared commits for a pair to be reported
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Report pairs that changed together at least this many times.",
+        long_help = "The bar a pair has to clear. One shared commit is a coincidence any two files can have; three inside a few hundred is a pattern. Raising it answers a stricter question, and the report states the bar it used, so an empty report can be told apart from a bar set too high."
+    )]
+    pub min_co_changes: u64,
+
+    /// Output format for the coupling report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the coupling report. Supports markdown and json.",
+        long_help = "Output format for the coupling report. Supports markdown and json."
+    )]
+    pub format: CouplingOutputFormat,
+
+    }
+);
+
+tree_command_args!(
+    #[doc = "Review a change before it lands."]
+    ReviewArgs {
+        /// Reference the working tree is compared against
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "Compare the working tree against this reference (default: HEAD).",
+        long_help = "The reference the change is read against. The default, HEAD, reviews everything uncommitted -- staged, unstaged, deleted, and untracked. Naming a branch or tag reviews the whole body of work since that point, committed and uncommitted together, which is the form a branch review takes before a push."
+    )]
+    pub against: Option<String>,
+
+        /// How many commits of history to read for coupling warnings
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits for the coupling warnings.",
+        long_help = "How far back the history window reaches, in commits, for the coupling warnings. The window bounds every count behind a warning: a partner is only named on co-changes inside it. It means the same thing it means for `coupling`, whose report can be consulted for the pairs themselves."
+    )]
+    pub commits: u32,
+
+    /// Minimum shared commits for a coupling warning
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Warn about partners that changed together at least this many times.",
+        long_help = "The bar a hidden pair has to clear before the review warns about it. One shared commit is a coincidence any two files can have; three inside a few hundred is a pattern. The report states the bar it used."
+    )]
+    pub min_co_changes: u64,
+
+    /// Output format for the review
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the review. Supports markdown and json.",
+        long_help = "Output format for the review. Supports markdown and json."
+    )]
+    pub format: ReviewOutputFormat,
+
+    }
+);
+
+tree_command_args!(
+    #[doc = "Rank the files where a change is most likely to hurt."]
+    RiskArgs {
+        /// How many commits of history to read
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits.",
+        long_help = "How far back the history window reaches, in commits. Churn and coupling are both counted inside it: a file that stopped changing before the window starts has no churn here, which is the right answer for a ranking about how the tree changes now. It means the same thing it means for `coupling`."
+    )]
+    pub commits: u32,
+
+    /// Minimum shared commits for a pair to count as coupled
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Count a hidden pair as a coupled partner only at this many co-changes.",
+        long_help = "The bar a hidden pair has to clear before it counts as one of a file's coupled partners. One shared commit is a coincidence any two files can have; three inside a few hundred is a pattern. It is `coupling`'s bar, with `coupling`'s meaning."
+    )]
+    pub min_co_changes: u64,
+
+    /// How many files the ranking returns
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "20",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Return at most this many files, riskiest first.",
+        long_help = "The length of the ranking. The files below the cut scored lower on the same product; the report is a head of a ranking, not the whole of it, and says how long it is."
+    )]
+    pub limit: u32,
+
+    /// Output format for the ranking
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the ranking. Supports markdown and json.",
+        long_help = "Output format for the ranking. Supports markdown and json."
+    )]
+    pub format: RiskOutputFormat,
+
+    }
+);
+
+tree_command_args!(
+    #[doc = "Find the files no entry point reaches."]
+    DeadArgs {
+        /// Entry points the conventions cannot see (repeatable)
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Name an entry point a path cannot show (repeatable).",
+        long_help = "An entry point the path conventions cannot see: a Java entry class, a plugin loaded by name at runtime, a file a framework's convention scans for. Named roots are listed in the report beside the conventional ones, so the verdict can be checked against the full set it was measured from. A root that matches no file in the analysis is an error."
+    )]
+    pub root: Vec<String>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: DeadOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DeadOutputFormat {
+    /// Markdown list of dead files.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RiskOutputFormat {
+    /// Markdown ranking.
+    #[value(name = "markdown", help = "Render the ranking as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the ranking as JSON.")]
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ReviewOutputFormat {
+    /// Markdown review of the change.
+    #[value(name = "markdown", help = "Render the review as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the review as JSON.")]
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CouplingOutputFormat {
+    /// Markdown list of coupled pairs.
+    #[value(
+        name = "markdown",
+        help = "Render the coupling report as Markdown."
+    )]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the coupling report as JSON.")]
+    Json,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum WhyOutputFormat {
     /// Markdown chain of imports.
@@ -950,7 +1198,7 @@ mod tests {
     use super::{Cli, Commands, ContextFormat};
 
     /// Commands that walk a tree, and so must accept the shared groups.
-    const TREE_COMMANDS: [&str; 7] = [
+    const TREE_COMMANDS: [&str; 8] = [
         "loc",
         "symbols",
         "context",
@@ -958,6 +1206,7 @@ mod tests {
         "impact",
         "affected-tests",
         "watch",
+        "coupling",
     ];
 
     /// Flags every tree-walking command must accept.
@@ -1072,7 +1321,8 @@ mod tests {
     /// `--url` and `--ref` cannot mean the same thing on two commands.
     #[test]
     fn url_and_ref_appear_where_url_mode_is_supported() {
-        for name in ["loc", "symbols", "context", "graph", "impact"] {
+        for name in ["loc", "symbols", "context", "graph", "impact", "coupling"]
+        {
             // `impact` takes the file to report on positionally, so its argv has
             // to name one or the parse fails on the missing argument before the
             // flags are ever considered.

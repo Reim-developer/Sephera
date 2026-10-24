@@ -124,6 +124,7 @@ fuzz_target!(|data: &[u8]| {
             files_considered: u64::try_from(files.len()).unwrap_or(u64::MAX),
             files_selected: u64::try_from(files.len()).unwrap_or(u64::MAX),
             truncated_files: u64::try_from(truncated_files).unwrap_or(u64::MAX),
+            closure_pulled_files: 0,
         },
         dominant_languages,
         groups,

@@ -69,6 +69,15 @@ pub struct ResolvedContextOptions {
     /// Reported after the pack is built rather than aborting it, because one
     /// unusable name should not discard the symbols that did resolve.
     pub unresolved_symbols: Vec<String>,
+    /// In-project imports per file, when dependency closure is on.
+    ///
+    /// Built by the entry point, which owns the graph, and handed
+    /// to the context builder as data. `None` packs in rank order,
+    /// the historical behaviour. Closure and `--focus-symbol`
+    /// cannot combine: one packs whole files behind their
+    /// importers, the other packs parts of files and nothing else.
+    pub dependency_closure:
+        Option<std::collections::BTreeMap<String, Vec<String>>>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, serde::Serialize)]
@@ -254,6 +263,16 @@ pub fn build_context_report(
     if !options.line_ranges.is_empty() {
         builder = builder.only_ranged_files();
     }
+    if let Some(dependencies) = &options.dependency_closure {
+        if !options.line_ranges.is_empty() {
+            bail!(
+                "dependency closure cannot be combined with `--focus-symbol`: \
+                 closure packs whole files behind their importers, and \
+                 `--focus-symbol` packs parts of files and nothing else"
+            );
+        }
+        builder = builder.with_dependency_closure(dependencies.clone());
+    }
     let builder = match diff_selection {
         Some(selection) => builder.with_diff_selection(selection),
         None => builder,
@@ -366,6 +385,7 @@ fn merge_context_sources(
         output,
         line_ranges: BTreeMap::new(),
         unresolved_symbols: Vec::new(),
+        dependency_closure: None,
     })
 }
 

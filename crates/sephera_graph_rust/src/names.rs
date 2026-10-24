@@ -129,13 +129,94 @@ pub fn crate_root_file(
     // `src.rs`, so the two file names a crate root can have are named here.
     // `src/mod.rs` is included because it is a valid spelling of a root module
     // and costs one comparison.
-    for name in ["lib", "main", "mod"] {
-        let candidate = format!("{root}/{name}.rs");
-        if context.contains(&candidate) {
-            return Some(candidate);
-        }
+    let candidates: Vec<String> = ["lib", "main", "mod"]
+        .iter()
+        .map(|name| format!("{root}/{name}.rs"))
+        .filter(|candidate| context.contains(candidate))
+        .collect();
+
+    // A package can hold two crates at once -- `src/lib.rs` and
+    // `src/main.rs` are separate crates to Cargo -- and the first
+    // candidate is then the wrong answer for the other crate's files:
+    // a `crate::` path written in `main.rs` names the binary's module
+    // tree, not the library's (CodeRabbit on PR #41). Two questions
+    // decide it when the tree offers the evidence.
+    //
+    // A root file is its own crate's root.
+    if candidates.iter().any(|candidate| candidate == source_file) {
+        return Some(source_file.to_owned());
     }
-    None
+    // For any other file, the root that declares its module is its
+    // crate's root: `mod tests;` in `main.rs` makes `src/tests.rs`
+    // part of the binary, however the library spells its own modules.
+    if candidates.len() > 1
+        && let Some(declaring) =
+            declaring_root(&context, &candidates, source_file, &root)
+    {
+        return Some(declaring);
+    }
+    candidates.into_iter().next()
+}
+
+/// The candidate root whose top level declares the module the source
+/// file sits in, when exactly one candidate does.
+fn declaring_root(
+    context: &ResolveContext<'_>,
+    candidates: &[String],
+    source_file: &str,
+    root: &str,
+) -> Option<String> {
+    // The module a root file declares is the first segment below the
+    // root: `src/tests.rs` is `tests`, and `src/routing/mod.rs` is
+    // `routing`.
+    let relative = source_file.strip_prefix(root)?.strip_prefix('/')?;
+    let module = relative.split('/').next()?;
+    let module = module.strip_suffix(".rs").unwrap_or(module);
+
+    let mut declaring = candidates.iter().filter(|candidate| {
+        let Some(contents) = context.read_project_file(candidate) else {
+            return false;
+        };
+        declares_module(&contents, module)
+    });
+    let found = declaring.next()?.clone();
+    // Two roots declaring the same module is a tree no compiler
+    // accepts either; the preference order decides, as it did before.
+    if declaring.next().is_some() {
+        return None;
+    }
+    Some(found)
+}
+
+/// Whether a crate root's top level declares `mod <module>;`.
+///
+/// Parsed, not scanned: a comment shaped like a declaration is not
+/// one, and this crate already owns the grammar.
+fn declares_module(contents: &str, module: &str) -> bool {
+    let mut parser = tree_sitter::Parser::new();
+    if parser
+        .set_language(&tree_sitter_rust::LANGUAGE.into())
+        .is_err()
+    {
+        return false;
+    }
+    let Some(tree) = parser.parse(contents, None) else {
+        return false;
+    };
+    let root = tree.root_node();
+    let mut cursor = root.walk();
+    root.children(&mut cursor).any(|item| {
+        item.kind() == "mod_item"
+            && item.child_by_field_name("name").is_some_and(|name| {
+                name.utf8_text(contents.as_bytes())
+                    .is_ok_and(|text| text == module)
+            })
+            // A body makes it an inline module: an item of this
+            // module, but a declaration of no file beside it.
+            && item
+                .children(&mut item.walk())
+                .all(|child| child.kind() != "declaration_list")
+    })
 }
 
 #[cfg(test)]
@@ -156,6 +237,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: std::path::Path::new(""),
+            file_text: None,
         }
     }
 
@@ -201,8 +283,70 @@ mod tests {
                 declarations: Some(&self.index),
                 manifests: None,
                 base_path: std::path::Path::new(""),
+                file_text: None,
             }
         }
+    }
+
+    #[test]
+    fn a_root_file_is_its_own_crates_root() {
+        // A package with both a library and a binary: `crate::` from
+        // inside `main.rs` names the binary's tree, and the old
+        // preference order answered `lib.rs` for both roots
+        // (CodeRabbit on PR #41).
+        let known: std::collections::BTreeSet<String> = [
+            "src/lib.rs".to_owned(),
+            "src/main.rs".to_owned(),
+            "src/leaf.rs".to_owned(),
+        ]
+        .into_iter()
+        .collect();
+
+        assert_eq!(
+            crate_root_file(context_over(&known, "src/main.rs"), "src/main.rs"),
+            Some("src/main.rs".to_owned())
+        );
+        assert_eq!(
+            crate_root_file(context_over(&known, "src/lib.rs"), "src/lib.rs"),
+            Some("src/lib.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn the_root_that_declares_a_module_is_that_files_root() {
+        // `src/tests.rs` belongs to whichever root declares
+        // `mod tests;`. Here that is the binary; the library declares
+        // nothing, so the old preference order -- lib first -- put
+        // the file in the wrong crate (CodeRabbit on PR #41).
+        let directory = tempfile::tempdir().expect("a writable directory");
+        std::fs::create_dir_all(directory.path().join("src"))
+            .expect("the tree is written");
+        std::fs::write(
+            directory.path().join("src/lib.rs"),
+            "pub fn lib() {}\n",
+        )
+        .expect("the root is written");
+        std::fs::write(
+            directory.path().join("src/main.rs"),
+            "mod tests;\n\nfn main() {}\n",
+        )
+        .expect("the root is written");
+        let known: std::collections::BTreeSet<String> = [
+            "src/lib.rs".to_owned(),
+            "src/main.rs".to_owned(),
+            "src/tests.rs".to_owned(),
+        ]
+        .into_iter()
+        .collect();
+        let context = ResolveContext {
+            base_path: directory.path(),
+            ..context_over(&known, "src/tests.rs")
+        };
+
+        assert_eq!(
+            crate_root_file(context, "src/tests.rs"),
+            Some("src/main.rs".to_owned())
+        );
     }
 
     #[test]

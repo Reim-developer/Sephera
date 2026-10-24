@@ -257,3 +257,97 @@ fn a_focus_that_excludes_everything_is_distinguishable_from_no_focus() {
     assert_eq!(json["targets"][0]["target"], "src/core/lib_file.rs");
     assert_eq!(json["targets"][0]["dependent_count"], 1);
 }
+
+/// A repository where one file exports two names and each is used by
+/// a different file, with a namespace importer and a downstream file
+/// besides.
+fn repo_with_two_symbols() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    write_file(
+        temp_dir.path(),
+        "src/lib.rs",
+        b"pub mod a;\npub mod b;\npub mod c;\npub mod g;\npub mod other;\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/a.rs",
+        b"pub struct Router;\npub struct Json;\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/b.rs",
+        b"use crate::a::Router;\npub fn make() -> Router { Router }\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/other.rs",
+        b"use crate::a::Json;\npub fn make() -> Json { Json }\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/g.rs",
+        b"use crate::a::*;\npub fn make() -> Router { Router }\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/c.rs",
+        b"use crate::b;\npub fn go() { let _ = b::make(); }\n",
+    );
+    temp_dir
+}
+
+#[test]
+fn a_symbol_report_names_only_the_files_that_use_the_symbol() {
+    // The file-level radius of a.rs is four files. The symbol radius
+    // of Router is one named user, one namespace importer, and the
+    // one file downstream of the named user -- and the file that
+    // imports a.rs for Json appears in none of the three lists.
+    let temp_dir = repo_with_two_symbols();
+    let output = run_impact(
+        temp_dir.path(),
+        &["src/a.rs", "--symbol", "Router", "--format", "json"],
+    );
+    assert!(output.status.success(), "{output:?}");
+
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("impact json");
+    let target = &json["targets"][0];
+    assert_eq!(target["symbol"], "Router");
+    assert_eq!(target["direct_count"], 1);
+    assert_eq!(target["direct"][0]["file"], "src/b.rs");
+    assert_eq!(target["namespace_users"][0], "src/g.rs");
+    assert_eq!(target["downstream"][0], "src/c.rs");
+
+    let other = run_impact(
+        temp_dir.path(),
+        &["src/a.rs", "--symbol", "Json", "--format", "json"],
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&other.stdout).expect("impact json");
+    assert_eq!(json["targets"][0]["direct"][0]["file"], "src/other.rs");
+    assert_eq!(
+        json["targets"][0]["direct_count"], 1,
+        "the Json report must not inherit Router's users"
+    );
+}
+
+#[test]
+fn a_symbol_threshold_compares_against_the_symbol_count() {
+    // Two files depend on a.rs, so a file-level `--fail-on 2` fires.
+    // Only one names Router, so the same threshold with `--symbol`
+    // must hold -- a gate that ignored the narrowing would fire on a
+    // rename that touches a single file.
+    let temp_dir = repo_with_two_symbols();
+
+    let held = run_impact(
+        temp_dir.path(),
+        &["src/a.rs", "--symbol", "Router", "--fail-on", "2"],
+    );
+    assert_eq!(held.status.code(), Some(0), "one direct user is under 2");
+
+    let crossed = run_impact(
+        temp_dir.path(),
+        &["src/a.rs", "--symbol", "Router", "--fail-on", "1"],
+    );
+    assert_eq!(crossed.status.code(), Some(2), "one direct user reaches 1");
+}

@@ -27,6 +27,14 @@ impl ImportPlugin for CCppPlugin {
     ) -> Option<Vec<sephera_core::types::ImportStatement>> {
         crate::extract::extract_from_node(source, node)
     }
+
+    fn is_cfg_gated(
+        &self,
+        source: &[u8],
+        node: &tree_sitter::Node<'_>,
+    ) -> bool {
+        crate::extract::is_cfg_gated(source, node)
+    }
 }
 
 impl ResolverPlugin for CCppPlugin {

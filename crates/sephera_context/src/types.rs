@@ -41,6 +41,15 @@ pub struct ContextMetadata {
     pub files_considered: u64,
     pub files_selected: u64,
     pub truncated_files: u64,
+    /// Selected files the dependency-closure pass placed in the pack.
+    ///
+    /// Zero unless closure was requested. A file counts when the
+    /// closure pass emitted it behind a file that imports it --
+    /// pulled up ahead of unrelated files that ranked above it --
+    /// and it survived the budget into the final selection. It is
+    /// the measurable half of the closure guarantee: how much of
+    /// the pack is there because the graph said it had to be.
+    pub closure_pulled_files: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]

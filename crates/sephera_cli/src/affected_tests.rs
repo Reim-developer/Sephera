@@ -163,15 +163,29 @@ fn classify_runner(file: &str) -> RunnerKind {
         });
     }
 
-    if file_name.ends_with(".py") {
+    // Only the names pytest collects by default. `is_test_file`
+    // also answers for `conftest.py` and for helpers under a `tests/`
+    // directory, and pytest collects nothing from those -- it exits
+    // 5, which `execute_plan` reads as a failed suite and stops the
+    // whole run for a change whose only reachable "test" was a
+    // conftest (CodeRabbit on PR #41). They stay in the report as
+    // manual: affected, but with no command this tool will invent.
+    if file_name.ends_with(".py")
+        && (file_name.starts_with("test_") || file_name.ends_with("_test.py"))
+    {
         return RunnerKind::Pytest;
     }
 
     if file_name.ends_with(".rs") {
         // Directly under a `tests/` directory, the file *is* a Cargo test
         // target. Any deeper and it is a module of some target whose name
-        // this path does not say.
-        if dirs.last() == Some(&"tests") {
+        // this path does not say. A `tests/` under `src/` is a module
+        // directory, not a target directory -- Cargo has no target
+        // named after it, and claiming one stops the run (CodeRabbit
+        // on PR #41). A path may still carry an unrelated `src`
+        // component above the crate; the cost of that reading is the
+        // full suite, which is the safe direction to be wrong in.
+        if dirs.last() == Some(&"tests") && !dirs.contains(&"src") {
             let stem = file_name.trim_end_matches(".rs");
             return RunnerKind::CargoIntegration(stem.to_owned());
         }
@@ -438,6 +452,52 @@ mod tests {
             plan.commands[1].display(),
             "python3 -m pytest tests/test_api.py"
         );
+    }
+
+    #[test]
+    fn python_files_pytest_cannot_collect_are_manual() {
+        // `is_test_file` answers for a conftest and for helpers under
+        // a `tests/` directory, but pytest collects nothing from
+        // either and exits 5 -- which `--run` would read as a failed
+        // suite and stop on (CodeRabbit on PR #41). Only the names
+        // pytest collects by default get a command.
+        let plan = runner_plan(&[impact(
+            "pkg/api.py",
+            vec![
+                test("tests/conftest.py", 1),
+                test("tests/helpers.py", 1),
+                test("tests/test_api.py", 1),
+                test("tests/api_test.py", 2),
+            ],
+        )]);
+
+        assert_eq!(plan.commands.len(), 1);
+        assert_eq!(
+            plan.commands[0].display(),
+            "python3 -m pytest tests/api_test.py tests/test_api.py"
+        );
+        assert_eq!(
+            plan.manual,
+            vec![
+                "tests/conftest.py".to_owned(),
+                "tests/helpers.py".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_tests_directory_under_src_is_a_module_not_a_target() {
+        // `src/tests/` is a module directory inside the crate. Cargo
+        // has no integration target named after a file in it, so
+        // claiming one stops `--run` on a target that does not exist
+        // (CodeRabbit on PR #41); the full suite is the honest plan.
+        let plan = runner_plan(&[impact(
+            "src/lib.rs",
+            vec![test("src/tests/parser.rs", 1)],
+        )]);
+
+        assert_eq!(plan.commands.len(), 1);
+        assert_eq!(plan.commands[0].display(), "cargo test");
     }
 
     #[test]

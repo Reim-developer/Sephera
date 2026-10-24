@@ -161,7 +161,24 @@ impl ResolverPlugin for RustPlugin {
                 base = parent;
             }
 
-            return first_existing(context, &qualify(&base, rest), true);
+            return first_existing(context, &qualify(&base, rest), true)
+                .or_else(|| {
+                    // The path may end in an item rather than a module:
+                    // `super::sealed::Sealed`, where `sealed` is an inline
+                    // module in the parent file and `Sealed` a trait inside
+                    // it. The module half resolving to a file that declares
+                    // the item is the same evidence `resolve_qualified`
+                    // accepts for `crate::` paths; without it the coupling
+                    // to the parent file was reported but never edged, so
+                    // a change to that file did not reach this one.
+                    let (prefix, name) = rest.rsplit_once("::")?;
+                    let module_file =
+                        first_existing(context, &qualify(&base, prefix), true)?;
+                    let index = context.declarations?;
+                    index
+                        .file_declares(&module_file, name)
+                        .then_some(module_file)
+                });
         }
 
         // `self::` is relative to the module's own directory, which is not the same
@@ -290,7 +307,32 @@ fn resolve_qualified(
     // `pub type BoxError = ...` declared directly in the root, which is how
     // `crate::BoxError` failed to resolve at all.
     let root_file = crate_root_file(context, context.source_file)?;
-    if index.file_reaches(&root_file, name) {
+    // A module declaration names a file beside the declaring one, never
+    // the declaring file itself: `mod missing;` in `main.rs` declares
+    // a module whose file is absent, and landing the path on
+    // `main.rs` because the root "declares" the name would report a
+    // resolved self-edge for a file that is not there. An item path
+    // may land on its own root -- the name lives in that file -- so
+    // the refusal is for module declarations alone.
+    if index.file_reaches(&root_file, name)
+        && !(root_file == context.source_file
+            && context.kind == ImportKind::ModuleDeclaration)
+    {
+        return Some(root_file);
+    }
+
+    // `crate::__define_rejection` -- a `macro_rules!` carrying
+    // `#[macro_export]` lives at the crate root by definition, in
+    // whichever file of the crate it is written, so the root is where
+    // a path naming it lands. The index knows which files export a
+    // macro of this name; this crate is the scope, because another
+    // crate's exported macro of the same name is a different macro
+    // that happens to share it.
+    if index
+        .files_exporting_macro(name)
+        .iter()
+        .any(|file| crate_root(file) == crate_root(context.source_file))
+    {
         return Some(root_file);
     }
 
@@ -377,21 +419,24 @@ fn resolve_by_crate_name(
 /// named in a path (`axum_core`). A `[lib] path` replaces `src/lib.rs`
 /// as the root when the file it names is in the set.
 fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
-    context
+    let mut matches = context
         .files()
         .filter(|known| {
             known.as_str() == "src/lib.rs" || known.ends_with("/src/lib.rs")
         })
-        .find_map(|lib_rs| {
+        .filter_map(|lib_rs| {
             let crate_dir = shared_paths::parent(&shared_paths::parent(lib_rs));
             let manifest = if crate_dir.is_empty() {
                 "Cargo.toml".to_owned()
             } else {
                 format!("{crate_dir}/Cargo.toml")
             };
-            let text =
-                std::fs::read_to_string(context.base_path.join(&manifest))
-                    .ok()?;
+            // Through the analysis' cache: this runs per crate
+            // named in a path and reads every crate's manifest, so
+            // uncached it multiplied the manifest reads by the
+            // number of cross-crate imports -- the cost the PR #41
+            // review flagged.
+            let text = context.read_project_file(&manifest)?;
             let declared = declared_crate(&text)?;
             if declared.name.replace('-', "_") != name {
                 return None;
@@ -407,7 +452,17 @@ fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
                 }
             }
             Some(lib_rs.clone())
-        })
+        });
+    let first = matches.next()?;
+    // Two crates in one tree can declare the same name -- a vendored
+    // copy, a fixture, an example crate. Taking whichever path sorts
+    // first would invent an edge no compiler produces; the
+    // declaration index refuses an ambiguous name for the same
+    // reason, and so does this (CodeRabbit on PR #41).
+    if matches.any(|other| other != first) {
+        return None;
+    }
+    Some(first)
 }
 
 /// What a manifest declares about its lib target.
@@ -894,6 +949,47 @@ mod tests {
     }
 
     #[test]
+    fn a_crate_name_two_manifests_declare_resolves_nowhere() {
+        // A vendored copy and the crate it copies share a name. The
+        // lookup took whichever `src/lib.rs` sorted first, inventing
+        // an edge no compiler produces; an ambiguous name is no name,
+        // the rule the declaration index already follows
+        // (CodeRabbit on PR #41).
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_manifest(
+            directory.path(),
+            "crates/one",
+            "[package]\nname = \"dup\"\n",
+        );
+        write_manifest(
+            directory.path(),
+            "crates/two",
+            "[package]\nname = \"dup\"\n",
+        );
+        write_manifest(
+            directory.path(),
+            "crates/app",
+            "[package]\nname = \"app\"\n",
+        );
+        let files = [
+            "crates/app/src/lib.rs",
+            "crates/one/src/lib.rs",
+            "crates/two/src/lib.rs",
+        ];
+
+        assert_eq!(
+            resolve_on_disk(
+                directory.path(),
+                "dup",
+                "crates/app/src/lib.rs",
+                &files
+            ),
+            None,
+            "two roots declare `dup`; picking either invents the edge"
+        );
+    }
+
+    #[test]
     fn a_sibling_crate_named_by_its_manifest_resolves() {
         // axum's shape: one member's files name another member in
         // paths, and the name is a manifest fact -- package
@@ -1031,5 +1127,94 @@ mod tests {
             )
         };
         assert_eq!(RustPlugin.resolve("axum::Nonexistent", context), None);
+    }
+
+    #[test]
+    fn a_super_path_ending_in_an_item_lands_on_the_module_file() {
+        // axum-extra's shape: `super::sealed::Sealed` from
+        // `routing/typed.rs`, where `sealed` is an inline module in
+        // `routing/mod.rs` and `Sealed` a trait inside it. No file is
+        // called `sealed`, so the module walk alone finds nothing; the
+        // item half is answered by the file the module half names.
+        let files =
+            ["src/lib.rs", "src/routing/mod.rs", "src/routing/typed.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+
+        let mut index = sephera_core::declarations::DeclarationIndex::default();
+        index.insert(
+            "src/routing/mod.rs",
+            sephera_core::declarations::DeclaredNames::from_names(["Sealed"]),
+        );
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context(
+                "src/routing/typed.rs",
+                &known,
+            )
+        };
+        assert_eq!(
+            RustPlugin.resolve("super::sealed::Sealed", context),
+            Some("src/routing/mod.rs".to_owned())
+        );
+
+        // A name the module file does not declare stays unresolved:
+        // the landing is earned by the declaration, not by the shape.
+        let empty = sephera_core::declarations::DeclarationIndex::default();
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&empty),
+            ..sephera_core::plugins::test_context(
+                "src/routing/typed.rs",
+                &known,
+            )
+        };
+        assert_eq!(RustPlugin.resolve("super::sealed::Sealed", context), None);
+    }
+
+    #[test]
+    fn an_exported_macro_resolves_to_the_crate_root() {
+        // axum-core's shape: `crate::__define_rejection` from a sibling
+        // file, the macro itself written with `#[macro_export]` in a
+        // macros module. Rust puts such a macro at the crate root, so
+        // the root file is where the path lands -- not the file that
+        // happens to define it, which the path does not name.
+        let files = ["src/lib.rs", "src/macros.rs", "src/user.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+
+        let macros_source =
+            "#[macro_export]\nmacro_rules! __define_rejection { () => {}; }\n";
+        let declared = sephera_compression::with_parser(
+            sephera_compression::SupportedLanguage::Rust,
+            macros_source.len(),
+            |parser| {
+                let tree = parser
+                    .parse(macros_source.as_bytes(), None)
+                    .expect("the fixture parses");
+                Ok(sephera_core::declarations::collect_declared_names(
+                    macros_source.as_bytes(),
+                    &tree,
+                ))
+            },
+        )
+        .expect("a parser exists");
+        let mut index = sephera_core::declarations::DeclarationIndex::default();
+        index.insert("src/macros.rs", declared);
+
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context("src/user.rs", &known)
+        };
+        assert_eq!(
+            RustPlugin.resolve("crate::__define_rejection", context),
+            Some("src/lib.rs".to_owned())
+        );
+
+        // A name no file in the crate exports stays unresolved.
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context("src/user.rs", &known)
+        };
+        assert_eq!(RustPlugin.resolve("crate::__missing", context), None);
     }
 }

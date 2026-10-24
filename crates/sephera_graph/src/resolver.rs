@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Component, Path, PathBuf},
+    sync::Mutex,
 };
 
 use anyhow::{Context, Result, bail};
@@ -15,7 +16,7 @@ use rayon::prelude::*;
 use sephera_compression::{SupportedLanguage, with_parser};
 use sephera_core::plugins::walk_with_declarations;
 use sephera_core::progress::{NoProgress, Progress};
-use sephera_ignore::IgnoreMatcher;
+use sephera_ignore::{IgnoreMatcher, path_is_ignored, read_directory_rules};
 use sephera_scan::project_files::{ProjectFile, collect_project_files};
 
 use sephera_core::declarations;
@@ -175,6 +176,7 @@ pub fn build_graph_with_progress(
         known_files,
         declarations,
         manifests,
+        file_text: FileTextCache::new(base_path.to_path_buf()),
     };
     let (edges, node_map) = build_edges_and_nodes(&all_file_imports, &project);
     let selection = select_graph(&node_map, &focus_set, depth, query)?;
@@ -600,6 +602,7 @@ fn resolve_import_with(
         declarations: Some(&project.declarations),
         manifests: Some(&project.manifests),
         base_path: &project.base_path,
+        file_text: Some(&project.file_text),
     };
 
     match plugin.resolve(import_path, context) {
@@ -700,8 +703,38 @@ fn resolve_plain(
             known_files: known_files.clone(),
             declarations: declarations::DeclarationIndex::default(),
             manifests: manifests::ManifestIndex::default(),
+            file_text: FileTextCache::new(std::path::PathBuf::new()),
         },
     )
+}
+
+/// The graph as a forward adjacency map: each file to the resolved
+/// in-project files it imports, sorted and deduplicated, self-imports
+/// excluded.
+///
+/// The shape the context pack's dependency closure consumes, and
+/// the natural dual of the dependent walks: those are computed per
+/// query because they carry distances, while this one is the whole
+/// graph's forward edges as plain data a caller can keep.
+#[must_use]
+pub fn forward_dependencies(
+    report: &super::types::GraphReport,
+) -> BTreeMap<String, Vec<String>> {
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for edge in &report.edges {
+        if edge.resolved {
+            if let Some(to) = &edge.to {
+                if edge.from != *to {
+                    map.entry(edge.from.clone()).or_default().push(to.clone());
+                }
+            }
+        }
+    }
+    for imports in map.values_mut() {
+        imports.sort();
+        imports.dedup();
+    }
+    map
 }
 
 /// The project-wide facts every resolution reads.
@@ -714,6 +747,52 @@ struct ResolutionInputs {
     known_files: plugins::KnownFiles,
     declarations: declarations::DeclarationIndex,
     manifests: manifests::ManifestIndex,
+    file_text: FileTextCache,
+}
+
+/// One analysis' cache of project files' text.
+///
+/// Resolution asks for the same configs on every import that
+/// touches them -- every crate named in a Rust path re-read every
+/// crate's `Cargo.toml`; every bare import under a directory
+/// re-read its `tsconfig.json`. The files cannot change during an
+/// analysis, so each is read at most once here, misses included:
+/// "this directory has no `package.json`" is the common answer, and
+/// re-proving it from the disk per import was most of the cost.
+///
+/// Resolution runs on rayon's workers, so the cache is a mutex
+/// rather than a cell. Contention is not the concern it looks like:
+/// after the first pass over a tree's configs, nearly every lookup
+/// is a hit on a short string compare.
+struct FileTextCache {
+    base_path: PathBuf,
+    entries: Mutex<BTreeMap<String, Option<String>>>,
+}
+
+impl FileTextCache {
+    const fn new(base_path: PathBuf) -> Self {
+        Self {
+            base_path,
+            entries: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl sephera_core::plugins::FileTextLookup for FileTextCache {
+    fn read_text(&self, relative_path: &str) -> Option<String> {
+        // A poisoned lock means another worker panicked mid-read;
+        // answer as a miss rather than failing this import's
+        // resolution too -- the resolver's contract is that a file
+        // it cannot read is external, never an error.
+        let mut entries = self.entries.lock().ok()?;
+        if let Some(cached) = entries.get(relative_path) {
+            return cached.clone();
+        }
+        let text =
+            std::fs::read_to_string(self.base_path.join(relative_path)).ok();
+        entries.insert(relative_path.to_owned(), text.clone());
+        text
+    }
 }
 
 /// Builds edges and populates the node map from extracted imports.
@@ -773,7 +852,21 @@ fn build_edges_and_nodes(
                 // language has, and there is no file for it to bind to.
                 && (statement.kind.is_namespace()
                     == statement.raw_path.ends_with('*'))
-                && !names_a_declared_symbol(statement, file_data, project);
+                && !names_a_declared_symbol(statement, file_data, project)
+                && !names_a_generated_file(statement, file_data, project)
+                // A preprocessor-conditional include is not a gap either.
+                // What it names -- an optional dependency's headers, one
+                // platform's system headers -- is supplied by the build in
+                // that configuration and held by no configuration of this
+                // tree, so there is nothing here for a resolver to find.
+                // Scoped to C and C++: a Rust `#[cfg]` path names a source
+                // file the scan holds whatever the configuration, so a
+                // failure there still means what it says.
+                && !(statement.cfg_gated
+                    && matches!(
+                        file_data.ts_language,
+                        SupportedLanguage::C | SupportedLanguage::Cpp
+                    ));
 
             // Every resolved edge goes in the adjacency, including a parent naming its own
             // child with `mod child;`.
@@ -819,6 +912,7 @@ fn build_edges_and_nodes(
                 from: file_data.file_path.clone(),
                 to: target,
                 import_path: statement.raw_path.clone(),
+                items: statement.items.clone(),
                 resolved: is_resolved,
                 kind: statement.kind,
                 cfg_gated: statement.cfg_gated,
@@ -1314,10 +1408,186 @@ fn names_a_declared_symbol(
     // statement -- vouched for a name that does not exist until this
     // condition refused it.
     if parent_file == file_data.file_path {
-        return false;
+        // From inside an inline module the shape reverses. `use
+        // super::Name;` in `mod tests` names the enclosing file's own
+        // module -- that is what `super` means there -- so the file's
+        // namespace is exactly the evidence the path asks for: a name
+        // it declares, re-exports, or merely binds with a private
+        // `use`, which an inline child can see because visibility in
+        // Rust runs downward from ancestors. The vouching this guard
+        // refuses is a depth-zero claim, where the importing statement
+        // itself is the only binding on offer.
+        if statement.module_depth == 0 {
+            return false;
+        }
+        return project.declarations.file_reaches(&parent_file, &name)
+            || project.declarations.file_binds(&parent_file, &name);
     }
 
     project.declarations.file_reaches(&parent_file, &name)
+}
+
+/// Whether an unresolved path names a file the build generates.
+///
+/// A source checkout does not hold every file a project imports. Vue's
+/// package entry points re-export from `dist/`, which rollup writes;
+/// pytest imports `_pytest._version`, which `setuptools_scm` writes; curl
+/// includes `curl_config.h`, which configure writes. The resolver cannot
+/// place those, and reporting them beside a genuinely broken import --
+/// the one count a reader trusts to mean "something here is wrong" --
+/// made the count a liar in both directions: too large to act on, and
+/// easy to dismiss when it mattered.
+///
+/// The evidence is the project's own: each of those paths is named by
+/// the project's ignore files, which is the project's declaration that
+/// the file is not source. A path no ignore rule covers gets no such
+/// reading and stays a gap, so a broken import in a project that happens
+/// to ignore other things is still reported.
+fn names_a_generated_file(
+    statement: &ImportStatement,
+    file_data: &FileImportData,
+    project: &ResolutionInputs,
+) -> bool {
+    if generated_candidates(statement, file_data, project)
+        .iter()
+        .any(|candidate| path_is_ignored(&project.base_path, candidate))
+    {
+        return true;
+    }
+
+    // A generated header does not have to land beside its includer: the
+    // build writes it where the build system says, and an include path
+    // carries the includer there. curl generates `unitprotos.h` into
+    // `lib/` -- its `lib/CMakeLists.txt` says so, and `lib/.gitignore`
+    // names it -- while the include sits in `tests/libtest/`. So a bare
+    // C include also asks every directory in the project whether its own
+    // ignore files name this file. Only a directory's own files count:
+    // an unanchored pattern is inherited by every directory below the
+    // one that wrote it, so asking the accumulated set would have `lib/`
+    // and each of its subdirectories all "naming" the same header.
+    // Exactly one directory may name it: two would be two different
+    // generated files with one name, and which one the include means is
+    // not written anywhere in the source.
+    if matches!(
+        file_data.ts_language,
+        SupportedLanguage::C | SupportedLanguage::Cpp
+    ) && !statement.raw_path.starts_with('<')
+        && !statement.raw_path.contains('/')
+    {
+        let mut directories: Vec<String> = project
+            .known_files
+            .iter()
+            .map(|file| sephera_core::path_utils::parent(file))
+            .collect();
+        directories.push(String::new());
+        directories.sort();
+        directories.dedup();
+
+        let mut naming: usize = 0;
+        for directory in directories {
+            let on_disk = if directory.is_empty() {
+                project.base_path.clone()
+            } else {
+                project.base_path.join(&directory)
+            };
+            let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&on_disk)
+                .map(|read| read.filter_map(Result::ok).collect())
+                .unwrap_or_default();
+            let own = read_directory_rules(&on_disk, &entries);
+            if own.matched(&statement.raw_path, false)
+                == Some(sephera_ignore::Decision::Ignore)
+            {
+                naming += 1;
+            }
+        }
+        return naming == 1;
+    }
+
+    false
+}
+
+/// The files an unresolved path could name, spelled as project paths.
+///
+/// Three spellings, because languages name generated files the same ways
+/// they name source files. A relative path joins against the importing
+/// file. A C include may also sit beside the includer or on an include
+/// path spelled from the root. A module path is rebuilt from the parent
+/// that did resolve: `_pytest._version.version` is a claim about the
+/// module `_pytest._version`, whose file would sit beside the `_pytest`
+/// package file that resolution did find, so every split of the path is
+/// tried, longest first.
+fn generated_candidates(
+    statement: &ImportStatement,
+    file_data: &FileImportData,
+    project: &ResolutionInputs,
+) -> Vec<String> {
+    use sephera_core::path_utils;
+
+    let raw = &statement.raw_path;
+    let source_dir = path_utils::parent(&file_data.file_path);
+    let mut candidates: Vec<String> = Vec::new();
+
+    if raw.starts_with("./") || raw.starts_with("../") {
+        candidates.push(path_utils::resolve_relative(&source_dir, raw));
+    }
+
+    // A quoted C include is searched beside the includer first and then
+    // along the include path, whose entries are project-relative. An
+    // angle include names a system header and is never a project file.
+    if matches!(
+        file_data.ts_language,
+        SupportedLanguage::C | SupportedLanguage::Cpp
+    ) && !raw.starts_with('<')
+    {
+        candidates.push(path_utils::resolve_relative(&source_dir, raw));
+        candidates.push(raw.clone());
+    }
+
+    // Each split of a module path, longest parent first. The loop ends
+    // where the splits do: a parent is a strict prefix of the path it was
+    // split from, so `rest` shrinks on every pass.
+    let mut rest = raw.clone();
+    while let Some((parent, name)) = split_trailing_name(&rest) {
+        if let Resolution::File(parent_file) = resolve_import_with(
+            &parent,
+            &file_data.file_path,
+            statement.module_depth,
+            statement.kind,
+            file_data.ts_language,
+            project,
+        ) {
+            let directory = path_utils::parent(&parent_file);
+            for suffix in module_suffixes(file_data.ts_language) {
+                let candidate = if directory.is_empty() {
+                    format!("{name}{suffix}")
+                } else {
+                    format!("{directory}/{name}{suffix}")
+                };
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+        rest = parent;
+    }
+
+    candidates
+}
+
+/// The spellings one module name takes as a file, per language.
+///
+/// Only the languages whose module paths reach the split loop with a
+/// name that differs from the file it names. A path that already spells
+/// the whole file -- every JavaScript and C candidate -- needs no suffix,
+/// and inventing spellings for it would manufacture evidence.
+const fn module_suffixes(
+    language: SupportedLanguage,
+) -> &'static [&'static str] {
+    match language {
+        SupportedLanguage::Python => &["", ".py", "/__init__.py"],
+        SupportedLanguage::Rust => &["", ".rs", "/mod.rs"],
+        _ => &[""],
+    }
 }
 
 /// Split a dotted path into everything before the last separator and the last
@@ -1331,24 +1601,48 @@ fn names_a_declared_symbol(
 /// gap rule already counts on its own account, and no declaration index holds a
 /// name spelled `*` -- every one of them is read out of a grammar's `name`
 /// field, so the lookup finds nothing and the answer was false anyway.
-fn split_trailing_name(import_path: &str) -> Option<(String, String)> {
-    let separator = import_path.rfind(['.', '/', ':'])?;
-    let name = &import_path[separator + 1..];
+pub(crate) fn split_trailing_name(
+    import_path: &str,
+) -> Option<(String, String)> {
+    // The last separator, with Rust's `::` read as one separator rather
+    // than two colons. Slicing between its halves left the parent
+    // ending in a colon -- `super:` for `super::JsonLines` -- which the
+    // guard below reads as no parent at all, so no Rust item path was
+    // ever asked about the file its parent names. A single-character
+    // separator after the last `::` still wins: the name is what
+    // follows the final boundary, whatever spelled it.
+    let (separator, width) = match import_path.rfind("::") {
+        Some(double) => {
+            let single = import_path.rfind(['.', '/']).unwrap_or(0);
+            if single > double {
+                (single, 1)
+            } else {
+                (double, 2)
+            }
+        }
+        None => (import_path.rfind(['.', '/', ':'])?, 1),
+    };
+    let name = &import_path[separator + width..];
     let parent = &import_path[..separator];
 
     if name.is_empty() {
         return None;
     }
 
-    // A path that is only a leading dot and a name -- `.Flask` -- has
-    // the package itself for a parent, and slicing at the separator
-    // leaves that parent empty, which read as no parent at all. The
-    // three longest-standing gaps on flask were this shape, and no
-    // parent was ever asked about them.
-    if parent.is_empty() {
-        return import_path
-            .starts_with('.')
-            .then(|| (".".to_owned(), name.to_owned()));
+    // A path that is only a leading dot run and a name -- `.Flask`,
+    // `..Flask` -- has the package the dots name for a parent, and
+    // slicing at the last dot leaves that parent empty, or as a lone
+    // dot the check below rejects as a trailing separator. The three
+    // longest-standing gaps on flask were the one-dot shape, and no
+    // parent was ever asked about them; the two-dot shape is
+    // `from .. import Flask`, whose parent is the grandparent
+    // package the two dots name (CodeRabbit on PR #41). The parent
+    // is the whole run of leading dots, however long it is.
+    if parent.is_empty() || parent.chars().all(|character| character == '.') {
+        let dots =
+            import_path.len() - import_path.trim_start_matches('.').len();
+        return (dots > 0 && import_path[dots..] == *name)
+            .then(|| (import_path[..dots].to_owned(), name.to_owned()));
     }
 
     if parent.ends_with(['.', '/', ':']) {
@@ -1394,6 +1688,7 @@ fn names_a_known_module(
             declarations: Some(&project.declarations),
             manifests: Some(&project.manifests),
             base_path: &project.base_path,
+            file_text: Some(&project.file_text),
         },
     )
 }
@@ -1607,6 +1902,29 @@ mod tests {
         paths.iter().map(|path| (*path).to_owned()).collect()
     }
 
+    #[test]
+    fn the_file_text_cache_reads_each_file_once_misses_included() {
+        use sephera_core::plugins::FileTextLookup as _;
+
+        let temp_dir = tempdir().unwrap();
+        let cache = FileTextCache::new(temp_dir.path().to_path_buf());
+        fs::write(temp_dir.path().join("cfg.txt"), "one").unwrap();
+
+        assert_eq!(cache.read_text("cfg.txt"), Some("one".to_owned()));
+        // The file changes on disk; within one analysis the cache's
+        // first answer stands, which is the property the cache
+        // exists for -- and the proof the second read never reached
+        // the disk.
+        fs::write(temp_dir.path().join("cfg.txt"), "two").unwrap();
+        assert_eq!(cache.read_text("cfg.txt"), Some("one".to_owned()));
+
+        // A miss is cached too: most directories hold no manifest,
+        // and re-proving that per import was most of the old cost.
+        assert_eq!(cache.read_text("absent.txt"), None);
+        fs::write(temp_dir.path().join("absent.txt"), "late").unwrap();
+        assert_eq!(cache.read_text("absent.txt"), None);
+    }
+
     /// Build a statement of the given kind for filter tests.
     fn statement(raw_path: &str, kind: ImportKind) -> ImportStatement {
         ImportStatement {
@@ -1615,6 +1933,7 @@ mod tests {
             kind,
             module_depth: 0,
             cfg_gated: false,
+            items: Vec::new(),
         }
     }
 
@@ -2121,6 +2440,32 @@ mod tests {
     }
 
     #[test]
+    fn a_name_the_grandparent_package_declares_is_not_a_gap() {
+        // `from .. import Flask` in a subpackage: the extractor's item
+        // half is `..Flask`, and splitting its trailing name read the
+        // parent as a lone dot, which the separator check rejected --
+        // so the grandparent package was never asked whether it
+        // declares the name, and a real attribute counted as a
+        // missing module (CodeRabbit on PR #41).
+        let report = graph_for(&[
+            ("pkg/__init__.py", "class Flask:\n    pass\n"),
+            ("pkg/sub/__init__.py", ""),
+            ("pkg/sub/mod.py", "from .. import Flask, Absent\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 1,
+            "only `Absent`, which the grandparent declares no more than \
+             the parent did: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+        assert_eq!(
+            report.metrics.unresolved_local_samples,
+            vec!["pkg/sub/mod.py: ..Absent".to_owned()]
+        );
+    }
+
+    #[test]
     fn a_module_level_assignment_is_a_name_the_module_declares() {
         // Half the names on flask are this shape: `request = LocalProxy(...)` in
         // `globals.py`, `message_flashed = signals.signal(...)` in `signals.py`.
@@ -2389,6 +2734,93 @@ mod tests {
             .filter(|edge| edge.from == source && edge.resolved)
             .filter_map(|edge| edge.to.clone())
             .collect()
+    }
+
+    #[test]
+    fn an_import_of_a_generated_bundle_is_not_a_gap() {
+        // The bundle is build output: the project's own `.gitignore` names
+        // `dist`, which is the project saying the file is not source. The
+        // import beside it that names a file nothing generates and no rule
+        // covers stays a gap -- the excuse is the evidence, not the shape.
+        let report = graph_for(&[
+            (".gitignore", "dist\n"),
+            (
+                "packages/core/index.js",
+                "export * from \"./dist/core.cjs.js\";\nimport \"./missing.js\";\n",
+            ),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
+        assert!(
+            report
+                .metrics
+                .unresolved_local_samples
+                .iter()
+                .all(|sample| sample.contains("missing.js")),
+            "samples: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+    }
+
+    #[test]
+    fn a_generated_python_module_is_not_a_gap() {
+        // `_version.py` is written by the build's version stamping and the
+        // `.gitignore` says so by path. `absent` has no such evidence: it
+        // names a module in a package the analysis holds, and stays a gap.
+        let report = graph_for(&[
+            (".gitignore", "src/_pytest/_version.py\n"),
+            (
+                "src/_pytest/__init__.py",
+                "from _pytest._version import version\n",
+            ),
+            ("src/_pytest/plain.py", "import _pytest.absent\n"),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
+        assert!(
+            report
+                .metrics
+                .unresolved_local_samples
+                .iter()
+                .all(|sample| sample.contains("absent")),
+            "samples: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+    }
+
+    #[test]
+    fn a_test_modules_super_names_its_own_files_bindings() {
+        // axum's `raw_form.rs` shape: the file binds two rejection types
+        // with a private `use super::rejection::{...}`, and its test
+        // module names them back through `super::`. From inside the
+        // inline module, `super` is the file's own module, so the names
+        // it binds -- declared, or merely imported -- are the answer.
+        // Both halves were needed: the `::` split that finds the parent
+        // (the parent of `super::InvalidFormContentType` is `super`, not
+        // `super:`), and bindings counting for a parent that is the
+        // importing file itself when the reference sits at depth.
+        let report = graph_for(&[
+            ("src/lib.rs", "pub mod extract;\n"),
+            (
+                "src/extract/mod.rs",
+                "pub mod raw_form;\npub mod rejection;\n",
+            ),
+            (
+                "src/extract/rejection.rs",
+                "pub struct InvalidFormContentType;\npub enum RawFormRejection { Invalid }\n",
+            ),
+            (
+                "src/extract/raw_form.rs",
+                "use super::rejection::{InvalidFormContentType, RawFormRejection};\n\
+                 pub struct RawForm;\n\
+                 #[cfg(test)]\n\
+                 mod tests {\n\
+                 \x20   use super::{InvalidFormContentType, RawForm, RawFormRejection};\n\
+                 }\n",
+            ),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 0);
     }
 
     #[test]
@@ -2966,6 +3398,7 @@ mod tests {
                 known_files: files,
                 declarations: index,
                 manifests: manifests::ManifestIndex::default(),
+                file_text: FileTextCache::new(std::path::PathBuf::new()),
             },
         );
 
@@ -3094,6 +3527,7 @@ mod tests {
                 known_files: files.clone(),
                 declarations: index.clone(),
                 manifests: manifests::ManifestIndex::default(),
+                file_text: FileTextCache::new(std::path::PathBuf::new()),
             },
         )
         .file()

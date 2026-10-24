@@ -75,6 +75,12 @@ pub struct ContextInput {
     pub compress: Option<String>,
     /// Output format: 'markdown' or 'json' (default: 'json')
     pub format: Option<String>,
+    /// Pack each file's in-project dependencies directly behind it,
+    /// ahead of unrelated files that ranked below it, so a packed
+    /// file is accompanied by what it imports. The report's
+    /// metadata counts the files closure pulled in. Cannot be
+    /// combined with `focus_symbol`.
+    pub closure: Option<bool>,
 }
 
 /// Arguments accepted by the `symbols` tool.
@@ -173,6 +179,13 @@ pub struct ImpactInput {
     /// tell those apart would have to treat every threshold as fatal. The CLI exit
     /// code is included so a wrapper gets the same number the shell would.
     pub fail_on: Option<u64>,
+    /// Narrow the report to one exported name in each file, mirroring the
+    /// CLI's `--symbol`: `dependents` becomes the files that import that
+    /// name, `dependent_count` counts them (so `fail_on` compares against
+    /// the symbol's users), and the entry gains `namespace_users` (files
+    /// that import the file's namespace and may use the name without
+    /// naming it) and `downstream` (files downstream of those).
+    pub symbol: Option<String>,
     /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
     /// compact summary that fits an agent's context.
     pub format: Option<String>,
@@ -246,6 +259,147 @@ pub struct WhyInput {
     pub ignore: Option<Vec<String>>,
     /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
     pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
+/// Arguments accepted by the `coupling` tool.
+///
+/// Hidden coupling is a question about a whole tree and its history,
+/// so there is no file argument: the tool reads the recent commits,
+/// builds the graph, and reports the pairs the two disagree about.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CouplingInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// How many recent commits to read. Defaults to 500, the CLI's
+    /// window. The window bounds every count in the report.
+    pub commits: Option<u32>,
+    /// Report pairs that changed together at least this many times.
+    /// Defaults to 3: one shared commit is a coincidence any two files
+    /// can have.
+    pub min_co_changes: Option<u64>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
+/// Arguments accepted by the `review` tool.
+///
+/// A review is a question about a change in a tree, so the file set
+/// comes from git rather than from a parameter: the tool reads the
+/// working tree against a reference, the recent history, and the
+/// graph, and reports what the change puts at risk.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Reference the working tree is compared against. Defaults to
+    /// HEAD, which reviews everything uncommitted; naming a branch
+    /// or tag reviews the whole body of work since that point.
+    pub against: Option<String>,
+    /// How many recent commits to read for the coupling warnings.
+    /// Defaults to 500, the CLI's window.
+    pub commits: Option<u32>,
+    /// Warn about partners that changed together at least this many
+    /// times. Defaults to 3.
+    pub min_co_changes: Option<u64>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
+/// Arguments accepted by the `risk` tool.
+///
+/// A ranking is a question about a whole tree and its history, so
+/// there is no file argument: the tool reads the recent commits,
+/// builds the graph, and ranks what the two put at risk together.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RiskInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// How many recent commits to read. Defaults to 500, the CLI's
+    /// window. The window bounds every count in the ranking.
+    pub commits: Option<u32>,
+    /// Count a hidden pair as a coupled partner only at this many
+    /// co-changes. Defaults to 3.
+    pub min_co_changes: Option<u64>,
+    /// How many files the ranking returns, riskiest first. Defaults
+    /// to 20, the CLI's limit.
+    pub limit: Option<u32>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
+/// Arguments accepted by the `dead` tool.
+///
+/// The question is about a whole tree, so there is no file
+/// argument: the tool walks forward from the entry points the path
+/// conventions identify, plus any the caller names, and reports
+/// what the walk never reaches.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeadInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Additional entry points the path conventions cannot see, in
+    /// the analysis' path spelling: an entry class, a plugin loaded
+    /// by name, a file a framework scans for. A root that matches
+    /// no file in the analysis is an error.
+    pub roots: Option<Vec<String>>,
     /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
     /// compact summary that fits an agent's context.
     pub format: Option<String>,

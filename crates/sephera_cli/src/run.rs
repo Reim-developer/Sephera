@@ -4,13 +4,15 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 use sephera_graph::{
-    resolver::{EdgeFilters, build_focus_set, build_graph_with_progress},
+    resolver::{
+        EdgeFilters, build_focus_set, build_graph, build_graph_with_progress,
+    },
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-    build_context_report, load_project_settings, resolve_changed_files,
-    resolve_source,
+    build_context_report, changed_files, load_project_settings,
+    recent_commit_files, resolve_changed_files, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -18,9 +20,11 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     affected_tests,
     args::{
-        AffectedTestsArgs, Cli, Commands, ContextArgs, GraphArgs,
+        AffectedTestsArgs, Cli, Commands, ContextArgs, CouplingArgs,
+        CouplingOutputFormat, DeadArgs, DeadOutputFormat, GraphArgs,
         GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
-        ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, SettingsArgs,
+        ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, ReviewArgs,
+        ReviewOutputFormat, RiskArgs, RiskOutputFormat, SettingsArgs,
         SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
         WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
@@ -28,6 +32,7 @@ use crate::{
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
+    coupling, dead,
     gate::{self, Gate},
     guard, impact,
     output::{
@@ -37,7 +42,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    watch, why,
+    review, risk, watch, why,
 };
 
 #[must_use]
@@ -121,6 +126,10 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
             run_affected_tests(&arguments).await
         }
         Commands::Why(arguments) => run_why(&arguments).await,
+        Commands::Coupling(arguments) => run_coupling(&arguments).await,
+        Commands::Review(arguments) => run_review(&arguments).await,
+        Commands::Risk(arguments) => run_risk(&arguments).await,
+        Commands::Dead(arguments) => run_dead(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -441,13 +450,44 @@ async fn run_context(
     arguments: ContextArgs,
     profile: Option<String>,
 ) -> Result<Vec<Gate>> {
+    let closure = arguments.closure;
     match resolve_context_options(arguments, profile).await? {
-        ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
+        ResolvedContextCommand::Execute(mut resolved) => {
+            if closure {
+                inject_dependency_closure(&mut resolved)?;
+            }
+            execute_context(&resolved)
+        }
         ResolvedContextCommand::ListProfiles(profiles) => {
             print_available_profiles(&profiles);
             Ok(no_gates())
         }
     }
+}
+
+/// Build the import graph and hand its edges to the context
+/// builder as the closure map.
+///
+/// The matcher is the one the context build itself uses -- the
+/// resolved options' patterns, with the repository's ignore files
+/// applied unless the invocation turned them off -- so the graph
+/// and the pack are built over the same file set. Edges are the
+/// graph's resolved ones; an unresolved import names no file the
+/// pack could include.
+fn inject_dependency_closure(
+    options: &mut ResolvedContextOptions,
+) -> Result<()> {
+    let matcher = if options.read_ignore_files {
+        IgnoreMatcher::from_patterns(&options.ignore)?
+    } else {
+        IgnoreMatcher::from_patterns_without_ignore_files(&options.ignore)?
+    };
+    let graph =
+        build_graph(&options.source.analysis_path, &matcher, &[], None, None)?;
+
+    options.dependency_closure =
+        Some(sephera_graph::resolver::forward_dependencies(&graph));
+    Ok(())
 }
 
 fn execute_context(arguments: &ResolvedContextOptions) -> Result<Vec<Gate>> {
@@ -540,17 +580,35 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         .into_iter()
         .collect::<Vec<_>>();
 
-    let radii = impact::measure_all(
-        &report,
-        &arguments.files,
-        "",
-        arguments.depth,
-        &focus,
-    )?;
+    let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
 
-    let rendered = match arguments.format {
-        ImpactOutputFormat::Markdown => impact::render_report(&radii),
-        ImpactOutputFormat::Json => impact::render_report_json(&radii),
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(gates)
+}
+
+/// Measure one impact run and render it, with the gates it crosses.
+///
+/// Split out of `run_impact` because the symbol branch doubled the
+/// measuring code: the source resolution and graph build above are
+/// shared, everything from the scope note down is this question --
+/// file-level or symbol-level -- asked of the same report.
+fn impact_outcome(
+    arguments: &ImpactArgs,
+    report: &sephera_graph::types::GraphReport,
+    focus: &[String],
+) -> Result<(String, Vec<Gate>)> {
+    // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
+    // is spelled as a scope but normalises to the whole analysis base, and
+    // claiming a narrowed count for an unscoped one would be a false statement
+    // in the one line someone reads to decide whether to merge.
+    let scope_note = if focus.is_empty() {
+        String::new()
+    } else {
+        " within the requested scope".to_owned()
     };
 
     // One gate per offending target rather than a single gate for the widest,
@@ -562,38 +620,75 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // X, limit is 40" is indistinguishable from X having three dependents in
     // total, and those two warrant different decisions.
     //
-    // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
-    // is spelled as a scope but normalises to the whole analysis base, and
-    // claiming a narrowed count for an unscoped one would be a false statement
-    // in the one line someone reads to decide whether to merge.
-    let scope_note = if focus.is_empty() {
-        String::new()
+    // With `--symbol`, both the report and the gate narrow together: the count
+    // compared is the files that name the symbol, and the label names the
+    // symbol, so a gate that fires on a rename does not read as one that fired
+    // on the whole file.
+    let (rendered, gates) = if let Some(symbol) = &arguments.symbol {
+        let impacts = impact::measure_symbol_all(
+            report,
+            &arguments.files,
+            "",
+            symbol,
+            arguments.depth,
+            focus,
+        )?;
+        let rendered = match arguments.format {
+            ImpactOutputFormat::Markdown => {
+                impact::render_symbol_report(&impacts)
+            }
+            ImpactOutputFormat::Json => {
+                impact::render_symbol_report_json(&impacts)
+            }
+        };
+        let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+            impacts
+                .iter()
+                .filter(|impact| impact::symbol_direct_count(impact) >= limit)
+                .map(|impact| {
+                    Gate::new(
+                        format!(
+                            "files importing `{symbol}` from `{}`{scope_note}",
+                            impact.target
+                        ),
+                        impact::symbol_direct_count(impact),
+                        limit,
+                    )
+                })
+                .collect()
+        });
+        (rendered, gates)
     } else {
-        " within the requested scope".to_owned()
+        let radii = impact::measure_all(
+            report,
+            &arguments.files,
+            "",
+            arguments.depth,
+            focus,
+        )?;
+        let rendered = match arguments.format {
+            ImpactOutputFormat::Markdown => impact::render_report(&radii),
+            ImpactOutputFormat::Json => impact::render_report_json(&radii),
+        };
+        let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+            radii
+                .iter()
+                .filter(|radius| impact::dependent_count(radius) >= limit)
+                .map(|radius| {
+                    Gate::new(
+                        format!(
+                            "files depending on `{}`{scope_note}",
+                            radius.target
+                        ),
+                        impact::dependent_count(radius),
+                        limit,
+                    )
+                })
+                .collect()
+        });
+        (rendered, gates)
     };
-    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
-        radii
-            .iter()
-            .filter(|radius| impact::dependent_count(radius) >= limit)
-            .map(|radius| {
-                Gate::new(
-                    format!(
-                        "files depending on `{}`{scope_note}",
-                        radius.target
-                    ),
-                    impact::dependent_count(radius),
-                    limit,
-                )
-            })
-            .collect()
-    });
-
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
-    Ok(gates)
+    Ok((rendered, gates))
 }
 
 /// Show why one file depends on another.
@@ -674,6 +769,303 @@ async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
 /// step: the two commands are one analysis with two filters, and a reader
 /// comparing them should never have to wonder whether the difference is in
 /// the answer or in how the question was built.
+/// Find hidden coupling: history's pairs that the graph does not join.
+///
+/// Two readings of the same tree, intersected. The graph is built over
+/// the whole repository, as `run_impact`'s is, because a coupling can
+/// join any two files in it; the history is read at the repository
+/// root, where git spells paths from, and rebased onto the analysis
+/// base's spelling before the two are compared.
+async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Reading history...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // History first: a tree with no readable history is an error this
+    // command exists to state plainly, and it should arrive before the
+    // graph build spends its time rather than after.
+    let commits = recent_commit_files(&source.repo_root, arguments.commits)
+        .with_context(|| {
+            format!(
+                "coupling reads the git history of {}, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let measured = coupling::measure_coupling(
+        &report,
+        &rebased,
+        coupling::CouplingOptions {
+            min_co_changes: arguments.min_co_changes,
+            ..coupling::CouplingOptions::default()
+        },
+    );
+
+    let rendered = match arguments.format {
+        CouplingOutputFormat::Markdown => {
+            coupling::render_markdown(&measured, arguments.min_co_changes)
+        }
+        CouplingOutputFormat::Json => coupling::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
+async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Reviewing the change...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // The change and the history first, for the reason `coupling`
+    // reads its history first: both errors are about git, and they
+    // should arrive before the graph build spends its time.
+    let against = arguments.against.as_deref();
+    let changed =
+        changed_files(&source.repo_root, against).with_context(|| {
+            format!(
+                "review reads the working tree of {} against {}, and \
+                 git could not make the comparison",
+                source.repo_root.display(),
+                against.unwrap_or("HEAD")
+            )
+        })?;
+    let commits = recent_commit_files(&source.repo_root, arguments.commits)
+        .with_context(|| {
+            format!(
+                "review reads the git history of {} for its coupling \
+                 warnings, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased_commits = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let rebased_changed = review::rebase_changed_paths(&changed, &base_prefix);
+    let measured = review::measure_review(
+        &report,
+        &rebased_changed,
+        &rebased_commits,
+        review::ReviewOptions {
+            depth: None,
+            coupling: coupling::CouplingOptions {
+                min_co_changes: arguments.min_co_changes,
+                ..coupling::CouplingOptions::default()
+            },
+        },
+    );
+
+    let against_label = against.unwrap_or("HEAD");
+    let rendered = match arguments.format {
+        ReviewOutputFormat::Markdown => {
+            review::render_markdown(&measured, against_label)
+        }
+        ReviewOutputFormat::Json => {
+            review::render_json(&measured, against_label)
+        }
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
+async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Ranking risk...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // History first, as `coupling` reads it: a tree with no readable
+    // history is an error this command exists to state, and it
+    // should arrive before the graph build spends its time.
+    let commits = recent_commit_files(&source.repo_root, arguments.commits)
+        .with_context(|| {
+            format!(
+                "risk reads the git history of {}, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let measured = risk::measure_risk(
+        &report,
+        &rebased,
+        risk::RiskOptions {
+            coupling: coupling::CouplingOptions {
+                min_co_changes: arguments.min_co_changes,
+                ..coupling::CouplingOptions::default()
+            },
+            limit: usize::try_from(arguments.limit).unwrap_or(20),
+        },
+    );
+
+    let rendered = match arguments.format {
+        RiskOutputFormat::Markdown => risk::render_markdown(&measured),
+        RiskOutputFormat::Json => risk::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
+async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Finding dead files...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    // A named root that matches nothing is a typo in the one input
+    // the whole verdict rests on; refuse it the way every other
+    // command refuses a path that matches no file.
+    let mut extra_roots = Vec::new();
+    for raw in &arguments.root {
+        let matched =
+            impact::match_path(&report, raw, "").with_context(|| {
+                format!("no file in the analysis matches `{raw}`")
+            })?;
+        extra_roots.push(matched);
+    }
+
+    let measured = dead::measure_dead(&report, &extra_roots);
+
+    let rendered = match arguments.format {
+        DeadOutputFormat::Markdown => dead::render_markdown(&measured),
+        DeadOutputFormat::Json => dead::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
 async fn run_affected_tests(
     arguments: &AffectedTestsArgs,
 ) -> Result<Vec<Gate>> {
@@ -772,14 +1164,6 @@ async fn run_affected_tests(
     Ok(gates)
 }
 
-/// Judge one agent edit before it happens.
-///
-/// Reads the hook payload, measures the edited file, prints the decision
-/// JSON on stdout and the reasoning on stderr. Every outcome that is not a
-/// denial is an allow, including "no file could be found in the payload"
-/// and "the file is not in the graph": a guard that blocked edits it could
-/// not judge would block them all the first time it was misconfigured, and
-/// be removed by lunch. See [`crate::guard`].
 /// The file a guard run judges: the one named by `--file`, or the one the
 /// hook payload on stdin names.
 ///
@@ -798,6 +1182,14 @@ fn guard_target(arguments: &GuardArgs) -> Result<Option<String>> {
     Ok(guard::file_path_from_hook_input(&payload))
 }
 
+/// Judge one agent edit before it happens.
+///
+/// Reads the hook payload, measures the edited file, prints the decision
+/// JSON on stdout and the reasoning on stderr. Every outcome that is not a
+/// denial is an allow, including "no file could be found in the payload"
+/// and "the file is not in the graph": a guard that blocked edits it could
+/// not judge would block them all the first time it was misconfigured, and
+/// be removed by lunch. See [`crate::guard`].
 async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
     let edited = guard_target(arguments)?;
 

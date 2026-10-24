@@ -7,9 +7,9 @@ expectation about what resolving it should produce, and checked against a real
 ## Status
 
 ```
-accuracy over local imports: 46/46 resolved (100.0%)
-external imports left alone: 18/30
-76 import cases, 16 file cases, 0 known defects
+accuracy over local imports: 47/47 resolved (100.0%)
+external imports left alone: 20/31
+78 import cases, 16 file cases, 0 known defects
 ```
 
 All eight bundled languages are covered.

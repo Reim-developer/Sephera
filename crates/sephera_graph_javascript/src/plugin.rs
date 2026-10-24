@@ -132,11 +132,15 @@ fn package_entry_point(
 ) -> Option<String> {
     // Read the manifest rather than checking the known-files set first: that set
     // holds source files, and a manifest is not one. A missing file is the
-    // common case and the read is what discovers it.
-    let contents = std::fs::read_to_string(
-        context.base_path.join(directory).join("package.json"),
-    )
-    .ok()?;
+    // common case and the read is what discovers it. The read goes through
+    // the analysis' cache: a tree asks this question per directory import,
+    // and the manifest's answer cannot change mid-analysis.
+    let manifest = if directory.is_empty() {
+        "package.json".to_owned()
+    } else {
+        format!("{directory}/package.json")
+    };
+    let contents = context.read_project_file(&manifest)?;
     let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
     let main = value.get("main")?.as_str()?.trim();
     if main.is_empty() {
@@ -236,9 +240,11 @@ impl TsconfigPaths {
             let Some(relative) = current.take() else {
                 break;
             };
-            let Ok(text) =
-                std::fs::read_to_string(context.base_path.join(&relative))
-            else {
+            // Through the analysis' cache, as every project-file
+            // read: a monorepo's bare imports all climb to the same
+            // few tsconfigs, and re-reading them per import was the
+            // cost the PR #41 review flagged.
+            let Some(text) = context.read_project_file(&relative) else {
                 break;
             };
             let Some(value) = parse_jsonc(&text) else {
@@ -582,6 +588,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: directory.path(),
+            file_text: None,
         };
 
         let plugin = JavaScriptPlugin {
@@ -608,6 +615,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: empty.path(),
+            file_text: None,
         };
         let plugin = JavaScriptPlugin {
             language: SupportedLanguage::JavaScript,
@@ -629,6 +637,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: empty.path(),
+            file_text: None,
         };
         assert_eq!(
             plugin.resolve("../..", context),
@@ -701,6 +710,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: directory,
+            file_text: None,
         };
         JavaScriptPlugin {
             language: SupportedLanguage::TypeScript,

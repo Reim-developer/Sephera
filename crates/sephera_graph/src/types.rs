@@ -65,6 +65,19 @@ pub struct GraphEdge {
     /// [`ImportKind::is_dependency`] edges.
     #[serde(default)]
     pub kind: ImportKind,
+
+    /// The individual names the statement behind this edge imports from
+    /// the file it names, in source order.
+    ///
+    /// Copied from the statement so a consumer can ask which files import
+    /// one *name* from a file rather than the file as a whole, without
+    /// re-reading the source. Empty whenever the path itself carries the
+    /// name (Rust, Java) or the statement names a module rather than
+    /// anything inside it; see `ImportStatement::items`. Omitted from
+    /// serialised output when empty so a graph with no recorded names
+    /// reads exactly as it did before names were recorded.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub items: Vec<String>,
 }
 
 /// A node in the dependency graph with aggregated metrics.

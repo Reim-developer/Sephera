@@ -118,6 +118,11 @@ fn write_metadata(output: &mut String, metadata: &ContextMetadata) {
         "Truncated files",
         &metadata.truncated_files.to_string(),
     );
+    write_metadata_row(
+        output,
+        "Dependency closure pulls",
+        &metadata.closure_pulled_files.to_string(),
+    );
 }
 
 fn write_metadata_row(output: &mut String, field: &str, value: &str) {

@@ -37,6 +37,31 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct DeclaredNames {
     declared: BTreeSet<String>,
     reexported: BTreeSet<String>,
+    /// Names bound by a `use` at this file's own module level, public
+    /// or not.
+    ///
+    /// Kept apart from both sets above. A private `use` makes a name a
+    /// member of its own module -- visible to that module's inline
+    /// children, which is what `super::Name` inside `mod tests` asks
+    /// about -- without making it reachable from anywhere else, so it
+    /// is neither a declaration nor a re-export. Callers ask for it by
+    /// name rather than through `contains`, because which of the three
+    /// a name is decides who may rely on it.
+    ///
+    /// Only the file's own level is recorded. A `use` inside an inline
+    /// module binds in *that* module, not in this one, and recording it
+    /// here let a statement vouch for itself: `use super::helper_module;`
+    /// inside `mod tests` put `helper_module` in this set, and the gap
+    /// classifier then read the name as bound in the parent module --
+    /// the very claim the statement was being tested for.
+    bound: BTreeSet<String>,
+    /// Names of `macro_rules!` definitions carrying `#[macro_export]`.
+    ///
+    /// Also a subset of `declared`, kept apart because the attribute
+    /// changes where the name lives: an exported macro is a member of
+    /// the crate root whichever file defines it, so a lookup for
+    /// `crate::name` has to know the name travels, and from where.
+    macro_exports: BTreeSet<String>,
 }
 
 impl DeclaredNames {
@@ -54,6 +79,18 @@ impl DeclaredNames {
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.declared.contains(name) || self.reexported.contains(name)
+    }
+
+    /// Whether a `use` in this file binds `name`, at any visibility.
+    #[must_use]
+    pub fn binds(&self, name: &str) -> bool {
+        self.bound.contains(name)
+    }
+
+    /// Whether this file defines a `#[macro_export]` macro of this name.
+    #[must_use]
+    pub fn exports_macro(&self, name: &str) -> bool {
+        self.macro_exports.contains(name)
     }
 }
 
@@ -118,6 +155,32 @@ impl DeclarationIndex {
             .is_some_and(|declared| declared.declares(name))
     }
 
+    /// Whether a `use` in `file` binds `name`, at any visibility.
+    ///
+    /// The question an inline module's `super::` asks about its own
+    /// file: the name need not be reachable from outside the module,
+    /// only bound within it.
+    #[must_use]
+    pub fn file_binds(&self, file: &str, name: &str) -> bool {
+        self.by_file
+            .get(file)
+            .is_some_and(|declared| declared.binds(name))
+    }
+
+    /// Files that define a `#[macro_export]` macro of this name.
+    ///
+    /// The caller decides what the answer means: the macro lives at
+    /// its own crate's root, so which crate a file belongs to is the
+    /// scope check, and crate membership is the caller's knowledge.
+    #[must_use]
+    pub fn files_exporting_macro(&self, name: &str) -> Vec<&str> {
+        self.by_file
+            .iter()
+            .filter(|(_, declared)| declared.exports_macro(name))
+            .map(|(file, _)| file.as_str())
+            .collect()
+    }
+
     /// Whether `file` re-exports `name`, making it reachable from the crate root.
     #[must_use]
     pub fn file_reexports(&self, file: &str, name: &str) -> bool {
@@ -145,6 +208,8 @@ impl DeclaredNames {
         Self {
             declared: names.into_iter().map(ToOwned::to_owned).collect(),
             reexported: BTreeSet::new(),
+            bound: BTreeSet::new(),
+            macro_exports: BTreeSet::new(),
         }
     }
 
@@ -163,6 +228,8 @@ impl DeclaredNames {
         Self {
             declared: declared.into_iter().map(ToOwned::to_owned).collect(),
             reexported: reexported.into_iter().map(ToOwned::to_owned).collect(),
+            bound: BTreeSet::new(),
+            macro_exports: BTreeSet::new(),
         }
     }
 
@@ -286,47 +353,39 @@ pub fn collect_declared_names_with(
 ) -> DeclaredNames {
     let mut declared = BTreeSet::new();
     let mut reexported = BTreeSet::new();
+    let mut bound = BTreeSet::new();
+    let mut macro_exports = BTreeSet::new();
     walk(
         source,
         tree.root_node(),
-        &mut declared,
-        &mut reexported,
+        &mut NameSets {
+            declared: &mut declared,
+            reexported: &mut reexported,
+            bound: &mut bound,
+            macro_exports: &mut macro_exports,
+        },
         rules,
+        false,
     );
     DeclaredNames {
         declared,
         reexported,
+        bound,
+        macro_exports,
     }
-}
-
-/// Record the names one `use` makes reachable from its own module.
-///
-/// Every leaf a `use` tree names, because `pub use self::ext_traits::request::
-/// RequestExt;` and `pub use self::ext_traits::{request::RequestExt};` both make
-/// `RequestExt` reachable and neither form is the common one.
-fn collect_reexported_names(
-    source: &[u8],
-    node: tree_sitter::Node<'_>,
-    names: &mut BTreeSet<String>,
-) {
-    // Only a `pub use` makes a name reachable from outside its own module. A
-    // plain `use crate::service;` binds `service` inside the file that writes it,
-    // so treating it as a re-export made `use crate::service;` in `main.rs`
-    // resolve `crate::service` to `main.rs` -- an edge from a file to itself,
-    // found by a test that only ever wrote that one line.
-    if !is_public_use(source, node) {
-        return;
-    }
-    collect_use_leaves(source, node, names);
 }
 
 /// Record every leaf name under a `use` statement.
 ///
-/// Deliberately separate from [`collect_reexported_names`], and not re-checking
+/// Deliberately separate from the visibility question, and not re-checking
 /// visibility as it descends. The two used to be one function, so walking into
 /// the `use_list` of a `pub use a::{B, C};` asked whether a `use_list` was a
 /// public use, found it was not, and returned before reading anything -- no
-/// grouped re-export was recorded at all.
+/// grouped re-export was recorded at all. The caller reads the leaves once
+/// and decides from the statement's own visibility whether they are also
+/// re-exports; a plain `use` binds the name inside its own module, and
+/// treating that as a re-export once made `use crate::service;` in `main.rs`
+/// resolve `crate::service` to `main.rs` -- an edge from a file to itself.
 ///
 /// That mattered more than it looks: grouping is the commonest way crates
 /// re-export, and a name reachable only through one was reported as unresolvable.
@@ -406,17 +465,31 @@ fn collect_use_leaves(
     }
 }
 
+/// The four name sets one walk fills, carried as one bundle so the
+/// recursion passes a single argument instead of four siblings.
+struct NameSets<'sets> {
+    declared: &'sets mut BTreeSet<String>,
+    reexported: &'sets mut BTreeSet<String>,
+    bound: &'sets mut BTreeSet<String>,
+    macro_exports: &'sets mut BTreeSet<String>,
+}
+
 fn walk(
     source: &[u8],
     node: tree_sitter::Node<'_>,
-    declared: &mut BTreeSet<String>,
-    reexported: &mut BTreeSet<String>,
+    sets: &mut NameSets<'_>,
     rules: DeclarationRules<'_>,
+    inside_inline_module: bool,
 ) {
+    // An inline module is a scope of its own inside the file. Its
+    // children are walked with the flag set, so what they bind is not
+    // filed under the file's own module level.
+    let children_inside_inline_module =
+        inside_inline_module || node.kind() == "mod_item";
     if rules.declaration_kinds.contains(&node.kind())
         && let Some(name) = node.child_by_field_name("name")
     {
-        declared.insert(node_text(source, name).to_owned());
+        sets.declared.insert(node_text(source, name).to_owned());
     }
 
     // A derive macro's name lives in its attribute, not on the item it
@@ -429,11 +502,42 @@ fn walk(
     if node.kind() == "attribute_item"
         && let Some(name) = derive_macro_name(source, node)
     {
-        declared.insert(name);
+        sets.declared.insert(name);
+    }
+
+    // A `#[macro_export]` macro is declared where it is written and
+    // lives at the crate root: both facts, kept in two sets, because a
+    // `crate::name` lookup needs the second and a same-file lookup the
+    // first. The attribute is a preceding sibling, read the way the
+    // derive check reads its own. A `macro_definition` node is a
+    // Rust-grammar kind, so other languages' walks never meet it.
+    if node.kind() == "macro_definition"
+        && let Some(name) = node.child_by_field_name("name")
+        && has_macro_export_attribute(source, node)
+    {
+        sets.macro_exports
+            .insert(node_text(source, name).to_owned());
     }
 
     if rules.reexport_kinds.contains(&node.kind()) {
-        collect_reexported_names(source, node, reexported);
+        // Every leaf a `use` names is bound by it, at any visibility. Only
+        // a public one also re-exports the name, so the leaves are read
+        // once and filed under both answers, with visibility deciding
+        // whether the second filing happens.
+        let mut leaves = BTreeSet::new();
+        collect_use_leaves(source, node, &mut leaves);
+        if is_public_use(source, node) {
+            sets.reexported.extend(leaves.iter().cloned());
+        }
+        // A `use` binds in the module it is written in. Inside an
+        // inline module that module is not this file's own, so the
+        // leaves are not this file's bindings -- recording them let
+        // `use super::helper_module;` in `mod tests` testify that
+        // `helper_module` was bound in the parent module, which is
+        // the claim that statement itself was under test for.
+        if !inside_inline_module {
+            sets.bound.extend(leaves);
+        }
         // A re-export statement's own subtree is fully handled here; recursing
         // would re-visit the same nodes and record the imported names twice
         // under two meanings.
@@ -442,7 +546,13 @@ fn walk(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(source, child, declared, reexported, rules);
+        walk(
+            source,
+            child,
+            &mut *sets,
+            rules,
+            children_inside_inline_module,
+        );
     }
 }
 
@@ -458,6 +568,43 @@ fn node_text<'a>(source: &'a [u8], node: tree_sitter::Node<'_>) -> &'a str {
 /// everything after the first comma names helper attributes, not
 /// macros. A plain `#[derive(...)]` is a different attribute and
 /// declares nothing here.
+/// Whether a `#[macro_export]` attribute decorates this node.
+///
+/// Attributes are preceding siblings; documentation comments may sit
+/// between them and the item, so the scan walks back over attributes
+/// and comments and stops at anything else. The attribute's head is
+/// its first identifier, read through the `attribute` node the
+/// grammar interposes -- the same shape the derive check reads.
+fn has_macro_export_attribute(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+) -> bool {
+    let mut sibling = node.prev_named_sibling();
+    while let Some(current) = sibling {
+        match current.kind() {
+            "attribute_item" => {
+                let head = current
+                    .named_child(0)
+                    .and_then(|attribute| {
+                        if attribute.kind() == "attribute" {
+                            attribute.named_child(0)
+                        } else {
+                            Some(attribute)
+                        }
+                    })
+                    .map(|head| node_text(source, head));
+                if head == Some("macro_export") {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = current.prev_named_sibling();
+    }
+    false
+}
+
 fn derive_macro_name(
     source: &[u8],
     node: tree_sitter::Node<'_>,
@@ -480,10 +627,15 @@ fn derive_macro_name(
         return None;
     }
     let arguments = node_text(source, *parts.get(1)?);
+    // The token tree's text keeps its parentheses. Splitting only on
+    // the comma read the single-name form -- the commonest one,
+    // `#[proc_macro_derive(Plain)]` -- as `Plain)`, which the
+    // character check below then rejected, so a derive without
+    // helper attributes was never declared (CodeRabbit on PR #41).
     let name = arguments
         .trim()
         .trim_start_matches('(')
-        .split(',')
+        .split([',', ')'])
         .next()?
         .trim();
     let mut characters = name.chars();
@@ -515,6 +667,10 @@ impl crate::plugins::DeclarationLookup for DeclarationIndex {
 
     fn file_reaches(&self, file: &str, name: &str) -> bool {
         self.file_reaches(file, name)
+    }
+
+    fn files_exporting_macro(&self, name: &str) -> Vec<&str> {
+        self.files_exporting_macro(name)
     }
 }
 
@@ -573,6 +729,14 @@ mod tests {
         names.reexported.into_iter().collect()
     }
 
+    /// What one file's own module level binds, without what it declares.
+    fn binds_of(source: &str) -> Vec<String> {
+        let mut parser = rust_parser();
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let names = collect_declared_names(source.as_bytes(), &tree);
+        names.bound.into_iter().collect()
+    }
+
     #[test]
     fn a_grouped_reexport_records_every_leaf() {
         // The commonest shape there is. `pub use a::{B, C};` nests a `use_list`
@@ -606,6 +770,56 @@ mod tests {
         assert!(found.contains(&"derive_from_request".to_owned()));
         assert!(!found.contains(&"from_request".to_owned()), "{found:?}");
         assert!(!found.contains(&"Debug".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn a_proc_macro_derive_without_attributes_declares_its_name() {
+        // The single-name form is the commonest one, and its token
+        // tree has no comma to split on: the name was read as
+        // `Plain)` and rejected by the character check, so the
+        // derive was never declared (CodeRabbit on PR #41).
+        let found = names_of(
+            "#[proc_macro_derive(Plain)]\n\
+             pub fn derive_plain() {}\n",
+        );
+
+        assert!(found.contains(&"Plain".to_owned()), "{found:?}");
+    }
+
+    /// The macros one source exports to its crate root, sorted.
+    fn macro_exports_of(source: &str) -> Vec<String> {
+        let mut parser = rust_parser();
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let names = collect_declared_names(source.as_bytes(), &tree);
+        names.macro_exports.into_iter().collect()
+    }
+
+    #[test]
+    fn a_macro_export_is_recorded_apart_from_a_plain_macro() {
+        // Both macros are declarations of the file that writes them.
+        // Only the exported one also lives at the crate root, which is
+        // the fact a `crate::__define_rejection` lookup needs, so it
+        // is kept in its own set rather than inferred from the name.
+        let source = "#[macro_export]\n\
+                      macro_rules! exported { () => {}; }\n\
+                      macro_rules! local { () => {}; }\n";
+
+        assert_eq!(macro_exports_of(source), vec!["exported".to_owned()]);
+        let names = names_of(source);
+        assert!(names.contains(&"exported".to_owned()), "{names:?}");
+        assert!(names.contains(&"local".to_owned()), "{names:?}");
+    }
+
+    #[test]
+    fn a_macro_export_with_a_doc_comment_still_counts() {
+        // Documentation sits between the attribute and the item in
+        // real code, in either order, and the scan walks back over
+        // comments rather than demanding the attribute touch the item.
+        let source = "/// Builds the rejection.\n\
+                      #[macro_export]\n\
+                      macro_rules! documented { () => {}; }\n";
+
+        assert_eq!(macro_exports_of(source), vec!["documented".to_owned()]);
     }
 
     #[test]
@@ -679,6 +893,27 @@ mod tests {
         let found = reexports_of("pub use a::{B as Bee};\n");
 
         assert_eq!(found, vec!["Bee".to_owned()]);
+    }
+
+    #[test]
+    fn a_use_at_the_files_own_level_binds_there() {
+        // The evidence `super::Name` inside an inline module asks for:
+        // a name the enclosing module itself binds.
+        let found = binds_of("use crate::sibling::Helper;\n");
+
+        assert_eq!(found, vec!["Helper".to_owned()]);
+    }
+
+    #[test]
+    fn a_use_inside_an_inline_module_binds_there_not_in_the_file() {
+        // The self-vouch this guards: `use super::helper_module;` in
+        // `mod tests` names a thing that exists nowhere. Recording its
+        // leaf as a binding of the file made the gap classifier read
+        // the parent module as binding it -- the statement testifying
+        // for itself -- and a genuine resolver gap stopped counting.
+        let found = binds_of("mod tests {\n    use super::helper_module;\n}\n");
+
+        assert_eq!(found, Vec::<String>::new());
     }
 
     #[test]

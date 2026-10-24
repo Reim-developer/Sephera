@@ -55,11 +55,29 @@
 [[corpus]]
 name = "axum"
 language = "Rust"
-# What is left is a pair of `#[macro_export]` macros and a `pub use` re-export the
-# declaration index reads as local. A floor of gaps is expected here; it was 66
-# before declaration lookup resolved the re-export and crate-root cases, 13 once
-# a `pub use http;` of an external crate stopped being counted as a missing
-# file, and 3 once grouped re-exports were recorded at all.
+# Zero. The last six were one unasked question in three shapes and a
+# hoisting rule. Four were item paths (`super::JsonLines`,
+# `super::sealed::Sealed`, the `super::{...}` pair in raw_form's test
+# module) whose parent the gap rule could not even name: the split
+# that finds a path's parent sliced on the last colon, so a Rust
+# parent came out as `super:` and was read as no parent at all. With
+# `::` read as one separator the parents resolve, and the answers are
+# the ones Rust gives: from inside an inline module the enclosing
+# file's own bindings are the namespace (a private `use` binds for
+# its module's children), and a `super::` path ending in an item
+# lands on the module file that declares it. The other two were
+# `#[macro_export]` macros, which live at the crate root in
+# whichever file they are written; the declaration index records
+# exported macros apart, and `crate::__define_rejection` and its
+# sibling now land on axum-core's root as edges (three of the six
+# became internal edges this way; the other three were classification
+# only, their couplings already carried by sibling statements).
+#
+# The count was 66 before declaration lookup resolved the re-export
+# and crate-root cases, 13 once a `pub use http;` of an external
+# crate stopped being counted as a missing file, 3 once grouped
+# re-exports were recorded at all, and 6 while the item-path
+# questions went unasked.
 #
 # Grouping is how crates re-export in practice -- `pub use axum_core::extract::{...}`
 # -- and the collector used to record none of them, because walking into the
@@ -67,7 +85,19 @@ language = "Rust"
 # `use_list` is not. So six internal edges were missing and five resolver gaps
 # were reported against names the crate does re-export. Both numbers moved for
 # the same reason and neither is a behaviour change.
-unresolved_local = 6
+#
+# One of the four item paths above was answered by accident, and the
+# correction is why this is 1 and not 0. `super::JsonLines` was excused
+# because the declaration walk filed the importing statement's own leaf
+# under the file's bindings -- a `use` inside `mod tests` binds in that
+# module, not in the file's, so the statement was testifying for itself.
+# With bindings recorded only at the file's own module level, the excuse
+# is gone, and what remains is the limitation the header of this file
+# already documents: `JsonLines` is declared inside a `pin_project!`
+# token tree, which tree-sitter does not parse into items, so the index
+# honestly has no entry for it. The count says so now instead of being
+# carried to zero by the bug it sat next to.
+unresolved_local = 1
 files = 307
 # Was 646 internal and 60 self-references before a qualifier-only path
 # (`use super::*;` recorded as the bare word `super`) learned to answer at
@@ -104,13 +134,11 @@ files = 307
 # the declaration index records from the `proc_macro_derive` attribute
 # that declares them (the name lives in the attribute, not on the function
 # it annotates). What is left names the `http` and `headers` crates
-# through axum's re-exports of them, a crate the tree does not contain
-# (axum-server), or `#[macro_export]` macros, whose names are declared in
-# the file that defines them but are hoisted to the crate root by a rule
-# the index does not model. The evidence a name
+# through axum's re-exports of them, or a crate the tree does not
+# contain (axum-server). The evidence a name
 # is the project's own is a manifest on disk declaring it; a name no
 # manifest in the tree declares still stays external.
-internal_edges = 1593
+internal_edges = 1596
 self_references = 70
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim
@@ -225,17 +253,23 @@ language = "TypeScript"
 # mappings, and they are most of the internal count -- the graph that holds
 # the monorepo together was the part that went missing.
 #
-# The 27 that remain are not resolver gaps. Twenty-six import built bundles
-# (`./dist/*.cjs.js`, `../dist/*.prod`) from package index shims and
-# benchmarks: a source checkout does not contain build output, and no
-# resolver should invent it. The last is the sfc-playground's template
-# importing the `App.vue` of the project the template generates when copied
-# out; no such file stands beside it in this tree.
+# Twenty-six of the twenty-seven that used to stand here imported built
+# bundles (`./dist/*.cjs.js`, `../dist/*.prod`) from package index shims
+# and benchmarks. They are excused now, on the project's own evidence:
+# the root `.gitignore` names `dist`, which is the project declaring the
+# bundles build output rather than source. The gap rule asks the ignore
+# files about a path it could not place before calling it a gap, so a
+# path no rule covers still counts -- `./missing.js` in a fixture does.
+#
+# The one that remains is the sfc-playground's template importing the
+# `App.vue` of the project the template generates when copied out; no
+# such file stands beside it in this tree, and no ignore rule names it.
+# It stays a floor.
 #
 # Files is 527 rather than 524 because the playground's three template
 # assets (index.html, package.json, README.md) became nodes when the
 # `?raw` imports naming them started resolving.
-unresolved_local = 27
+unresolved_local = 1
 files = 527
 internal_edges = 1890
 self_references = 0
@@ -282,27 +316,50 @@ structural_cycles = 0
 [[corpus]]
 name = "fmt"
 language = "C++"
-# The four unresolved are Abseil headers (`absl/...`) quoted by the
-# vendored googletest: an external dependency this checkout does not
-# contain, spelled with quotes because gtest spells its includes that
-# way. fmt's own headers are included with angle brackets
+# The four that used to stand here were Abseil headers (`absl/...`)
+# quoted by the vendored googletest under `#if GTEST_HAS_ABSL`: an
+# optional dependency's headers, present only in a build configured
+# with Abseil, spelled with quotes because gtest spells its includes
+# that way. A preprocessor-conditional include is now marked
+# cfg-gated -- the C spelling of Rust's `#[cfg]`, with the include
+# guard (`#ifndef X` over `#define X`) read as the idiom it is rather
+# than as a configuration -- and a gated include no resolver could
+# place is not a gap, because no configuration of this tree holds
+# what it names. fmt's own headers are included with angle brackets
 # (`#include <fmt/format.h>`) and resolve through the unique-suffix
-# rule -- eighty import statements of them.
-unresolved_local = 4
+# rule -- eighty import statements of them. The cfg_gated_edges
+# count is the vendored googletest's conditional surface, which is
+# most of what gtest.h is.
+unresolved_local = 0
 files = 78
 internal_edges = 158
 self_references = 0
-cfg_gated_edges = 0
+cfg_gated_edges = 218
 cycles = 2
 structural_cycles = 0
 
 [[corpus]]
 name = "curl"
 language = "C"
-# Three unresolved, all of one family: headers the build generates --
-# `curl_config.h` from configure, `cipher.mih` and `unitprotos.h` from
-# their generators -- which a source checkout legitimately does not
-# hold.
+# Zero unresolved. The last one was `cipher.mih`, an OS/400 system
+# header included only under `#elif defined(USE_OS400CRYPTO)`. It is
+# not generated and no ignore rule names it; what excuses it is the
+# conditional: a preprocessor-gated include names what the build
+# supplies in that configuration, and no configuration of this tree
+# holds an OS/400 machine-interface header. The same marking makes
+# cfg_gated_edges large here -- curl's headers state most of their
+# includes inside one conditional or another, which is a property
+# of the project the count is now honest about.
+#
+# Two of the three that stood here are gone, both generated headers:
+# `curl_config.h` from configure and `unitprotos.h`, which the build
+# writes into `lib/` (its generators are in `lib/CMakeLists.txt` and
+# `lib/Makefile.am`) while the include sits in `tests/libtest/`. The
+# evidence in both cases is `lib/.gitignore`, which names each file:
+# the project's own declaration that neither is source. A generated
+# header's home need not be beside its includer, so the gap rule also
+# asks each directory's own ignore files about a bare include's name,
+# and accepts the answer only when exactly one directory names it.
 #
 # There were seven. The other four were Python, not C: `from . import
 # CurlClient` and its siblings in `tests/http/testenv`, naming names
@@ -312,11 +369,11 @@ language = "C"
 # what a Python file declares and the gap rule can ask the package
 # about a name bound against it. No edge moved -- the module halves
 # carried those couplings all along. Only the gap count was wrong.
-unresolved_local = 3
+unresolved_local = 0
 files = 1125
 internal_edges = 3087
 self_references = 0
-cfg_gated_edges = 0
+cfg_gated_edges = 1638
 cycles = 7
 structural_cycles = 0
 
@@ -335,18 +392,26 @@ language = "Python"
 # in an `__init__` is most of them. Fifty statements were counted
 # as resolver gaps on that account; eight are.
 #
-# The eight, in two families. Seven name `_pytest._version`, a
+# The eight were in two families. Seven named `_pytest._version`, a
 # module setuptools_scm generates at build time; a source checkout
 # legitimately does not hold it, and `src/_pytest/__init__.py` says
-# so itself by catching the ImportError. (The names that `__init__`
+# so itself by catching the ImportError. They are excused now on the
+# project's own evidence: the root `.gitignore` names
+# `src/_pytest/_version.py` outright. (The names that `__init__`
 # binds in the `try` and the `except` are declared, which is why
-# `__version__` itself is not among the eight.) The eighth is
-# `_pytest._argcomplete.filescompleter`: the name is bound under
-# `if os.environ.get("_ARGCOMPLETE"):` in `_argcomplete.py`, a
-# runtime-conditional definition. The declarations do not look
-# through a module-level `if` -- the same restraint that keeps
-# `if TYPE_CHECKING:` names out -- so this one stays a floor.
-unresolved_local = 8
+# `__version__` itself was never among the eight.)
+#
+# The last one was `_pytest._argcomplete.filescompleter`, bound
+# under `if os.environ.get("_ARGCOMPLETE"):` in `_argcomplete.py`.
+# That restraint -- never look through a module-level `if` -- was
+# broader than its reason. What `if TYPE_CHECKING:` needs kept out
+# is a name bound on only one path; `filescompleter` is bound in
+# both branches (a completer in one, `None` in the other), so it is
+# a module attribute whichever world runs, and the declarations now
+# record exactly the names an `if`/`elif`/`else` chain binds on
+# every path through it. A bare annotation in a branch binds
+# nothing and does not count. Zero.
+unresolved_local = 0
 files = 274
 internal_edges = 870
 self_references = 4

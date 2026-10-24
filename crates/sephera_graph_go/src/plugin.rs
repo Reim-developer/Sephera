@@ -57,19 +57,25 @@ fn resolve_import(
         for (prefix, replacement) in manifests.go_replaces() {
             if let Some(rest) = import_path.strip_prefix(prefix) {
                 let rest = rest.trim_start_matches('/');
+                let replacement = replacement.trim_end_matches('/');
                 let replaced = if rest.is_empty() {
-                    replacement.clone()
+                    replacement.to_owned()
                 } else {
                     format!("{replacement}/{rest}")
                 };
                 // The replacement path is relative to the go.mod directory
                 // (project root), and it names a directory, exactly: the
                 // package is the files in it, not the files in any other
-                // directory that shares its name.
-                let directory = replaced.trim_start_matches("./");
-                if !directory.is_empty() {
-                    return package_in_dir(&context, directory);
-                }
+                // directory that shares its name. Go accepts spellings an
+                // exact match cannot survive unnormalised -- a trailing
+                // slash (`./local/foo/`, which also doubled the slash in
+                // a subpath's `local/foo//pkg`), and `.` for the root
+                // itself, whose files have no directory component to
+                // compare against (CodeRabbit on PR #41).
+                let directory =
+                    replaced.trim_start_matches("./").trim_end_matches('/');
+                let directory = if directory == "." { "" } else { directory };
+                return package_in_dir(&context, directory);
             }
         }
     }
@@ -122,9 +128,10 @@ fn package_in_dir(
         .files()
         .filter(|known| is_go_file(known))
         .find(|known| {
-            known
-                .rsplit_once('/')
-                .is_some_and(|(dir, _)| dir == directory)
+            // A file at the root has no directory component; its
+            // directory is the empty string the normalised `.`
+            // replacement asks for.
+            known.rsplit_once('/').map_or("", |(dir, _)| dir) == directory
         })
         .cloned()
 }
@@ -206,6 +213,7 @@ mod tests {
             manifests: manifests
                 .map(|index| index as &dyn ModuleManifestLookup),
             base_path: std::path::Path::new("."),
+            file_text: None,
         }
     }
 
@@ -377,6 +385,37 @@ mod tests {
         assert!(
             resolved2.starts_with("local/x/pkg/"),
             "expected a file inside local/x/pkg/, got {resolved2}"
+        );
+    }
+
+    #[test]
+    fn a_replace_with_a_trailing_slash_or_a_dot_still_redirects() {
+        // Go accepts `=> ./local/x/` and `=> .` -- the first left the
+        // directory as `local/x/`, which no file's parent equals, and
+        // the second left `.`, which no parent equals either, so both
+        // imports went unresolved with no fallback (CodeRabbit on
+        // PR #41).
+        let files = known(&["main.go", "local/x/y.go", "root.go"]);
+        let slashed = GoMod::new("example.com/app")
+            .replacing("github.com/x/y", "./local/x/");
+
+        let resolved = GoPlugin
+            .resolve("github.com/x/y", context_for(&files, Some(&slashed)))
+            .expect("a trailing slash must not defeat the exact match");
+        assert!(
+            resolved.starts_with("local/x/"),
+            "expected a file inside local/x/, got {resolved}"
+        );
+
+        let dotted =
+            GoMod::new("example.com/app").replacing("github.com/x/y", ".");
+
+        let resolved = GoPlugin
+            .resolve("github.com/x/y", context_for(&files, Some(&dotted)))
+            .expect("a dot replacement names the root package");
+        assert!(
+            !resolved.contains('/'),
+            "expected a file at the root, got {resolved}"
         );
     }
 }

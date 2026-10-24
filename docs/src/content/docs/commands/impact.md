@@ -113,6 +113,73 @@ depends on it" rather than "nothing at all".
 `graph --focus` with a reverse query narrows the same way, and the two agree
 because both use the same path predicate.
 
+## One name, not the whole file
+
+The blast radius is the right answer for a change to the file as a whole. It is
+the wrong answer for a change to one name inside it: renaming a struct should
+not report the files that only import its neighbour. `--symbol` narrows the
+question to one exported name.
+
+```bash
+sephera impact crates/sephera_graph/src/symbol_impact.rs --symbol SymbolImpact
+```
+
+```text
+# Symbol impact for `SymbolImpact` in `crates/sephera_graph/src/symbol_impact.rs`
+
+2 files import `SymbolImpact` from this file.
+9 more files are downstream of those.
+
+## Files that import `SymbolImpact`
+
+- `crates/sephera_cli/src/impact.rs` via `sephera_graph::symbol_impact::SymbolImpact`
+- `crates/sephera_graph/src/lib.rs` via `symbol_impact::SymbolImpact`
+
+## Downstream
+
+- `crates/sephera_cli/src/change_impact.rs`
+- `crates/sephera_cli/src/lib.rs`
+- `crates/sephera_cli/src/run.rs`
+- `crates/sephera_cli/tests/loc_table.rs`
+- `fuzz/fuzz_targets/render_context_markdown.rs`
+- `fuzz/fuzz_targets/render_loc_table.rs`
+- `gui/src-tauri/src/commands/graph.rs`
+- `gui/src-tauri/src/commands/mod.rs`
+- `gui/src-tauri/src/main.rs`
+```
+
+The report keeps three lists apart because they are three different strengths
+of claim:
+
+- **Files that import the symbol** — their import statements name it. This is
+  the count `--fail-on` compares against when `--symbol` is set.
+- **Namespace importers** — files that import the target's namespace wholesale
+  (`use a::*`). They *may* use the symbol without naming it, so they are
+  reported as may-use, never merged into the count of users.
+- **Downstream** — files downstream of the first two groups. A file that
+  imports the target only for a different name, and is reached no other way,
+  is not in this report at all.
+
+The contrast can be stark. `crates/sephera_core/src/declarations.rs` has 32
+dependents as a file; its `DeclaredNames` type is named by exactly one of them.
+Both numbers are true — they answer different questions, and `--symbol` exists
+so the second one can be asked.
+
+How a use is recognised depends on how the language spells an import. An item
+path's last segment is the name (Rust's `crate::a::Router`, Java's
+`com.x.Router`); a JavaScript clause records its names on the edge; a Python
+`from m import Router` counts when its module statement landed on the target
+and the name is declared there. Go and C/C++ imports name packages and headers
+rather than items, so for files in those languages there is almost nothing to
+narrow with: the symbol report shows few or no direct users rather than
+inventing them, and the file-level radius remains the answer there.
+
+One coincidence is accepted rather than hidden: a symbol spelled exactly like
+its own module (`json` inside `crate::json`) also matches plain imports of the
+module, whose last segment is the same word. The evidence path printed with
+each user shows the module import it came from, so the match cannot pass as an
+item import.
+
 ## Machine-readable output
 
 ```bash

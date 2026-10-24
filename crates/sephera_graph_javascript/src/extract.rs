@@ -33,7 +33,12 @@ pub fn extract_from_node(
         "import_statement" | "export_statement" => {
             let module = node.child_by_field_name("source")?;
             let path = string_value(source, &module);
-            (!path.is_empty()).then(|| vec![ImportStatement::new(path, line)])
+            (!path.is_empty()).then(|| {
+                vec![
+                    ImportStatement::new(path, line)
+                        .with_items(imported_items(source, node)),
+                ]
+            })
         }
         "call_expression" => {
             // Checking the callee rather than the text also excludes
@@ -63,6 +68,75 @@ pub fn extract_from_node(
     }
 }
 
+/// The names one import or re-export statement takes from its module.
+///
+/// The module path alone loses these: `import { Router } from './a'`
+/// and `import { Json } from './a'` share a path and differ only in
+/// the clause, so a reader asking which files use one *name* would
+/// find the two indistinguishable. An aliased specifier records the
+/// name it has in the module (`import { a as b }` records `a`); that
+/// is the name a change to the module's `a` reaches. A default import
+/// records `default`, the name the module itself knows the binding
+/// by. A namespace import records nothing: it names the module as a
+/// whole, which the path already says.
+fn imported_items(source: &[u8], node: &Node<'_>) -> Vec<String> {
+    let mut items = Vec::new();
+    let mut cursor = node.walk();
+    for clause in node.named_children(&mut cursor) {
+        match clause.kind() {
+            "import_clause" => {
+                let mut clause_cursor = clause.walk();
+                for part in clause.named_children(&mut clause_cursor) {
+                    match part.kind() {
+                        // The clause's bare identifier is the default
+                        // binding.
+                        "identifier" => items.push("default".to_owned()),
+                        "named_imports" => {
+                            collect_specifier_names(source, &part, &mut items);
+                        }
+                        // A namespace import names the module, not a
+                        // name inside it.
+                        _ => {}
+                    }
+                }
+            }
+            "export_clause" => {
+                collect_specifier_names(source, &clause, &mut items);
+            }
+            _ => {}
+        }
+    }
+    items
+}
+
+/// Append the source-side name of every specifier under `parent`.
+///
+/// Shared by `named_imports` and `export_clause`, whose specifiers
+/// carry the same `name`/`alias` fields. The name is the identifier
+/// the exporting module declares; the alias is a local spelling and
+/// is not recorded, for the same reason an aliased import elsewhere
+/// in this crate is read by its original name.
+fn collect_specifier_names(
+    source: &[u8],
+    parent: &Node<'_>,
+    items: &mut Vec<String>,
+) {
+    let mut cursor = parent.walk();
+    for specifier in parent.named_children(&mut cursor) {
+        let Some(name) = specifier.child_by_field_name("name") else {
+            continue;
+        };
+        let text = if name.kind() == "string" {
+            string_value(source, &name)
+        } else {
+            node_text(source, &name)
+        };
+        if !text.is_empty() {
+            items.push(text);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use sephera_compression::{SupportedLanguage, with_parser};
@@ -86,6 +160,76 @@ mod tests {
         .into_iter()
         .map(|s| s.raw_path)
         .collect()
+    }
+
+    /// Every statement one file produces, as (path, imported names).
+    fn statements(
+        source: &[u8],
+        language: SupportedLanguage,
+    ) -> Vec<(String, Vec<String>)> {
+        with_parser(language, source.len(), |parser| {
+            Ok(imports_found_by(
+                source,
+                parser,
+                &crate::JavaScriptPlugin { language },
+            ))
+        })
+        .expect("a parser exists")
+        .into_iter()
+        .map(|s| (s.raw_path, s.items))
+        .collect()
+    }
+
+    #[test]
+    fn named_imports_record_the_names_they_take() {
+        // The path is the same for both statements; only the clause
+        // differs. Recording the names is what lets a reader tell a
+        // file that uses `Router` from one that merely shares its
+        // module.
+        let source = b"import { Router, Json as J } from './a';\n";
+
+        assert_eq!(
+            statements(source, SupportedLanguage::JavaScript),
+            vec![(
+                "./a".to_owned(),
+                vec!["Router".to_owned(), "Json".to_owned()]
+            )],
+            "the aliased specifier records the name in the module, not the alias"
+        );
+    }
+
+    #[test]
+    fn a_default_import_records_default_and_a_namespace_import_records_nothing()
+    {
+        let source = b"import routes, { helper } from './a';\n\
+                      import * as ns from './b';\n\
+                      import './side';\n";
+
+        assert_eq!(
+            statements(source, SupportedLanguage::JavaScript),
+            vec![
+                (
+                    "./a".to_owned(),
+                    vec!["default".to_owned(), "helper".to_owned()]
+                ),
+                ("./b".to_owned(), Vec::new()),
+                ("./side".to_owned(), Vec::new()),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_reexport_records_the_name_in_the_source_module() {
+        let source = b"export { Router as Routes } from './a';\n\
+                      export * from './b';\n";
+
+        assert_eq!(
+            statements(source, SupportedLanguage::JavaScript),
+            vec![
+                ("./a".to_owned(), vec!["Router".to_owned()]),
+                ("./b".to_owned(), Vec::new()),
+            ]
+        );
     }
 
     #[test]

@@ -296,6 +296,65 @@ pub fn read_directory_rules<'a>(
     rules
 }
 
+/// Whether the project's own ignore files exclude this path.
+///
+/// Asked about a path that is *not* in the analysis -- the file a build step
+/// would generate, named by an import whose target the tree does not hold.
+/// The scanner never has to answer this: it prunes an excluded directory
+/// before anything under it is considered. A caller holding only the path
+/// has to walk the same descent itself, accumulating each directory's rules
+/// before judging that directory's entries, which is the order
+/// [`read_directory_rules`] and the traversal together give the scanner.
+///
+/// The answer means the project itself declares the path not-source: a
+/// `dist/` bundle, a `setuptools_scm` version module, a configure-generated
+/// header. It is evidence about what the file *is*, collected from the
+/// project's own files, and it is the only question this answers -- a path
+/// no rule mentions is simply not excluded.
+#[must_use]
+pub fn path_is_ignored(root: &Path, relative_path: &str) -> bool {
+    let components: Vec<&str> = relative_path
+        .split('/')
+        .filter(|component| !component.is_empty() && *component != ".")
+        .collect();
+    if components.is_empty() {
+        return false;
+    }
+
+    let mut rules = IgnoreRules::default();
+    let mut directory = root.to_path_buf();
+    let mut prefix = String::new();
+
+    for (index, component) in components.iter().enumerate() {
+        // The directory we are standing in judges its own entries, so its
+        // rules join the accumulated set before the entry is tested -- the
+        // same order the traversal applies.
+        let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&directory)
+            .map(|read| read.filter_map(Result::ok).collect())
+            .unwrap_or_default();
+        rules.extend(read_directory_rules(&directory, &entries));
+
+        if !prefix.is_empty() {
+            prefix.push('/');
+        }
+        prefix.push_str(component);
+
+        let is_directory = index + 1 < components.len();
+        if rules.matched(&prefix, is_directory) == Some(Decision::Ignore) {
+            // An excluded directory excludes everything under it; git cannot
+            // re-include a file whose parent directory is out, and neither
+            // can a negation further down this path.
+            return true;
+        }
+
+        if is_directory {
+            directory = directory.join(component);
+        }
+    }
+
+    false
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -526,5 +585,75 @@ mod tests {
         assert!(
             read_directory_rules(Path::new("/nonexistent/dir"), &[]).is_empty()
         );
+    }
+
+    /// Write one ignore file inside a fresh temporary project.
+    fn project_with_ignore(at: &str, contents: &str) -> tempfile::TempDir {
+        let dir = tempfile::tempdir().unwrap();
+        let file = dir.path().join(at);
+        std::fs::create_dir_all(file.parent().unwrap()).unwrap();
+        std::fs::write(file, contents).unwrap();
+        dir
+    }
+
+    #[test]
+    fn a_path_no_rule_mentions_is_not_ignored() {
+        let dir = project_with_ignore(".gitignore", "dist\n");
+
+        assert!(!path_is_ignored(dir.path(), "src/main.rs"));
+        assert!(!path_is_ignored(dir.path(), "src/distribution.rs"));
+    }
+
+    #[test]
+    fn a_file_under_an_ignored_directory_is_ignored() {
+        // The rule names the directory only. Everything under it is out,
+        // which is the whole reason `dist` covers a bundle whose own name
+        // no rule spells.
+        let dir = project_with_ignore(".gitignore", "dist\n");
+
+        assert!(path_is_ignored(
+            dir.path(),
+            "packages/core/dist/compiler.cjs.js"
+        ));
+        assert!(path_is_ignored(dir.path(), "dist/bundle.js"));
+    }
+
+    #[test]
+    fn an_anchored_rule_matches_only_its_own_path() {
+        let dir = project_with_ignore(".gitignore", "src/_pkg/_version.py\n");
+
+        assert!(path_is_ignored(dir.path(), "src/_pkg/_version.py"));
+        assert!(!path_is_ignored(dir.path(), "src/other/_version.py"));
+    }
+
+    #[test]
+    fn a_nested_ignore_file_judges_its_own_directory() {
+        // curl's build writes `curl_config.h` into `lib/`, and it is
+        // `lib/.gitignore` -- not the root file -- that says so.
+        let dir = project_with_ignore("lib/.gitignore", "curl_config.h\n");
+
+        assert!(path_is_ignored(dir.path(), "lib/curl_config.h"));
+    }
+
+    #[test]
+    fn a_negation_re_includes_a_file() {
+        let dir = project_with_ignore(".gitignore", "*.log\n!important.log\n");
+
+        assert!(path_is_ignored(dir.path(), "var/debug.log"));
+        assert!(!path_is_ignored(dir.path(), "var/important.log"));
+    }
+
+    #[test]
+    fn a_sepheraignore_is_evidence_too() {
+        let dir = project_with_ignore(".sepheraignore", "generated/\n");
+
+        assert!(path_is_ignored(dir.path(), "generated/client.rs"));
+    }
+
+    #[test]
+    fn a_project_with_no_ignore_files_ignores_nothing() {
+        let dir = tempfile::tempdir().unwrap();
+
+        assert!(!path_is_ignored(dir.path(), "dist/bundle.js"));
     }
 }

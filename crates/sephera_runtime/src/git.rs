@@ -148,6 +148,116 @@ where
     }
 }
 
+/// The files each of the most recent `limit` commits touched, newest
+/// first.
+///
+/// Paths are spelled as git spells them: relative to the repository
+/// root. A commit that names no files -- a merge, whose file set is
+/// its parents' rather than a change anyone made -- contributes an
+/// empty list, so the length of the result is the number of commits
+/// read, which a caller reporting "scanned N commits" needs to be
+/// true.
+///
+/// # Errors
+///
+/// Returns an error when git cannot read the history, most often
+/// because `repo_root` is not inside a git repository at all. That
+/// is reported rather than read as "no history": the analyses built
+/// on this answer a question about history, and an empty history and
+/// an unreadable one warrant different responses.
+pub fn recent_commit_files(
+    repo_root: &Path,
+    limit: u32,
+) -> Result<Vec<Vec<String>>> {
+    let output = git_stdout_string(
+        repo_root,
+        [
+            "log",
+            "--name-only",
+            "--format=%x1e%H",
+            "-n",
+            &limit.to_string(),
+            "--",
+        ],
+        "read the commit history",
+    )?;
+    Ok(parse_commit_files(&output))
+}
+
+/// The files a change touches, spelled from the repository root.
+///
+/// The change is the working tree read against `reference` -- `HEAD`
+/// when none is named, so an unstaged edit, a staged one, and a
+/// deletion all count. Committed differences between two refs are
+/// the caller's `git diff A..B` concern; this answers the question a
+/// review asks before anything is committed.
+///
+/// Untracked files are always included. A new file is the likeliest
+/// thing in a change to break the build -- it is the one nothing
+/// references yet and the one whose own imports nobody has run --
+/// and a review that ignored it for having no history in the index
+/// would miss exactly the file it exists to check.
+///
+/// # Errors
+///
+/// Returns an error when git cannot make the comparison, most often
+/// because `repo_root` is not a repository or the reference does not
+/// exist. That is reported rather than read as "nothing changed":
+/// an empty change and an unreadable one warrant different responses.
+pub fn changed_files(
+    repo_root: &Path,
+    reference: Option<&str>,
+) -> Result<Vec<String>> {
+    let diff = git_stdout_string(
+        repo_root,
+        ["diff", "--name-only", "-z", reference.unwrap_or("HEAD")],
+        "read the changed files",
+    )?;
+    let untracked = git_stdout_string(
+        repo_root,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        "read the untracked files",
+    )?;
+
+    let mut files: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for output in [&diff, &untracked] {
+        files.extend(
+            output
+                .split('\0')
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+    Ok(files.into_iter().collect())
+}
+
+/// Split `git log --name-only` output into one file list per commit.
+///
+/// Records begin with a unit-separator byte and the commit hash, so
+/// the split is on a character that cannot appear in a path. Blank
+/// lines are separators git puts between the header and the names
+/// and between commits; filtering them makes the parse indifferent
+/// to exactly where git puts them.
+fn parse_commit_files(output: &str) -> Vec<Vec<String>> {
+    let mut commits = Vec::new();
+    for record in output.split('\u{1e}') {
+        let lines: Vec<&str> = record
+            .lines()
+            .map(str::trim)
+            .filter(|line| !line.is_empty())
+            .collect();
+        if lines.is_empty() {
+            continue;
+        }
+        // The first line is the hash; the rest are the files.
+        commits
+            .push(lines[1..].iter().map(|line| (*line).to_owned()).collect());
+    }
+    commits
+}
+
 fn render_command<S>(args: &[S]) -> String
 where
     S: AsRef<OsStr>,
@@ -157,4 +267,122 @@ where
         .map(|arg| arg.as_ref().to_string_lossy())
         .collect::<Vec<_>>();
     format!("git {}", rendered_args.join(" "))
+}
+
+#[cfg(test)]
+mod tests {
+    use std::{fs, path::Path, process::Command};
+
+    use super::{changed_files, parse_commit_files, recent_commit_files};
+
+    #[test]
+    fn parse_splits_records_and_drops_the_hash_line() {
+        // The shape `git log --name-only --format=%x1e%H` produces:
+        // records led by the separator and hash, blank lines between
+        // the names and the next record, and a merge-style record
+        // holding a hash and no names at all.
+        let output = "\u{1e}abc123\n\nsrc/a.rs\nsrc/b.rs\n\n\u{1e}def456\n\n\u{1e}789aaa\nsrc/c.rs\n";
+        assert_eq!(
+            parse_commit_files(output),
+            vec![
+                vec!["src/a.rs".to_owned(), "src/b.rs".to_owned()],
+                Vec::new(),
+                vec!["src/c.rs".to_owned()],
+            ]
+        );
+    }
+
+    fn git(dir: &Path, args: &[&str]) {
+        let status = Command::new("git")
+            .args(args)
+            .current_dir(dir)
+            .env("GIT_AUTHOR_NAME", "Test")
+            .env("GIT_AUTHOR_EMAIL", "test@example.com")
+            .env("GIT_COMMITTER_NAME", "Test")
+            .env("GIT_COMMITTER_EMAIL", "test@example.com")
+            .output()
+            .expect("git runs");
+        assert!(status.status.success(), "{status:?}");
+    }
+
+    #[test]
+    fn recent_commit_files_reads_a_real_repository() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+        fs::write(dir.join("b.txt"), "two\n").expect("write");
+        fs::write(dir.join("a.txt"), "one more\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "second"]);
+
+        let commits = recent_commit_files(dir, 10).expect("history reads");
+        assert_eq!(commits.len(), 2, "one list per commit");
+        assert_eq!(
+            commits[0],
+            vec!["a.txt".to_owned(), "b.txt".to_owned()],
+            "newest first, both files of the second commit"
+        );
+        assert_eq!(commits[1], vec!["a.txt".to_owned()]);
+
+        let one = recent_commit_files(dir, 1).expect("history reads");
+        assert_eq!(one.len(), 1, "the limit is honoured");
+    }
+
+    #[test]
+    fn changed_files_reads_the_working_tree_against_a_reference() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        fs::write(dir.join("gone.txt"), "soon\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+
+        // An unstaged edit, a deletion, and a file git has never seen.
+        fs::write(dir.join("a.txt"), "one more\n").expect("write");
+        fs::remove_file(dir.join("gone.txt")).expect("remove");
+        fs::write(dir.join("new.txt"), "uncommitted\n").expect("write");
+
+        let changed = changed_files(dir, None).expect("the change reads");
+        assert_eq!(
+            changed,
+            vec![
+                "a.txt".to_owned(),
+                "gone.txt".to_owned(),
+                "new.txt".to_owned()
+            ],
+            "edited, deleted and untracked, sorted, each once"
+        );
+
+        // A commit makes the same tree clean against the new HEAD and
+        // changed against the first commit.
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-qm", "second"]);
+        assert_eq!(
+            changed_files(dir, None).expect("clean reads"),
+            Vec::<String>::new()
+        );
+        let against_first = changed_files(dir, Some("HEAD~1"))
+            .expect("the older reference reads");
+        assert_eq!(
+            against_first,
+            vec![
+                "a.txt".to_owned(),
+                "gone.txt".to_owned(),
+                "new.txt".to_owned()
+            ]
+        );
+    }
+
+    #[test]
+    fn a_directory_without_history_is_an_error_not_an_empty_answer() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        assert!(
+            recent_commit_files(temp.path(), 10).is_err(),
+            "a non-repository must not read as a repository with no past"
+        );
+    }
 }

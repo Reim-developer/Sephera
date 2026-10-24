@@ -23,7 +23,7 @@ use super::{
     focus::{display_focus_paths, resolve_focus_paths},
     grouping::summarize_groups,
     line_range::LineRange,
-    ranker::rank_candidates,
+    ranker::{interleave_dependency_closure, rank_candidates},
     types::{
         ContextDiffMetadata, ContextDiffSelection, ContextFile,
         ContextLanguageSummary, ContextMetadata, ContextReport, SelectionClass,
@@ -52,6 +52,15 @@ pub struct ContextBuilder {
     /// remaining budget as general files, which would bury the declaration the
     /// user named.
     pub only_ranged_files: bool,
+    /// In-project imports per file, when dependency closure is on.
+    ///
+    /// Keyed by normalised relative path, values in the same
+    /// spelling. Supplied by the caller, which owns the graph; this
+    /// crate ranks and packs, and taking the map as data keeps it
+    /// that way. `None` is the historical behaviour exactly: rank
+    /// order is selection order, and a file's dependencies compete
+    /// as general files.
+    pub dependency_closure: Option<BTreeMap<String, Vec<String>>>,
 }
 
 impl ContextBuilder {
@@ -71,6 +80,7 @@ impl ContextBuilder {
             compression_mode: CompressionMode::None,
             line_ranges: BTreeMap::new(),
             only_ranged_files: false,
+            dependency_closure: None,
         }
     }
 
@@ -119,6 +129,22 @@ impl ContextBuilder {
     #[must_use]
     pub const fn only_ranged_files(mut self) -> Self {
         self.only_ranged_files = true;
+        self
+    }
+
+    /// Turn on dependency closure, with the project's import map.
+    ///
+    /// After ranking, each file's dependency chain is interleaved
+    /// directly behind it, so selection reaches a file's imports
+    /// before unrelated files that ranked below it. See
+    /// `ranker::interleave_dependency_closure` for the exact rule
+    /// and what a tight budget still cuts.
+    #[must_use]
+    pub fn with_dependency_closure(
+        mut self,
+        dependencies: BTreeMap<String, Vec<String>>,
+    ) -> Self {
+        self.dependency_closure = Some(dependencies);
         self
     }
 
@@ -172,6 +198,13 @@ impl ContextBuilder {
                     .contains_key(&candidate.normalized_relative_path)
             });
         }
+        let mut closure_pulled: BTreeSet<String> = BTreeSet::new();
+        if let Some(dependencies) = &self.dependency_closure {
+            let (interleaved, pulled) =
+                interleave_dependency_closure(candidates, dependencies);
+            candidates = interleaved;
+            closure_pulled = pulled;
+        }
 
         let budget = ContextBudget::new(self.budget_tokens);
         let files = select_context_files(
@@ -180,6 +213,13 @@ impl ContextBuilder {
             self.compression_mode,
             &self.line_ranges,
         )?;
+        let closure_pulled_files = u64::try_from(
+            files
+                .iter()
+                .filter(|file| closure_pulled.contains(&file.relative_path))
+                .count(),
+        )
+        .context("file count exceeded the u64 reporting limit")?;
         let estimated_excerpt_tokens =
             files.iter().map(|file| file.estimated_tokens).sum::<u64>();
         let estimated_metadata_tokens = estimate_metadata_tokens(
@@ -225,6 +265,7 @@ impl ContextBuilder {
                 files_selected: u64::try_from(files.len())
                     .context("file count exceeded the u64 reporting limit")?,
                 truncated_files,
+                closure_pulled_files,
             },
             dominant_languages,
             groups,

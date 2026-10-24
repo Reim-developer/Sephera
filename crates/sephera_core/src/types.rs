@@ -125,6 +125,20 @@ pub struct ImportStatement {
     /// Whether a `#[cfg(...)]` attribute decorates this import.
     #[serde(default)]
     pub cfg_gated: bool,
+    /// The individual names this statement imports from the module it
+    /// names, in source order.
+    ///
+    /// Recorded only where the language separates the names from the
+    /// module path and the path alone would lose them: a JavaScript
+    /// `import { Router } from './a'` names `Router` in its clause,
+    /// while its `raw_path` is just `./a`. Languages whose paths carry
+    /// the item themselves (Rust, Java) leave this empty and a reader
+    /// takes the name from the path's trailing segment instead; a
+    /// statement that names a whole module (a side-effect import, a
+    /// namespace import, a C include) leaves it empty because there
+    /// is no single name to record.
+    #[serde(default)]
+    pub items: Vec<String>,
 }
 
 impl ImportStatement {
@@ -136,7 +150,19 @@ impl ImportStatement {
             kind: ImportKind::Dependency,
             module_depth: 0,
             cfg_gated: false,
+            items: Vec::new(),
         }
+    }
+
+    /// Attach the names this statement imports from its module.
+    ///
+    /// See the field's documentation for which statements carry names
+    /// at all; an empty list is the statement's way of saying it names
+    /// a module rather than anything inside one.
+    #[must_use]
+    pub fn with_items(mut self, items: Vec<String>) -> Self {
+        self.items = items;
+        self
     }
 
     #[must_use]

@@ -20,14 +20,16 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, dependency_path,
+    blast_radius, coupling, dead, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
+    review, risk, symbol_impact,
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
-    ContextCommandInput, ResolvedContextCommand, SourceRequest,
-    build_context_report, resolve_context_command, resolve_source,
+    ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
+    SourceRequest, build_context_report, changed_files, recent_commit_files,
+    resolve_context_command, resolve_source,
 };
 use sephera_scan::CodeLoc;
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -35,8 +37,8 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, ContextInput, GraphInput, ImpactInput, LocInput,
-        SymbolsInput, WhyInput,
+        AffectedTestsInput, ContextInput, CouplingInput, DeadInput, GraphInput,
+        ImpactInput, LocInput, ReviewInput, RiskInput, SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -166,7 +168,7 @@ impl SepheraServer {
     /// agents.
     #[tool(
         name = "context",
-        description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
+        description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. With closure=true, each packed file's in-project dependency chain is packed directly behind it, ahead of unrelated files that ranked below it, and the metadata counts the files closure pulled in. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
     )]
     #[allow(
         clippy::unused_self,
@@ -176,6 +178,7 @@ impl SepheraServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ContextInput>,
     ) -> Result<String, rmcp::ErrorData> {
+        let closure = param.closure.unwrap_or(false);
         let resolved = resolve_context_command(ContextCommandInput {
             source: SourceRequest {
                 path: param.path.map(std::path::PathBuf::from),
@@ -208,7 +211,10 @@ impl SepheraServer {
             ResolvedContextCommand::ListProfiles(profiles) => {
                 serialize_json(&profiles)
             }
-            ResolvedContextCommand::Execute(options) => {
+            ResolvedContextCommand::Execute(mut options) => {
+                if closure {
+                    inject_dependency_closure(&mut options)?;
+                }
                 let report = build_context_report(&options)
                     .map_err(map_internal_error("context build failed"))?;
                 match options.format.as_str() {
@@ -331,7 +337,7 @@ impl SepheraServer {
     /// node array to find a count.
     #[tool(
         name = "impact",
-        description = "Report the blast radius of one or more files: every file that transitively imports each one, with the names they import. Run this BEFORE editing a file to find out what else breaks. Accepts one or more files plus exactly one of path or url, and an optional ref for repo URLs. Several files cost about the same as one because the graph is built once, and results come back widest first. Use depth to limit how far the reach travels, focus to report only dependents inside a subtree, and format=markdown for a compact summary that fits an agent's context or json for dependent_count as a number."
+        description = "Report the blast radius of one or more files: every file that transitively imports each one, with the names they import. Run this BEFORE editing a file to find out what else breaks. Accepts one or more files plus exactly one of path or url, and an optional ref for repo URLs. Several files cost about the same as one because the graph is built once, and results come back widest first. Use depth to limit how far the reach travels, focus to report only dependents inside a subtree, and format=markdown for a compact summary that fits an agent's context or json for dependent_count as a number. Pass symbol to narrow from a file to one name it exports: dependents become the files that import that name, and the entry also reports namespace importers (may use the name without naming it) and files downstream of those -- the answer to give before renaming or removing a single exported name."
     )]
     #[allow(
         clippy::unused_self,
@@ -399,16 +405,32 @@ impl SepheraServer {
         .into_iter()
         .collect::<Vec<_>>();
 
-        let radii = blast_radius::measure_all(
-            &report,
-            &param.files,
-            &base_prefix,
-            param.depth,
-            &focus,
-        )
-        .map_err(map_internal_error("blast radius measurement failed"))?;
-
-        let built = ImpactReport::new(&radii, param.fail_on);
+        // One build, two questions: the file's whole radius, or the
+        // radius of one name inside it when `symbol` is set. The symbol
+        // answer is built by the same code the CLI renders, so the two
+        // entry points cannot disagree about who uses a name.
+        let built = if let Some(symbol) = &param.symbol {
+            let impacts = symbol_impact::measure_symbol_all(
+                &report,
+                &param.files,
+                &base_prefix,
+                symbol,
+                param.depth,
+                &focus,
+            )
+            .map_err(map_internal_error("symbol impact measurement failed"))?;
+            ImpactReport::from_symbol_impacts(&impacts, param.fail_on)
+        } else {
+            let radii = blast_radius::measure_all(
+                &report,
+                &param.files,
+                &base_prefix,
+                param.depth,
+                &focus,
+            )
+            .map_err(map_internal_error("blast radius measurement failed"))?;
+            ImpactReport::new(&radii, param.fail_on)
+        };
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&built),
@@ -606,6 +628,333 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Find hidden coupling in a repository.
+    ///
+    /// The question no graph query can ask, because it is about the
+    /// pairs the graph does *not* join: two files that keep changing
+    /// in the same commits while neither imports the other. The
+    /// counting is `sephera_graph::coupling`'s, shared with the
+    /// `coupling` command, so the two cannot disagree.
+    #[tool(
+        name = "coupling",
+        description = "Find hidden coupling: file pairs that change together in the commit history but share no import between them. The graph says what a file declares it depends on; history says what actually moves together, and a pair that keeps changing in the same commits with no edge between them is coupled in a way source analysis cannot see -- exactly the coupling that breaks a change whose author knew about only one of the two files. Scans the most recent commits (default 500) and reports pairs that changed together at least min_co_changes times (default 3), strongest first, each with its two commit counts and containment: the share of the quieter file's commits that also touched the other file, where 1.0 means it has never changed without the other. Pairs joined by an import in either direction are excluded, and commits touching more than fifty files in the tree are skipped, because a mass reformat couples everything and means nothing. Requires a git history; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the pairs as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn coupling(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<CouplingInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // History first, as the CLI reads it: a tree with no readable
+        // history is the error this tool exists to state, and it
+        // should arrive before the graph build spends its time.
+        let commits = recent_commit_files(
+            &source.repo_root,
+            param.commits.unwrap_or(500),
+        )
+        .map_err(map_internal_error("commit history could not be read"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+        let min_co_changes = param.min_co_changes.unwrap_or(3);
+        let measured = coupling::measure_coupling(
+            &report,
+            &rebased,
+            coupling::CouplingOptions {
+                min_co_changes,
+                ..coupling::CouplingOptions::default()
+            },
+        );
+        let built = CouplingReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(coupling_markdown(&built, min_co_changes)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported coupling format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// The review of a change in progress: for every file the change
+    /// touches, what depends on it, which tests reach it, and a
+    /// warning for each historic partner the change leaves behind.
+    /// The measurement is `sephera_graph::review`'s, shared with the
+    /// `review` command, so the two cannot disagree.
+    #[tool(
+        name = "review",
+        description = "Review a change before it lands: for each file the change touches, its blast radius (direct dependents and the transitive count), the tests that reach it, and a warning for every file that history keeps changing with it but the change does not touch. The change is the working tree read against a reference (against, default HEAD: staged, unstaged, deleted and untracked files all count; naming a branch reviews the whole body of work since that point). Dependents and tests are the same measurements as the impact and affected_tests tools, and the warnings come from the same hidden-coupling measurement as the coupling tool, read against the changed set -- a pair where both sides changed does not warn. A changed file the graph does not hold (deleted, or outside the analysis base) is reported with present=false rather than dropped. Requires a git history for the warnings; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn review(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ReviewInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // The change and the history first, as the CLI reads them: a
+        // comparison git cannot make, or a tree with no readable
+        // history, is the error this tool exists to state.
+        let changed =
+            changed_files(&source.repo_root, param.against.as_deref())
+                .map_err(map_internal_error("the change could not be read"))?;
+        let commits = recent_commit_files(
+            &source.repo_root,
+            param.commits.unwrap_or(500),
+        )
+        .map_err(map_internal_error("commit history could not be read"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased_commits =
+            coupling::rebase_commit_paths(&commits, &base_prefix);
+        let prefix = base_prefix.trim_matches('/');
+        let rebased_changed: Vec<String> = if prefix.is_empty() {
+            changed
+        } else {
+            let with_slash = format!("{prefix}/");
+            changed
+                .iter()
+                .filter_map(|path| {
+                    path.strip_prefix(&with_slash).map(ToOwned::to_owned)
+                })
+                .collect()
+        };
+        let min_co_changes = param.min_co_changes.unwrap_or(3);
+        let measured = review::measure_review(
+            &report,
+            &rebased_changed,
+            &rebased_commits,
+            review::ReviewOptions {
+                depth: None,
+                coupling: coupling::CouplingOptions {
+                    min_co_changes,
+                    ..coupling::CouplingOptions::default()
+                },
+            },
+        );
+        let against = param.against.as_deref().unwrap_or("HEAD");
+        let built = ReviewReport::from_measured(&measured, against);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(review_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported review format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// The files where a change is most likely to hurt, ranked by
+    /// dependents × churn × hidden coupling. The measurement is
+    /// `sephera_graph::risk`'s, shared with the `risk` command, so
+    /// the two cannot disagree.
+    #[tool(
+        name = "risk",
+        description = "Rank the files where a change is most likely to hurt. Three readings of a tree each name a different danger: how much depends on a file (its blast radius), how often it changes in the recent history (churn, over the most recent commits, default 500), and how many hidden-coupling partners its changes drag along. The score is a product -- dependents x churn x (1 + coupled partners) -- because the danger compounds rather than adds, and the coupling term amplifies a risk that already exists rather than creating one in a file nothing depends on. Every row prints the score's factors beside it, and each factor is a count the impact and coupling tools also report, so a row can be audited rather than taken on faith. Only files both depended on and in motion inside the window are listed. Requires a git history; a tree without one is an error rather than an empty ranking. Use format=markdown for a compact summary or json for the rows as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn risk(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<RiskInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // History first, as the CLI reads it: a tree with no readable
+        // history is the error this tool exists to state.
+        let commits = recent_commit_files(
+            &source.repo_root,
+            param.commits.unwrap_or(500),
+        )
+        .map_err(map_internal_error("commit history could not be read"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+        let measured = risk::measure_risk(
+            &report,
+            &rebased,
+            risk::RiskOptions {
+                coupling: coupling::CouplingOptions {
+                    min_co_changes: param.min_co_changes.unwrap_or(3),
+                    ..coupling::CouplingOptions::default()
+                },
+                limit: usize::try_from(param.limit.unwrap_or(20)).unwrap_or(20),
+            },
+        );
+        let built = RiskReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(risk_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported risk format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// The files no entry point reaches. The measurement is
+    /// `sephera_graph::dead`'s, shared with the `dead` command, so
+    /// the two cannot disagree.
+    #[tool(
+        name = "dead",
+        description = "Find the files no entry point reaches: the part of a tree that is compiled, bundled, shipped, and reviewed as if it were alive, while nothing that runs ever imports it. The walk starts from the entry points readable off the paths -- test files, files named main.*, lib.rs or build.rs, Python's __main__.py, files under a bin, cmd, examples, benches or scripts directory, and index.* files -- and follows import edges forward. A file with no importers is NOT assumed alive or an entry point by that fact alone: an orphaned cluster imports itself, and dead means unreachable from positive evidence of entry. The result lists the roots the walk used, the reachable and total counts, and each dead file with how many files import it and how many it imports -- an abandoned subsystem (importers and imports both nonzero) reads differently from a lone orphan. Entry points a path cannot show -- a Java entry class, a plugin loaded by name -- are passed as roots; a root matching no file is an error. Use format=markdown for a compact summary or json for the rows as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn dead(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<DeadInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let mut extra_roots = Vec::new();
+        for raw in param.roots.as_deref().unwrap_or(&[]) {
+            let matched = blast_radius::match_path(&report, raw, &base_prefix)
+                .ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params(
+                        format!("no file in the analysis matches `{raw}`"),
+                        None,
+                    )
+                })?;
+            extra_roots.push(matched);
+        }
+
+        let measured = dead::measure_dead(&report, &extra_roots);
+        let built = DeadReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(dead_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported dead format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -791,6 +1140,451 @@ fn why_markdown(report: &WhyReport) -> String {
     output
 }
 
+/// The JSON shape the `coupling` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CouplingReport {
+    /// Commits handed to the measurement.
+    pub commits_scanned: u64,
+    /// Commits that touched at least one file in the tree and were
+    /// small enough to count. A pair's counts mean nothing without
+    /// the window behind them, so the window is part of the answer
+    /// rather than a parameter the caller has to remember sending.
+    pub commits_counted: u64,
+    /// The pairs found, strongest first.
+    pub pairs: Vec<CouplingPair>,
+}
+
+/// One pair of files that change together with no import between them.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CouplingPair {
+    /// The lexicographically first file of the pair.
+    pub first: String,
+    /// The other file.
+    pub second: String,
+    /// Commits in the window that touched both files.
+    pub co_changes: u64,
+    /// Commits in the window that touched `first`.
+    pub first_commits: u64,
+    /// Commits in the window that touched `second`.
+    pub second_commits: u64,
+    /// `co_changes` over the smaller of the two commit counts: the
+    /// share of the quieter file's commits that also touched the
+    /// other file.
+    pub containment: f64,
+}
+
+impl CouplingReport {
+    fn from_measured(measured: &coupling::CouplingReport) -> Self {
+        Self {
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            pairs: measured
+                .pairs
+                .iter()
+                .map(|pair| CouplingPair {
+                    first: pair.first.clone(),
+                    second: pair.second.clone(),
+                    co_changes: pair.co_changes,
+                    first_commits: pair.first_commits,
+                    second_commits: pair.second_commits,
+                    containment: pair.containment,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a coupling report as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools' Markdown
+/// follows its command's: the same measurement should not need two
+/// phrasings learned.
+fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Hidden coupling\n");
+    let _ = writeln!(
+        output,
+        "Scanned {} commits; {} touched files in this tree.",
+        report.commits_scanned, report.commits_counted
+    );
+
+    if report.pairs.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo pair of files changed together at least {min_co_changes} \
+             times without an import between them."
+        );
+        return output;
+    }
+
+    let _ = writeln!(
+        output,
+        "\nPairs that changed together at least {min_co_changes} times with \
+         no import between them. Containment is the share of the quieter \
+         file's commits that also touched the other file: 1.0 means it has \
+         never changed without the other.\n"
+    );
+    for pair in &report.pairs {
+        let _ = writeln!(
+            output,
+            "- `{}` + `{}` — {} co-changes, {}/{} commits, containment {}",
+            pair.first,
+            pair.second,
+            pair.co_changes,
+            pair.first_commits,
+            pair.second_commits,
+            pair.containment
+        );
+    }
+    output
+}
+
+/// The JSON shape the `review` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ReviewReport {
+    /// The reference the change was read against.
+    pub against: String,
+    /// Commits handed to the coupling measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it.
+    pub commits_counted: u64,
+    /// One entry per changed file, sorted by path.
+    pub changed: Vec<ReviewedFile>,
+    /// Coupling warnings, strongest first.
+    pub warnings: Vec<ReviewWarning>,
+}
+
+/// One changed file and what the change to it puts at risk.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ReviewedFile {
+    /// Path of the changed file.
+    pub file: String,
+    /// Whether the file is a node in the graph. A deleted file is
+    /// not; it is reported rather than dropped, with empty
+    /// measurements.
+    pub present: bool,
+    /// Files that import the changed file directly, sorted.
+    pub direct_dependents: Vec<String>,
+    /// Files that depend on it at any depth, direct ones included.
+    pub dependent_count: usize,
+    /// Test files that reach it, closest first.
+    pub tests: Vec<String>,
+}
+
+/// One hidden-coupling warning: a file in the change whose historic
+/// partner is not.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ReviewWarning {
+    /// The file in the change.
+    pub changed: String,
+    /// The file history keeps changing with it, untouched here.
+    pub partner: String,
+    /// Commits in the window that touched both files.
+    pub co_changes: u64,
+    /// The pair's containment, as the `coupling` tool defines it.
+    pub containment: f64,
+}
+
+impl ReviewReport {
+    fn from_measured(measured: &review::ReviewReport, against: &str) -> Self {
+        Self {
+            against: against.to_owned(),
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            changed: measured
+                .changed
+                .iter()
+                .map(|entry| ReviewedFile {
+                    file: entry.file.clone(),
+                    present: entry.present,
+                    direct_dependents: entry.direct_dependents.clone(),
+                    dependent_count: entry.dependent_count,
+                    tests: entry.tests.clone(),
+                })
+                .collect(),
+            warnings: measured
+                .warnings
+                .iter()
+                .map(|warning| ReviewWarning {
+                    changed: warning.changed.clone(),
+                    partner: warning.partner.clone(),
+                    co_changes: warning.co_changes,
+                    containment: warning.containment,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Build the import graph over the same file set the context build
+/// uses and store its forward edges on the options as the closure
+/// map. The CLI's `--closure` does the same through the same graph
+/// function, so the two packs cannot disagree about the closure.
+fn inject_dependency_closure(
+    options: &mut ResolvedContextOptions,
+) -> Result<(), rmcp::ErrorData> {
+    let matcher = build_ignore_matcher(
+        Some(options.ignore.clone()),
+        Some(!options.read_ignore_files),
+    )?;
+    let graph =
+        build_graph(&options.source.analysis_path, &matcher, &[], None, None)
+            .map_err(map_internal_error("graph build failed"))?;
+    options.dependency_closure =
+        Some(sephera_graph::resolver::forward_dependencies(&graph));
+    Ok(())
+}
+
+/// The JSON shape the `dead` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DeadReport {
+    /// Files in the graph.
+    pub total: usize,
+    /// Files the walk reached, roots included.
+    pub reachable: usize,
+    /// The entry points the walk started from.
+    pub roots: Vec<String>,
+    /// The unreachable files.
+    pub dead: Vec<DeadFileReport>,
+}
+
+/// One unreachable file, with the counts that say what kind of dead
+/// it is.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DeadFileReport {
+    /// Path of the file.
+    pub file: String,
+    /// Files that import it.
+    pub imported_by: usize,
+    /// Resolved files it imports.
+    pub imports: usize,
+}
+
+impl DeadReport {
+    fn from_measured(measured: &dead::DeadReport) -> Self {
+        Self {
+            total: measured.total,
+            reachable: measured.reachable,
+            roots: measured.roots.clone(),
+            dead: measured
+                .dead
+                .iter()
+                .map(|file| DeadFileReport {
+                    file: file.file.clone(),
+                    imported_by: file.imported_by,
+                    imports: file.imports,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a dead-file report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn dead_markdown(report: &DeadReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Dead files\n");
+    let _ = writeln!(
+        output,
+        "{} of {} files reached from {} entry point(s); {} dead.",
+        report.reachable,
+        report.total,
+        report.roots.len(),
+        report.dead.len()
+    );
+
+    if report.dead.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nEvery file in the tree is reached from an entry point."
+        );
+        return output;
+    }
+
+    let _ = writeln!(output);
+    for file in &report.dead {
+        let _ = writeln!(
+            output,
+            "- `{}` — imported by {}, imports {}",
+            file.file, file.imported_by, file.imports
+        );
+    }
+    output
+}
+
+/// The JSON shape the `risk` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RiskReport {
+    /// Commits handed to the measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it.
+    pub commits_counted: u64,
+    /// The riskiest files, highest score first.
+    pub files: Vec<RiskyFile>,
+}
+
+/// One file's risk, with the counts the score is built from.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RiskyFile {
+    /// Path of the file.
+    pub file: String,
+    /// Files that depend on it at any depth.
+    pub dependents: usize,
+    /// Counted commits in the window that touched it.
+    pub churn: u64,
+    /// Hidden-coupling pairs it takes part in.
+    pub coupled_partners: usize,
+    /// `dependents × churn × (1 + coupled_partners)`.
+    pub score: u64,
+}
+
+impl RiskReport {
+    fn from_measured(measured: &risk::RiskReport) -> Self {
+        Self {
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            files: measured
+                .files
+                .iter()
+                .map(|file| RiskyFile {
+                    file: file.file.clone(),
+                    dependents: file.dependents,
+                    churn: file.churn,
+                    coupled_partners: file.coupled_partners,
+                    score: file.score,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a risk ranking as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn risk_markdown(report: &RiskReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Risk ranking\n");
+    let _ = writeln!(
+        output,
+        "History: {} commits scanned, {} counted. Score is dependents \
+         × churn × (1 + coupled partners); only files both depended on \
+         and in motion are listed.",
+        report.commits_scanned, report.commits_counted
+    );
+
+    if report.files.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo file in this tree is both depended on and changing \
+             inside the window."
+        );
+        return output;
+    }
+
+    let _ = writeln!(output);
+    for file in &report.files {
+        let _ = writeln!(
+            output,
+            "- `{}` — score {}, {} dependents, {} changes, {} coupled partner(s)",
+            file.file,
+            file.score,
+            file.dependents,
+            file.churn,
+            file.coupled_partners
+        );
+    }
+    output
+}
+
+/// Render a review as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's: the same measurement should not
+/// need two phrasings learned.
+fn review_markdown(report: &ReviewReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Change review\n");
+    let _ = writeln!(
+        output,
+        "{} changed file(s) against `{}`. History: {} commits \
+         scanned, {} counted.",
+        report.changed.len(),
+        report.against,
+        report.commits_scanned,
+        report.commits_counted
+    );
+
+    if report.changed.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNothing to review: the working tree matches `{}`, and \
+             no untracked files were found.",
+            report.against
+        );
+        return output;
+    }
+
+    for entry in &report.changed {
+        let _ = writeln!(output, "\n## `{}`", entry.file);
+        if !entry.present {
+            let _ = writeln!(
+                output,
+                "- Not in the analysed tree -- deleted by the change, \
+                 or outside the analysis base. The graph cannot name \
+                 its dependents, which is not the same as there being \
+                 none."
+            );
+            continue;
+        }
+        let _ = writeln!(
+            output,
+            "- {} direct dependent(s), {} in total.",
+            entry.direct_dependents.len(),
+            entry.dependent_count
+        );
+        if entry.tests.is_empty() {
+            let _ = writeln!(output, "- No affected tests reach this file.");
+        } else {
+            let _ = writeln!(
+                output,
+                "- Affected tests ({}): {}",
+                entry.tests.len(),
+                entry
+                    .tests
+                    .iter()
+                    .map(|test| format!("`{test}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for warning in report
+            .warnings
+            .iter()
+            .filter(|warning| warning.changed == entry.file)
+        {
+            let _ = writeln!(
+                output,
+                "- Warning: `{}` changed with this file {} times \
+                 (containment {}) and is not in this change.",
+                warning.partner, warning.co_changes, warning.containment
+            );
+        }
+    }
+    output
+}
+
 /// Render affected tests as Markdown for an agent's context window.
 ///
 /// One `#` title for the document and `##` per target when there are
@@ -926,11 +1720,29 @@ pub struct ImpactEntry {
     pub target: String,
     /// How many files depend on it. The number worth comparing against a
     /// threshold without walking the dependent list.
+    ///
+    /// When `symbol` is set this counts the files that import the symbol,
+    /// not every dependent of the file.
     pub dependent_count: u64,
     /// The depth limit applied, if any.
     pub depth: Option<u32>,
     /// The dependents, each with the names it imports from the target.
+    ///
+    /// When `symbol` is set these are the files that import the symbol,
+    /// each with the import paths that name it.
     pub dependents: Vec<ImpactDependent>,
+    /// The name the report was narrowed to, when it was. Serialised as
+    /// `null` at file level rather than omitted, as `depth` and `gate`
+    /// already spell absence, so a caller learns one convention.
+    pub symbol: Option<String>,
+    /// Files that import the target's namespace wholesale and so may use
+    /// the symbol without naming it. `null` unless `symbol` is set: at
+    /// file level the distinction does not exist, and spelling it as an
+    /// empty list would claim a measurement that was never made.
+    pub namespace_users: Option<Vec<String>>,
+    /// Files downstream of a direct or namespace user. `null` unless
+    /// `symbol` is set, for the same reason as `namespace_users`.
+    pub downstream: Option<Vec<String>>,
 }
 
 /// One dependent of a target.
@@ -959,31 +1771,80 @@ impl ImpactReport {
                         imports: dependent.imports.clone(),
                     })
                     .collect(),
+                symbol: None,
+                namespace_users: None,
+                downstream: None,
             })
             .collect();
 
-        // One violation per offending target rather than a single flag, so the
-        // caller learns *which* file broke the rule. The CLI does the same, and
-        // for the same reason: a count with no owner cannot be acted on.
-        let gate = fail_on.map(|limit| {
-            let violations: Vec<ImpactViolation> = targets
-                .iter()
-                .filter(|entry| entry.dependent_count >= limit)
-                .map(|entry| ImpactViolation {
-                    target: entry.target.clone(),
-                    dependent_count: entry.dependent_count,
-                })
-                .collect();
+        Self {
+            gate: fail_on.map(|limit| impact_gate(&targets, limit)),
+            targets,
+        }
+    }
 
-            ImpactGate {
-                fail_on: limit,
-                crossed: !violations.is_empty(),
-                exit_code: if violations.is_empty() { 0 } else { 2 },
-                violations,
-            }
-        });
+    /// Build the report for a symbol-narrowed run.
+    ///
+    /// The entry keeps the file-level shape so a caller parses one
+    /// report either way: `dependents` carries the symbol's direct
+    /// users and `dependent_count` counts them, which is what makes
+    /// the shared gate compare against the symbol's reach rather than
+    /// the file's. The two lists that only exist at symbol level ride
+    /// along as their own fields.
+    fn from_symbol_impacts(
+        impacts: &[symbol_impact::SymbolImpact],
+        fail_on: Option<u64>,
+    ) -> Self {
+        let targets: Vec<ImpactEntry> = impacts
+            .iter()
+            .map(|impact| ImpactEntry {
+                target: impact.target.clone(),
+                dependent_count: symbol_impact::direct_count(impact),
+                depth: impact.depth,
+                dependents: impact
+                    .direct
+                    .iter()
+                    .map(|user| ImpactDependent {
+                        file: user.file.clone(),
+                        imports: user.imports.clone(),
+                    })
+                    .collect(),
+                symbol: Some(impact.symbol.clone()),
+                namespace_users: Some(impact.namespace_users.clone()),
+                downstream: Some(impact.downstream.clone()),
+            })
+            .collect();
 
-        Self { targets, gate }
+        Self {
+            gate: fail_on.map(|limit| impact_gate(&targets, limit)),
+            targets,
+        }
+    }
+}
+
+/// The verdict on a `fail_on` threshold over already-built entries.
+///
+/// Shared by the file-level and symbol-level reports: the rule is
+/// the same, only the count it compares differs, and each entry
+/// already carries the count its own question produced.
+fn impact_gate(targets: &[ImpactEntry], fail_on: u64) -> ImpactGate {
+    // One violation per offending target rather than a single flag, so the
+    // caller learns *which* file broke the rule. The CLI does the same, and
+    // for the same reason: a count with no owner cannot be acted on.
+    let violations: Vec<ImpactViolation> = targets
+        .iter()
+        .filter(|entry| entry.dependent_count >= fail_on)
+        .map(|entry| ImpactViolation {
+            target: entry.target.clone(),
+            dependent_count: entry.dependent_count,
+        })
+        .collect();
+
+    ImpactGate {
+        fail_on,
+        crossed: !violations.is_empty(),
+        exit_code: if violations.is_empty() { 0 } else { 2 },
+        violations,
     }
 }
 
@@ -1000,6 +1861,18 @@ impl ImpactReport {
 /// gate, and acting on them is the reason for the gate.
 fn impact_markdown(report: &ImpactReport) -> String {
     use std::fmt::Write as _;
+
+    // A symbol-narrowed report renders by its own wording, as the CLI's
+    // does. Decided from the first entry because a run is narrowed for
+    // every target or for none -- the parameter is the run's, not a
+    // target's.
+    if report
+        .targets
+        .first()
+        .is_some_and(|entry| entry.symbol.is_some())
+    {
+        return symbol_impact_markdown(report);
+    }
 
     let mut output = String::new();
     let several = report.targets.len() > 1;
@@ -1058,6 +1931,20 @@ fn impact_markdown(report: &ImpactReport) -> String {
         output.push('\n');
     }
 
+    write_impact_gate(&mut output, report);
+
+    output
+}
+
+/// Append the threshold verdict to an impact report's Markdown.
+///
+/// Shared by the file-level and symbol-level renderers: the verdict's
+/// wording is about the gate, not about which question produced the
+/// counts, and the two reports should not be able to drift on how a
+/// crossed threshold reads.
+fn write_impact_gate(output: &mut String, report: &ImpactReport) {
+    use std::fmt::Write as _;
+
     if let Some(gate) = &report.gate {
         let _ = writeln!(output, "\n## Threshold\n");
         if gate.crossed {
@@ -1084,8 +1971,151 @@ fn impact_markdown(report: &ImpactReport) -> String {
             );
         }
     }
+}
+
+/// Render a symbol-narrowed impact report as Markdown.
+///
+/// The wording follows the CLI's symbol report, because an agent
+/// reading the tool's answer and a person reading the terminal's are
+/// reading the same measurement and should not have to learn two
+/// phrasings of it. The three lists stay apart for the CLI's reason:
+/// a namespace importer is a may-use, not a use.
+fn symbol_impact_markdown(report: &ImpactReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let several = report.targets.len() > 1;
+    let symbol = report
+        .targets
+        .first()
+        .and_then(|entry| entry.symbol.as_deref())
+        .unwrap_or_default();
+
+    if several {
+        let _ = writeln!(
+            output,
+            "# Symbol impact for `{symbol}` in {} files\n",
+            report.targets.len()
+        );
+        let _ = writeln!(output, "Widest first.");
+    }
+
+    for entry in &report.targets {
+        write_symbol_entry(&mut output, entry, symbol, several);
+    }
+
+    write_impact_gate(&mut output, report);
 
     output
+}
+
+/// Write one target's section of a symbol impact report.
+///
+/// Split out of `symbol_impact_markdown` for length; the three
+/// lists and their order are the per-target content, while the
+/// document title and the threshold verdict belong to the report.
+fn write_symbol_entry(
+    output: &mut String,
+    entry: &ImpactEntry,
+    symbol: &str,
+    several: bool,
+) {
+    use std::fmt::Write as _;
+
+    if several {
+        let _ = writeln!(
+            output,
+            "\n## Symbol impact for `{symbol}` in `{}`\n",
+            entry.target
+        );
+    } else {
+        let _ = writeln!(
+            output,
+            "# Symbol impact for `{symbol}` in `{}`\n",
+            entry.target
+        );
+    }
+    let _ = writeln!(
+        output,
+        "{}",
+        match entry.dependent_count {
+            0 => format!("No file imports `{symbol}` from this file."),
+            1 => format!("1 file imports `{symbol}` from this file."),
+            other => {
+                format!("{other} files import `{symbol}` from this file.")
+            }
+        }
+    );
+    if let Some(namespace) = &entry.namespace_users
+        && !namespace.is_empty()
+    {
+        let _ = writeln!(
+            output,
+            "{}",
+            match namespace.len() {
+                1 => format!(
+                    "1 file imports this file's namespace and may use \
+                     `{symbol}` without naming it."
+                ),
+                other => format!(
+                    "{other} files import this file's namespace and may \
+                     use `{symbol}` without naming it."
+                ),
+            }
+        );
+    }
+    if let Some(downstream) = &entry.downstream
+        && !downstream.is_empty()
+    {
+        let _ = writeln!(
+            output,
+            "{}",
+            match downstream.len() {
+                1 => "1 more file is downstream of those.".to_owned(),
+                other => {
+                    format!("{other} more files are downstream of those.")
+                }
+            }
+        );
+    }
+    if let Some(depth) = entry.depth {
+        let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
+    }
+
+    let sub = if several { "###" } else { "##" };
+    if !entry.dependents.is_empty() {
+        let _ = writeln!(output, "\n{sub} Files that import `{symbol}`\n");
+        for dependent in &entry.dependents {
+            let names: Vec<String> = dependent
+                .imports
+                .iter()
+                .map(|path| format!("`{path}`"))
+                .collect();
+            let _ = writeln!(
+                output,
+                "- `{}` via {}",
+                dependent.file,
+                names.join(", ")
+            );
+        }
+    }
+    if let Some(namespace) = &entry.namespace_users
+        && !namespace.is_empty()
+    {
+        let _ = writeln!(output, "\n{sub} Namespace importers\n");
+        for file in namespace {
+            let _ = writeln!(output, "- `{file}`");
+        }
+    }
+    if let Some(downstream) = &entry.downstream
+        && !downstream.is_empty()
+    {
+        let _ = writeln!(output, "\n{sub} Downstream\n");
+        for file in downstream {
+            let _ = writeln!(output, "- `{file}`");
+        }
+    }
+    output.push('\n');
 }
 
 /// Server identity advertised during MCP initialization.
