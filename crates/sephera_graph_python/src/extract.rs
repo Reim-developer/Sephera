@@ -13,6 +13,8 @@
 //! Every path is read from a grammar field. Nothing here splits statement text,
 //! which is what caused all four.
 
+use std::collections::BTreeSet;
+
 use tree_sitter::Node;
 
 use sephera_core::{
@@ -58,6 +60,7 @@ pub fn declared_names(
     );
     collect_module_level_assignments(source, tree.root_node(), &mut declared);
     collect_module_level_imports(source, tree.root_node(), &mut declared);
+    collect_conditional_bindings(source, tree.root_node(), &mut declared);
     declared
 }
 
@@ -176,6 +179,132 @@ fn collect_module_level_imports(
             _ => {}
         }
     }
+}
+
+/// Record the names a module-level `if` binds on every path through it.
+///
+/// The passes above do not look through an `if`, and for a name bound
+/// in one branch only that restraint is the point: an `if
+/// TYPE_CHECKING:` import is not a runtime attribute. But a name
+/// bound in the consequence *and* in the alternative is a module
+/// attribute whichever way the condition goes. pytest's `_argcomplete`
+/// binds `filescompleter` to a completer when the `_ARGCOMPLETE`
+/// environment variable is set and to `None` when it is not, and
+/// `from _pytest._argcomplete import filescompleter` works in both
+/// worlds -- so the declarations may say the module has the name,
+/// because it does. An `if` with no `else` binds nothing
+/// unconditionally, and neither does a single branch of one that has.
+fn collect_conditional_bindings(
+    source: &[u8],
+    module: Node<'_>,
+    declared: &mut DeclaredNames,
+) {
+    for statement in module_level_statements(module) {
+        if statement.kind() == "if_statement" {
+            for name in bound_on_all_paths(source, statement) {
+                declared.declare(name);
+            }
+        }
+    }
+}
+
+/// The names one conditional statement binds whichever branch runs.
+///
+/// The grammar lays a chain out flat: an `if_statement` holds its
+/// `elif` clauses and its `else` clause as sibling `alternative`
+/// children, not nested inside one another. Every link is therefore a
+/// path of its own and has to bind the name, and a chain with no
+/// `else` has a fall-through path that binds nothing at all.
+fn bound_on_all_paths(source: &[u8], conditional: Node<'_>) -> BTreeSet<String> {
+    let Some(consequence) = conditional.child_by_field_name("consequence")
+    else {
+        return BTreeSet::new();
+    };
+
+    let mut bound = bindings_of_block(source, consequence);
+    let mut saw_else = false;
+
+    let mut cursor = conditional.walk();
+    for alternative in
+        conditional.children_by_field_name("alternative", &mut cursor)
+    {
+        match alternative.kind() {
+            "elif_clause" => {
+                let Some(block) =
+                    alternative.child_by_field_name("consequence")
+                else {
+                    return BTreeSet::new();
+                };
+                let inner = bindings_of_block(source, block);
+                bound.retain(|name| inner.contains(name));
+            }
+            "else_clause" => {
+                saw_else = true;
+                let Some(block) = alternative.child_by_field_name("body")
+                else {
+                    return BTreeSet::new();
+                };
+                let inner = bindings_of_block(source, block);
+                bound.retain(|name| inner.contains(name));
+            }
+            // A grammar that nests the rest of the chain in a single
+            // `if` alternative: its own all-paths answer already
+            // accounts for whether it ends in an `else`.
+            "if_statement" => {
+                saw_else = true;
+                let inner = bound_on_all_paths(source, alternative);
+                bound.retain(|name| inner.contains(name));
+            }
+            _ => {}
+        }
+    }
+
+    if saw_else { bound } else { BTreeSet::new() }
+}
+
+/// The names one block's statements bind: assignments with a value and
+/// imports, read the way the module-level passes read them, looking
+/// through `try` as they do. A nested conditional counts only for the
+/// names it binds on all of its own paths.
+///
+/// An assignment *without* a value -- a bare annotation, `x: T` --
+/// binds nothing at runtime, so it is not counted here even though
+/// the module-level pass records annotated names it can see a value
+/// on. The distinction matters only inside a branch: across an
+/// `if`/`else`, counting an annotation as a binding would declare a
+/// name one of the two worlds does not have.
+fn bindings_of_block(source: &[u8], block: Node<'_>) -> BTreeSet<String> {
+    let mut names: BTreeSet<String> = BTreeSet::new();
+
+    // Imports bind exactly what the module-level pass binds, so it is
+    // asked against a scratch set and its answers are taken from it.
+    let mut imported = DeclaredNames::default();
+    collect_module_level_imports(source, block, &mut imported);
+    names.extend(imported.into_sorted_vec());
+
+    for statement in module_level_statements(block) {
+        match statement.kind() {
+            "expression_statement" => {
+                let Some(assignment) = statement.named_child(0) else {
+                    continue;
+                };
+                if assignment.kind() != "assignment"
+                    || assignment.child_by_field_name("right").is_none()
+                {
+                    continue;
+                }
+                for target in assignment_targets(assignment) {
+                    names.insert(node_text(source, &target).to_owned());
+                }
+            }
+            "if_statement" => {
+                names.extend(bound_on_all_paths(source, statement));
+            }
+            _ => {}
+        }
+    }
+
+    names
 }
 
 /// Bind the name one part of an import statement introduces.
@@ -389,6 +518,88 @@ mod tests {
     }
 
     #[test]
+    fn a_name_bound_in_both_branches_of_an_if_is_declared() {
+        // pytest's `_argcomplete` shape: the environment decides which
+        // binding runs, and the name is a module attribute in both
+        // worlds, so a `from ... import filescompleter` against it is
+        // answerable. The `try` inside the branch is the optional-import
+        // idiom and is looked through the same way.
+        let found = declared(
+            b"import os\n\
+              if os.environ.get(\"_ARGCOMPLETE\"):\n\
+              \x20   try:\n\
+              \x20       import argcomplete.completers\n\
+              \x20   except ImportError:\n\
+              \x20       raise SystemExit(-1)\n\
+              \x20   filescompleter = object()\n\
+              else:\n\
+              \x20   filescompleter = None\n",
+        );
+
+        assert!(found.contains(&"filescompleter".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn a_name_bound_in_one_branch_only_is_not_declared() {
+        let found = declared(
+            b"import os\n\
+              if os.name == \"nt\":\n\
+              \x20   windows_only = 1\n\
+              \x20   shared = 2\n\
+              else:\n\
+              \x20   shared = 3\n",
+        );
+
+        assert!(found.contains(&"shared".to_owned()), "{found:?}");
+        assert!(!found.contains(&"windows_only".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn an_if_without_an_else_binds_nothing_unconditionally() {
+        let found = declared(
+            b"from typing import TYPE_CHECKING\n\
+              if TYPE_CHECKING:\n\
+              \x20   from .types import OnlyTypes\n\
+              \x20   maybe = 1\n",
+        );
+
+        assert!(!found.contains(&"OnlyTypes".to_owned()), "{found:?}");
+        assert!(!found.contains(&"maybe".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn an_elif_chain_must_bind_the_name_at_every_link() {
+        let found = declared(
+            b"import sys\n\
+              if sys.platform == \"win32\":\n\
+              \x20   sep = \"\\\\\"\n\
+              elif sys.platform == \"darwin\":\n\
+              \x20   sep = \"/\"\n\
+              \x20   mac_only = 1\n\
+              else:\n\
+              \x20   sep = \"/\"\n",
+        );
+
+        assert!(found.contains(&"sep".to_owned()), "{found:?}");
+        assert!(!found.contains(&"mac_only".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn an_annotation_alone_in_a_branch_binds_nothing() {
+        // `x: T` records an annotation and creates no attribute, so a
+        // branch that only annotates leaves the name unbound in that
+        // world even when the other branch assigns it.
+        let found = declared(
+            b"if True:\n\
+              \x20   promised: int\n\
+              else:\n\
+              \x20   promised = 3\n",
+        );
+
+        assert!(!found.contains(&"promised".to_owned()), "{found:?}");
+    }
+
+    #[test]
     fn a_binding_named_after_the_module_is_not_mistaken_for_the_path() {
         // The statement's own `name` field holds `typing as t`, so reading that
         // field produced paths reading `typing as t`. Twenty-three of those
@@ -503,3 +714,4 @@ mod tests {
         assert_eq!(paths(b"def f():\n pass\n"), Vec::<String>::new());
     }
 }
+

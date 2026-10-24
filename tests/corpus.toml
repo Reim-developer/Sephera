@@ -373,13 +373,17 @@ language = "Python"
 # binds in the `try` and the `except` are declared, which is why
 # `__version__` itself was never among the eight.)
 #
-# The one that remains is `_pytest._argcomplete.filescompleter`: the
-# name is bound under `if os.environ.get("_ARGCOMPLETE"):` in
-# `_argcomplete.py`, a runtime-conditional definition. The
-# declarations do not look through a module-level `if` -- the same
-# restraint that keeps `if TYPE_CHECKING:` names out -- so this one
-# stays a floor for now.
-unresolved_local = 1
+# The last one was `_pytest._argcomplete.filescompleter`, bound
+# under `if os.environ.get("_ARGCOMPLETE"):` in `_argcomplete.py`.
+# That restraint -- never look through a module-level `if` -- was
+# broader than its reason. What `if TYPE_CHECKING:` needs kept out
+# is a name bound on only one path; `filescompleter` is bound in
+# both branches (a completer in one, `None` in the other), so it is
+# a module attribute whichever world runs, and the declarations now
+# record exactly the names an `if`/`elif`/`else` chain binds on
+# every path through it. A bare annotation in a branch binds
+# nothing and does not count. Zero.
+unresolved_local = 0
 files = 274
 internal_edges = 870
 self_references = 4
