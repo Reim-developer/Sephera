@@ -1431,3 +1431,72 @@ async fn review_tool_markdown_orders_breaking_before_warnings() {
         "{markdown}"
     );
 }
+
+/// Two committed versions where a symbol moves files: v1 declares
+/// `add` in lib.py, v2 declares it in other.py instead. The breaking
+/// tool reads v1 from the ref and v2 from the working tree, which
+/// is the v2 checkout.
+fn repo_with_a_move() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "lib.py", b"def add(x, y):\n    return x + y\n");
+    write_file(
+        dir,
+        "consumer.py",
+        b"from lib import add\n\nprint(add(1, 2))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v1 declares add in lib"]);
+    write_file(dir, "lib.py", b"def keep(x):\n    return x\n");
+    write_file(dir, "other.py", b"def add(x, y):\n    return x + y\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v2 moves add to other"]);
+    temp_dir
+}
+
+fn breaking_input(dir: &Path, format: Option<String>) -> BreakingInput {
+    BreakingInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        from: "HEAD~1".to_owned(),
+        to: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
+    let repo = repo_with_a_move();
+    let server = SepheraServer::new();
+
+    let output = server
+        .breaking(param_for(breaking_input(repo.path(), None)))
+        .await
+        .expect("breaking tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("breaking output must be JSON");
+
+    let broken = &parsed["broken"][0];
+    assert_eq!(broken["symbol"], "add", "{output}");
+    assert_eq!(broken["change"], "removed", "{output}");
+    assert_eq!(broken["suggestion"]["action"], "moved", "{output}");
+    assert_eq!(broken["suggestion"]["file"], "other.py", "{output}");
+    assert_eq!(
+        broken["suggestion"]["declaration_kind"], "function",
+        "{output}"
+    );
+
+    let markdown = server
+        .breaking(param_for(breaking_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("breaking tool should succeed for a temp repo");
+    assert!(
+        markdown.contains("Suggestion: moved to `other.py` (function)."),
+        "{markdown}"
+    );
+}
