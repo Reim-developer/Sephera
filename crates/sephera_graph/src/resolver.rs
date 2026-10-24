@@ -779,14 +779,7 @@ struct ResolutionInputs {
     declarations: declarations::DeclarationIndex,
     /// Carried from the extraction phase beside the declaration index,
     /// because this is the one value every resolution question is asked
-    /// against. The boundary join in `build_edges_and_nodes` is its reader;
-    /// until that lands, the expectation below keeps the wiring honest
-    /// rather than silent — it fails the moment the field goes unread for
-    /// any other reason, and the moment the join starts reading it.
-    #[expect(
-        dead_code,
-        reason = "read by the boundary join in build_edges_and_nodes, which lands with the PyO3 harvest"
-    )]
+    /// against. The boundary join in `build_edges_and_nodes` reads it.
     boundaries: boundary::BoundaryIndex,
     manifests: manifests::ManifestIndex,
     file_text: FileTextCache,
@@ -863,6 +856,12 @@ fn build_edges_and_nodes(
                 file_data.ts_language,
                 project,
             );
+            // A reference no resolver in its own language could place may
+            // still name a module another language exposes; the boundary
+            // join is the last chance to place it before it is counted as
+            // external or a gap.
+            let (resolved, boundary_joined) =
+                join_across_boundary(resolved, statement, file_data, project);
 
             let is_resolved = resolved.is_resolved();
             let target = resolved.file().map(ToOwned::to_owned);
@@ -956,7 +955,14 @@ fn build_edges_and_nodes(
                 import_path: statement.raw_path.clone(),
                 items: statement.items.clone(),
                 resolved: is_resolved,
-                kind: statement.kind,
+                // A joined edge says so on its face: the reference crosses
+                // a language boundary, which a reader weighing it wants to
+                // know without re-deriving it from the endpoints.
+                kind: if boundary_joined {
+                    ImportKind::Ffi
+                } else {
+                    statement.kind
+                },
                 cfg_gated: statement.cfg_gated,
                 // Whether this edge was meant for the project and could not be
                 // placed. Carried on the edge so the metrics read a fact rather
@@ -967,6 +973,77 @@ fn build_edges_and_nodes(
     }
 
     (edges, node_map)
+}
+
+/// The cross-language join: places a reference its own language's resolver
+/// could not, when the name it leads with is a boundary module another
+/// language in the analysis exposes.
+///
+/// Python is the importing side in this step, and `PyO3` the boundary the
+/// harvest covers. Two shapes are placed:
+///
+/// - a module reference (`import myext`, or the module half of a
+///   from-import) lands on the file that declares the `#[pymodule]`;
+/// - an item reference (`from myext import add`, whose item half is spelled
+///   `myext.add`) whose leaf the module exposes lands on the file that
+///   declares the leaf when exactly one Rust file does — a registered
+///   function commonly lives in a different file from the module that
+///   registers it — and on the module file otherwise. An item reference
+///   whose leaf the module does not expose is left unplaced, as the item
+///   halves of within-language imports are.
+///
+/// Nothing already resolved is touched: a real Python module of the same
+/// name wins by having resolved first, which is the precedence Python's own
+/// import system gives a source module over guessing. Relative imports are
+/// not joined — a leading dot makes the name package-local by definition,
+/// so it cannot name a top-level native module however it is spelled.
+fn join_across_boundary(
+    resolved: Resolution,
+    statement: &ImportStatement,
+    file_data: &FileImportData,
+    project: &ResolutionInputs,
+) -> (Resolution, bool) {
+    if resolved.is_resolved() || project.boundaries.is_empty() {
+        return (resolved, false);
+    }
+    if file_data.ts_language != SupportedLanguage::Python
+        || statement.raw_path.starts_with('.')
+    {
+        return (resolved, false);
+    }
+    let Some(module_name) = statement.raw_path.split('.').next() else {
+        return (resolved, false);
+    };
+    let Some((module_file, module)) =
+        project.boundaries.module_named(module_name)
+    else {
+        return (resolved, false);
+    };
+    if statement.raw_path.contains('.') {
+        // A dotted path is an item reference, and it is placed only when
+        // the module exposes the leaf it names. Landing it on the module
+        // file anyway would claim a dependency the module half of the same
+        // import already states, for a name that may not exist there; the
+        // item halves of within-language imports are left unplaced in the
+        // same situation, and the join follows that treatment.
+        let Some(leaf) = statement.raw_path.rsplit('.').next() else {
+            return (resolved, false);
+        };
+        if !module.exposed.contains(leaf) {
+            return (resolved, false);
+        }
+        let target = project
+            .declarations
+            .file_declaring(leaf)
+            .filter(|file| {
+                Path::new(file)
+                    .extension()
+                    .is_some_and(|extension| extension == "rs")
+            })
+            .unwrap_or(module_file);
+        return (Resolution::File(target.to_owned()), true);
+    }
+    (Resolution::File(module_file.to_owned()), true)
 }
 
 fn select_graph(
@@ -1965,6 +2042,147 @@ mod tests {
         assert_eq!(cache.read_text("absent.txt"), None);
         fs::write(temp_dir.path().join("absent.txt"), "late").unwrap();
         assert_eq!(cache.read_text("absent.txt"), None);
+    }
+
+    /// One file's extraction, spelled out by hand for the join tests.
+    fn file_data(
+        file_path: &str,
+        ts_language: SupportedLanguage,
+        imports: Vec<ImportStatement>,
+    ) -> FileImportData {
+        FileImportData {
+            file_path: file_path.to_owned(),
+            language: None,
+            ts_language,
+            imports,
+        }
+    }
+
+    /// Resolution inputs whose boundary index holds one `PyO3` module,
+    /// `myext`, exposed by `native/lib.rs` and exposing `add` — which
+    /// `native/math.rs` declares, as a registered function commonly lives
+    /// in a different file from the module that registers it.
+    fn boundary_inputs() -> ResolutionInputs {
+        let mut boundaries = boundary::BoundaryIndex::default();
+        boundaries.insert(
+            "native/lib.rs",
+            boundary::FileBoundary {
+                modules: vec![boundary::BoundaryModule {
+                    name: "myext".to_owned(),
+                    kind: boundary::BoundaryKind::PyO3,
+                    exposed: BTreeSet::from(["add".to_owned()]),
+                }],
+            },
+        );
+        let mut declarations = declarations::DeclarationIndex::default();
+        let mut lib_names = declarations::DeclaredNames::default();
+        lib_names.declare("myext");
+        declarations.insert("native/lib.rs", lib_names);
+        let mut math_names = declarations::DeclaredNames::default();
+        math_names.declare("add");
+        declarations.insert("native/math.rs", math_names);
+        ResolutionInputs {
+            base_path: PathBuf::new(),
+            known_files: BTreeSet::new(),
+            declarations,
+            boundaries,
+            manifests: manifests::ManifestIndex::default(),
+            file_text: FileTextCache::new(PathBuf::new()),
+        }
+    }
+
+    #[test]
+    fn a_python_import_of_a_pyo3_module_joins_to_the_rust_file() {
+        let imports = vec![
+            file_data(
+                "app.py",
+                SupportedLanguage::Python,
+                vec![statement("myext", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &boundary_inputs());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to.as_deref(), Some("native/lib.rs"));
+        assert!(edges[0].resolved);
+        assert_eq!(edges[0].kind, ImportKind::Ffi);
+        assert!(!edges[0].local_gap);
+    }
+
+    #[test]
+    fn a_python_item_import_joins_to_the_file_declaring_the_item() {
+        let imports = vec![
+            file_data(
+                "app.py",
+                SupportedLanguage::Python,
+                vec![statement("myext.add", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+            file_data("native/math.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &boundary_inputs());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to.as_deref(), Some("native/math.rs"));
+        assert_eq!(edges[0].kind, ImportKind::Ffi);
+    }
+
+    #[test]
+    fn an_item_the_module_does_not_expose_stays_unplaced() {
+        let imports = vec![
+            file_data(
+                "app.py",
+                SupportedLanguage::Python,
+                vec![statement("myext.absent", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &boundary_inputs());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to, None);
+        assert!(!edges[0].resolved);
+        assert_eq!(edges[0].kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn an_unrelated_python_import_is_not_joined() {
+        let imports = vec![
+            file_data(
+                "app.py",
+                SupportedLanguage::Python,
+                vec![statement("requests", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &boundary_inputs());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to, None);
+        assert_eq!(edges[0].kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn a_relative_python_import_is_not_joined() {
+        let imports = vec![
+            file_data(
+                "pkg/app.py",
+                SupportedLanguage::Python,
+                vec![statement(".myext", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &boundary_inputs());
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to, None);
+        assert_eq!(edges[0].kind, ImportKind::Dependency);
     }
 
     /// Build a statement of the given kind for filter tests.
