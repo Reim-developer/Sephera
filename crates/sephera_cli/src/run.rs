@@ -540,6 +540,27 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         .into_iter()
         .collect::<Vec<_>>();
 
+    let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(gates)
+}
+
+/// Measure one impact run and render it, with the gates it crosses.
+///
+/// Split out of `run_impact` because the symbol branch doubled the
+/// measuring code: the source resolution and graph build above are
+/// shared, everything from the scope note down is this question --
+/// file-level or symbol-level -- asked of the same report.
+fn impact_outcome(
+    arguments: &ImpactArgs,
+    report: &sephera_graph::types::GraphReport,
+    focus: &[String],
+) -> Result<(String, Vec<Gate>)> {
     // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
     // is spelled as a scope but normalises to the whole analysis base, and
     // claiming a narrowed count for an unscoped one would be a false statement
@@ -565,12 +586,12 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // on the whole file.
     let (rendered, gates) = if let Some(symbol) = &arguments.symbol {
         let impacts = impact::measure_symbol_all(
-            &report,
+            report,
             &arguments.files,
             "",
             symbol,
             arguments.depth,
-            &focus,
+            focus,
         )?;
         let rendered = match arguments.format {
             ImpactOutputFormat::Markdown => {
@@ -599,11 +620,11 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         (rendered, gates)
     } else {
         let radii = impact::measure_all(
-            &report,
+            report,
             &arguments.files,
             "",
             arguments.depth,
-            &focus,
+            focus,
         )?;
         let rendered = match arguments.format {
             ImpactOutputFormat::Markdown => impact::render_report(&radii),
@@ -627,13 +648,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         });
         (rendered, gates)
     };
-
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
-    Ok(gates)
+    Ok((rendered, gates))
 }
 
 /// Show why one file depends on another.
