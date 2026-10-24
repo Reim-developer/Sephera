@@ -1328,7 +1328,20 @@ fn names_a_declared_symbol(
     // statement -- vouched for a name that does not exist until this
     // condition refused it.
     if parent_file == file_data.file_path {
-        return false;
+        // From inside an inline module the shape reverses. `use
+        // super::Name;` in `mod tests` names the enclosing file's own
+        // module -- that is what `super` means there -- so the file's
+        // namespace is exactly the evidence the path asks for: a name
+        // it declares, re-exports, or merely binds with a private
+        // `use`, which an inline child can see because visibility in
+        // Rust runs downward from ancestors. The vouching this guard
+        // refuses is a depth-zero claim, where the importing statement
+        // itself is the only binding on offer.
+        if statement.module_depth == 0 {
+            return false;
+        }
+        return project.declarations.file_reaches(&parent_file, &name)
+            || project.declarations.file_binds(&parent_file, &name);
     }
 
     project.declarations.file_reaches(&parent_file, &name)
@@ -1338,7 +1351,7 @@ fn names_a_declared_symbol(
 ///
 /// A source checkout does not hold every file a project imports. Vue's
 /// package entry points re-export from `dist/`, which rollup writes;
-/// pytest imports `_pytest._version`, which setuptools_scm writes; curl
+/// pytest imports `_pytest._version`, which `setuptools_scm` writes; curl
 /// includes `curl_config.h`, which configure writes. The resolver cannot
 /// place those, and reporting them beside a genuinely broken import --
 /// the one count a reader trusts to mean "something here is wrong" --
@@ -1487,7 +1500,9 @@ fn generated_candidates(
 /// name that differs from the file it names. A path that already spells
 /// the whole file -- every JavaScript and C candidate -- needs no suffix,
 /// and inventing spellings for it would manufacture evidence.
-fn module_suffixes(language: SupportedLanguage) -> &'static [&'static str] {
+const fn module_suffixes(
+    language: SupportedLanguage,
+) -> &'static [&'static str] {
     match language {
         SupportedLanguage::Python => &["", ".py", "/__init__.py"],
         SupportedLanguage::Rust => &["", ".rs", "/mod.rs"],
@@ -1507,8 +1522,25 @@ fn module_suffixes(language: SupportedLanguage) -> &'static [&'static str] {
 /// name spelled `*` -- every one of them is read out of a grammar's `name`
 /// field, so the lookup finds nothing and the answer was false anyway.
 fn split_trailing_name(import_path: &str) -> Option<(String, String)> {
-    let separator = import_path.rfind(['.', '/', ':'])?;
-    let name = &import_path[separator + 1..];
+    // The last separator, with Rust's `::` read as one separator rather
+    // than two colons. Slicing between its halves left the parent
+    // ending in a colon -- `super:` for `super::JsonLines` -- which the
+    // guard below reads as no parent at all, so no Rust item path was
+    // ever asked about the file its parent names. A single-character
+    // separator after the last `::` still wins: the name is what
+    // follows the final boundary, whatever spelled it.
+    let (separator, width) = match import_path.rfind("::") {
+        Some(double) => {
+            let single = import_path.rfind(['.', '/']).unwrap_or(0);
+            if single > double {
+                (single, 1)
+            } else {
+                (double, 2)
+            }
+        }
+        None => (import_path.rfind(['.', '/', ':'])?, 1),
+    };
+    let name = &import_path[separator + width..];
     let parent = &import_path[..separator];
 
     if name.is_empty() {
@@ -2616,6 +2648,41 @@ mod tests {
             "samples: {:?}",
             report.metrics.unresolved_local_samples
         );
+    }
+
+    #[test]
+    fn a_test_modules_super_names_its_own_files_bindings() {
+        // axum's `raw_form.rs` shape: the file binds two rejection types
+        // with a private `use super::rejection::{...}`, and its test
+        // module names them back through `super::`. From inside the
+        // inline module, `super` is the file's own module, so the names
+        // it binds -- declared, or merely imported -- are the answer.
+        // Both halves were needed: the `::` split that finds the parent
+        // (the parent of `super::InvalidFormContentType` is `super`, not
+        // `super:`), and bindings counting for a parent that is the
+        // importing file itself when the reference sits at depth.
+        let report = graph_for(&[
+            ("src/lib.rs", "pub mod extract;\n"),
+            (
+                "src/extract/mod.rs",
+                "pub mod raw_form;\npub mod rejection;\n",
+            ),
+            (
+                "src/extract/rejection.rs",
+                "pub struct InvalidFormContentType;\npub enum RawFormRejection { Invalid }\n",
+            ),
+            (
+                "src/extract/raw_form.rs",
+                "use super::rejection::{InvalidFormContentType, RawFormRejection};\n\
+                 pub struct RawForm;\n\
+                 #[cfg(test)]\n\
+                 mod tests {\n\
+                 \x20   use super::{InvalidFormContentType, RawForm, RawFormRejection};\n\
+                 }\n",
+            ),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 0);
     }
 
     #[test]

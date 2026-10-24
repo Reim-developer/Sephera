@@ -37,6 +37,16 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct DeclaredNames {
     declared: BTreeSet<String>,
     reexported: BTreeSet<String>,
+    /// Names bound by any `use`, public or not.
+    ///
+    /// Kept apart from both sets above. A private `use` makes a name a
+    /// member of its own module -- visible to that module's inline
+    /// children, which is what `super::Name` inside `mod tests` asks
+    /// about -- without making it reachable from anywhere else, so it
+    /// is neither a declaration nor a re-export. Callers ask for it by
+    /// name rather than through `contains`, because which of the three
+    /// a name is decides who may rely on it.
+    bound: BTreeSet<String>,
 }
 
 impl DeclaredNames {
@@ -54,6 +64,12 @@ impl DeclaredNames {
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
         self.declared.contains(name) || self.reexported.contains(name)
+    }
+
+    /// Whether a `use` in this file binds `name`, at any visibility.
+    #[must_use]
+    pub fn binds(&self, name: &str) -> bool {
+        self.bound.contains(name)
     }
 }
 
@@ -118,6 +134,18 @@ impl DeclarationIndex {
             .is_some_and(|declared| declared.declares(name))
     }
 
+    /// Whether a `use` in `file` binds `name`, at any visibility.
+    ///
+    /// The question an inline module's `super::` asks about its own
+    /// file: the name need not be reachable from outside the module,
+    /// only bound within it.
+    #[must_use]
+    pub fn file_binds(&self, file: &str, name: &str) -> bool {
+        self.by_file
+            .get(file)
+            .is_some_and(|declared| declared.binds(name))
+    }
+
     /// Whether `file` re-exports `name`, making it reachable from the crate root.
     #[must_use]
     pub fn file_reexports(&self, file: &str, name: &str) -> bool {
@@ -145,6 +173,7 @@ impl DeclaredNames {
         Self {
             declared: names.into_iter().map(ToOwned::to_owned).collect(),
             reexported: BTreeSet::new(),
+            bound: BTreeSet::new(),
         }
     }
 
@@ -163,6 +192,7 @@ impl DeclaredNames {
         Self {
             declared: declared.into_iter().map(ToOwned::to_owned).collect(),
             reexported: reexported.into_iter().map(ToOwned::to_owned).collect(),
+            bound: BTreeSet::new(),
         }
     }
 
@@ -286,47 +316,33 @@ pub fn collect_declared_names_with(
 ) -> DeclaredNames {
     let mut declared = BTreeSet::new();
     let mut reexported = BTreeSet::new();
+    let mut bound = BTreeSet::new();
     walk(
         source,
         tree.root_node(),
         &mut declared,
         &mut reexported,
+        &mut bound,
         rules,
     );
     DeclaredNames {
         declared,
         reexported,
+        bound,
     }
-}
-
-/// Record the names one `use` makes reachable from its own module.
-///
-/// Every leaf a `use` tree names, because `pub use self::ext_traits::request::
-/// RequestExt;` and `pub use self::ext_traits::{request::RequestExt};` both make
-/// `RequestExt` reachable and neither form is the common one.
-fn collect_reexported_names(
-    source: &[u8],
-    node: tree_sitter::Node<'_>,
-    names: &mut BTreeSet<String>,
-) {
-    // Only a `pub use` makes a name reachable from outside its own module. A
-    // plain `use crate::service;` binds `service` inside the file that writes it,
-    // so treating it as a re-export made `use crate::service;` in `main.rs`
-    // resolve `crate::service` to `main.rs` -- an edge from a file to itself,
-    // found by a test that only ever wrote that one line.
-    if !is_public_use(source, node) {
-        return;
-    }
-    collect_use_leaves(source, node, names);
 }
 
 /// Record every leaf name under a `use` statement.
 ///
-/// Deliberately separate from [`collect_reexported_names`], and not re-checking
+/// Deliberately separate from the visibility question, and not re-checking
 /// visibility as it descends. The two used to be one function, so walking into
 /// the `use_list` of a `pub use a::{B, C};` asked whether a `use_list` was a
 /// public use, found it was not, and returned before reading anything -- no
-/// grouped re-export was recorded at all.
+/// grouped re-export was recorded at all. The caller reads the leaves once
+/// and decides from the statement's own visibility whether they are also
+/// re-exports; a plain `use` binds the name inside its own module, and
+/// treating that as a re-export once made `use crate::service;` in `main.rs`
+/// resolve `crate::service` to `main.rs` -- an edge from a file to itself.
 ///
 /// That mattered more than it looks: grouping is the commonest way crates
 /// re-export, and a name reachable only through one was reported as unresolvable.
@@ -411,6 +427,7 @@ fn walk(
     node: tree_sitter::Node<'_>,
     declared: &mut BTreeSet<String>,
     reexported: &mut BTreeSet<String>,
+    bound: &mut BTreeSet<String>,
     rules: DeclarationRules<'_>,
 ) {
     if rules.declaration_kinds.contains(&node.kind())
@@ -433,7 +450,16 @@ fn walk(
     }
 
     if rules.reexport_kinds.contains(&node.kind()) {
-        collect_reexported_names(source, node, reexported);
+        // Every leaf a `use` names is bound by it, at any visibility. Only
+        // a public one also re-exports the name, so the leaves are read
+        // once and filed under both answers, with visibility deciding
+        // whether the second filing happens.
+        let mut leaves = BTreeSet::new();
+        collect_use_leaves(source, node, &mut leaves);
+        if is_public_use(source, node) {
+            reexported.extend(leaves.iter().cloned());
+        }
+        bound.extend(leaves);
         // A re-export statement's own subtree is fully handled here; recursing
         // would re-visit the same nodes and record the imported names twice
         // under two meanings.
@@ -442,7 +468,7 @@ fn walk(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(source, child, declared, reexported, rules);
+        walk(source, child, declared, reexported, bound, rules);
     }
 }
 

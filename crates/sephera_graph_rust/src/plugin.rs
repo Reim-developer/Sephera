@@ -161,7 +161,24 @@ impl ResolverPlugin for RustPlugin {
                 base = parent;
             }
 
-            return first_existing(context, &qualify(&base, rest), true);
+            return first_existing(context, &qualify(&base, rest), true)
+                .or_else(|| {
+                    // The path may end in an item rather than a module:
+                    // `super::sealed::Sealed`, where `sealed` is an inline
+                    // module in the parent file and `Sealed` a trait inside
+                    // it. The module half resolving to a file that declares
+                    // the item is the same evidence `resolve_qualified`
+                    // accepts for `crate::` paths; without it the coupling
+                    // to the parent file was reported but never edged, so
+                    // a change to that file did not reach this one.
+                    let (prefix, name) = rest.rsplit_once("::")?;
+                    let module_file =
+                        first_existing(context, &qualify(&base, prefix), true)?;
+                    let index = context.declarations?;
+                    index
+                        .file_declares(&module_file, name)
+                        .then_some(module_file)
+                });
         }
 
         // `self::` is relative to the module's own directory, which is not the same
@@ -1031,5 +1048,47 @@ mod tests {
             )
         };
         assert_eq!(RustPlugin.resolve("axum::Nonexistent", context), None);
+    }
+
+    #[test]
+    fn a_super_path_ending_in_an_item_lands_on_the_module_file() {
+        // axum-extra's shape: `super::sealed::Sealed` from
+        // `routing/typed.rs`, where `sealed` is an inline module in
+        // `routing/mod.rs` and `Sealed` a trait inside it. No file is
+        // called `sealed`, so the module walk alone finds nothing; the
+        // item half is answered by the file the module half names.
+        let files =
+            ["src/lib.rs", "src/routing/mod.rs", "src/routing/typed.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+
+        let mut index = sephera_core::declarations::DeclarationIndex::default();
+        index.insert(
+            "src/routing/mod.rs",
+            sephera_core::declarations::DeclaredNames::from_names(["Sealed"]),
+        );
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context(
+                "src/routing/typed.rs",
+                &known,
+            )
+        };
+        assert_eq!(
+            RustPlugin.resolve("super::sealed::Sealed", context),
+            Some("src/routing/mod.rs".to_owned())
+        );
+
+        // A name the module file does not declare stays unresolved:
+        // the landing is earned by the declaration, not by the shape.
+        let empty = sephera_core::declarations::DeclarationIndex::default();
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&empty),
+            ..sephera_core::plugins::test_context(
+                "src/routing/typed.rs",
+                &known,
+            )
+        };
+        assert_eq!(RustPlugin.resolve("super::sealed::Sealed", context), None);
     }
 }

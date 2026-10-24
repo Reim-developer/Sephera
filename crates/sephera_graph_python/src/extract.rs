@@ -215,7 +215,10 @@ fn collect_conditional_bindings(
 /// children, not nested inside one another. Every link is therefore a
 /// path of its own and has to bind the name, and a chain with no
 /// `else` has a fall-through path that binds nothing at all.
-fn bound_on_all_paths(source: &[u8], conditional: Node<'_>) -> BTreeSet<String> {
+fn bound_on_all_paths(
+    source: &[u8],
+    conditional: Node<'_>,
+) -> BTreeSet<String> {
     let Some(consequence) = conditional.child_by_field_name("consequence")
     else {
         return BTreeSet::new();
@@ -714,4 +717,3 @@ mod tests {
         assert_eq!(paths(b"def f():\n pass\n"), Vec::<String>::new());
     }
 }
-

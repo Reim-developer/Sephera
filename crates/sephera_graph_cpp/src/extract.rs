@@ -111,12 +111,10 @@ fn is_include_guard(source: &[u8], node: &Node<'_>) -> bool {
 
     children.iter().any(|child| {
         child.kind() == "preproc_def"
-            && child
-                .children(&mut child.walk())
-                .any(|part| {
-                    part.kind() == "identifier"
-                        && node_text(source, &part) == guarded
-                })
+            && child.children(&mut child.walk()).any(|part| {
+                part.kind() == "identifier"
+                    && node_text(source, &part) == guarded
+            })
     })
 }
 
@@ -228,10 +226,7 @@ mod tests {
 
         assert_eq!(
             found,
-            vec![
-                ("ssl.h".to_owned(), true),
-                ("cipher.mih".to_owned(), true)
-            ]
+            vec![("ssl.h".to_owned(), true), ("cipher.mih".to_owned(), true)]
         );
     }
 
@@ -267,4 +262,3 @@ mod tests {
         assert_eq!(found, vec![("win.h".to_owned(), true)]);
     }
 }
-
