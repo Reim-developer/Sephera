@@ -79,8 +79,14 @@ fn module_level_statements(module: Node<'_>) -> Vec<Node<'_>> {
         let mut cursor = node.walk();
         for child in node.named_children(&mut cursor) {
             match child.kind() {
-                "try_statement" | "block" | "except_clause"
-                | "finally_clause" => collect(child, out),
+                "try_statement"
+                | "block"
+                | "except_clause"
+                | "except_group_clause"
+                | "else_clause"
+                | "finally_clause" => {
+                    collect(child, out);
+                }
                 _ => out.push(child),
             }
         }
@@ -518,6 +524,36 @@ mod tests {
 
         assert!(found.contains(&"__version__".to_owned()), "{found:?}");
         assert!(!found.contains(&"OnlyTypes".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn a_name_bound_in_a_try_else_or_except_star_is_declared() {
+        // The two clause kinds the flattening missed (CodeRabbit on
+        // PR #41). A `try`'s `else` runs at module level when nothing
+        // raised, and `except*` is an `except` with a group -- a name
+        // bound in either is as much a module attribute as the ones
+        // in the clauses that were already looked through, and a
+        // `from pkg import name` against it was a false gap.
+        let in_else = declared(
+            b"try:\n\
+              \x20   import fastpath\n\
+              except ImportError:\n\
+              \x20   fastpath = None\n\
+              else:\n\
+              \x20   accelerated = True\n",
+        );
+        assert!(in_else.contains(&"accelerated".to_owned()), "{in_else:?}");
+
+        let in_except_star = declared(
+            b"try:\n\
+              \x20   import grouped\n\
+              except* ValueError:\n\
+              \x20   grouped = None\n",
+        );
+        assert!(
+            in_except_star.contains(&"grouped".to_owned()),
+            "{in_except_star:?}"
+        );
     }
 
     #[test]
