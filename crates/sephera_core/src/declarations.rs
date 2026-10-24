@@ -627,10 +627,15 @@ fn derive_macro_name(
         return None;
     }
     let arguments = node_text(source, *parts.get(1)?);
+    // The token tree's text keeps its parentheses. Splitting only on
+    // the comma read the single-name form -- the commonest one,
+    // `#[proc_macro_derive(Plain)]` -- as `Plain)`, which the
+    // character check below then rejected, so a derive without
+    // helper attributes was never declared (CodeRabbit on PR #41).
     let name = arguments
         .trim()
         .trim_start_matches('(')
-        .split(',')
+        .split([',', ')'])
         .next()?
         .trim();
     let mut characters = name.chars();
@@ -765,6 +770,20 @@ mod tests {
         assert!(found.contains(&"derive_from_request".to_owned()));
         assert!(!found.contains(&"from_request".to_owned()), "{found:?}");
         assert!(!found.contains(&"Debug".to_owned()), "{found:?}");
+    }
+
+    #[test]
+    fn a_proc_macro_derive_without_attributes_declares_its_name() {
+        // The single-name form is the commonest one, and its token
+        // tree has no comma to split on: the name was read as
+        // `Plain)` and rejected by the character check, so the
+        // derive was never declared (CodeRabbit on PR #41).
+        let found = names_of(
+            "#[proc_macro_derive(Plain)]\n\
+             pub fn derive_plain() {}\n",
+        );
+
+        assert!(found.contains(&"Plain".to_owned()), "{found:?}");
     }
 
     /// The macros one source exports to its crate root, sorted.
