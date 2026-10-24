@@ -524,6 +524,27 @@ runner with the MCP server — every feature lands in both, and the two crates
 may not import each other by design — and the declaration index with the Rust
 plugin that consumes it.
 
+### `review` — the whole change, before it lands
+
+The three questions above, fused over the change you are about to make. The
+change is the working tree read against `HEAD` — or against a branch with
+`--against` — and for every file it touches the report gives the blast
+radius, the tests that reach it, and a warning for each file that history
+keeps changing with it but the change leaves behind: "you changed A; B has
+moved with A seven times and is not in this change."
+
+```bash
+# Review everything uncommitted
+sephera review --path .
+
+# Review a whole branch before pushing it
+sephera review --path . --against master
+```
+
+A file the change deletes is reported as absent rather than dropped — a
+deletion is the change whose dependents matter most, and the report says
+the graph cannot name them instead of implying there were none.
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it
@@ -679,7 +700,7 @@ sephera loc --path . --format markdown
 sephera mcp
 ```
 
-Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, and `coupling` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
+Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, `coupling`, and `review` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
 
 ```json
 {

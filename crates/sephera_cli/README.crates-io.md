@@ -43,6 +43,17 @@ change together in commit after commit while neither imports the other.
 sephera coupling --path .
 ```
 
+## Change review
+
+The three questions fused over the change you are about to make: for every
+file it touches, the blast radius, the tests that reach it, and a warning
+for each historic partner the change leaves behind.
+
+```bash
+sephera review --path .
+sephera review --path . --against master
+```
+
 ## The graph is measured, not asserted
 
 Accuracy is checked against nine real repositories at pinned commits, in CI,
@@ -88,7 +99,7 @@ sephera context --path . --focus-symbol GraphReport --budget 2k
 - `watch` — re-run an analysis when the tree changes
 - `guard` — a pre-edit hook that denies changes whose blast radius is too wide
 - `mcp` — built-in MCP server exposing `loc`, `symbols`, `context`, `graph`,
-  `impact`, `affected_tests`, `why` and `coupling`
+  `impact`, `affected_tests`, `why`, `coupling` and `review`
 
 ## Scope
 
