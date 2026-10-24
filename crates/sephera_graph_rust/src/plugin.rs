@@ -52,6 +52,17 @@ impl ImportPlugin for RustPlugin {
         ))
     }
 
+    /// What this file exposes to Python through `PyO3`, so an import that
+    /// resolves nowhere inside Python can be placed on the Rust file that
+    /// satisfies it.
+    fn collect_boundary(
+        &self,
+        source: &[u8],
+        tree: &tree_sitter::Tree,
+    ) -> Option<sephera_core::boundary::FileBoundary> {
+        crate::boundary::collect_boundary(source, tree)
+    }
+
     fn child_depth_step(&self, node: &Node<'_>) -> u8 {
         u8::from(crate::extract::opens_inline_module(node))
     }
