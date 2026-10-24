@@ -356,7 +356,10 @@ fn resolve_checkout_ref(repo_root: &Path, raw_ref: &str) -> Result<String> {
     Ok(trimmed_ref.to_owned())
 }
 
-fn resolve_commitish(repo_root: &Path, candidate: &str) -> Result<String> {
+pub fn resolve_commitish(
+    repo_root: &Path,
+    candidate: &str,
+) -> Result<String> {
     git_stdout_string(
         repo_root,
         [
