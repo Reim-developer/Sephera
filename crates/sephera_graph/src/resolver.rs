@@ -1550,15 +1550,20 @@ pub(crate) fn split_trailing_name(
         return None;
     }
 
-    // A path that is only a leading dot and a name -- `.Flask` -- has
-    // the package itself for a parent, and slicing at the separator
-    // leaves that parent empty, which read as no parent at all. The
-    // three longest-standing gaps on flask were this shape, and no
-    // parent was ever asked about them.
-    if parent.is_empty() {
-        return import_path
-            .starts_with('.')
-            .then(|| (".".to_owned(), name.to_owned()));
+    // A path that is only a leading dot run and a name -- `.Flask`,
+    // `..Flask` -- has the package the dots name for a parent, and
+    // slicing at the last dot leaves that parent empty, or as a lone
+    // dot the check below rejects as a trailing separator. The three
+    // longest-standing gaps on flask were the one-dot shape, and no
+    // parent was ever asked about them; the two-dot shape is
+    // `from .. import Flask`, whose parent is the grandparent
+    // package the two dots name (CodeRabbit on PR #41). The parent
+    // is the whole run of leading dots, however long it is.
+    if parent.is_empty() || parent.chars().all(|character| character == '.') {
+        let dots =
+            import_path.len() - import_path.trim_start_matches('.').len();
+        return (dots > 0 && import_path[dots..] == *name)
+            .then(|| (import_path[..dots].to_owned(), name.to_owned()));
     }
 
     if parent.ends_with(['.', '/', ':']) {
@@ -2328,6 +2333,32 @@ mod tests {
             vec!["pkg/app.py".to_owned()],
             "the dependency itself must still be there -- only the false alarm \
              is removed, not the edge"
+        );
+    }
+
+    #[test]
+    fn a_name_the_grandparent_package_declares_is_not_a_gap() {
+        // `from .. import Flask` in a subpackage: the extractor's item
+        // half is `..Flask`, and splitting its trailing name read the
+        // parent as a lone dot, which the separator check rejected --
+        // so the grandparent package was never asked whether it
+        // declares the name, and a real attribute counted as a
+        // missing module (CodeRabbit on PR #41).
+        let report = graph_for(&[
+            ("pkg/__init__.py", "class Flask:\n    pass\n"),
+            ("pkg/sub/__init__.py", ""),
+            ("pkg/sub/mod.py", "from .. import Flask, Absent\n"),
+        ]);
+
+        assert_eq!(
+            report.metrics.unresolved_local_edges, 1,
+            "only `Absent`, which the grandparent declares no more than \
+             the parent did: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+        assert_eq!(
+            report.metrics.unresolved_local_samples,
+            vec!["pkg/sub/mod.py: ..Absent".to_owned()]
         );
     }
 
