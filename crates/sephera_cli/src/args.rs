@@ -202,6 +202,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera guard --path . --max-dependents 25\n  sephera guard --file src/lib.rs --path ."
     )]
     Guard(GuardArgs),
+    /// Install the change-safety agent skill, or show where it would go
+    #[command(
+        long_about = "Install the `sephera-change-safety` agent skill into a project, or show where it would go.\n\n`sephera skill install` copies the skill — the workflow that says when to check a change, what threshold stops an edit, and how to fix a break from its suggestion — into the project's agent-skills directory (`.claude/skills` by default, `--dir` overrides). An existing skill is left untouched unless the install is forced.\n\n`sephera skill --print` prints the install path and a one-line summary instead of copying, for agents and scripts that prefer to do it themselves. With no subcommand, `skill` prints the same summary.",
+        after_long_help = "Examples:\n  sephera skill install\n  sephera skill install --dir .agents/skills\n  sephera skill install --force\n  sephera skill --print"
+    )]
+    Skill(SkillArgs),
 }
 
 tree_command_args!(
@@ -1293,6 +1299,68 @@ pub struct GuardArgs {
         long_help = "Deny the edit when at least this many files depend on the edited file, and exit 2. The limit is the first failing value, so `--max-dependents 25` denies the twenty-fifth dependent, not the twenty-sixth. Without this flag every edit is allowed and the guard is a report only."
     )]
     pub max_dependents: Option<u64>,
+}
+
+/// Arguments for `sephera skill`.
+///
+/// Not built by `tree_command_args!`: the skill copies files and
+/// analyses nothing, so the shared groups' source, ignore, output,
+/// and settings fields would be flags that parse and do nothing.
+/// `--path` and `--dir` are global so they parse on either side
+/// of the `install` subcommand: `skill install --dir X` and
+/// `skill --dir X install` are the same request, and a flag that
+/// only parsed in one spelling would be a trap, not an option.
+#[derive(Debug, Args)]
+pub struct SkillArgs {
+    /// Project directory to install into
+    #[arg(
+        long,
+        value_name = "PATH",
+        global = true,
+        help = "Project directory to install into.",
+        long_help = "Project directory to install into, resolved from the current working directory. Defaults to the current directory. A relative `--dir` is resolved against it."
+    )]
+    pub path: Option<PathBuf>,
+
+    /// Skills directory override
+    #[arg(
+        long,
+        value_name = "DIR",
+        global = true,
+        help = "Skills directory to install into.",
+        long_help = "Skills directory to install into. Relative paths resolve against the project directory. Defaults to `.claude/skills` inside the project."
+    )]
+    pub dir: Option<PathBuf>,
+
+    /// Print the install path and a summary instead of installing
+    #[arg(
+        long,
+        help = "Print the install path and a one-line summary instead of installing.",
+        long_help = "Print where `install` would copy the skill and a one-line summary of what it does, instead of copying anything. Cannot be combined with `install`."
+    )]
+    pub print: bool,
+
+    #[command(subcommand)]
+    pub command: Option<SkillCommand>,
+}
+
+/// Subcommands of `sephera skill`.
+#[derive(Debug, Subcommand)]
+pub enum SkillCommand {
+    /// Copy the skill into the project's agent-skills directory
+    #[command(
+        long_about = "Copy the `sephera-change-safety` skill into the project's agent-skills directory.\n\nThe target is `<skills-dir>/sephera-change-safety`, where `<skills-dir>` is `--dir` or `.claude/skills` inside the project. An existing skill is left untouched unless forced: silently clobbering a skill the user tuned would be the kind of harm this tool does not do.",
+        after_long_help = "Examples:\n  sephera skill install\n  sephera skill install --dir .agents/skills\n  sephera skill install --force"
+    )]
+    Install {
+        /// Overwrite an existing skill
+        #[arg(
+            long,
+            help = "Overwrite the skill if it already exists.",
+            long_help = "Overwrite the skill if it already exists at the target. Without it, installing over an existing skill is an error."
+        )]
+        force: bool,
+    },
 }
 
 #[cfg(test)]

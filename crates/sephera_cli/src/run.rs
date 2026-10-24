@@ -28,7 +28,7 @@ use crate::{
         DeadOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs, IgnoreArgs,
         ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
         ReviewArgs, ReviewOutputFormat, RiskArgs, RiskOutputFormat,
-        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
+        SettingsArgs, SkillArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
         TestImpactOutputFormat, UntestedArgs, UntestedOutputFormat, WatchArgs,
         WatchTarget, WhyArgs, WhyOutputFormat,
     },
@@ -46,7 +46,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, untested, watch, why,
+    review, risk, skill, untested, watch, why,
 };
 
 #[must_use]
@@ -137,6 +137,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Breaking(arguments) => run_breaking(&arguments).await,
         Commands::Untested(arguments) => run_untested(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
+        Commands::Skill(arguments) => run_skill(&arguments),
     }?;
     Ok(gate::evaluate(&gate))
 }
@@ -1415,6 +1416,17 @@ fn guard_target(arguments: &GuardArgs) -> Result<Option<String>> {
         .read_to_string(&mut payload)
         .context("failed to read the hook payload from stdin")?;
     Ok(guard::file_path_from_hook_input(&payload))
+}
+
+/// Install the change-safety skill, or say where it would go.
+///
+/// The skill ships no gates: installing it enforces nothing, so the
+/// run returns no thresholds for the gate evaluator. It is a plain
+/// function, not an async one, because it awaits nothing — an async
+/// wrapper with no await would be a lint failure, not a convenience.
+fn run_skill(arguments: &SkillArgs) -> Result<Vec<Gate>> {
+    skill::execute(arguments)?;
+    Ok(no_gates())
 }
 
 /// Judge one agent edit before it happens.
