@@ -18,6 +18,7 @@
 //! | `impact`  | Report what breaks if one or more files change     |
 //! | `affected_tests` | Report which tests a change has to answer for |
 //! | `why`     | Explain why one file depends on another, as the shortest import chain |
+//! | `coupling` | Find file pairs that change together in history but share no import |
 //!
 //! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
 //! the CLI exactly: the same arguments produce the same file set, because an

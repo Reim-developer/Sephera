@@ -20,7 +20,7 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, dependency_path,
+    blast_radius, coupling, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
     symbol_impact,
@@ -28,7 +28,8 @@ use sephera_graph::{
 };
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, SourceRequest,
-    build_context_report, resolve_context_command, resolve_source,
+    build_context_report, recent_commit_files, resolve_context_command,
+    resolve_source,
 };
 use sephera_scan::CodeLoc;
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -36,8 +37,8 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, ContextInput, GraphInput, ImpactInput, LocInput,
-        SymbolsInput, WhyInput,
+        AffectedTestsInput, ContextInput, CouplingInput, GraphInput,
+        ImpactInput, LocInput, SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -623,6 +624,86 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Find hidden coupling in a repository.
+    ///
+    /// The question no graph query can ask, because it is about the
+    /// pairs the graph does *not* join: two files that keep changing
+    /// in the same commits while neither imports the other. The
+    /// counting is `sephera_graph::coupling`'s, shared with the
+    /// `coupling` command, so the two cannot disagree.
+    #[tool(
+        name = "coupling",
+        description = "Find hidden coupling: file pairs that change together in the commit history but share no import between them. The graph says what a file declares it depends on; history says what actually moves together, and a pair that keeps changing in the same commits with no edge between them is coupled in a way source analysis cannot see -- exactly the coupling that breaks a change whose author knew about only one of the two files. Scans the most recent commits (default 500) and reports pairs that changed together at least min_co_changes times (default 3), strongest first, each with its two commit counts and containment: the share of the quieter file's commits that also touched the other file, where 1.0 means it has never changed without the other. Pairs joined by an import in either direction are excluded, and commits touching more than fifty files in the tree are skipped, because a mass reformat couples everything and means nothing. Requires a git history; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the pairs as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn coupling(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<CouplingInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // History first, as the CLI reads it: a tree with no readable
+        // history is the error this tool exists to state, and it
+        // should arrive before the graph build spends its time.
+        let commits = recent_commit_files(
+            &source.repo_root,
+            param.commits.unwrap_or(500),
+        )
+        .map_err(map_internal_error("commit history could not be read"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+        let min_co_changes = param.min_co_changes.unwrap_or(3);
+        let measured = coupling::measure_coupling(
+            &report,
+            &rebased,
+            coupling::CouplingOptions {
+                min_co_changes,
+                ..coupling::CouplingOptions::default()
+            },
+        );
+        let built = CouplingReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(coupling_markdown(&built, min_co_changes)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported coupling format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -805,6 +886,107 @@ fn why_markdown(report: &WhyReport) -> String {
         );
     }
     let _ = writeln!(output, "- `{}`", report.to);
+    output
+}
+
+/// The JSON shape the `coupling` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CouplingReport {
+    /// Commits handed to the measurement.
+    pub commits_scanned: u64,
+    /// Commits that touched at least one file in the tree and were
+    /// small enough to count. A pair's counts mean nothing without
+    /// the window behind them, so the window is part of the answer
+    /// rather than a parameter the caller has to remember sending.
+    pub commits_counted: u64,
+    /// The pairs found, strongest first.
+    pub pairs: Vec<CouplingPair>,
+}
+
+/// One pair of files that change together with no import between them.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct CouplingPair {
+    /// The lexicographically first file of the pair.
+    pub first: String,
+    /// The other file.
+    pub second: String,
+    /// Commits in the window that touched both files.
+    pub co_changes: u64,
+    /// Commits in the window that touched `first`.
+    pub first_commits: u64,
+    /// Commits in the window that touched `second`.
+    pub second_commits: u64,
+    /// `co_changes` over the smaller of the two commit counts: the
+    /// share of the quieter file's commits that also touched the
+    /// other file.
+    pub containment: f64,
+}
+
+impl CouplingReport {
+    fn from_measured(measured: &coupling::CouplingReport) -> Self {
+        Self {
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            pairs: measured
+                .pairs
+                .iter()
+                .map(|pair| CouplingPair {
+                    first: pair.first.clone(),
+                    second: pair.second.clone(),
+                    co_changes: pair.co_changes,
+                    first_commits: pair.first_commits,
+                    second_commits: pair.second_commits,
+                    containment: pair.containment,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a coupling report as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools' Markdown
+/// follows its command's: the same measurement should not need two
+/// phrasings learned.
+fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Hidden coupling\n");
+    let _ = writeln!(
+        output,
+        "Scanned {} commits; {} touched files in this tree.",
+        report.commits_scanned, report.commits_counted
+    );
+
+    if report.pairs.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo pair of files changed together at least {min_co_changes} \
+             times without an import between them."
+        );
+        return output;
+    }
+
+    let _ = writeln!(
+        output,
+        "\nPairs that changed together at least {min_co_changes} times with \
+         no import between them. Containment is the share of the quieter \
+         file's commits that also touched the other file: 1.0 means it has \
+         never changed without the other.\n"
+    );
+    for pair in &report.pairs {
+        let _ = writeln!(
+            output,
+            "- `{}` + `{}` — {} co-changes, {}/{} commits, containment {}",
+            pair.first,
+            pair.second,
+            pair.co_changes,
+            pair.first_commits,
+            pair.second_commits,
+            pair.containment
+        );
+    }
     output
 }
 

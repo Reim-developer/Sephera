@@ -132,6 +132,98 @@ async fn impact_tool_with_a_symbol_reports_only_its_users() {
     );
 }
 
+fn git(dir: &Path, args: &[&str]) {
+    let output = Command::new("git")
+        .args(args)
+        .current_dir(dir)
+        .env("GIT_AUTHOR_NAME", "Test")
+        .env("GIT_AUTHOR_EMAIL", "test@example.com")
+        .env("GIT_COMMITTER_NAME", "Test")
+        .env("GIT_COMMITTER_EMAIL", "test@example.com")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+}
+
+/// A repository whose `a.rs` and `b.rs` change together three times
+/// beyond the seed commit, with no import between them.
+fn repo_with_a_hidden_pair() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "src/lib.rs", b"pub mod a;\npub mod b;\n");
+    write_file(dir, "src/a.rs", b"pub fn a() {}\n");
+    write_file(dir, "src/b.rs", b"pub fn b() {}\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "seed"]);
+    for round in 0..3 {
+        write_file(
+            dir,
+            "src/a.rs",
+            format!("pub fn a() {{ /* {round} */ }}\n").as_bytes(),
+        );
+        write_file(
+            dir,
+            "src/b.rs",
+            format!("pub fn b() {{ /* {round} */ }}\n").as_bytes(),
+        );
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "the pair moves"]);
+    }
+    temp_dir
+}
+
+#[tokio::test]
+async fn coupling_tool_reports_the_hidden_pair() {
+    let server = SepheraServer::new();
+    let temp_dir = repo_with_a_hidden_pair();
+
+    let result = server
+        .coupling(param_for(CouplingInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            commits: None,
+            min_co_changes: None,
+            format: None,
+        }))
+        .await;
+
+    let output = result.expect("coupling tool should succeed for a git repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("coupling output must be JSON");
+    assert_eq!(parsed["commits_scanned"], 4);
+    assert_eq!(parsed["pairs"][0]["first"], "src/a.rs");
+    assert_eq!(parsed["pairs"][0]["second"], "src/b.rs");
+    assert_eq!(parsed["pairs"][0]["co_changes"], 4);
+}
+
+#[tokio::test]
+async fn coupling_tool_without_history_is_an_error() {
+    // "No coupling found" and "no history read" are different
+    // answers; a plain directory must get the second.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+
+    let result = server
+        .coupling(param_for(CouplingInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            commits: None,
+            min_co_changes: None,
+            format: None,
+        }))
+        .await;
+
+    assert!(result.is_err(), "a tree with no history must not answer");
+}
+
 #[tokio::test]
 async fn impact_tool_accepts_several_files_at_once() {
     // Asking about a change rather than a single file is the common case, and

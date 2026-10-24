@@ -258,6 +258,40 @@ pub struct WhyInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `coupling` tool.
+///
+/// Hidden coupling is a question about a whole tree and its history,
+/// so there is no file argument: the tool reads the recent commits,
+/// builds the graph, and reports the pairs the two disagree about.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct CouplingInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// How many recent commits to read. Defaults to 500, the CLI's
+    /// window. The window bounds every count in the report.
+    pub commits: Option<u32>,
+    /// Report pairs that changed together at least this many times.
+    /// Defaults to 3: one shared commit is a coincidence any two files
+    /// can have.
+    pub min_co_changes: Option<u64>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};
