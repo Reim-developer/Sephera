@@ -833,6 +833,7 @@ fn build_edges_and_nodes(
                 from: file_data.file_path.clone(),
                 to: target,
                 import_path: statement.raw_path.clone(),
+                items: statement.items.clone(),
                 resolved: is_resolved,
                 kind: statement.kind,
                 cfg_gated: statement.cfg_gated,
@@ -1822,6 +1823,7 @@ mod tests {
             kind,
             module_depth: 0,
             cfg_gated: false,
+            items: Vec::new(),
         }
     }
 

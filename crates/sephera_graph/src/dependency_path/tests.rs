@@ -18,6 +18,7 @@ fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
         from: from.to_owned(),
         to: Some(to.to_owned()),
         import_path: path.to_owned(),
+        items: Vec::new(),
         resolved: true,
         kind: ImportKind::Dependency,
         local_gap: false,
