@@ -17,6 +17,7 @@ mod progress;
 mod review;
 mod risk;
 mod run;
+mod untested;
 mod watch;
 mod why;
 

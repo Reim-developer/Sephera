@@ -29,8 +29,8 @@ use crate::{
         ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
         ReviewArgs, ReviewOutputFormat, RiskArgs, RiskOutputFormat,
         SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
-        TestImpactOutputFormat, WatchArgs, WatchTarget, WhyArgs,
-        WhyOutputFormat,
+        TestImpactOutputFormat, UntestedArgs, UntestedOutputFormat, WatchArgs,
+        WatchTarget, WhyArgs, WhyOutputFormat,
     },
     breaking, change_impact, configure,
     context_config::{
@@ -46,7 +46,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, watch, why,
+    review, risk, untested, watch, why,
 };
 
 #[must_use]
@@ -135,6 +135,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Risk(arguments) => run_risk(&arguments).await,
         Commands::Dead(arguments) => run_dead(&arguments).await,
         Commands::Breaking(arguments) => run_breaking(&arguments).await,
+        Commands::Untested(arguments) => run_untested(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -1157,6 +1158,50 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
                 with_consumers,
                 limit,
             )]
+        } else {
+            Vec::new()
+        }
+    });
+    Ok(gates)
+}
+
+async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Finding untested symbols...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    let (report, index) =
+        build_graph_with_declarations(&source.analysis_path, &ignore)?;
+    let measured = untested::measure_untested(&report, &index);
+
+    let rendered = match arguments.format {
+        UntestedOutputFormat::Markdown => untested::render_markdown(&measured),
+        UntestedOutputFormat::Json => untested::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+        let count = u64::try_from(measured.untested.len()).unwrap_or(u64::MAX);
+        if count >= limit {
+            vec![Gate::new("untested symbols", count, limit)]
         } else {
             Vec::new()
         }

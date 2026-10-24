@@ -25,6 +25,7 @@ use sephera_graph::{
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, symbol_impact,
     types::{GraphFormat, GraphQuery},
+    untested,
 };
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
@@ -39,7 +40,7 @@ use crate::{
     input::{
         AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
         DeadInput, GraphInput, ImpactInput, LocInput, ReviewInput, RiskInput,
-        SymbolsInput, WhyInput,
+        SymbolsInput, UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1035,6 +1036,96 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Report the declared symbols no test exercises, measured
+    /// statically through the import graph. The measurement is
+    /// `sephera_graph::untested`'s, shared with the `untested`
+    /// command, so the two cannot disagree.
+    #[tool(
+        name = "untested",
+        description = "Report the declared symbols no test exercises, measured statically through the import graph -- no test run, no instrumentation. A test file is a root; the files its imports reach are the code the tests can execute; a symbol is exercised when a reached file names it. A symbol a test file names itself is exercised directly, and one named only by a file the tests reach is exercised indirectly: both count as tested, and the report keeps the tiers apart because they mean different things. A namespace import names nothing, so it is never evidence, and only Rust and Python collect declarations, so only their symbols can be reported. Test files are found by convention: a test, tests, __tests__, spec, or specs directory, or a file named test_*, *_test.*, *.test.*, or *.spec.*. Inline unit tests do not cross an import edge, so a Rust #[cfg(test)] module's own symbols read as untested unless a separate test file names them. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn untested(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<UntestedInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let (report, index) = build_graph_with_declarations(
+            &source.analysis_path,
+            &ignore_matcher,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+        let measured = untested::measure_untested(&report, &index);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(untested_markdown(&measured)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported untested format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+}
+
+/// Render an untested report as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn untested_markdown(report: &untested::UntestedReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let total =
+        report.tested_direct + report.tested_indirect + report.untested.len();
+    let _ = writeln!(output, "# Untested symbols\n");
+    let _ = writeln!(
+        output,
+        "{total} declared symbol(s); {} exercised directly by a test, {} \
+         exercised indirectly through code the tests reach, {} exercised \
+         by nothing ({} test file(s) as roots).",
+        report.tested_direct,
+        report.tested_indirect,
+        report.untested.len(),
+        report.test_files.len()
+    );
+
+    if report.untested.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nEvery declared symbol is named by a file the tests reach."
+        );
+        return output;
+    }
+
+    for symbol in &report.untested {
+        let _ = writeln!(
+            output,
+            "\n- `{}` — `{}` ({:?})",
+            symbol.file, symbol.symbol, symbol.kind
+        );
+    }
+    output
 }
 
 /// The JSON shape the `affected_tests` tool returns.

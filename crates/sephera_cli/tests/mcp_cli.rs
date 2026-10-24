@@ -268,6 +268,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "review",
             "risk",
             "symbols",
+            "untested",
             "why"
         ],
         "the protocol must advertise exactly the documented tools"

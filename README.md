@@ -606,6 +606,20 @@ takes before it is pushed.
 sephera breaking --path . --from origin/master
 ```
 
+### `untested` — the symbols no test exercises, without running anything
+
+Coverage tools answer this by running the tests and watching what
+executes. This one answers it statically: a test file is a root,
+the files its imports reach are the code the tests can execute,
+and a symbol is exercised when a reached file names it. A symbol a
+test names itself is direct; one named only by code the tests reach
+is indirect; what no reached file names is untested — not
+uncovered-by-a-run, but unreachable from every test in the tree.
+
+```bash
+sephera untested --path .
+```
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it

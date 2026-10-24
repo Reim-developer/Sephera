@@ -435,6 +435,34 @@ pub struct BreakingInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `untested` tool.
+///
+/// The question is about a whole tree, so there is no file
+/// argument: the tool finds the test files by convention, walks
+/// forward from them, and reports the declared symbols no reached
+/// file names.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct UntestedInput {
+    /// Absolute or relative path to the project root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Remote Git URL to analyze instead of a local path. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Git reference to analyze (a branch, tag, or commit). Only applies when `url` is set.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

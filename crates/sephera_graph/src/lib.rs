@@ -21,6 +21,7 @@ pub mod review;
 pub mod risk;
 pub mod symbol_impact;
 pub mod types;
+pub mod untested;
 
 pub use affected_tests::{AffectedTest, TestImpact};
 pub use blast_radius::{BlastRadius, Dependent};

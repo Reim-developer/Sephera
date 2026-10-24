@@ -190,6 +190,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera breaking --path . --from origin/main\\n  sephera breaking --path . --from v1.0.0 --to v2.0.0\\n  sephera breaking --path . --from origin/main --format json"
     )]
     Breaking(BreakingArgs),
+    /// Report the declared symbols no test exercises
+    #[command(
+        long_about = "Report the declared symbols no test exercises, measured statically through the import graph — no test run, no instrumentation.\\n\\nA test file is a root; the files its imports reach are the code the tests can execute; a symbol is exercised when a reached file names it. A symbol a test file names itself is exercised directly, and one named only by a file the tests reach is exercised indirectly: both count as tested, and the report keeps the tiers apart because they mean different things. A namespace import names nothing, so it is never evidence, and only Rust and Python collect declarations, so only their symbols can be reported.\\n\\nTest files are found by the conventions ecosystems agree on: a test, tests, __tests__, spec, or specs directory, or a file named test_*, *_test.*, *.test.*, or *.spec.*. Inline unit tests do not cross an import edge — a Rust #[cfg(test)] module inside lib.rs tests its own file without importing it — so those symbols read as untested unless a separate test file names them; the report's limit, stated plainly, is that it measures coverage through the import graph, the way a new test file would see the code.",
+        after_long_help = "Examples:\\n  sephera untested --path .\\n  sephera untested --path . --format json\\n  sephera untested --path . --fail-on 10"
+    )]
+    Untested(UntestedArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -1141,6 +1147,43 @@ tree_command_args!(
 
     }
 );
+
+tree_command_args!(
+    #[doc = "Report the declared symbols no test exercises."]
+    UntestedArgs {
+        /// Fail with exit code 2 when this many symbols are untested
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many untested symbols.",
+        long_help = "Exit with code 2 when at least this many declared symbols are exercised by nothing. The report is still printed; only the exit code changes, so a pipeline can gate on test coverage without running the tests."
+    )]
+    pub fail_on: Option<u64>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: UntestedOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum UntestedOutputFormat {
+    /// Markdown list of untested symbols.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum BreakingOutputFormat {

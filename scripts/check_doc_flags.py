@@ -54,6 +54,7 @@ COMMANDS = [
     "risk",
     "dead",
     "breaking",
+    "untested",
 ]
 
 LONG_FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z0-9-]*)")
@@ -64,7 +65,7 @@ LONG_FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z0-9-]*)")
 # the line is cargo's; demanding one of the ten subcommands is what tells the
 # two apart, since `sephera` on its own is a valid argument to something else.
 INVOKES = re.compile(
-    r"(?<![\w-])sephera(\.exe)?\s+(?:loc|symbols|context|graph|impact|watch|mcp|affected-tests|guard|why|breaking)\b"
+    r"(?<![\w-])sephera(\.exe)?\s+(?:loc|symbols|context|graph|impact|watch|mcp|affected-tests|guard|why|breaking|untested)\b"
 )
 
 
