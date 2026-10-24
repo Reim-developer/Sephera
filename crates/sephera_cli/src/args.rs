@@ -160,6 +160,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera why src/main.rs src/lib.rs\n  sephera why crates/sephera_cli/src/run.rs crates/sephera_graph/src/types.rs\n  sephera why src/run.rs src/types.rs --format json"
     )]
     Why(WhyArgs),
+    /// Find file pairs that change together but share no import between them
+    #[command(
+        long_about = "Find hidden coupling: file pairs that change together in the commit history but share no import between them.\n\nThe graph says what a file declares it depends on; history says what actually moves together. A pair that commit after commit changes in the same commit while neither imports the other is coupled in a way no source analysis can see, because there is no statement to read -- and it is exactly the coupling that breaks a change whose author only knew about one of the two files. The report intersects the last `--commits` commits with the graph of the current tree: pairs joined by an import in either direction are excluded, because their coupling is already the graph's to report, and commits touching more than fifty files in the tree are skipped, because a mass reformat couples everything and means nothing.\n\nThe analysis needs a git history. A tree that is not a git repository is an error, not an empty report.",
+        after_long_help = "Examples:\n  sephera coupling --path .\n  sephera coupling --path . --commits 1000 --min-co-changes 5\n  sephera coupling --path . --format json"
+    )]
+    Coupling(CouplingArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -895,6 +901,58 @@ tree_command_args!(
     }
 );
 
+tree_command_args!(
+    #[doc = "Find file pairs that change together but share no import between them."]
+    CouplingArgs {
+        /// How many commits of history to read
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits.",
+        long_help = "How far back the history window reaches, in commits. The window bounds every count in the report: a pair's co-changes are counted inside it, and a coupling that stopped happening before the window starts is not reported, which is the right answer for a report about how the tree changes now. Larger windows are slower to read and likelier to include a period when the tree was shaped differently."
+    )]
+    pub commits: u32,
+
+    /// Minimum shared commits for a pair to be reported
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Report pairs that changed together at least this many times.",
+        long_help = "The bar a pair has to clear. One shared commit is a coincidence any two files can have; three inside a few hundred is a pattern. Raising it answers a stricter question, and the report states the bar it used, so an empty report can be told apart from a bar set too high."
+    )]
+    pub min_co_changes: u64,
+
+    /// Output format for the coupling report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the coupling report. Supports markdown and json.",
+        long_help = "Output format for the coupling report. Supports markdown and json."
+    )]
+    pub format: CouplingOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum CouplingOutputFormat {
+    /// Markdown list of coupled pairs.
+    #[value(
+        name = "markdown",
+        help = "Render the coupling report as Markdown."
+    )]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the coupling report as JSON.")]
+    Json,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum WhyOutputFormat {
     /// Markdown chain of imports.
@@ -959,7 +1017,7 @@ mod tests {
     use super::{Cli, Commands, ContextFormat};
 
     /// Commands that walk a tree, and so must accept the shared groups.
-    const TREE_COMMANDS: [&str; 7] = [
+    const TREE_COMMANDS: [&str; 8] = [
         "loc",
         "symbols",
         "context",
@@ -967,6 +1025,7 @@ mod tests {
         "impact",
         "affected-tests",
         "watch",
+        "coupling",
     ];
 
     /// Flags every tree-walking command must accept.
@@ -1081,7 +1140,8 @@ mod tests {
     /// `--url` and `--ref` cannot mean the same thing on two commands.
     #[test]
     fn url_and_ref_appear_where_url_mode_is_supported() {
-        for name in ["loc", "symbols", "context", "graph", "impact"] {
+        for name in ["loc", "symbols", "context", "graph", "impact", "coupling"]
+        {
             // `impact` takes the file to report on positionally, so its argv has
             // to name one or the parse fails on the missing argument before the
             // flags are ever considered.

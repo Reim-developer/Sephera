@@ -6,6 +6,7 @@ mod budget;
 mod change_impact;
 pub(crate) mod configure;
 pub(crate) mod context_config;
+mod coupling;
 mod gate;
 mod guard;
 mod impact;

@@ -9,8 +9,8 @@ use sephera_graph::{
 };
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-    build_context_report, load_project_settings, resolve_changed_files,
-    resolve_source,
+    build_context_report, load_project_settings, recent_commit_files,
+    resolve_changed_files, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -18,16 +18,18 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     affected_tests,
     args::{
-        AffectedTestsArgs, Cli, Commands, ContextArgs, GraphArgs,
-        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
-        ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, SettingsArgs,
-        SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
-        WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
+        AffectedTestsArgs, Cli, Commands, ContextArgs, CouplingArgs,
+        CouplingOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs,
+        IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
+        OutputArgs, SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
+        TestImpactOutputFormat, WatchArgs, WatchTarget, WhyArgs,
+        WhyOutputFormat,
     },
     change_impact, configure,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
+    coupling,
     gate::{self, Gate},
     guard, impact,
     output::{
@@ -121,6 +123,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
             run_affected_tests(&arguments).await
         }
         Commands::Why(arguments) => run_why(&arguments).await,
+        Commands::Coupling(arguments) => run_coupling(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -729,6 +732,84 @@ async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
 /// step: the two commands are one analysis with two filters, and a reader
 /// comparing them should never have to wonder whether the difference is in
 /// the answer or in how the question was built.
+/// Find hidden coupling: history's pairs that the graph does not join.
+///
+/// Two readings of the same tree, intersected. The graph is built over
+/// the whole repository, as `run_impact`'s is, because a coupling can
+/// join any two files in it; the history is read at the repository
+/// root, where git spells paths from, and rebased onto the analysis
+/// base's spelling before the two are compared.
+async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Reading history...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // History first: a tree with no readable history is an error this
+    // command exists to state plainly, and it should arrive before the
+    // graph build spends its time rather than after.
+    let commits = recent_commit_files(&source.repo_root, arguments.commits)
+        .with_context(|| {
+            format!(
+                "coupling reads the git history of {}, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let measured = coupling::measure_coupling(
+        &report,
+        &rebased,
+        coupling::CouplingOptions {
+            min_co_changes: arguments.min_co_changes,
+            ..coupling::CouplingOptions::default()
+        },
+    );
+
+    let rendered = match arguments.format {
+        CouplingOutputFormat::Markdown => {
+            coupling::render_markdown(&measured, arguments.min_co_changes)
+        }
+        CouplingOutputFormat::Json => coupling::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
 async fn run_affected_tests(
     arguments: &AffectedTestsArgs,
 ) -> Result<Vec<Gate>> {
