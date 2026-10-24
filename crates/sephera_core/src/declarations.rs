@@ -47,6 +47,13 @@ pub struct DeclaredNames {
     /// name rather than through `contains`, because which of the three
     /// a name is decides who may rely on it.
     bound: BTreeSet<String>,
+    /// Names of `macro_rules!` definitions carrying `#[macro_export]`.
+    ///
+    /// Also a subset of `declared`, kept apart because the attribute
+    /// changes where the name lives: an exported macro is a member of
+    /// the crate root whichever file defines it, so a lookup for
+    /// `crate::name` has to know the name travels, and from where.
+    macro_exports: BTreeSet<String>,
 }
 
 impl DeclaredNames {
@@ -70,6 +77,12 @@ impl DeclaredNames {
     #[must_use]
     pub fn binds(&self, name: &str) -> bool {
         self.bound.contains(name)
+    }
+
+    /// Whether this file defines a `#[macro_export]` macro of this name.
+    #[must_use]
+    pub fn exports_macro(&self, name: &str) -> bool {
+        self.macro_exports.contains(name)
     }
 }
 
@@ -146,6 +159,20 @@ impl DeclarationIndex {
             .is_some_and(|declared| declared.binds(name))
     }
 
+    /// Files that define a `#[macro_export]` macro of this name.
+    ///
+    /// The caller decides what the answer means: the macro lives at
+    /// its own crate's root, so which crate a file belongs to is the
+    /// scope check, and crate membership is the caller's knowledge.
+    #[must_use]
+    pub fn files_exporting_macro(&self, name: &str) -> Vec<&str> {
+        self.by_file
+            .iter()
+            .filter(|(_, declared)| declared.exports_macro(name))
+            .map(|(file, _)| file.as_str())
+            .collect()
+    }
+
     /// Whether `file` re-exports `name`, making it reachable from the crate root.
     #[must_use]
     pub fn file_reexports(&self, file: &str, name: &str) -> bool {
@@ -174,6 +201,7 @@ impl DeclaredNames {
             declared: names.into_iter().map(ToOwned::to_owned).collect(),
             reexported: BTreeSet::new(),
             bound: BTreeSet::new(),
+            macro_exports: BTreeSet::new(),
         }
     }
 
@@ -193,6 +221,7 @@ impl DeclaredNames {
             declared: declared.into_iter().map(ToOwned::to_owned).collect(),
             reexported: reexported.into_iter().map(ToOwned::to_owned).collect(),
             bound: BTreeSet::new(),
+            macro_exports: BTreeSet::new(),
         }
     }
 
@@ -317,18 +346,21 @@ pub fn collect_declared_names_with(
     let mut declared = BTreeSet::new();
     let mut reexported = BTreeSet::new();
     let mut bound = BTreeSet::new();
+    let mut macro_exports = BTreeSet::new();
     walk(
         source,
         tree.root_node(),
         &mut declared,
         &mut reexported,
         &mut bound,
+        &mut macro_exports,
         rules,
     );
     DeclaredNames {
         declared,
         reexported,
         bound,
+        macro_exports,
     }
 }
 
@@ -428,6 +460,7 @@ fn walk(
     declared: &mut BTreeSet<String>,
     reexported: &mut BTreeSet<String>,
     bound: &mut BTreeSet<String>,
+    macro_exports: &mut BTreeSet<String>,
     rules: DeclarationRules<'_>,
 ) {
     if rules.declaration_kinds.contains(&node.kind())
@@ -449,6 +482,19 @@ fn walk(
         declared.insert(name);
     }
 
+    // A `#[macro_export]` macro is declared where it is written and
+    // lives at the crate root: both facts, kept in two sets, because a
+    // `crate::name` lookup needs the second and a same-file lookup the
+    // first. The attribute is a preceding sibling, read the way the
+    // derive check reads its own. A `macro_definition` node is a
+    // Rust-grammar kind, so other languages' walks never meet it.
+    if node.kind() == "macro_definition"
+        && let Some(name) = node.child_by_field_name("name")
+        && has_macro_export_attribute(source, node)
+    {
+        macro_exports.insert(node_text(source, name).to_owned());
+    }
+
     if rules.reexport_kinds.contains(&node.kind()) {
         // Every leaf a `use` names is bound by it, at any visibility. Only
         // a public one also re-exports the name, so the leaves are read
@@ -468,7 +514,7 @@ fn walk(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(source, child, declared, reexported, bound, rules);
+        walk(source, child, declared, reexported, bound, macro_exports, rules);
     }
 }
 
@@ -484,6 +530,43 @@ fn node_text<'a>(source: &'a [u8], node: tree_sitter::Node<'_>) -> &'a str {
 /// everything after the first comma names helper attributes, not
 /// macros. A plain `#[derive(...)]` is a different attribute and
 /// declares nothing here.
+/// Whether a `#[macro_export]` attribute decorates this node.
+///
+/// Attributes are preceding siblings; documentation comments may sit
+/// between them and the item, so the scan walks back over attributes
+/// and comments and stops at anything else. The attribute's head is
+/// its first identifier, read through the `attribute` node the
+/// grammar interposes -- the same shape the derive check reads.
+fn has_macro_export_attribute(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+) -> bool {
+    let mut sibling = node.prev_named_sibling();
+    while let Some(current) = sibling {
+        match current.kind() {
+            "attribute_item" => {
+                let head = current
+                    .named_child(0)
+                    .and_then(|attribute| {
+                        if attribute.kind() == "attribute" {
+                            attribute.named_child(0)
+                        } else {
+                            Some(attribute)
+                        }
+                    })
+                    .map(|head| node_text(source, head));
+                if head == Some("macro_export") {
+                    return true;
+                }
+            }
+            "line_comment" | "block_comment" => {}
+            _ => break,
+        }
+        sibling = current.prev_named_sibling();
+    }
+    false
+}
+
 fn derive_macro_name(
     source: &[u8],
     node: tree_sitter::Node<'_>,
@@ -541,6 +624,10 @@ impl crate::plugins::DeclarationLookup for DeclarationIndex {
 
     fn file_reaches(&self, file: &str, name: &str) -> bool {
         self.file_reaches(file, name)
+    }
+
+    fn files_exporting_macro(&self, name: &str) -> Vec<&str> {
+        self.files_exporting_macro(name)
     }
 }
 
@@ -632,6 +719,48 @@ mod tests {
         assert!(found.contains(&"derive_from_request".to_owned()));
         assert!(!found.contains(&"from_request".to_owned()), "{found:?}");
         assert!(!found.contains(&"Debug".to_owned()), "{found:?}");
+    }
+
+    /// The macros one source exports to its crate root, sorted.
+    fn macro_exports_of(source: &str) -> Vec<String> {
+        let mut parser = rust_parser();
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let names = collect_declared_names(source.as_bytes(), &tree);
+        names.macro_exports.into_iter().collect()
+    }
+
+    #[test]
+    fn a_macro_export_is_recorded_apart_from_a_plain_macro() {
+        // Both macros are declarations of the file that writes them.
+        // Only the exported one also lives at the crate root, which is
+        // the fact a `crate::__define_rejection` lookup needs, so it
+        // is kept in its own set rather than inferred from the name.
+        let source = "#[macro_export]\n\
+                      macro_rules! exported { () => {}; }\n\
+                      macro_rules! local { () => {}; }\n";
+
+        assert_eq!(
+            macro_exports_of(source),
+            vec!["exported".to_owned()]
+        );
+        let names = names_of(source);
+        assert!(names.contains(&"exported".to_owned()), "{names:?}");
+        assert!(names.contains(&"local".to_owned()), "{names:?}");
+    }
+
+    #[test]
+    fn a_macro_export_with_a_doc_comment_still_counts() {
+        // Documentation sits between the attribute and the item in
+        // real code, in either order, and the scan walks back over
+        // comments rather than demanding the attribute touch the item.
+        let source = "/// Builds the rejection.\n\
+                      #[macro_export]\n\
+                      macro_rules! documented { () => {}; }\n";
+
+        assert_eq!(
+            macro_exports_of(source),
+            vec!["documented".to_owned()]
+        );
     }
 
     #[test]

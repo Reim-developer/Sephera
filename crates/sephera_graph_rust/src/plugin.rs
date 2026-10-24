@@ -311,6 +311,21 @@ fn resolve_qualified(
         return Some(root_file);
     }
 
+    // `crate::__define_rejection` -- a `macro_rules!` carrying
+    // `#[macro_export]` lives at the crate root by definition, in
+    // whichever file of the crate it is written, so the root is where
+    // a path naming it lands. The index knows which files export a
+    // macro of this name; this crate is the scope, because another
+    // crate's exported macro of the same name is a different macro
+    // that happens to share it.
+    if index
+        .files_exporting_macro(name)
+        .iter()
+        .any(|file| crate_root(file) == crate_root(context.source_file))
+    {
+        return Some(root_file);
+    }
+
     // `self::private::DefaultBodyLimitService` -- an inline module in this very
     // file, so there is no separate file to name.
     if context.kind.is_dependency()
@@ -1090,5 +1105,53 @@ mod tests {
             )
         };
         assert_eq!(RustPlugin.resolve("super::sealed::Sealed", context), None);
+    }
+
+    #[test]
+    fn an_exported_macro_resolves_to_the_crate_root() {
+        // axum-core's shape: `crate::__define_rejection` from a sibling
+        // file, the macro itself written with `#[macro_export]` in a
+        // macros module. Rust puts such a macro at the crate root, so
+        // the root file is where the path lands -- not the file that
+        // happens to define it, which the path does not name.
+        let files = ["src/lib.rs", "src/macros.rs", "src/user.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+
+        let macros_source =
+            "#[macro_export]\nmacro_rules! __define_rejection { () => {}; }\n";
+        let declared = sephera_compression::with_parser(
+            sephera_compression::SupportedLanguage::Rust,
+            macros_source.len(),
+            |parser| {
+                let tree = parser
+                    .parse(macros_source.as_bytes(), None)
+                    .expect("the fixture parses");
+                Ok(sephera_core::declarations::collect_declared_names(
+                    macros_source.as_bytes(),
+                    &tree,
+                ))
+            },
+        )
+        .expect("a parser exists");
+        let mut index =
+            sephera_core::declarations::DeclarationIndex::default();
+        index.insert("src/macros.rs", declared);
+
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context("src/user.rs", &known)
+        };
+        assert_eq!(
+            RustPlugin.resolve("crate::__define_rejection", context),
+            Some("src/lib.rs".to_owned())
+        );
+
+        // A name no file in the crate exports stays unresolved.
+        let context = sephera_core::plugins::ResolveContext {
+            declarations: Some(&index),
+            ..sephera_core::plugins::test_context("src/user.rs", &known)
+        };
+        assert_eq!(RustPlugin.resolve("crate::__missing", context), None);
     }
 }

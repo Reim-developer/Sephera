@@ -55,11 +55,29 @@
 [[corpus]]
 name = "axum"
 language = "Rust"
-# What is left is a pair of `#[macro_export]` macros and a `pub use` re-export the
-# declaration index reads as local. A floor of gaps is expected here; it was 66
-# before declaration lookup resolved the re-export and crate-root cases, 13 once
-# a `pub use http;` of an external crate stopped being counted as a missing
-# file, and 3 once grouped re-exports were recorded at all.
+# Zero. The last six were one unasked question in three shapes and a
+# hoisting rule. Four were item paths (`super::JsonLines`,
+# `super::sealed::Sealed`, the `super::{...}` pair in raw_form's test
+# module) whose parent the gap rule could not even name: the split
+# that finds a path's parent sliced on the last colon, so a Rust
+# parent came out as `super:` and was read as no parent at all. With
+# `::` read as one separator the parents resolve, and the answers are
+# the ones Rust gives: from inside an inline module the enclosing
+# file's own bindings are the namespace (a private `use` binds for
+# its module's children), and a `super::` path ending in an item
+# lands on the module file that declares it. The other two were
+# `#[macro_export]` macros, which live at the crate root in
+# whichever file they are written; the declaration index records
+# exported macros apart, and `crate::__define_rejection` and its
+# sibling now land on axum-core's root as edges (three of the six
+# became internal edges this way; the other three were classification
+# only, their couplings already carried by sibling statements).
+#
+# The count was 66 before declaration lookup resolved the re-export
+# and crate-root cases, 13 once a `pub use http;` of an external
+# crate stopped being counted as a missing file, 3 once grouped
+# re-exports were recorded at all, and 6 while the item-path
+# questions went unasked.
 #
 # Grouping is how crates re-export in practice -- `pub use axum_core::extract::{...}`
 # -- and the collector used to record none of them, because walking into the
@@ -67,7 +85,7 @@ language = "Rust"
 # `use_list` is not. So six internal edges were missing and five resolver gaps
 # were reported against names the crate does re-export. Both numbers moved for
 # the same reason and neither is a behaviour change.
-unresolved_local = 6
+unresolved_local = 0
 files = 307
 # Was 646 internal and 60 self-references before a qualifier-only path
 # (`use super::*;` recorded as the bare word `super`) learned to answer at
@@ -104,13 +122,11 @@ files = 307
 # the declaration index records from the `proc_macro_derive` attribute
 # that declares them (the name lives in the attribute, not on the function
 # it annotates). What is left names the `http` and `headers` crates
-# through axum's re-exports of them, a crate the tree does not contain
-# (axum-server), or `#[macro_export]` macros, whose names are declared in
-# the file that defines them but are hoisted to the crate root by a rule
-# the index does not model. The evidence a name
+# through axum's re-exports of them, or a crate the tree does not
+# contain (axum-server). The evidence a name
 # is the project's own is a manifest on disk declaring it; a name no
 # manifest in the tree declares still stays external.
-internal_edges = 1593
+internal_edges = 1596
 self_references = 70
 # Edges that only compile when a `#[cfg]` is on. axum gates its public API on
 # `feature = "form"` and `feature = "json"`, so an unqualified count would claim

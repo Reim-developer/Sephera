@@ -36,6 +36,17 @@ pub trait DeclarationLookup {
 
     /// Whether `file` declares `name` or re-exports something that does.
     fn file_reaches(&self, file: &str, name: &str) -> bool;
+
+    /// Files that export a `#[macro_export]` macro of this name.
+    ///
+    /// A third question, and only Rust asks it: an exported macro
+    /// lives at its crate's root in a file that may be anywhere in
+    /// the crate, so neither per-file question can answer for it.
+    /// The default answers none, which is complete for every other
+    /// language and for a lookup that knows nothing of macros.
+    fn files_exporting_macro(&self, _name: &str) -> Vec<&str> {
+        Vec::new()
+    }
 }
 
 /// What a resolver can ask about the project's manifests.
