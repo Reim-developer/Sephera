@@ -97,21 +97,12 @@ pub fn is_test_file(path: &str) -> bool {
         || file.contains(".spec.")
 }
 
-/// Measure which declared symbols no test exercises.
-#[must_use]
-pub fn measure_untested(
-    report: &GraphReport,
-    index: &DeclarationIndex,
-) -> UntestedReport {
-    let test_files: Vec<String> = report
-        .nodes
-        .iter()
-        .map(|node| node.file_path.clone())
-        .filter(|path| is_test_file(path))
-        .collect();
-
-    // Forward reachability from the test files over resolved edges:
-    // the code the tests can execute, test files included.
+/// The files a set of roots reaches over resolved edges, roots
+/// included: the code the tests can execute.
+fn reachable_from<'a>(
+    report: &'a GraphReport,
+    roots: &'a [String],
+) -> BTreeSet<&'a str> {
     let mut adjacency: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
     for edge in &report.edges {
         if edge.resolved
@@ -122,7 +113,7 @@ pub fn measure_untested(
     }
     let mut reached: BTreeSet<&str> = BTreeSet::new();
     let mut queue: VecDeque<&str> = VecDeque::new();
-    for file in &test_files {
+    for file in roots {
         if reached.insert(file.as_str()) {
             queue.push_back(file.as_str());
         }
@@ -136,6 +127,23 @@ pub fn measure_untested(
             }
         }
     }
+    reached
+}
+
+/// Measure which declared symbols no test exercises.
+#[must_use]
+pub fn measure_untested(
+    report: &GraphReport,
+    index: &DeclarationIndex,
+) -> UntestedReport {
+    let test_files: Vec<String> = report
+        .nodes
+        .iter()
+        .map(|node| node.file_path.clone())
+        .filter(|path| is_test_file(path))
+        .collect();
+
+    let reached = reachable_from(report, &test_files);
     let test_set: BTreeSet<&str> =
         test_files.iter().map(String::as_str).collect();
 
