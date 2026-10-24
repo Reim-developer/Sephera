@@ -590,7 +590,7 @@ also exits **2**.
 
 ```bash
 # Judge one file by hand, the way a harness would
-sephera guard --file crates/sephera_graph/src/blast_radius.rs --path . --max-dependents 25
+sephera guard --file crates/sephera_graph/src/blast_radius.rs --path . --max-dependents 50
 ```
 
 The measurements are also MCP tools (`impact`, `affected_tests`, `why`,
