@@ -22,16 +22,13 @@ const SKILL_NAME: &str = "sephera-change-safety";
 /// One line saying what the skill is for, printed by `--print`.
 const SUMMARY: &str = "sephera-change-safety: check a file's blast radius before editing, review before committing, gate the merge on breaking symbols with consumers.";
 
-const SKILL_MD: &str =
-    include_str!("../../../skills/sephera-change-safety/SKILL.md");
-const COMMANDS_MD: &str = include_str!(
-    "../../../skills/sephera-change-safety/references/commands.md"
-);
+const SKILL_MD: &str = include_str!("../skills/sephera-change-safety/SKILL.md");
+const COMMANDS_MD: &str =
+    include_str!("../skills/sephera-change-safety/references/commands.md");
 const TOOLS_MD: &str =
-    include_str!("../../../skills/sephera-change-safety/references/tools.md");
-const THRESHOLDS_MD: &str = include_str!(
-    "../../../skills/sephera-change-safety/references/thresholds.md"
-);
+    include_str!("../skills/sephera-change-safety/references/tools.md");
+const THRESHOLDS_MD: &str =
+    include_str!("../skills/sephera-change-safety/references/thresholds.md");
 
 /// The files the skill ships, as (relative path, contents) pairs.
 const FILES: [(&str, &str); 4] = [

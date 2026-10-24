@@ -12,7 +12,7 @@ check a change, what threshold stops an edit, and how to fix
 a break from its suggestion.
 
 The skill lives in the repo at
-`skills/sephera-change-safety/`, and `skill` is how it reaches
+`crates/sephera_cli/skills/sephera-change-safety/`, and `skill` is how it reaches
 a project. The workflow itself is the skill's body — this page
 is only the install story.
 

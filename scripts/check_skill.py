@@ -26,7 +26,7 @@ import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-SKILL_DIR = ROOT / "skills" / "sephera-change-safety"
+SKILL_DIR = ROOT / "crates" / "sephera_cli" / "skills" / "sephera-change-safety"
 SKILL_MD = SKILL_DIR / "SKILL.md"
 
 NAME = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
