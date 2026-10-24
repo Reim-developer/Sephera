@@ -87,6 +87,16 @@ pub enum ImportKind {
     TypeAlias,
     /// A namespace import such as `use foo::*`.
     Namespace,
+    /// A reference satisfied across a language boundary: the importing file
+    /// names a module that only exists as foreign code (a `PyO3` extension
+    /// module, a JNI implementation), and the resolver's boundary join placed
+    /// it on the file that exposes it.
+    ///
+    /// Never extracted from source — no import statement says this about
+    /// itself. The join assigns it when it rewrites an unresolved reference
+    /// onto boundary evidence, so a consumer can tell a within-language
+    /// dependency from one that crosses.
+    Ffi,
 }
 
 impl ImportKind {
