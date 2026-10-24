@@ -926,12 +926,24 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
     );
 
     let against_label = against.unwrap_or("HEAD");
+    // The fourth review question, composed rather than measured
+    // inside review: what broke by name between the ref and the
+    // working tree, computed exactly the way `breaking` computes it
+    // when --to is absent. The ref side lives in a detached
+    // worktree so the working tree is never disturbed, and the new
+    // side is a whole-tree build — the focus-filtered report above
+    // cannot serve as it, because breaking assumes whole-tree
+    // edges. Two extra builds is the stated cost of the answer.
+    progress.set_message("Checking for broken symbols...");
+    let breaking =
+        measure_review_breaking(&source, arguments, against_label, &ignore)?;
+
     let rendered = match arguments.format {
         ReviewOutputFormat::Markdown => {
-            review::render_markdown(&measured, against_label)
+            review::render_markdown(&measured, against_label, &breaking)
         }
         ReviewOutputFormat::Json => {
-            review::render_json(&measured, against_label)
+            review::render_json(&measured, against_label, &breaking)
         }
     };
 
@@ -1215,6 +1227,44 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
 /// newer side is the working tree itself. Either way the returned
 /// report and index are plain data, so the worktree can drop before
 /// the measurement runs.
+/// The breaking side of a review: the ref in a detached worktree
+/// against the working tree, each built whole-tree with its own
+/// side's ignore matcher — the breaking command's per-side rule,
+/// not one matcher shared across sides.
+fn measure_review_breaking(
+    source: &ResolvedSource,
+    arguments: &ReviewArgs,
+    against_label: &str,
+    ignore: &IgnoreMatcher,
+) -> Result<breaking::BreakingReport> {
+    let old_worktree = checkout_worktree(&source.repo_root, against_label)
+        .with_context(|| {
+            format!(
+                "review checks `{against_label}` out of {} and git could not do it",
+                source.repo_root.display()
+            )
+        })?;
+    let old_ignore = build_ignore_matcher(
+        old_worktree.path(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    let (old_report, old_index) =
+        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
+    let (new_report, new_index) =
+        build_graph_with_declarations(&source.analysis_path, ignore)?;
+    drop(old_worktree);
+    Ok(breaking::measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        against_label,
+        "working tree",
+    ))
+}
+
 fn build_new_side(
     source: &ResolvedSource,
     arguments: &BreakingArgs,
