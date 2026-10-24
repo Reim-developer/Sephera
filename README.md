@@ -592,6 +592,20 @@ Its first run on this repository found a stale duplicate of the runtime
 crate's root that no `mod` statement declares — imported by nothing,
 importing five files, reviewed as if it were alive.
 
+### `breaking` — what a change breaks, named by symbol
+
+A diff between two declaration indexes says what vanished or changed
+shape; this command joins each break to the files in the newer tree
+that still name it. A removed name nobody imports breaks nothing — a
+removed name with nine importers breaks nine files, and those files
+are the report. `--from` names the older side; without `--to`, the
+newer side is the working tree, which is the form a branch review
+takes before it is pushed.
+
+```bash
+sephera breaking --path . --from origin/master
+```
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it

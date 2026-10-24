@@ -31,6 +31,7 @@ export default defineConfig({
 						{ slug: 'commands/review' },
 						{ slug: 'commands/risk' },
 						{ slug: 'commands/dead' },
+						{ slug: 'commands/breaking' },
 						{ slug: 'commands/guard' },
 						{ slug: 'commands/watch' },
 						{ slug: 'commands/mcp' },
