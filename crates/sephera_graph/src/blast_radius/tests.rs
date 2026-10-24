@@ -66,6 +66,7 @@ fn report(nodes: &[&str], edges: &[(&str, &str, &str)]) -> GraphReport {
             .iter()
             .map(|(from, to, path)| edge(from, to, path))
             .collect(),
+        boundary_files: Vec::new(),
         metrics: empty_metrics(),
     }
 }

@@ -7,6 +7,7 @@
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
+mod boundary;
 mod extract;
 mod plugin;
 pub use plugin::JavaPlugin;

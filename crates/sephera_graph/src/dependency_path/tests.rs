@@ -63,6 +63,7 @@ fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
         query: None,
         nodes: nodes.iter().map(|path| node(path)).collect(),
         edges,
+        boundary_files: Vec::new(),
         metrics: empty_metrics(),
     }
 }

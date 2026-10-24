@@ -269,11 +269,98 @@ where
     format!("git {}", rendered_args.join(" "))
 }
 
+/// A detached worktree holding one ref's tree, removed on drop.
+///
+/// Comparing two refs needs both trees on disk: a graph is built from
+/// files, not from git objects. A worktree is the cheapest honest way
+/// to get one — the repository's own objects, checked out beside the
+/// main tree, without touching the caller's checkout or index. The
+/// worktree holds tracked files only, exactly like the commit it
+/// names; that is the point of comparing refs rather than working
+/// trees.
+///
+/// Removal is best-effort by design: `git worktree remove --force`
+/// unregisters and deletes, and the temporary directory's own drop
+/// cleans anything left behind.
+pub struct DetachedWorktree {
+    repo: std::path::PathBuf,
+    dir: tempfile::TempDir,
+}
+
+impl DetachedWorktree {
+    /// The directory the ref's tree is checked out into.
+    #[must_use]
+    pub fn path(&self) -> &Path {
+        self.dir.path()
+    }
+}
+
+impl Drop for DetachedWorktree {
+    fn drop(&mut self) {
+        let _ = run_git(
+            Some(&self.repo),
+            [
+                std::ffi::OsString::from("worktree"),
+                std::ffi::OsString::from("remove"),
+                std::ffi::OsString::from("--force"),
+                self.dir.path().as_os_str().to_owned(),
+            ],
+            "remove the temporary worktree",
+        );
+    }
+}
+
+/// Check `reference` out into a fresh temporary worktree of `repo`.
+///
+/// The reference is verified as a commit first (with the same
+/// `origin/` fallback the source resolver uses for branch names), so
+/// a mistyped ref fails here with git's own answer rather than
+/// downstream as an empty tree.
+///
+/// # Errors
+///
+/// Returns an error when `repo` is not a repository, the reference
+/// does not resolve to a commit, or git cannot create the worktree.
+pub fn checkout_worktree(
+    repo: &Path,
+    reference: &str,
+) -> Result<DetachedWorktree> {
+    let trimmed = reference.trim();
+    if trimmed.is_empty() {
+        bail!("git ref must not be empty");
+    }
+    let resolved =
+        super::source::resolve_commitish(repo, trimmed).or_else(|_| {
+            let remote_ref = format!("origin/{trimmed}");
+            super::source::resolve_commitish(repo, &remote_ref)
+        })?;
+    let dir =
+        tempfile::tempdir().context("create a temporary worktree directory")?;
+    run_git(
+        Some(repo),
+        [
+            std::ffi::OsString::from("worktree"),
+            std::ffi::OsString::from("add"),
+            std::ffi::OsString::from("--detach"),
+            dir.path().as_os_str().to_owned(),
+            std::ffi::OsString::from(&resolved),
+        ],
+        &format!("check `{trimmed}` out into a worktree"),
+    )?;
+    Ok(DetachedWorktree {
+        repo: repo.to_path_buf(),
+        dir,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path, process::Command};
 
-    use super::{changed_files, parse_commit_files, recent_commit_files};
+    use super::{
+        changed_files, checkout_worktree, git_stdout_string,
+        parse_commit_files, recent_commit_files,
+    };
 
     #[test]
     fn parse_splits_records_and_drops_the_hash_line() {
@@ -329,6 +416,53 @@ mod tests {
 
         let one = recent_commit_files(dir, 1).expect("history reads");
         assert_eq!(one.len(), 1, "the limit is honoured");
+    }
+
+    #[test]
+    fn a_worktree_holds_the_refs_tree_and_is_removed_on_drop() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+        fs::write(dir.join("b.txt"), "two\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "second"]);
+
+        let worktree_path;
+        {
+            let worktree = checkout_worktree(dir, "HEAD~1").expect("worktree");
+            worktree_path = worktree.path().to_path_buf();
+            // The older ref's tree: a.txt as it was, and no b.txt.
+            assert_eq!(
+                fs::read_to_string(worktree_path.join("a.txt")).expect("read"),
+                "one\n"
+            );
+            assert!(!worktree_path.join("b.txt").exists());
+        }
+
+        assert!(!worktree_path.exists(), "the drop removes the worktree");
+        let list =
+            git_stdout_string(dir, ["worktree", "list", "--porcelain"], "list")
+                .expect("worktree list reads");
+        assert_eq!(
+            list.matches("worktree ").count(),
+            1,
+            "only the main tree remains: {list}"
+        );
+    }
+
+    #[test]
+    fn an_unknown_ref_fails_the_checkout() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+
+        assert!(checkout_worktree(dir, "no-such-ref").is_err());
     }
 
     #[test]

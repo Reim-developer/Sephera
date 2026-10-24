@@ -31,6 +31,7 @@
 
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
+pub mod boundary;
 pub mod config;
 pub mod declarations;
 pub mod language_data;

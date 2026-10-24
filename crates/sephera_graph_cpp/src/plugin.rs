@@ -35,6 +35,16 @@ impl ImportPlugin for CCppPlugin {
     ) -> bool {
         crate::extract::is_cfg_gated(source, node)
     }
+
+    /// The JNI symbols this file implements through `Java_…` functions,
+    /// so a Java `native` declaration can be joined to its implementation.
+    fn collect_boundary(
+        &self,
+        source: &[u8],
+        tree: &tree_sitter::Tree,
+    ) -> Option<sephera_core::boundary::FileBoundary> {
+        crate::boundary::collect_boundary(source, tree)
+    }
 }
 
 impl ResolverPlugin for CCppPlugin {

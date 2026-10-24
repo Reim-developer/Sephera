@@ -139,12 +139,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 42 |
-| Internal edges | 234 |
-| External edges | 115 |
+| Internal edges | 236 |
+| External edges | 117 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 39 |
 | Local crate edges | 0 |
-| Standard library edges | 66 |
+| Standard library edges | 68 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -453,6 +453,21 @@ sephera impact crates/sephera_core/src/declarations.rs --symbol DeclaredNames
 sephera impact crates/sephera_core/src/declarations.rs --symbol DeclaredNames --fail-on 10
 ```
 
+### Cross-language dependencies — Python ↔ Rust, through PyO3
+
+A graph built one language at a time has a hole where Python imports a
+module that only exists as a Rust extension: the import reads as external,
+the Rust file looks imported by nobody, and both blast radii are wrong.
+Sephera harvests the boundary from the Rust side — the `#[pymodule]` name
+and the names it registers (`wrap_pyfunction!`, `add_class`) — and joins
+Python imports onto it. `import myext` lands on the file declaring the
+module; `from myext import add` lands on the file declaring `add`. JNI is
+the other shape: no import on either side, just a Java `native` method and
+a C function sharing a mangled name (`Java_com_acme_Native_add`) — the two
+spellings are paired and the edge is added. The edges carry kind `ffi`,
+and every command above — `impact`, `why`, `review`, `dead` — crosses the
+boundary without knowing it is there.
+
 ### `affected-tests` — which tests answer for a change *(new in 2.0)*
 
 The follow-up question: not just what breaks, but what to run. The same walk,
@@ -576,6 +591,34 @@ sephera dead --path .
 Its first run on this repository found a stale duplicate of the runtime
 crate's root that no `mod` statement declares — imported by nothing,
 importing five files, reviewed as if it were alive.
+
+### `breaking` — what a change breaks, named by symbol
+
+A diff between two declaration indexes says what vanished or changed
+shape; this command joins each break to the files in the newer tree
+that still name it. A removed name nobody imports breaks nothing — a
+removed name with nine importers breaks nine files, and those files
+are the report. `--from` names the older side; without `--to`, the
+newer side is the working tree, which is the form a branch review
+takes before it is pushed.
+
+```bash
+sephera breaking --path . --from origin/master
+```
+
+### `untested` — the symbols no test exercises, without running anything
+
+Coverage tools answer this by running the tests and watching what
+executes. This one answers it statically: a test file is a root,
+the files its imports reach are the code the tests can execute,
+and a symbol is exercised when a reached file names it. A symbol a
+test names itself is direct; one named only by code the tests reach
+is indirect; what no reached file names is untested — not
+uncovered-by-a-run, but unreachable from every test in the tree.
+
+```bash
+sephera untested --path .
+```
 
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 

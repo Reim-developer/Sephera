@@ -682,6 +682,7 @@ mod tests {
                 local_gap: false,
                 cfg_gated: false,
             }],
+            boundary_files: Vec::new(),
             metrics: GraphMetrics {
                 total_files: 2,
                 total_internal_edges: 1,
@@ -996,6 +997,7 @@ mod tests {
                 // Never resolved, so it has no arrow at all.
                 edge("a.rs", None),
             ],
+            boundary_files: Vec::new(),
             metrics: sample_report().metrics,
         };
 
@@ -1030,6 +1032,7 @@ mod tests {
                 local_gap: false,
                 cfg_gated: false,
             }],
+            boundary_files: Vec::new(),
             metrics: sample_report().metrics,
         };
 

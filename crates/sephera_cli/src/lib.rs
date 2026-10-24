@@ -2,6 +2,7 @@
 
 mod affected_tests;
 mod args;
+mod breaking;
 mod budget;
 mod change_impact;
 pub(crate) mod configure;
@@ -16,6 +17,7 @@ mod progress;
 mod review;
 mod risk;
 mod run;
+mod untested;
 mod watch;
 mod why;
 

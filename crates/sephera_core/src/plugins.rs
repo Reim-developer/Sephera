@@ -213,6 +213,13 @@ pub struct ExtractedSource {
     /// `None` for every language but Rust, and that is the normal answer rather
     /// than a gap.
     pub declared: Option<crate::declarations::DeclaredNames>,
+
+    /// The boundary modules this file exposes to other languages, when its
+    /// plugin harvests them.
+    ///
+    /// `None` for every language but Rust, and that is the normal answer
+    /// rather than a gap: most files expose nothing across a boundary.
+    pub boundary: Option<crate::boundary::FileBoundary>,
 }
 
 /// A context for a resolver test, with no lookup tables attached.
@@ -288,6 +295,7 @@ pub fn walk_with_declarations(
     Ok(ExtractedSource {
         imports,
         declared: extractor.collect_declarations(source, &tree),
+        boundary: extractor.collect_boundary(source, &tree),
     })
 }
 
@@ -465,6 +473,22 @@ pub trait ImportPlugin: Sync {
         _source: &[u8],
         _tree: &tree_sitter::Tree,
     ) -> Option<crate::declarations::DeclaredNames> {
+        None
+    }
+
+    /// Boundary modules this source exposes to other languages, when the
+    /// language has a foreign-function interface whose declarations are
+    /// visible in source.
+    ///
+    /// Returning `None` is the normal answer: most languages in the table
+    /// have no boundary declarations to harvest, and most files in the ones
+    /// that do expose nothing. Only a plugin whose files can satisfy another
+    /// language's imports has to answer.
+    fn collect_boundary(
+        &self,
+        _source: &[u8],
+        _tree: &tree_sitter::Tree,
+    ) -> Option<crate::boundary::FileBoundary> {
         None
     }
 }

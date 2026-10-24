@@ -258,6 +258,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
         names,
         vec![
             "affected_tests",
+            "breaking",
             "context",
             "coupling",
             "dead",
@@ -267,6 +268,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "review",
             "risk",
             "symbols",
+            "untested",
             "why"
         ],
         "the protocol must advertise exactly the documented tools"

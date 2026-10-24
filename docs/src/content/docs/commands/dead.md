@@ -53,6 +53,14 @@ themselves agree on:
   or **`scripts`** directory;
 - **`index.*`** files, a directory's public face.
 
+One class of root is read off the code rather than the path: a file
+that **exports across a language boundary** — it owns a PyO3 module,
+carries `#[wasm_bindgen]` exports, declares a cgo `//export`, or
+implements a JNI method — is entered from outside the graph, by
+Python, JavaScript, or C. The graph report names these files
+(`boundary_files`), and `dead` treats them as roots, because their
+callers exist even though no edge in the tree can show them.
+
 A file with no importers is **not** a root by that fact alone. That
 reading is the one this command exists to refuse: an orphaned
 cluster imports itself happily — in the run above, the end-to-end

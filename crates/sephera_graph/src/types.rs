@@ -200,6 +200,14 @@ pub struct GraphReport {
     /// Graph nodes (one per file).
     pub nodes: Vec<GraphNode>,
 
+    /// Files that expose names across a language boundary — a `PyO3`
+    /// module, a `wasm_bindgen` export, a cgo `//export`, a JNI
+    /// implementation. Their callers live outside the graph, so
+    /// analyses that cannot see a caller (dead-code reachability
+    /// above all) treat them as reached by definition.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub boundary_files: Vec<String>,
+
     /// All edges (both resolved and unresolved).
     pub edges: Vec<GraphEdge>,
 

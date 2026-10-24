@@ -10,7 +10,7 @@ from __future__ import annotations
 
 from types import ModuleType
 
-from . import c_cpp, go_java_ts, javascript, python, rust
+from . import c_cpp, ffi, go_java_ts, javascript, python, rust
 
 LANGUAGE_MODULES: tuple[ModuleType, ...] = (
     rust,
@@ -18,4 +18,5 @@ LANGUAGE_MODULES: tuple[ModuleType, ...] = (
     javascript,
     go_java_ts,
     c_cpp,
+    ffi,
 )

@@ -31,6 +31,8 @@ export default defineConfig({
 						{ slug: 'commands/review' },
 						{ slug: 'commands/risk' },
 						{ slug: 'commands/dead' },
+						{ slug: 'commands/breaking' },
+						{ slug: 'commands/untested' },
 						{ slug: 'commands/guard' },
 						{ slug: 'commands/watch' },
 						{ slug: 'commands/mcp' },
@@ -48,6 +50,7 @@ export default defineConfig({
 					label: 'Architecture',
 					items: [
 						{ slug: 'architecture/overview' },
+						{ slug: 'architecture/ffi-boundaries' },
 						{ slug: 'architecture/releasing' },
 					],
 				},
