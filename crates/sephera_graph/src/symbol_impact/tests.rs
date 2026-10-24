@@ -300,6 +300,34 @@ fn depth_bounds_the_downstream_walk_from_the_target() {
 }
 
 #[test]
+fn measuring_several_files_names_every_unknown_path_at_once() {
+    // One mistyped path in a list should not take one run per mistake
+    // to surface, and a known file among the unknown must not be
+    // reported as measured when the run as a whole is refused.
+    let report = report(
+        &["a.rs", "b.rs"],
+        vec![edge("b.rs", "a.rs", "crate::a::Router")],
+    );
+
+    let error = super::measure_symbol_all(
+        &report,
+        &[
+            "a.rs".to_owned(),
+            "nope.rs".to_owned(),
+            "gone.rs".to_owned(),
+        ],
+        "",
+        "Router",
+        None,
+        &[],
+    )
+    .expect_err("unknown paths are an error");
+    let message = format!("{error}");
+    assert!(message.contains("`nope.rs`"), "{message}");
+    assert!(message.contains("`gone.rs`"), "{message}");
+}
+
+#[test]
 fn the_target_is_never_its_own_symbol_user() {
     // A file can name its own symbols through a self path (an inline
     // module's `use super::Router`). It is still not a file that

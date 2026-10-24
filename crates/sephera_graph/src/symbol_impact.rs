@@ -161,6 +161,64 @@ pub fn measure_symbol_scoped(
     })
 }
 
+/// Measure the impact of `symbol` in every file a caller asked
+/// about, widest first.
+///
+/// One graph report answers all of them, as one does for the blast
+/// radius. Sorting is by direct users, the count this report exists
+/// to compare across files.
+///
+/// # Errors
+///
+/// Returns an error naming **every** path that matched no node rather
+/// than stopping at the first, as `blast_radius::measure_all` does: a
+/// caller who mistyped one path in a list should learn about all the
+/// mistakes at once.
+pub fn measure_symbol_all(
+    report: &GraphReport,
+    requested: &[String],
+    base_prefix: &str,
+    symbol: &str,
+    depth: Option<u32>,
+    focus: &[String],
+) -> Result<Vec<SymbolImpact>> {
+    let mut matched = Vec::with_capacity(requested.len());
+    let mut unknown = Vec::new();
+
+    for raw in requested {
+        match super::blast_radius::match_path(report, raw, base_prefix) {
+            Some(canonical) => matched.push(measure_symbol_scoped(
+                report, &canonical, symbol, depth, focus,
+            )?),
+            None => unknown.push(raw.clone()),
+        }
+    }
+
+    if !unknown.is_empty() {
+        let listed: Vec<String> =
+            unknown.iter().map(|path| format!("  `{path}`")).collect();
+        bail!(
+            "{} path(s) did not resolve to a file in the analysed graph:\n{}\n\
+             Paths are relative to the analysis base{}.",
+            unknown.len(),
+            listed.join("\n"),
+            if base_prefix.is_empty() {
+                String::new()
+            } else {
+                format!(", or to the repository root under `{base_prefix}`")
+            }
+        );
+    }
+
+    matched.sort_by(|left, right| {
+        direct_count(right)
+            .cmp(&direct_count(left))
+            .then_with(|| left.target.cmp(&right.target))
+    });
+
+    Ok(matched)
+}
+
 /// The files that name `symbol` from `target`, and the files that
 /// import `target`'s namespace wholesale.
 ///

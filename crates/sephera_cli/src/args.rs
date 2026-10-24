@@ -732,13 +732,22 @@ tree_command_args!(
     )]
     pub exclude_types: bool,
 
+    /// Narrow the report to one exported name in the file
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "Report only the files that use this name from the target.",
+        long_help = "Narrow the report from the file to one name it exports: the files that import that name from the target, the files that import the target's namespace wholesale (they may use the name without naming it, and are reported apart rather than counted as users), and the files downstream of those. A file that imports the target only for a different name is not in this report at all. With `--fail-on`, the threshold compares against the files that name the symbol. The name is matched as the importing statements spell it -- an item path's last segment, or the names a JavaScript import clause records -- so it is the name as declared in the target, not a local alias for it."
+    )]
+    pub symbol: Option<String>,
+
     /// Fail with exit code 2 when this many or more files depend on a target
     #[arg(
         long,
         value_name = "COUNT",
         value_parser = clap::value_parser!(u64).range(1..),
         help = "Fail with exit code 2 at this many dependents.",
-        long_help = "Exit with code 2 when at least this many files depend on any one of the targets. With several targets, every target at or over the limit is named, because a run that violates three rules should not take three CI runs to discover. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth."
+        long_help = "Exit with code 2 when at least this many files depend on any one of the targets. With several targets, every target at or over the limit is named, because a run that violates three rules should not take three CI runs to discover. The report is still printed; only the exit code changes. The limit is the first failing value, so `--fail-on 40` fails on the fortieth dependent and not the thirty-ninth. With `--symbol`, the count compared is the files that name the symbol."
     )]
     pub fail_on: Option<u64>,
 

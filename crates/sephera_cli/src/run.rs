@@ -540,17 +540,14 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         .into_iter()
         .collect::<Vec<_>>();
 
-    let radii = impact::measure_all(
-        &report,
-        &arguments.files,
-        "",
-        arguments.depth,
-        &focus,
-    )?;
-
-    let rendered = match arguments.format {
-        ImpactOutputFormat::Markdown => impact::render_report(&radii),
-        ImpactOutputFormat::Json => impact::render_report_json(&radii),
+    // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
+    // is spelled as a scope but normalises to the whole analysis base, and
+    // claiming a narrowed count for an unscoped one would be a false statement
+    // in the one line someone reads to decide whether to merge.
+    let scope_note = if focus.is_empty() {
+        String::new()
+    } else {
+        " within the requested scope".to_owned()
     };
 
     // One gate per offending target rather than a single gate for the widest,
@@ -562,31 +559,74 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // X, limit is 40" is indistinguishable from X having three dependents in
     // total, and those two warrant different decisions.
     //
-    // Keyed off the *effective* scope rather than the flags as typed: `--focus .`
-    // is spelled as a scope but normalises to the whole analysis base, and
-    // claiming a narrowed count for an unscoped one would be a false statement
-    // in the one line someone reads to decide whether to merge.
-    let scope_note = if focus.is_empty() {
-        String::new()
+    // With `--symbol`, both the report and the gate narrow together: the count
+    // compared is the files that name the symbol, and the label names the
+    // symbol, so a gate that fires on a rename does not read as one that fired
+    // on the whole file.
+    let (rendered, gates) = if let Some(symbol) = &arguments.symbol {
+        let impacts = impact::measure_symbol_all(
+            &report,
+            &arguments.files,
+            "",
+            symbol,
+            arguments.depth,
+            &focus,
+        )?;
+        let rendered = match arguments.format {
+            ImpactOutputFormat::Markdown => {
+                impact::render_symbol_report(&impacts)
+            }
+            ImpactOutputFormat::Json => {
+                impact::render_symbol_report_json(&impacts)
+            }
+        };
+        let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+            impacts
+                .iter()
+                .filter(|impact| impact::symbol_direct_count(impact) >= limit)
+                .map(|impact| {
+                    Gate::new(
+                        format!(
+                            "files importing `{symbol}` from `{}`{scope_note}",
+                            impact.target
+                        ),
+                        impact::symbol_direct_count(impact),
+                        limit,
+                    )
+                })
+                .collect()
+        });
+        (rendered, gates)
     } else {
-        " within the requested scope".to_owned()
+        let radii = impact::measure_all(
+            &report,
+            &arguments.files,
+            "",
+            arguments.depth,
+            &focus,
+        )?;
+        let rendered = match arguments.format {
+            ImpactOutputFormat::Markdown => impact::render_report(&radii),
+            ImpactOutputFormat::Json => impact::render_report_json(&radii),
+        };
+        let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+            radii
+                .iter()
+                .filter(|radius| impact::dependent_count(radius) >= limit)
+                .map(|radius| {
+                    Gate::new(
+                        format!(
+                            "files depending on `{}`{scope_note}",
+                            radius.target
+                        ),
+                        impact::dependent_count(radius),
+                        limit,
+                    )
+                })
+                .collect()
+        });
+        (rendered, gates)
     };
-    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
-        radii
-            .iter()
-            .filter(|radius| impact::dependent_count(radius) >= limit)
-            .map(|radius| {
-                Gate::new(
-                    format!(
-                        "files depending on `{}`{scope_note}",
-                        radius.target
-                    ),
-                    impact::dependent_count(radius),
-                    limit,
-                )
-            })
-            .collect()
-    });
 
     if arguments.output_args.output.is_some() {
         progress.set_message("Writing output...");
