@@ -129,7 +129,7 @@ fn collect_specifier_names(
         let text = if name.kind() == "string" {
             string_value(source, &name)
         } else {
-            node_text(source, &name).to_owned()
+            node_text(source, &name)
         };
         if !text.is_empty() {
             items.push(text);
