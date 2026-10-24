@@ -436,3 +436,72 @@ fn a_kind_change_suggests_nothing_because_the_change_says_it() {
     assert_eq!(measured.broken.len(), 1);
     assert_eq!(measured.broken[0].suggestion, None);
 }
+
+#[test]
+fn a_consumer_import_binding_is_not_a_new_home() {
+    // This is the case the suggestion exists for, and the one that
+    // first broke it: the consumer's `from lib import add` binds
+    // `add` as a Value in the consumer, so the new index holds the
+    // name twice — once derived, once real. The derived binding
+    // must not veto the move, and must not be suggested as one.
+    let old_index = index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[
+        ("lib.py", &[]),
+        ("consumer.py", &[("add", DeclarationKind::Value)]),
+        ("other.py", &[("add", DeclarationKind::Function)]),
+    ]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py", "consumer.py", "other.py"], vec![]),
+        &report(
+            &["lib.py", "consumer.py", "other.py"],
+            vec![
+                edge("consumer.py", "lib.py", "lib"),
+                unresolved("consumer.py", "lib.add", true),
+            ],
+        ),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(
+        measured.broken[0].suggestion,
+        Some(BreakSuggestion::Moved {
+            file: "other.py".to_owned(),
+            kind: DeclarationKind::Function,
+        })
+    );
+}
+
+#[test]
+fn a_value_move_in_a_file_that_imports_nothing_of_the_name_suggests() {
+    // Filtering Value out entirely would be simpler, and wrong:
+    // a constant or lambda that moved is a real home, and its file
+    // imports nothing named after it.
+    let old_index = index(&[("lib.py", &[("pi", DeclarationKind::Value)])]);
+    let new_index = index(&[
+        ("lib.py", &[]),
+        ("other.py", &[("pi", DeclarationKind::Value)]),
+    ]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py", "other.py"], vec![]),
+        &report(&["lib.py", "other.py"], vec![]),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(
+        measured.broken[0].suggestion,
+        Some(BreakSuggestion::Moved {
+            file: "other.py".to_owned(),
+            kind: DeclarationKind::Value,
+        })
+    );
+}

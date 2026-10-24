@@ -80,7 +80,9 @@ pub enum BreakChange {
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum BreakSuggestion {
     /// The name survives, declared exactly once in the new tree,
-    /// in a different file.
+    /// in a different file. A file that imports the name does not
+    /// count: its binding is derived from the import, not a home
+    /// of its own.
     Moved {
         /// The file that now declares it.
         file: String,
@@ -185,7 +187,7 @@ pub fn measure_breaking(
                 .chain(namespace_users.iter().map(String::as_str))
                 .collect();
             let downstream = downstream_of(new_report, file, &seeds);
-            let suggestion = suggest(new_index, &change, name);
+            let suggestion = suggest(new_index, new_report, &change, name);
             broken.push(BrokenSymbol {
                 file: file.to_owned(),
                 symbol: name.to_owned(),
@@ -225,15 +227,30 @@ pub fn measure_breaking(
 /// the change itself already says all there is to say.
 fn suggest(
     new_index: &DeclarationIndex,
+    new_report: &GraphReport,
     change: &BreakChange,
     symbol: &str,
 ) -> Option<BreakSuggestion> {
     match change {
         BreakChange::Removed => {
+            // A file that imports the name cannot be its new home:
+            // any binding it holds for the name is derived from the
+            // import, not a declaration of its own. This matters
+            // because Python records imported names as Value
+            // bindings beside genuine assignments, so the index
+            // alone cannot tell a consumer's `from lib import add`
+            // from a real new home — the edges can.
+            let importers: BTreeSet<&str> = new_report
+                .edges
+                .iter()
+                .filter(|edge| import_binds_symbol(&edge.import_path, symbol))
+                .map(|edge| edge.from.as_str())
+                .collect();
             let mut matches = new_index.files().filter_map(|other| {
-                new_index
-                    .kind_in(other, symbol)
-                    .map(|kind| (other, kind))
+                if importers.contains(other) {
+                    return None;
+                }
+                new_index.kind_in(other, symbol).map(|kind| (other, kind))
             });
             let (found_file, found_kind) = matches.next()?;
             if matches.next().is_some() {
@@ -251,6 +268,20 @@ fn suggest(
         }
         BreakChange::KindChanged { .. } => None,
     }
+}
+
+/// Whether an import statement binds `symbol` in the importing
+/// file: the trailing segment (`from lib import add`,
+/// `use crate::lib::add`) or the leading segment (`import add`,
+/// which binds the module name itself).
+fn import_binds_symbol(import_path: &str, symbol: &str) -> bool {
+    if path_names_symbol(import_path, symbol) {
+        return true;
+    }
+    import_path
+        .split(['.', '/', ':'])
+        .next()
+        .is_some_and(|first| first == symbol)
 }
 
 /// Where one statement used to land, by `(from file, import path)`.
