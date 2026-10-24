@@ -72,10 +72,14 @@ fn resolve_import(
     // a prefix the source tree does not. The guess is sometimes right, and
     // unverified it also adopts external classes whose package tail a local
     // class happens to share -- so a dropped candidate is only taken when
-    // the file it lands on declares the type the import names.
+    // the file it lands on declares the type the import names. Every file
+    // the candidate names is checked, not just the first: two source roots
+    // can hold the same tail, and the first one's package may be the wrong
+    // one while a later file's is the import's (CodeRabbit on PR #41).
     leading_drops(&parts).into_iter().find_map(|candidate| {
-        let found = first_existing(&context, &candidate)?;
-        names_the_imported_type(&context, &found, import_path).then_some(found)
+        all_existing(&context, &candidate)
+            .into_iter()
+            .find(|found| names_the_imported_type(&context, found, import_path))
     })
 }
 
@@ -120,7 +124,13 @@ fn names_the_imported_type(
 fn declared_package(contents: &str) -> Option<String> {
     contents.lines().find_map(|line| {
         let rest = line.trim().strip_prefix("package ")?;
-        let name = rest.trim().trim_end_matches(';').trim();
+        // The name ends at the semicolon. Trimming semicolons off the
+        // end of the line instead left a trailing comment in the name
+        // -- `package example.util; // note` read as a package called
+        // `example.util; // note` -- and verification rejected the
+        // file for it (CodeRabbit on PR #41).
+        let (name, _) = rest.split_once(';')?;
+        let name = name.trim();
         (!name.is_empty()).then(|| name.to_owned())
     })
 }
@@ -162,15 +172,24 @@ fn leading_drops(parts: &[&str]) -> Vec<String> {
 
 /// Try `path.java` exactly, then as a directory suffix of a known file.
 fn first_existing(context: &ResolveContext<'_>, path: &str) -> Option<String> {
-    let candidate = format!("{path}.java");
-    if context.contains(&candidate) {
-        return Some(candidate);
-    }
+    all_existing(context, path).into_iter().next()
+}
 
-    context
-        .files()
-        .find(|known| ends_with_segments(known, &candidate))
-        .cloned()
+/// Every file a path could name, in the order `first_existing` prefers
+/// them: the path itself, then every known file whose tail it is.
+fn all_existing(context: &ResolveContext<'_>, path: &str) -> Vec<String> {
+    let candidate = format!("{path}.java");
+    let mut found = Vec::new();
+    if context.contains(&candidate) {
+        found.push(candidate.clone());
+    }
+    found.extend(
+        context
+            .files()
+            .filter(|known| ends_with_segments(known, &candidate))
+            .cloned(),
+    );
+    found
 }
 
 #[cfg(test)]
@@ -383,6 +402,47 @@ mod tests {
         let files = [(
             "example/util/Helper.java",
             "package example.util;\n\npublic class Helper {}\n",
+        )];
+
+        assert_eq!(
+            resolve_on_disk("com.example.util.Helper", &files),
+            Some("example/util/Helper.java".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_dropped_prefix_checks_every_file_sharing_the_tail() {
+        // Two source roots hold the same tail. The first declares a
+        // different package; the second declares the import's. Taking
+        // only the first match and rejecting it on its package left
+        // the import unresolved beside a verifiable match
+        // (CodeRabbit on PR #41).
+        let files = [
+            (
+                "a/example/util/Helper.java",
+                "package other.util;\n\npublic class Helper {}\n",
+            ),
+            (
+                "b/example/util/Helper.java",
+                "package example.util;\n\npublic class Helper {}\n",
+            ),
+        ];
+
+        assert_eq!(
+            resolve_on_disk("vendor.example.util.Helper", &files),
+            Some("b/example/util/Helper.java".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_package_statement_with_a_trailing_comment_still_verifies() {
+        // `package example.util; // note` is valid Java. Reading the
+        // package name as everything up to a trailing semicolon left
+        // the comment in the name, and verification rejected the
+        // file for a package it does declare (CodeRabbit on PR #41).
+        let files = [(
+            "example/util/Helper.java",
+            "package example.util; // the helpers\n\npublic class Helper {}\n",
         )];
 
         assert_eq!(
