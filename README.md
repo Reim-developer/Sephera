@@ -453,6 +453,18 @@ sephera impact crates/sephera_core/src/declarations.rs --symbol DeclaredNames
 sephera impact crates/sephera_core/src/declarations.rs --symbol DeclaredNames --fail-on 10
 ```
 
+### Cross-language dependencies — Python ↔ Rust, through PyO3
+
+A graph built one language at a time has a hole where Python imports a
+module that only exists as a Rust extension: the import reads as external,
+the Rust file looks imported by nobody, and both blast radii are wrong.
+Sephera harvests the boundary from the Rust side — the `#[pymodule]` name
+and the names it registers (`wrap_pyfunction!`, `add_class`) — and joins
+Python imports onto it. `import myext` lands on the file declaring the
+module; `from myext import add` lands on the file declaring `add`. The
+edges carry kind `ffi`, and every command above — `impact`, `why`,
+`review`, `dead` — crosses the boundary without knowing it is there.
+
 ### `affected-tests` — which tests answer for a change *(new in 2.0)*
 
 The follow-up question: not just what breaks, but what to run. The same walk,

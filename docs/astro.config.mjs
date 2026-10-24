@@ -48,6 +48,7 @@ export default defineConfig({
 					label: 'Architecture',
 					items: [
 						{ slug: 'architecture/overview' },
+						{ slug: 'architecture/ffi-boundaries' },
 						{ slug: 'architecture/releasing' },
 					],
 				},
