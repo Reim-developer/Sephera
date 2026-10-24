@@ -146,6 +146,76 @@ pub fn build_graph_with_progress(
     filters: EdgeFilters,
     progress: &dyn Progress,
 ) -> Result<GraphReport> {
+    let (report, _) = build_graph_impl(BuildRequest {
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        filters,
+        progress,
+        keep_declarations: false,
+    })?;
+    Ok(report)
+}
+
+/// Build a graph and keep the declaration index the build produced.
+///
+/// The index describes every file in the tree — focus and selection
+/// narrow the report, never the index — because its caller compares
+/// two trees' declarations against each other, and a comparison is
+/// only honest when both sides cover the whole tree.
+///
+/// # Errors
+///
+/// Returns an error when project traversal or import extraction fails.
+pub fn build_graph_with_declarations(
+    base_path: &Path,
+    ignore: &IgnoreMatcher,
+) -> Result<(GraphReport, declarations::DeclarationIndex)> {
+    build_graph_impl(BuildRequest {
+        base_path,
+        ignore,
+        focus_paths: &[],
+        depth: None,
+        query: None,
+        filters: EdgeFilters::default(),
+        progress: &NoProgress,
+        keep_declarations: true,
+    })
+}
+
+/// Everything one graph build needs, as one value: the public entry
+/// points differ in which fields they set, and a struct keeps that
+/// difference readable instead of positional.
+struct BuildRequest<'a> {
+    base_path: &'a Path,
+    ignore: &'a IgnoreMatcher,
+    focus_paths: &'a [PathBuf],
+    depth: Option<u32>,
+    query: Option<GraphQuery>,
+    filters: EdgeFilters,
+    progress: &'a dyn Progress,
+    /// Whether the declaration index is cloned out before resolution
+    /// consumes it — the clone is real work, so plain graph builds do
+    /// not pay for a comparison they never make.
+    keep_declarations: bool,
+}
+
+/// The one build pipeline.
+fn build_graph_impl(
+    request: BuildRequest<'_>,
+) -> Result<(GraphReport, declarations::DeclarationIndex)> {
+    let BuildRequest {
+        base_path,
+        ignore,
+        focus_paths,
+        depth,
+        query,
+        filters,
+        progress,
+        keep_declarations,
+    } = request;
     let project_files = collect_project_files(base_path, ignore)?;
     let focus_set = build_focus_set(base_path, focus_paths);
     let query = query
@@ -183,6 +253,11 @@ pub fn build_graph_with_progress(
         manifests,
         file_text: FileTextCache::new(base_path.to_path_buf()),
     };
+    let kept_declarations = if keep_declarations {
+        project.declarations.clone()
+    } else {
+        declarations::DeclarationIndex::default()
+    };
     let (edges, node_map) = build_edges_and_nodes(&all_file_imports, &project);
     let selection = select_graph(&node_map, &focus_set, depth, query)?;
     let filtered_node_map = filter_node_map(&node_map, &selection.node_paths);
@@ -198,7 +273,7 @@ pub fn build_graph_with_progress(
     // Phase 5: Build final nodes list.
     let nodes = build_node_list(&filtered_node_map);
 
-    Ok(GraphReport {
+    let report = GraphReport {
         base_path: base_path.to_path_buf(),
         focus_paths: focus_paths
             .iter()
@@ -215,7 +290,8 @@ pub fn build_graph_with_progress(
             .collect(),
         edges: filtered_edges,
         metrics,
-    })
+    };
+    Ok((report, kept_declarations))
 }
 
 /// Collects import information from a single file.
@@ -2289,6 +2365,33 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].to, None);
         assert_eq!(edges[0].kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn the_kept_index_describes_every_file_with_kinds() {
+        let temp_dir = tempdir().unwrap();
+        let root = temp_dir.path();
+        fs::create_dir_all(root.join("src")).unwrap();
+        fs::write(
+            root.join("src/lib.rs"),
+            "pub struct Point { x: f64 }\npub fn add(a: i32) -> i32 { a }\n",
+        )
+        .unwrap();
+        fs::write(root.join("src/main.rs"), "fn main() {}\n").unwrap();
+
+        let (report, index) =
+            build_graph_with_declarations(root, &IgnoreMatcher::empty())
+                .expect("the build succeeds");
+
+        assert_eq!(report.nodes.len(), 2);
+        assert_eq!(
+            index.kind_in("src/lib.rs", "Point"),
+            Some(sephera_core::declarations::DeclarationKind::Struct)
+        );
+        assert_eq!(
+            index.kind_in("src/lib.rs", "add"),
+            Some(sephera_core::declarations::DeclarationKind::Function)
+        );
     }
 
     #[test]
