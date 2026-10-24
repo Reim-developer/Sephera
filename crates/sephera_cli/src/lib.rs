@@ -13,6 +13,7 @@ mod impact;
 mod output;
 mod progress;
 mod review;
+mod risk;
 mod run;
 mod watch;
 mod why;

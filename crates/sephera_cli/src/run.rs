@@ -21,9 +21,10 @@ use crate::{
         AffectedTestsArgs, Cli, Commands, ContextArgs, CouplingArgs,
         CouplingOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs,
         IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
-        OutputArgs, ReviewArgs, ReviewOutputFormat, SettingsArgs, SourceArgs,
-        SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat, WatchArgs,
-        WatchTarget, WhyArgs, WhyOutputFormat,
+        OutputArgs, ReviewArgs, ReviewOutputFormat, RiskArgs, RiskOutputFormat,
+        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
+        TestImpactOutputFormat, WatchArgs, WatchTarget, WhyArgs,
+        WhyOutputFormat,
     },
     change_impact, configure,
     context_config::{
@@ -39,7 +40,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, watch, why,
+    review, risk, watch, why,
 };
 
 #[must_use]
@@ -125,6 +126,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Why(arguments) => run_why(&arguments).await,
         Commands::Coupling(arguments) => run_coupling(&arguments).await,
         Commands::Review(arguments) => run_review(&arguments).await,
+        Commands::Risk(arguments) => run_risk(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -891,6 +893,78 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
         ReviewOutputFormat::Json => {
             review::render_json(&measured, against_label)
         }
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
+async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Ranking risk...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // History first, as `coupling` reads it: a tree with no readable
+    // history is an error this command exists to state, and it
+    // should arrive before the graph build spends its time.
+    let commits = recent_commit_files(&source.repo_root, arguments.commits)
+        .with_context(|| {
+            format!(
+                "risk reads the git history of {}, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let measured = risk::measure_risk(
+        &report,
+        &rebased,
+        risk::RiskOptions {
+            coupling: coupling::CouplingOptions {
+                min_co_changes: arguments.min_co_changes,
+                ..coupling::CouplingOptions::default()
+            },
+            limit: usize::try_from(arguments.limit).unwrap_or(20),
+        },
+    );
+
+    let rendered = match arguments.format {
+        RiskOutputFormat::Markdown => risk::render_markdown(&measured),
+        RiskOutputFormat::Json => risk::render_json(&measured),
     };
 
     if arguments.output_args.output.is_some() {

@@ -172,6 +172,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera review --path .\n  sephera review --path . --against master\n  sephera review --path . --format json"
     )]
     Review(ReviewArgs),
+    /// Rank the files where a change is most likely to hurt
+    #[command(
+        long_about = "Rank the files where a change is most likely to hurt, by the three readings of a tree that each name a different danger: how much depends on the file (the graph), how often it changes (the history), and how many hidden partners its changes drag along (the coupling the graph cannot see).\n\nThe score is a product -- dependents × churn × (1 + coupled partners) -- because the danger compounds rather than adds, and the coupling term amplifies rather than creates: a file nothing depends on is not made risky by its partners. Every factor is printed beside the score, and each is a count the other commands also report, so a row can be audited against `impact`, the history, and `coupling` rather than taken on faith.\n\nChurn is counted over the same commits `coupling` counts, under the same rule. A file is listed only when it is both depended on and in motion inside the window: stable infrastructure and churning leaves are each safe in their own way, and a ranking that listed them would be warning about files whose changes cannot hurt anyone, or cannot happen.\n\nThe analysis needs a git history. A tree that is not a git repository is an error, not an empty ranking.",
+        after_long_help = "Examples:\n  sephera risk --path .\n  sephera risk --path . --limit 10\n  sephera risk --path . --commits 1000 --format json"
+    )]
+    Risk(RiskArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -993,6 +999,66 @@ tree_command_args!(
 
     }
 );
+
+tree_command_args!(
+    #[doc = "Rank the files where a change is most likely to hurt."]
+    RiskArgs {
+        /// How many commits of history to read
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits.",
+        long_help = "How far back the history window reaches, in commits. Churn and coupling are both counted inside it: a file that stopped changing before the window starts has no churn here, which is the right answer for a ranking about how the tree changes now. It means the same thing it means for `coupling`."
+    )]
+    pub commits: u32,
+
+    /// Minimum shared commits for a pair to count as coupled
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Count a hidden pair as a coupled partner only at this many co-changes.",
+        long_help = "The bar a hidden pair has to clear before it counts as one of a file's coupled partners. One shared commit is a coincidence any two files can have; three inside a few hundred is a pattern. It is `coupling`'s bar, with `coupling`'s meaning."
+    )]
+    pub min_co_changes: u64,
+
+    /// How many files the ranking returns
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "20",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Return at most this many files, riskiest first.",
+        long_help = "The length of the ranking. The files below the cut scored lower on the same product; the report is a head of a ranking, not the whole of it, and says how long it is."
+    )]
+    pub limit: u32,
+
+    /// Output format for the ranking
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the ranking. Supports markdown and json.",
+        long_help = "Output format for the ranking. Supports markdown and json."
+    )]
+    pub format: RiskOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum RiskOutputFormat {
+    /// Markdown ranking.
+    #[value(name = "markdown", help = "Render the ranking as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the ranking as JSON.")]
+    Json,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum ReviewOutputFormat {
