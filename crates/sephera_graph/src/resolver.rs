@@ -774,7 +774,20 @@ fn build_edges_and_nodes(
                 && (statement.kind.is_namespace()
                     == statement.raw_path.ends_with('*'))
                 && !names_a_declared_symbol(statement, file_data, project)
-                && !names_a_generated_file(statement, file_data, project);
+                && !names_a_generated_file(statement, file_data, project)
+                // A preprocessor-conditional include is not a gap either.
+                // What it names -- an optional dependency's headers, one
+                // platform's system headers -- is supplied by the build in
+                // that configuration and held by no configuration of this
+                // tree, so there is nothing here for a resolver to find.
+                // Scoped to C and C++: a Rust `#[cfg]` path names a source
+                // file the scan holds whatever the configuration, so a
+                // failure there still means what it says.
+                && !(statement.cfg_gated
+                    && matches!(
+                        file_data.ts_language,
+                        SupportedLanguage::C | SupportedLanguage::Cpp
+                    ));
 
             // Every resolved edge goes in the adjacency, including a parent naming its own
             // child with `mod child;`.
