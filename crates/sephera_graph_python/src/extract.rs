@@ -294,7 +294,7 @@ fn bindings_of_block(source: &[u8], block: Node<'_>) -> BTreeSet<String> {
                     continue;
                 }
                 for target in assignment_targets(assignment) {
-                    names.insert(node_text(source, &target).to_owned());
+                    names.insert(node_text(source, &target));
                 }
             }
             "if_statement" => {
