@@ -19,6 +19,7 @@ use sephera_core::progress::{NoProgress, Progress};
 use sephera_ignore::{IgnoreMatcher, path_is_ignored, read_directory_rules};
 use sephera_scan::project_files::{ProjectFile, collect_project_files};
 
+use sephera_core::boundary;
 use sephera_core::declarations;
 
 use super::{manifests, plugins};
@@ -152,8 +153,11 @@ pub fn build_graph_with_progress(
         .transpose()?;
 
     // Phase 1: Extract imports from all supported files, and what each declares.
-    let (mut all_file_imports, declarations) =
-        extract_all_imports(&project_files, progress)?;
+    let Extraction {
+        files: mut all_file_imports,
+        declarations,
+        boundaries,
+    } = extract_all_imports(&project_files, progress)?;
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
             file.imports.retain(|statement| !filters.rejects(statement));
@@ -175,6 +179,7 @@ pub fn build_graph_with_progress(
         base_path: base_path.to_path_buf(),
         known_files,
         declarations,
+        boundaries,
         manifests,
         file_text: FileTextCache::new(base_path.to_path_buf()),
     };
@@ -236,7 +241,7 @@ struct FileImportData {
 fn extract_all_imports(
     project_files: &[ProjectFile],
     progress: &dyn Progress,
-) -> Result<(Vec<FileImportData>, declarations::DeclarationIndex)> {
+) -> Result<Extraction> {
     progress.set_total(project_files.len() as u64);
 
     let extracted: Vec<ExtractedFile> = project_files
@@ -251,15 +256,32 @@ fn extract_all_imports(
 
     let mut results = Vec::with_capacity(extracted.len());
     let mut declarations = declarations::DeclarationIndex::default();
+    let mut boundaries = boundary::BoundaryIndex::default();
 
     for file in extracted {
         if let Some((path, declared)) = file.declared {
             declarations.insert(&path, declared);
         }
+        if let Some((path, boundary)) = file.boundary {
+            boundaries.insert(&path, boundary);
+        }
         results.push(file.data);
     }
 
-    Ok((results, declarations))
+    Ok(Extraction {
+        files: results,
+        declarations,
+        boundaries,
+    })
+}
+
+/// What one extraction pass over the project produces: every file's imports,
+/// the declaration index resolution looks names up in, and the boundary
+/// index the cross-language join consults.
+struct Extraction {
+    files: Vec<FileImportData>,
+    declarations: declarations::DeclarationIndex,
+    boundaries: boundary::BoundaryIndex,
 }
 
 /// One file's imports, plus whatever it declares.
@@ -268,6 +290,9 @@ struct ExtractedFile {
     /// The file's path and the names it declares, kept beside the imports so
     /// the declaration index can be built in one ordered pass.
     declared: Option<(String, declarations::DeclaredNames)>,
+    /// The file's path and the boundary modules it exposes, kept beside the
+    /// imports for the same reason.
+    boundary: Option<(String, boundary::FileBoundary)>,
 }
 
 /// Extracts from one file, or reports that it has nothing to extract.
@@ -338,6 +363,7 @@ fn extract_one_file(
                 imports: Vec::new(),
             },
             declared: None,
+            boundary: None,
         }));
     }
 
@@ -364,6 +390,9 @@ fn extract_one_file(
         .declared
         .take()
         .map(|names| (project_file.normalized_relative_path.clone(), names));
+    let boundary = extracted.boundary.take().map(|boundary| {
+        (project_file.normalized_relative_path.clone(), boundary)
+    });
 
     Ok(Some(ExtractedFile {
         data: FileImportData {
@@ -373,6 +402,7 @@ fn extract_one_file(
             imports: extracted.imports,
         },
         declared,
+        boundary,
     }))
 }
 
@@ -702,6 +732,7 @@ fn resolve_plain(
             base_path: std::path::PathBuf::new(),
             known_files: known_files.clone(),
             declarations: declarations::DeclarationIndex::default(),
+            boundaries: boundary::BoundaryIndex::default(),
             manifests: manifests::ManifestIndex::default(),
             file_text: FileTextCache::new(std::path::PathBuf::new()),
         },
@@ -746,6 +777,17 @@ struct ResolutionInputs {
     base_path: PathBuf,
     known_files: plugins::KnownFiles,
     declarations: declarations::DeclarationIndex,
+    /// Carried from the extraction phase beside the declaration index,
+    /// because this is the one value every resolution question is asked
+    /// against. The boundary join in `build_edges_and_nodes` is its reader;
+    /// until that lands, the expectation below keeps the wiring honest
+    /// rather than silent — it fails the moment the field goes unread for
+    /// any other reason, and the moment the join starts reading it.
+    #[expect(
+        dead_code,
+        reason = "read by the boundary join in build_edges_and_nodes, which lands with the PyO3 harvest"
+    )]
+    boundaries: boundary::BoundaryIndex,
     manifests: manifests::ManifestIndex,
     file_text: FileTextCache,
 }
@@ -3397,6 +3439,7 @@ mod tests {
                 base_path: std::path::PathBuf::new(),
                 known_files: files,
                 declarations: index,
+                boundaries: boundary::BoundaryIndex::default(),
                 manifests: manifests::ManifestIndex::default(),
                 file_text: FileTextCache::new(std::path::PathBuf::new()),
             },
@@ -3526,6 +3569,7 @@ mod tests {
                 base_path: std::path::PathBuf::new(),
                 known_files: files.clone(),
                 declarations: index.clone(),
+                boundaries: boundary::BoundaryIndex::default(),
                 manifests: manifests::ManifestIndex::default(),
                 file_text: FileTextCache::new(std::path::PathBuf::new()),
             },
