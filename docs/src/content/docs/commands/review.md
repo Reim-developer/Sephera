@@ -44,7 +44,7 @@ the changed file's dependents.
 ## Reviewing a whole branch
 
 ```bash
-sephera review --path . --against master
+sephera review --path . --against origin/master
 ```
 
 `--against` names the reference the working tree is compared with.

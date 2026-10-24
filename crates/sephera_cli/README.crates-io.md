@@ -51,7 +51,7 @@ for each historic partner the change leaves behind.
 
 ```bash
 sephera review --path .
-sephera review --path . --against master
+sephera review --path . --against origin/master
 ```
 
 ## Risk ranking

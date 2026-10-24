@@ -534,7 +534,7 @@ moved with A seven times and is not in this change."
 sephera review --path .
 
 # Review a whole branch before pushing it
-sephera review --path . --against master
+sephera review --path . --against origin/master
 ```
 
 A file the change deletes is reported as absent rather than dropped — a
