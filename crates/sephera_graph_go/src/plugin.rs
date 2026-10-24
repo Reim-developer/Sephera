@@ -32,6 +32,16 @@ impl ImportPlugin for GoPlugin {
     ) -> Option<Vec<sephera_core::types::ImportStatement>> {
         crate::extract::extract_from_node(source, node)
     }
+
+    /// The cgo exports this file declares through `//export` directives,
+    /// so the graph knows the file is reached from C, outside itself.
+    fn collect_boundary(
+        &self,
+        source: &[u8],
+        tree: &tree_sitter::Tree,
+    ) -> Option<sephera_core::boundary::FileBoundary> {
+        crate::boundary::collect_boundary(source, tree)
+    }
 }
 
 impl ResolverPlugin for GoPlugin {
