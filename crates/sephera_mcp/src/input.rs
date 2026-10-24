@@ -292,6 +292,44 @@ pub struct CouplingInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `review` tool.
+///
+/// A review is a question about a change in a tree, so the file set
+/// comes from git rather than from a parameter: the tool reads the
+/// working tree against a reference, the recent history, and the
+/// graph, and reports what the change puts at risk.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct ReviewInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Reference the working tree is compared against. Defaults to
+    /// HEAD, which reviews everything uncommitted; naming a branch
+    /// or tag reviews the whole body of work since that point.
+    pub against: Option<String>,
+    /// How many recent commits to read for the coupling warnings.
+    /// Defaults to 500, the CLI's window.
+    pub commits: Option<u32>,
+    /// Warn about partners that changed together at least this many
+    /// times. Defaults to 3.
+    pub min_co_changes: Option<u64>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

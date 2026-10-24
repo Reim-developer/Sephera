@@ -23,13 +23,13 @@ use sephera_graph::{
     blast_radius, coupling, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
-    symbol_impact,
+    review, symbol_impact,
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, SourceRequest,
-    build_context_report, recent_commit_files, resolve_context_command,
-    resolve_source,
+    build_context_report, changed_files, recent_commit_files,
+    resolve_context_command, resolve_source,
 };
 use sephera_scan::CodeLoc;
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -38,7 +38,7 @@ use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
         AffectedTestsInput, ContextInput, CouplingInput, GraphInput,
-        ImpactInput, LocInput, SymbolsInput, WhyInput,
+        ImpactInput, LocInput, ReviewInput, SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -704,6 +704,105 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// The review of a change in progress: for every file the change
+    /// touches, what depends on it, which tests reach it, and a
+    /// warning for each historic partner the change leaves behind.
+    /// The measurement is `sephera_graph::review`'s, shared with the
+    /// `review` command, so the two cannot disagree.
+    #[tool(
+        name = "review",
+        description = "Review a change before it lands: for each file the change touches, its blast radius (direct dependents and the transitive count), the tests that reach it, and a warning for every file that history keeps changing with it but the change does not touch. The change is the working tree read against a reference (against, default HEAD: staged, unstaged, deleted and untracked files all count; naming a branch reviews the whole body of work since that point). Dependents and tests are the same measurements as the impact and affected_tests tools, and the warnings come from the same hidden-coupling measurement as the coupling tool, read against the changed set -- a pair where both sides changed does not warn. A changed file the graph does not hold (deleted, or outside the analysis base) is reported with present=false rather than dropped. Requires a git history for the warnings; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn review(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ReviewInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // The change and the history first, as the CLI reads them: a
+        // comparison git cannot make, or a tree with no readable
+        // history, is the error this tool exists to state.
+        let changed =
+            changed_files(&source.repo_root, param.against.as_deref())
+                .map_err(map_internal_error("the change could not be read"))?;
+        let commits = recent_commit_files(
+            &source.repo_root,
+            param.commits.unwrap_or(500),
+        )
+        .map_err(map_internal_error("commit history could not be read"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased_commits =
+            coupling::rebase_commit_paths(&commits, &base_prefix);
+        let prefix = base_prefix.trim_matches('/');
+        let rebased_changed: Vec<String> = if prefix.is_empty() {
+            changed
+        } else {
+            let with_slash = format!("{prefix}/");
+            changed
+                .iter()
+                .filter_map(|path| {
+                    path.strip_prefix(&with_slash).map(ToOwned::to_owned)
+                })
+                .collect()
+        };
+        let min_co_changes = param.min_co_changes.unwrap_or(3);
+        let measured = review::measure_review(
+            &report,
+            &rebased_changed,
+            &rebased_commits,
+            review::ReviewOptions {
+                depth: None,
+                coupling: coupling::CouplingOptions {
+                    min_co_changes,
+                    ..coupling::CouplingOptions::default()
+                },
+            },
+        );
+        let against = param.against.as_deref().unwrap_or("HEAD");
+        let built = ReviewReport::from_measured(&measured, against);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(review_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported review format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -986,6 +1085,162 @@ fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
             pair.second_commits,
             pair.containment
         );
+    }
+    output
+}
+
+/// The JSON shape the `review` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ReviewReport {
+    /// The reference the change was read against.
+    pub against: String,
+    /// Commits handed to the coupling measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it.
+    pub commits_counted: u64,
+    /// One entry per changed file, sorted by path.
+    pub changed: Vec<ReviewedFile>,
+    /// Coupling warnings, strongest first.
+    pub warnings: Vec<ReviewWarning>,
+}
+
+/// One changed file and what the change to it puts at risk.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ReviewedFile {
+    /// Path of the changed file.
+    pub file: String,
+    /// Whether the file is a node in the graph. A deleted file is
+    /// not; it is reported rather than dropped, with empty
+    /// measurements.
+    pub present: bool,
+    /// Files that import the changed file directly, sorted.
+    pub direct_dependents: Vec<String>,
+    /// Files that depend on it at any depth, direct ones included.
+    pub dependent_count: usize,
+    /// Test files that reach it, closest first.
+    pub tests: Vec<String>,
+}
+
+/// One hidden-coupling warning: a file in the change whose historic
+/// partner is not.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ReviewWarning {
+    /// The file in the change.
+    pub changed: String,
+    /// The file history keeps changing with it, untouched here.
+    pub partner: String,
+    /// Commits in the window that touched both files.
+    pub co_changes: u64,
+    /// The pair's containment, as the `coupling` tool defines it.
+    pub containment: f64,
+}
+
+impl ReviewReport {
+    fn from_measured(measured: &review::ReviewReport, against: &str) -> Self {
+        Self {
+            against: against.to_owned(),
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            changed: measured
+                .changed
+                .iter()
+                .map(|entry| ReviewedFile {
+                    file: entry.file.clone(),
+                    present: entry.present,
+                    direct_dependents: entry.direct_dependents.clone(),
+                    dependent_count: entry.dependent_count,
+                    tests: entry.tests.clone(),
+                })
+                .collect(),
+            warnings: measured
+                .warnings
+                .iter()
+                .map(|warning| ReviewWarning {
+                    changed: warning.changed.clone(),
+                    partner: warning.partner.clone(),
+                    co_changes: warning.co_changes,
+                    containment: warning.containment,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a review as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's: the same measurement should not
+/// need two phrasings learned.
+fn review_markdown(report: &ReviewReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Change review\n");
+    let _ = writeln!(
+        output,
+        "{} changed file(s) against `{}`. History: {} commits \
+         scanned, {} counted.",
+        report.changed.len(),
+        report.against,
+        report.commits_scanned,
+        report.commits_counted
+    );
+
+    if report.changed.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNothing to review: the working tree matches `{}`, and \
+             no untracked files were found.",
+            report.against
+        );
+        return output;
+    }
+
+    for entry in &report.changed {
+        let _ = writeln!(output, "\n## `{}`", entry.file);
+        if !entry.present {
+            let _ = writeln!(
+                output,
+                "- Not in the analysed tree -- deleted by the change, \
+                 or outside the analysis base. The graph cannot name \
+                 its dependents, which is not the same as there being \
+                 none."
+            );
+            continue;
+        }
+        let _ = writeln!(
+            output,
+            "- {} direct dependent(s), {} in total.",
+            entry.direct_dependents.len(),
+            entry.dependent_count
+        );
+        if entry.tests.is_empty() {
+            let _ = writeln!(output, "- No affected tests reach this file.");
+        } else {
+            let _ = writeln!(
+                output,
+                "- Affected tests ({}): {}",
+                entry.tests.len(),
+                entry
+                    .tests
+                    .iter()
+                    .map(|test| format!("`{test}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
+        }
+        for warning in report
+            .warnings
+            .iter()
+            .filter(|warning| warning.changed == entry.file)
+        {
+            let _ = writeln!(
+                output,
+                "- Warning: `{}` changed with this file {} times \
+                 (containment {}) and is not in this change.",
+                warning.partner, warning.co_changes, warning.containment
+            );
+        }
     }
     output
 }
