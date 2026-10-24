@@ -366,6 +366,39 @@ pub struct RiskInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `dead` tool.
+///
+/// The question is about a whole tree, so there is no file
+/// argument: the tool walks forward from the entry points the path
+/// conventions identify, plus any the caller names, and reports
+/// what the walk never reaches.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct DeadInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Additional entry points the path conventions cannot see, in
+    /// the analysis' path spelling: an entry class, a plugin loaded
+    /// by name, a file a framework scans for. A root that matches
+    /// no file in the analysis is an error.
+    pub roots: Option<Vec<String>>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

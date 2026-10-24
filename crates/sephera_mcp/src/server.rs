@@ -20,7 +20,7 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, coupling, dependency_path,
+    blast_radius, coupling, dead, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
     review, risk, symbol_impact,
@@ -37,7 +37,7 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, ContextInput, CouplingInput, GraphInput,
+        AffectedTestsInput, ContextInput, CouplingInput, DeadInput, GraphInput,
         ImpactInput, LocInput, ReviewInput, RiskInput, SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
@@ -881,6 +881,76 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// The files no entry point reaches. The measurement is
+    /// `sephera_graph::dead`'s, shared with the `dead` command, so
+    /// the two cannot disagree.
+    #[tool(
+        name = "dead",
+        description = "Find the files no entry point reaches: the part of a tree that is compiled, bundled, shipped, and reviewed as if it were alive, while nothing that runs ever imports it. The walk starts from the entry points readable off the paths -- test files, files named main.*, lib.rs or build.rs, Python's __main__.py, files under a bin, cmd, examples, benches or scripts directory, and index.* files -- and follows import edges forward. A file with no importers is NOT assumed alive or an entry point by that fact alone: an orphaned cluster imports itself, and dead means unreachable from positive evidence of entry. The result lists the roots the walk used, the reachable and total counts, and each dead file with how many files import it and how many it imports -- an abandoned subsystem (importers and imports both nonzero) reads differently from a lone orphan. Entry points a path cannot show -- a Java entry class, a plugin loaded by name -- are passed as roots; a root matching no file is an error. Use format=markdown for a compact summary or json for the rows as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn dead(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<DeadInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let mut extra_roots = Vec::new();
+        for raw in param.roots.as_deref().unwrap_or(&[]) {
+            let matched = blast_radius::match_path(&report, raw, &base_prefix)
+                .ok_or_else(|| {
+                    rmcp::ErrorData::invalid_params(
+                        format!("no file in the analysis matches `{raw}`"),
+                        None,
+                    )
+                })?;
+            extra_roots.push(matched);
+        }
+
+        let measured = dead::measure_dead(&report, &extra_roots);
+        let built = DeadReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(dead_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported dead format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -1242,6 +1312,88 @@ impl ReviewReport {
                 .collect(),
         }
     }
+}
+
+/// The JSON shape the `dead` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DeadReport {
+    /// Files in the graph.
+    pub total: usize,
+    /// Files the walk reached, roots included.
+    pub reachable: usize,
+    /// The entry points the walk started from.
+    pub roots: Vec<String>,
+    /// The unreachable files.
+    pub dead: Vec<DeadFileReport>,
+}
+
+/// One unreachable file, with the counts that say what kind of dead
+/// it is.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DeadFileReport {
+    /// Path of the file.
+    pub file: String,
+    /// Files that import it.
+    pub imported_by: usize,
+    /// Resolved files it imports.
+    pub imports: usize,
+}
+
+impl DeadReport {
+    fn from_measured(measured: &dead::DeadReport) -> Self {
+        Self {
+            total: measured.total,
+            reachable: measured.reachable,
+            roots: measured.roots.clone(),
+            dead: measured
+                .dead
+                .iter()
+                .map(|file| DeadFileReport {
+                    file: file.file.clone(),
+                    imported_by: file.imported_by,
+                    imports: file.imports,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a dead-file report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn dead_markdown(report: &DeadReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Dead files\n");
+    let _ = writeln!(
+        output,
+        "{} of {} files reached from {} entry point(s); {} dead.",
+        report.reachable,
+        report.total,
+        report.roots.len(),
+        report.dead.len()
+    );
+
+    if report.dead.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nEvery file in the tree is reached from an entry point."
+        );
+        return output;
+    }
+
+    let _ = writeln!(output);
+    for file in &report.dead {
+        let _ = writeln!(
+            output,
+            "- `{}` — imported by {}, imports {}",
+            file.file, file.imported_by, file.imports
+        );
+    }
+    output
 }
 
 /// The JSON shape the `risk` tool returns.
