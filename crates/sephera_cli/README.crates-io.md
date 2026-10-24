@@ -54,6 +54,16 @@ sephera review --path .
 sephera review --path . --against master
 ```
 
+## Risk ranking
+
+Where a change is most likely to hurt, ranked by the product of how much
+depends on a file, how often it changes, and how many hidden partners its
+changes drag along — every factor printed beside the score.
+
+```bash
+sephera risk --path .
+```
+
 ## The graph is measured, not asserted
 
 Accuracy is checked against nine real repositories at pinned commits, in CI,
@@ -99,7 +109,7 @@ sephera context --path . --focus-symbol GraphReport --budget 2k
 - `watch` — re-run an analysis when the tree changes
 - `guard` — a pre-edit hook that denies changes whose blast radius is too wide
 - `mcp` — built-in MCP server exposing `loc`, `symbols`, `context`, `graph`,
-  `impact`, `affected_tests`, `why`, `coupling` and `review`
+  `impact`, `affected_tests`, `why`, `coupling`, `review` and `risk`
 
 ## Scope
 

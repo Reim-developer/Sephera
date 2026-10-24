@@ -51,6 +51,7 @@ COMMANDS = [
     "why",
     "coupling",
     "review",
+    "risk",
 ]
 
 LONG_FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z0-9-]*)")

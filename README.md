@@ -545,6 +545,23 @@ A file the change deletes is reported as absent rather than dropped — a
 deletion is the change whose dependents matter most, and the report says
 the graph cannot name them instead of implying there were none.
 
+### `risk` — where a change is most likely to hurt
+
+The same three readings, asked about the whole tree as a standing ranking:
+dependents × churn × (1 + coupled partners). A product, because the danger
+compounds; the coupling term amplifies rather than creates, because a file
+nothing depends on is not made risky by its partners. Every factor is
+printed beside the score, auditable against `impact`, the history, and
+`coupling` itself.
+
+```bash
+sephera risk --path .
+```
+
+On this repository the head of the ranking is the CLI's own argument
+definitions — every feature touches them, they change constantly, and six
+hidden partners move with them. That is what a hotspot looks like.
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it
@@ -700,7 +717,7 @@ sephera loc --path . --format markdown
 sephera mcp
 ```
 
-Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, `coupling`, and `review` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
+Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, `coupling`, `review`, and `risk` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
 
 ```json
 {
