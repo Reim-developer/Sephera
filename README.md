@@ -642,6 +642,23 @@ The measurements are also MCP tools (`impact`, `affected_tests`, `why`,
 `coupling`), so an agent can ask before editing — `guard` exists for the
 moment before it thinks to ask.
 
+### `skill` — the workflow an agent follows, not just the tools it calls
+
+MCP tools give an agent hands; a skill gives it judgment. This one
+encodes the change-safety workflow: check the blast radius before
+editing and stop at the threshold, re-check every file the change
+newly touches, read the breaking section first before committing,
+fix a break by its suggestion, and gate the merge on breaking
+symbols that still have consumers. Install it into a project and
+any agent with skills support follows it.
+
+```bash
+sephera skill --print
+```
+
+`sephera skill install` copies it into the project's agent-skills
+directory instead of printing.
+
 ### `graph` — dependency structure and blast radius
 
 Works on Rust, Python, TypeScript, JavaScript, Go, Java, C, and C++.
