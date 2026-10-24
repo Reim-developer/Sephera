@@ -15,6 +15,7 @@ pub mod manifests;
 pub mod plugins;
 pub mod render;
 pub mod resolver;
+pub mod review;
 pub mod symbol_impact;
 pub mod types;
 
