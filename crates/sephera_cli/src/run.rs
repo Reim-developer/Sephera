@@ -4,7 +4,9 @@ use std::process::ExitCode;
 use anyhow::{Context, Result};
 use clap::Parser;
 use sephera_graph::{
-    resolver::{EdgeFilters, build_focus_set, build_graph_with_progress},
+    resolver::{
+        EdgeFilters, build_focus_set, build_graph, build_graph_with_progress,
+    },
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
@@ -448,13 +450,44 @@ async fn run_context(
     arguments: ContextArgs,
     profile: Option<String>,
 ) -> Result<Vec<Gate>> {
+    let closure = arguments.closure;
     match resolve_context_options(arguments, profile).await? {
-        ResolvedContextCommand::Execute(resolved) => execute_context(&resolved),
+        ResolvedContextCommand::Execute(mut resolved) => {
+            if closure {
+                inject_dependency_closure(&mut resolved)?;
+            }
+            execute_context(&resolved)
+        }
         ResolvedContextCommand::ListProfiles(profiles) => {
             print_available_profiles(&profiles);
             Ok(no_gates())
         }
     }
+}
+
+/// Build the import graph and hand its edges to the context
+/// builder as the closure map.
+///
+/// The matcher is the one the context build itself uses -- the
+/// resolved options' patterns, with the repository's ignore files
+/// applied unless the invocation turned them off -- so the graph
+/// and the pack are built over the same file set. Edges are the
+/// graph's resolved ones; an unresolved import names no file the
+/// pack could include.
+fn inject_dependency_closure(
+    options: &mut ResolvedContextOptions,
+) -> Result<()> {
+    let matcher = if options.read_ignore_files {
+        IgnoreMatcher::from_patterns(&options.ignore)?
+    } else {
+        IgnoreMatcher::from_patterns_without_ignore_files(&options.ignore)?
+    };
+    let graph =
+        build_graph(&options.source.analysis_path, &matcher, &[], None, None)?;
+
+    options.dependency_closure =
+        Some(sephera_graph::resolver::forward_dependencies(&graph));
+    Ok(())
 }
 
 fn execute_context(arguments: &ResolvedContextOptions) -> Result<Vec<Gate>> {

@@ -511,6 +511,7 @@ tree_command_args!(
         conflicts_with = "budget",
         conflicts_with = "format",
         conflicts_with = "output",
+        conflicts_with = "closure",
         help = "List available context profiles and exit.",
         long_help = "List available context profiles from the resolved `.sephera.toml` file and exit. Sephera uses either `--config <FILE>` or the normal auto-discovery rules. This mode does not build a context pack."
     )]
@@ -533,6 +534,14 @@ tree_command_args!(
         long_help = "Pack only the declaration with this name, rather than its whole file. Repeat this flag to pack several declarations. The name is matched case-insensitively and partially, so `resolve` also finds `resolve_source`. A name matching several declarations is reported rather than guessed; a name matching none is reported while the rest of the pack still builds. Cannot be combined with `--diff`, which selects whole changed files."
     )]
     pub focus_symbol: Vec<String>,
+
+    /// Pack each file's in-project dependencies directly behind it
+    #[arg(
+        long,
+        help = "Pack each file's in-project dependencies directly behind it.",
+        long_help = "Build the import graph and pack each file's dependency chain directly behind it, ahead of unrelated files that ranked below it -- so a file in the pack is accompanied by what it imports, instead of its dependencies competing as general files and losing on size to files nothing in the pack needs. The pack's metadata counts the files closure pulled in. Costs one graph build. Cannot be combined with `--focus-symbol`, which packs parts of files rather than whole files behind importers."
+    )]
+    pub closure: bool,
 
     /// Git diff source used to prioritize changed files in the context pack.
     #[arg(

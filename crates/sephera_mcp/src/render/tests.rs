@@ -29,6 +29,7 @@ fn metadata() -> ContextMetadata {
         files_considered: 148,
         files_selected: 13,
         truncated_files: 0,
+        closure_pulled_files: 0,
     }
 }
 

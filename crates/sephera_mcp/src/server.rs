@@ -27,8 +27,8 @@ use sephera_graph::{
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
-    ContextCommandInput, ResolvedContextCommand, SourceRequest,
-    build_context_report, changed_files, recent_commit_files,
+    ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
+    SourceRequest, build_context_report, changed_files, recent_commit_files,
     resolve_context_command, resolve_source,
 };
 use sephera_scan::CodeLoc;
@@ -168,7 +168,7 @@ impl SepheraServer {
     /// agents.
     #[tool(
         name = "context",
-        description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
+        description = "Build an LLM-ready context pack for a repository or focused sub-paths. Accepts exactly one of path or url, supports config loading, profiles, base-ref diffs, focus paths, and compression modes. With closure=true, each packed file's in-project dependency chain is packed directly behind it, ahead of unrelated files that ranked below it, and the metadata counts the files closure pulled in. Returns pretty JSON by default, Markdown when format=markdown, or profile JSON when list_profiles=true."
     )]
     #[allow(
         clippy::unused_self,
@@ -178,6 +178,7 @@ impl SepheraServer {
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ContextInput>,
     ) -> Result<String, rmcp::ErrorData> {
+        let closure = param.closure.unwrap_or(false);
         let resolved = resolve_context_command(ContextCommandInput {
             source: SourceRequest {
                 path: param.path.map(std::path::PathBuf::from),
@@ -210,7 +211,10 @@ impl SepheraServer {
             ResolvedContextCommand::ListProfiles(profiles) => {
                 serialize_json(&profiles)
             }
-            ResolvedContextCommand::Execute(options) => {
+            ResolvedContextCommand::Execute(mut options) => {
+                if closure {
+                    inject_dependency_closure(&mut options)?;
+                }
                 let report = build_context_report(&options)
                     .map_err(map_internal_error("context build failed"))?;
                 match options.format.as_str() {
@@ -1312,6 +1316,25 @@ impl ReviewReport {
                 .collect(),
         }
     }
+}
+
+/// Build the import graph over the same file set the context build
+/// uses and store its forward edges on the options as the closure
+/// map. The CLI's `--closure` does the same through the same graph
+/// function, so the two packs cannot disagree about the closure.
+fn inject_dependency_closure(
+    options: &mut ResolvedContextOptions,
+) -> Result<(), rmcp::ErrorData> {
+    let matcher = build_ignore_matcher(
+        Some(options.ignore.clone()),
+        Some(!options.read_ignore_files),
+    )?;
+    let graph =
+        build_graph(&options.source.analysis_path, &matcher, &[], None, None)
+            .map_err(map_internal_error("graph build failed"))?;
+    options.dependency_closure =
+        Some(sephera_graph::resolver::forward_dependencies(&graph));
+    Ok(())
 }
 
 /// The JSON shape the `dead` tool returns.

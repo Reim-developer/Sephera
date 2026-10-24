@@ -923,6 +923,7 @@ async fn context_tool_valid_directory() {
         budget: Some(1000),
         compress: Some("signatures".to_string()),
         format: Some("json".to_string()),
+        closure: None,
     });
 
     let result = server.context(param).await;
@@ -1131,6 +1132,7 @@ async fn context_tool_supports_url_profiles_diff_and_markdown() {
         budget: Some(4_000),
         compress: None,
         format: Some("markdown".to_owned()),
+        closure: None,
     });
 
     let result = server.context(param).await;
@@ -1170,6 +1172,7 @@ async fn context_tool_list_profiles_with_url_returns_json() {
         budget: None,
         compress: None,
         format: None,
+        closure: None,
     });
 
     let result = server.context(param).await;
@@ -1238,6 +1241,7 @@ async fn tools_reject_ref_without_url_and_blob_urls() {
             budget: None,
             compress: None,
             format: Some("json".to_owned()),
+            closure: None,
         }))
         .await;
     assert!(blob_error.is_err(), "blob URLs should fail");

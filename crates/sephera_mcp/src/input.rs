@@ -75,6 +75,12 @@ pub struct ContextInput {
     pub compress: Option<String>,
     /// Output format: 'markdown' or 'json' (default: 'json')
     pub format: Option<String>,
+    /// Pack each file's in-project dependencies directly behind it,
+    /// ahead of unrelated files that ranked below it, so a packed
+    /// file is accompanied by what it imports. The report's
+    /// metadata counts the files closure pulled in. Cannot be
+    /// combined with `focus_symbol`.
+    pub closure: Option<bool>,
 }
 
 /// Arguments accepted by the `symbols` tool.
