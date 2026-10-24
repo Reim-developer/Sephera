@@ -1001,7 +1001,7 @@ impl ImpactReport {
             .collect();
 
         Self {
-            gate: Self::gate_for(&targets, fail_on),
+            gate: fail_on.map(|limit| impact_gate(&targets, limit)),
             targets,
         }
     }
@@ -1039,40 +1039,35 @@ impl ImpactReport {
             .collect();
 
         Self {
-            gate: Self::gate_for(&targets, fail_on),
+            gate: fail_on.map(|limit| impact_gate(&targets, limit)),
             targets,
         }
     }
+}
 
-    /// The verdict on a `fail_on` threshold over already-built entries.
-    ///
-    /// Shared by the file-level and symbol-level reports: the rule is
-    /// the same, only the count it compares differs, and each entry
-    /// already carries the count its own question produced.
-    fn gate_for(
-        targets: &[ImpactEntry],
-        fail_on: Option<u64>,
-    ) -> Option<ImpactGate> {
-        // One violation per offending target rather than a single flag, so the
-        // caller learns *which* file broke the rule. The CLI does the same, and
-        // for the same reason: a count with no owner cannot be acted on.
-        fail_on.map(|limit| {
-            let violations: Vec<ImpactViolation> = targets
-                .iter()
-                .filter(|entry| entry.dependent_count >= limit)
-                .map(|entry| ImpactViolation {
-                    target: entry.target.clone(),
-                    dependent_count: entry.dependent_count,
-                })
-                .collect();
-
-            ImpactGate {
-                fail_on: limit,
-                crossed: !violations.is_empty(),
-                exit_code: if violations.is_empty() { 0 } else { 2 },
-                violations,
-            }
+/// The verdict on a `fail_on` threshold over already-built entries.
+///
+/// Shared by the file-level and symbol-level reports: the rule is
+/// the same, only the count it compares differs, and each entry
+/// already carries the count its own question produced.
+fn impact_gate(targets: &[ImpactEntry], fail_on: u64) -> ImpactGate {
+    // One violation per offending target rather than a single flag, so the
+    // caller learns *which* file broke the rule. The CLI does the same, and
+    // for the same reason: a count with no owner cannot be acted on.
+    let violations: Vec<ImpactViolation> = targets
+        .iter()
+        .filter(|entry| entry.dependent_count >= fail_on)
+        .map(|entry| ImpactViolation {
+            target: entry.target.clone(),
+            dependent_count: entry.dependent_count,
         })
+        .collect();
+
+    ImpactGate {
+        fail_on,
+        crossed: !violations.is_empty(),
+        exit_code: if violations.is_empty() { 0 } else { 2 },
+        violations,
     }
 }
 
@@ -1229,105 +1224,121 @@ fn symbol_impact_markdown(report: &ImpactReport) -> String {
     }
 
     for entry in &report.targets {
-        if several {
-            let _ = writeln!(
-                output,
-                "\n## Symbol impact for `{symbol}` in `{}`\n",
-                entry.target
-            );
-        } else {
-            let _ = writeln!(
-                output,
-                "# Symbol impact for `{symbol}` in `{}`\n",
-                entry.target
-            );
-        }
-        let _ = writeln!(
-            output,
-            "{}",
-            match entry.dependent_count {
-                0 => format!("No file imports `{symbol}` from this file."),
-                1 => format!("1 file imports `{symbol}` from this file."),
-                other => {
-                    format!("{other} files import `{symbol}` from this file.")
-                }
-            }
-        );
-        if let Some(namespace) = &entry.namespace_users
-            && !namespace.is_empty()
-        {
-            let _ = writeln!(
-                output,
-                "{}",
-                match namespace.len() {
-                    1 => format!(
-                        "1 file imports this file's namespace and may use \
-                         `{symbol}` without naming it."
-                    ),
-                    other => format!(
-                        "{other} files import this file's namespace and may \
-                         use `{symbol}` without naming it."
-                    ),
-                }
-            );
-        }
-        if let Some(downstream) = &entry.downstream
-            && !downstream.is_empty()
-        {
-            let _ = writeln!(
-                output,
-                "{}",
-                match downstream.len() {
-                    1 => "1 more file is downstream of those.".to_owned(),
-                    other => {
-                        format!("{other} more files are downstream of those.")
-                    }
-                }
-            );
-        }
-        if let Some(depth) = entry.depth {
-            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-        }
-
-        let sub = if several { "###" } else { "##" };
-        if !entry.dependents.is_empty() {
-            let _ = writeln!(output, "\n{sub} Files that import `{symbol}`\n");
-            for dependent in &entry.dependents {
-                let names: Vec<String> = dependent
-                    .imports
-                    .iter()
-                    .map(|path| format!("`{path}`"))
-                    .collect();
-                let _ = writeln!(
-                    output,
-                    "- `{}` via {}",
-                    dependent.file,
-                    names.join(", ")
-                );
-            }
-        }
-        if let Some(namespace) = &entry.namespace_users
-            && !namespace.is_empty()
-        {
-            let _ = writeln!(output, "\n{sub} Namespace importers\n");
-            for file in namespace {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-        if let Some(downstream) = &entry.downstream
-            && !downstream.is_empty()
-        {
-            let _ = writeln!(output, "\n{sub} Downstream\n");
-            for file in downstream {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-        output.push('\n');
+        write_symbol_entry(&mut output, entry, symbol, several);
     }
 
     write_impact_gate(&mut output, report);
 
     output
+}
+
+/// Write one target's section of a symbol impact report.
+///
+/// Split out of `symbol_impact_markdown` for length; the three
+/// lists and their order are the per-target content, while the
+/// document title and the threshold verdict belong to the report.
+fn write_symbol_entry(
+    output: &mut String,
+    entry: &ImpactEntry,
+    symbol: &str,
+    several: bool,
+) {
+    use std::fmt::Write as _;
+
+    if several {
+        let _ = writeln!(
+            output,
+            "\n## Symbol impact for `{symbol}` in `{}`\n",
+            entry.target
+        );
+    } else {
+        let _ = writeln!(
+            output,
+            "# Symbol impact for `{symbol}` in `{}`\n",
+            entry.target
+        );
+    }
+    let _ = writeln!(
+        output,
+        "{}",
+        match entry.dependent_count {
+            0 => format!("No file imports `{symbol}` from this file."),
+            1 => format!("1 file imports `{symbol}` from this file."),
+            other => {
+                format!("{other} files import `{symbol}` from this file.")
+            }
+        }
+    );
+    if let Some(namespace) = &entry.namespace_users
+        && !namespace.is_empty()
+    {
+        let _ = writeln!(
+            output,
+            "{}",
+            match namespace.len() {
+                1 => format!(
+                    "1 file imports this file's namespace and may use \
+                     `{symbol}` without naming it."
+                ),
+                other => format!(
+                    "{other} files import this file's namespace and may \
+                     use `{symbol}` without naming it."
+                ),
+            }
+        );
+    }
+    if let Some(downstream) = &entry.downstream
+        && !downstream.is_empty()
+    {
+        let _ = writeln!(
+            output,
+            "{}",
+            match downstream.len() {
+                1 => "1 more file is downstream of those.".to_owned(),
+                other => {
+                    format!("{other} more files are downstream of those.")
+                }
+            }
+        );
+    }
+    if let Some(depth) = entry.depth {
+        let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
+    }
+
+    let sub = if several { "###" } else { "##" };
+    if !entry.dependents.is_empty() {
+        let _ = writeln!(output, "\n{sub} Files that import `{symbol}`\n");
+        for dependent in &entry.dependents {
+            let names: Vec<String> = dependent
+                .imports
+                .iter()
+                .map(|path| format!("`{path}`"))
+                .collect();
+            let _ = writeln!(
+                output,
+                "- `{}` via {}",
+                dependent.file,
+                names.join(", ")
+            );
+        }
+    }
+    if let Some(namespace) = &entry.namespace_users
+        && !namespace.is_empty()
+    {
+        let _ = writeln!(output, "\n{sub} Namespace importers\n");
+        for file in namespace {
+            let _ = writeln!(output, "- `{file}`");
+        }
+    }
+    if let Some(downstream) = &entry.downstream
+        && !downstream.is_empty()
+    {
+        let _ = writeln!(output, "\n{sub} Downstream\n");
+        for file in downstream {
+            let _ = writeln!(output, "- `{file}`");
+        }
+    }
+    output.push('\n');
 }
 
 /// Server identity advertised during MCP initialization.
