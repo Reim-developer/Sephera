@@ -22,6 +22,51 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
+/// What kind of thing a declaration is.
+///
+/// Recorded beside the name because a name that vanishes and a name
+/// that changes shape are different events for whoever depends on it:
+/// a function that became a struct breaks its callers differently
+/// than either being deleted outright. Languages name their kinds
+/// differently; this is the shared vocabulary the walk translates
+/// into, kept deliberately coarse — the distinctions a consumer can
+/// act on, not a grammar's full taxonomy.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DeclarationKind {
+    /// A callable: a Rust `fn`, a Python `def`.
+    Function,
+    /// A Rust `struct`.
+    Struct,
+    /// A Rust `enum`.
+    Enum,
+    /// A Rust `trait`.
+    Trait,
+    /// A type alias: a Rust `type` item.
+    TypeAlias,
+    /// A Rust `const`.
+    Constant,
+    /// A Rust `static`.
+    Static,
+    /// A Rust `union`.
+    Union,
+    /// A module: a Rust `mod` item.
+    Module,
+    /// A `macro_rules!` definition.
+    Macro,
+    /// A proc-macro derive, declared by its attribute.
+    DeriveMacro,
+    /// A Python `class`.
+    Class,
+    /// A name bound by assignment or import at module level — the
+    /// kind is whatever the value is, which the walk cannot know.
+    Value,
+    /// Recorded without kind information.
+    Other,
+}
+
 /// What a file declares, keyed by name.
 ///
 /// Only names a module path can legitimately end in are recorded: the
@@ -35,7 +80,8 @@ use std::collections::{BTreeMap, BTreeSet};
 /// 105 to 686 when that happened, every one of them invented.
 #[derive(Debug, Clone, Default)]
 pub struct DeclaredNames {
-    declared: BTreeSet<String>,
+    /// The names, each with the kind of thing it is.
+    declared: BTreeMap<String, DeclarationKind>,
     reexported: BTreeSet<String>,
     /// Names bound by a `use` at this file's own module level, public
     /// or not.
@@ -72,13 +118,42 @@ impl DeclaredNames {
     /// -- so the shared walk handles the first two and the plugin adds the rest
     /// here rather than the shared walk growing a Python-shaped branch.
     pub fn declare(&mut self, name: impl Into<String>) {
-        self.declared.insert(name.into());
+        self.declare_as(name, DeclarationKind::Other);
+    }
+
+    /// Record one more name this file declares, with its kind.
+    ///
+    /// The first kind recorded wins. A grammar walk reads a name's
+    /// precise kind off its definition; a later, coarser binding of
+    /// the same name (a module-level assignment the plugin adds) must
+    /// not replace precision with a guess.
+    pub fn declare_as(
+        &mut self,
+        name: impl Into<String>,
+        kind: DeclarationKind,
+    ) {
+        self.declared.entry(name.into()).or_insert(kind);
+    }
+
+    /// The kind of thing `name` is declared as, when it is declared.
+    #[must_use]
+    pub fn kind_of(&self, name: &str) -> Option<DeclarationKind> {
+        self.declared.get(name).copied()
+    }
+
+    /// Every declared name with its kind, in name order.
+    #[must_use]
+    pub fn declared(&self) -> Vec<(&str, DeclarationKind)> {
+        self.declared
+            .iter()
+            .map(|(name, kind)| (name.as_str(), *kind))
+            .collect()
     }
 
     /// Whether this file binds `name` at all.
     #[must_use]
     pub fn contains(&self, name: &str) -> bool {
-        self.declared.contains(name) || self.reexported.contains(name)
+        self.declared.contains_key(name) || self.reexported.contains(name)
     }
 
     /// Whether a `use` in this file binds `name`, at any visibility.
@@ -141,6 +216,26 @@ impl DeclarationIndex {
             (Some(file), None) => Some(file),
             _ => None,
         }
+    }
+
+    /// Every name `file` declares, with its kind, in name order.
+    ///
+    /// The per-file view a comparison between two analyses needs: what
+    /// a file used to declare, set against what it declares now.
+    #[must_use]
+    pub fn declared_in(&self, file: &str) -> Vec<(&str, DeclarationKind)> {
+        self.by_file
+            .get(file)
+            .map(|declared| declared.declared())
+            .unwrap_or_default()
+    }
+
+    /// The kind `name` is declared as in `file`, when it is declared there.
+    #[must_use]
+    pub fn kind_in(&self, file: &str, name: &str) -> Option<DeclarationKind> {
+        self.by_file
+            .get(file)
+            .and_then(|declared| declared.kind_of(name))
     }
 
     /// Whether `file` itself declares `name`.
@@ -206,7 +301,10 @@ impl DeclaredNames {
     #[must_use]
     pub fn from_names<'a>(names: impl IntoIterator<Item = &'a str>) -> Self {
         Self {
-            declared: names.into_iter().map(ToOwned::to_owned).collect(),
+            declared: names
+                .into_iter()
+                .map(|name| (name.to_owned(), DeclarationKind::Other))
+                .collect(),
             reexported: BTreeSet::new(),
             bound: BTreeSet::new(),
             macro_exports: BTreeSet::new(),
@@ -226,7 +324,10 @@ impl DeclaredNames {
         reexported: impl IntoIterator<Item = &'a str>,
     ) -> Self {
         Self {
-            declared: declared.into_iter().map(ToOwned::to_owned).collect(),
+            declared: declared
+                .into_iter()
+                .map(|name| (name.to_owned(), DeclarationKind::Other))
+                .collect(),
             reexported: reexported.into_iter().map(ToOwned::to_owned).collect(),
             bound: BTreeSet::new(),
             macro_exports: BTreeSet::new(),
@@ -240,7 +341,7 @@ impl DeclaredNames {
     /// root check should accept one.
     #[must_use]
     pub fn declares(&self, name: &str) -> bool {
-        self.declared.contains(name)
+        self.declared.contains_key(name)
     }
 
     /// Whether `name` is reachable here because this file re-exports it.
@@ -272,7 +373,7 @@ impl DeclaredNames {
     /// The recorded names, sorted, for assertions and diagnostics.
     #[must_use]
     pub fn into_sorted_vec(self) -> Vec<String> {
-        self.declared.into_iter().chain(self.reexported).collect()
+        self.declared.into_keys().chain(self.reexported).collect()
     }
 }
 
@@ -282,17 +383,17 @@ impl DeclaredNames {
 /// confirmed to carry a `name` field, so an index built from this list is not
 /// quietly empty. A kind guessed wrong would make the whole lookup fail with no
 /// error, which is exactly the failure this module exists to remove.
-const RUST_DECLARATION_KINDS: [&str; 10] = [
-    "struct_item",
-    "enum_item",
-    "trait_item",
-    "type_item",
-    "function_item",
-    "const_item",
-    "static_item",
-    "union_item",
-    "mod_item",
-    "macro_definition",
+const RUST_DECLARATION_KINDS: [(&str, DeclarationKind); 10] = [
+    ("struct_item", DeclarationKind::Struct),
+    ("enum_item", DeclarationKind::Enum),
+    ("trait_item", DeclarationKind::Trait),
+    ("type_item", DeclarationKind::TypeAlias),
+    ("function_item", DeclarationKind::Function),
+    ("const_item", DeclarationKind::Constant),
+    ("static_item", DeclarationKind::Static),
+    ("union_item", DeclarationKind::Union),
+    ("mod_item", DeclarationKind::Module),
+    ("macro_definition", DeclarationKind::Macro),
 ];
 
 /// Rust's only re-export construct. Kept beside the declaration kinds because
@@ -338,8 +439,9 @@ pub fn collect_declared_names(
 /// nothing to distinguish.
 #[derive(Debug, Clone, Copy)]
 pub struct DeclarationRules<'rules> {
-    /// Node kinds whose `name` field names something this file declares.
-    pub declaration_kinds: &'rules [&'rules str],
+    /// Node kinds whose `name` field names something this file
+    /// declares, each paired with the shared kind that node kind is.
+    pub declaration_kinds: &'rules [(&'rules str, DeclarationKind)],
     /// Node kinds that re-export. Empty for a language with no such construct.
     pub reexport_kinds: &'rules [&'rules str],
 }
@@ -351,7 +453,7 @@ pub fn collect_declared_names_with(
     tree: &tree_sitter::Tree,
     rules: DeclarationRules<'_>,
 ) -> DeclaredNames {
-    let mut declared = BTreeSet::new();
+    let mut declared = BTreeMap::new();
     let mut reexported = BTreeSet::new();
     let mut bound = BTreeSet::new();
     let mut macro_exports = BTreeSet::new();
@@ -468,7 +570,7 @@ fn collect_use_leaves(
 /// The four name sets one walk fills, carried as one bundle so the
 /// recursion passes a single argument instead of four siblings.
 struct NameSets<'sets> {
-    declared: &'sets mut BTreeSet<String>,
+    declared: &'sets mut BTreeMap<String, DeclarationKind>,
     reexported: &'sets mut BTreeSet<String>,
     bound: &'sets mut BTreeSet<String>,
     macro_exports: &'sets mut BTreeSet<String>,
@@ -486,10 +588,14 @@ fn walk(
     // filed under the file's own module level.
     let children_inside_inline_module =
         inside_inline_module || node.kind() == "mod_item";
-    if rules.declaration_kinds.contains(&node.kind())
+    if let Some((_, kind)) = rules
+        .declaration_kinds
+        .iter()
+        .find(|(node_kind, _)| *node_kind == node.kind())
         && let Some(name) = node.child_by_field_name("name")
     {
-        sets.declared.insert(node_text(source, name).to_owned());
+        sets.declared
+            .insert(node_text(source, name).to_owned(), *kind);
     }
 
     // A derive macro's name lives in its attribute, not on the item it
@@ -502,7 +608,7 @@ fn walk(
     if node.kind() == "attribute_item"
         && let Some(name) = derive_macro_name(source, node)
     {
-        sets.declared.insert(name);
+        sets.declared.insert(name, DeclarationKind::DeriveMacro);
     }
 
     // A `#[macro_export]` macro is declared where it is written and
@@ -1078,7 +1184,10 @@ pub struct JsonLines<S, T = AsExtractor> {
             source.as_bytes(),
             &tree,
             DeclarationRules {
-                declaration_kinds: &["class_definition", "function_definition"],
+                declaration_kinds: &[
+                    ("class_definition", DeclarationKind::Class),
+                    ("function_definition", DeclarationKind::Function),
+                ],
                 reexport_kinds: &[],
             },
         );
@@ -1174,5 +1283,47 @@ pub struct JsonLines<S, T = AsExtractor> {
         let index = DeclarationIndex::default();
         assert!(index.is_empty());
         assert_eq!(index.file_declaring("Anything"), None);
+    }
+
+    #[test]
+    fn the_walk_records_the_kind_of_each_declaration() {
+        let source = "pub struct Point { x: f64 }\n\
+                      pub fn add(a: i32) -> i32 { a }\n\
+                      pub const MAX: i32 = 3;\n\
+                      pub enum Shape { Round }\n\
+                      pub trait Draw {}\n";
+        let mut parser = rust_parser();
+        let tree = parser.parse(source, None).expect("the snippet parses");
+        let names = collect_declared_names(source.as_bytes(), &tree);
+
+        assert_eq!(names.kind_of("Point"), Some(DeclarationKind::Struct));
+        assert_eq!(names.kind_of("add"), Some(DeclarationKind::Function));
+        assert_eq!(names.kind_of("MAX"), Some(DeclarationKind::Constant));
+        assert_eq!(names.kind_of("Shape"), Some(DeclarationKind::Enum));
+        assert_eq!(names.kind_of("Draw"), Some(DeclarationKind::Trait));
+        assert_eq!(names.declared().len(), 5);
+    }
+
+    #[test]
+    fn the_index_answers_kinds_per_file() {
+        let mut index = DeclarationIndex::default();
+        let mut names = DeclaredNames::default();
+        names.declare_as("add", DeclarationKind::Function);
+        names.declare_as("Point", DeclarationKind::Struct);
+        index.insert("src/lib.rs", names);
+
+        assert_eq!(
+            index.kind_in("src/lib.rs", "add"),
+            Some(DeclarationKind::Function)
+        );
+        assert_eq!(index.kind_in("src/lib.rs", "missing"), None);
+        assert_eq!(
+            index.declared_in("src/lib.rs"),
+            [
+                ("Point", DeclarationKind::Struct),
+                ("add", DeclarationKind::Function),
+            ]
+        );
+        assert_eq!(index.declared_in("src/other.rs").len(), 0);
     }
 }

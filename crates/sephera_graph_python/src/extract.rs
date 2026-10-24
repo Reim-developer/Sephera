@@ -19,7 +19,8 @@ use tree_sitter::Node;
 
 use sephera_core::{
     declarations::{
-        DeclarationRules, DeclaredNames, collect_declared_names_with,
+        DeclarationKind, DeclarationRules, DeclaredNames,
+        collect_declared_names_with,
     },
     types::{ImportKind, ImportStatement},
 };
@@ -32,8 +33,10 @@ use sephera_core::plugins::{line_of, node_text};
 /// `request = LocalProxy(...)` in flask's `globals.py` is one -- but its target
 /// sits in a child of the `assignment` rather than in a `name` field, so no
 /// grammar rule reaches it and it is collected separately below.
-const PYTHON_DECLARATION_KINDS: &[&str] =
-    &["function_definition", "class_definition"];
+const PYTHON_DECLARATION_KINDS: &[(&str, DeclarationKind)] = &[
+    ("function_definition", DeclarationKind::Function),
+    ("class_definition", DeclarationKind::Class),
+];
 
 /// What a Python module binds, read from the tree in one parse.
 ///
@@ -124,7 +127,8 @@ fn collect_module_level_assignments(
         }
 
         for target in assignment_targets(assignment) {
-            declared.declare(node_text(source, &target));
+            declared
+                .declare_as(node_text(source, &target), DeclarationKind::Value);
         }
     }
 }
@@ -208,7 +212,7 @@ fn collect_conditional_bindings(
     for statement in module_level_statements(module) {
         if statement.kind() == "if_statement" {
             for name in bound_on_all_paths(source, statement) {
-                declared.declare(name);
+                declared.declare_as(name, DeclarationKind::Value);
             }
         }
     }
@@ -331,13 +335,16 @@ fn bind_imported_name(
         "aliased_import" => {
             let mut cursor = part.walk();
             if let Some(alias) = part.named_children(&mut cursor).last() {
-                declared.declare(node_text(source, &alias));
+                declared.declare_as(
+                    node_text(source, &alias),
+                    DeclarationKind::Value,
+                );
             }
         }
         "dotted_name" => {
             let text = node_text(source, &part);
             let first = text.split('.').next().unwrap_or(&text);
-            declared.declare(first);
+            declared.declare_as(first, DeclarationKind::Value);
         }
         _ => {}
     }
