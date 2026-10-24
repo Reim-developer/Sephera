@@ -37,7 +37,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub struct DeclaredNames {
     declared: BTreeSet<String>,
     reexported: BTreeSet<String>,
-    /// Names bound by any `use`, public or not.
+    /// Names bound by a `use` at this file's own module level, public
+    /// or not.
     ///
     /// Kept apart from both sets above. A private `use` makes a name a
     /// member of its own module -- visible to that module's inline
@@ -46,6 +47,13 @@ pub struct DeclaredNames {
     /// is neither a declaration nor a re-export. Callers ask for it by
     /// name rather than through `contains`, because which of the three
     /// a name is decides who may rely on it.
+    ///
+    /// Only the file's own level is recorded. A `use` inside an inline
+    /// module binds in *that* module, not in this one, and recording it
+    /// here let a statement vouch for itself: `use super::helper_module;`
+    /// inside `mod tests` put `helper_module` in this set, and the gap
+    /// classifier then read the name as bound in the parent module --
+    /// the very claim the statement was being tested for.
     bound: BTreeSet<String>,
     /// Names of `macro_rules!` definitions carrying `#[macro_export]`.
     ///
@@ -350,11 +358,14 @@ pub fn collect_declared_names_with(
     walk(
         source,
         tree.root_node(),
-        &mut declared,
-        &mut reexported,
-        &mut bound,
-        &mut macro_exports,
+        &mut NameSets {
+            declared: &mut declared,
+            reexported: &mut reexported,
+            bound: &mut bound,
+            macro_exports: &mut macro_exports,
+        },
         rules,
+        false,
     );
     DeclaredNames {
         declared,
@@ -454,19 +465,31 @@ fn collect_use_leaves(
     }
 }
 
+/// The four name sets one walk fills, carried as one bundle so the
+/// recursion passes a single argument instead of four siblings.
+struct NameSets<'sets> {
+    declared: &'sets mut BTreeSet<String>,
+    reexported: &'sets mut BTreeSet<String>,
+    bound: &'sets mut BTreeSet<String>,
+    macro_exports: &'sets mut BTreeSet<String>,
+}
+
 fn walk(
     source: &[u8],
     node: tree_sitter::Node<'_>,
-    declared: &mut BTreeSet<String>,
-    reexported: &mut BTreeSet<String>,
-    bound: &mut BTreeSet<String>,
-    macro_exports: &mut BTreeSet<String>,
+    sets: &mut NameSets<'_>,
     rules: DeclarationRules<'_>,
+    inside_inline_module: bool,
 ) {
+    // An inline module is a scope of its own inside the file. Its
+    // children are walked with the flag set, so what they bind is not
+    // filed under the file's own module level.
+    let children_inside_inline_module =
+        inside_inline_module || node.kind() == "mod_item";
     if rules.declaration_kinds.contains(&node.kind())
         && let Some(name) = node.child_by_field_name("name")
     {
-        declared.insert(node_text(source, name).to_owned());
+        sets.declared.insert(node_text(source, name).to_owned());
     }
 
     // A derive macro's name lives in its attribute, not on the item it
@@ -479,7 +502,7 @@ fn walk(
     if node.kind() == "attribute_item"
         && let Some(name) = derive_macro_name(source, node)
     {
-        declared.insert(name);
+        sets.declared.insert(name);
     }
 
     // A `#[macro_export]` macro is declared where it is written and
@@ -492,7 +515,8 @@ fn walk(
         && let Some(name) = node.child_by_field_name("name")
         && has_macro_export_attribute(source, node)
     {
-        macro_exports.insert(node_text(source, name).to_owned());
+        sets.macro_exports
+            .insert(node_text(source, name).to_owned());
     }
 
     if rules.reexport_kinds.contains(&node.kind()) {
@@ -503,9 +527,17 @@ fn walk(
         let mut leaves = BTreeSet::new();
         collect_use_leaves(source, node, &mut leaves);
         if is_public_use(source, node) {
-            reexported.extend(leaves.iter().cloned());
+            sets.reexported.extend(leaves.iter().cloned());
         }
-        bound.extend(leaves);
+        // A `use` binds in the module it is written in. Inside an
+        // inline module that module is not this file's own, so the
+        // leaves are not this file's bindings -- recording them let
+        // `use super::helper_module;` in `mod tests` testify that
+        // `helper_module` was bound in the parent module, which is
+        // the claim that statement itself was under test for.
+        if !inside_inline_module {
+            sets.bound.extend(leaves);
+        }
         // A re-export statement's own subtree is fully handled here; recursing
         // would re-visit the same nodes and record the imported names twice
         // under two meanings.
@@ -517,11 +549,9 @@ fn walk(
         walk(
             source,
             child,
-            declared,
-            reexported,
-            bound,
-            macro_exports,
+            &mut *sets,
             rules,
+            children_inside_inline_module,
         );
     }
 }
@@ -694,6 +724,14 @@ mod tests {
         names.reexported.into_iter().collect()
     }
 
+    /// What one file's own module level binds, without what it declares.
+    fn binds_of(source: &str) -> Vec<String> {
+        let mut parser = rust_parser();
+        let tree = parser.parse(source.as_bytes(), None).expect("parses");
+        let names = collect_declared_names(source.as_bytes(), &tree);
+        names.bound.into_iter().collect()
+    }
+
     #[test]
     fn a_grouped_reexport_records_every_leaf() {
         // The commonest shape there is. `pub use a::{B, C};` nests a `use_list`
@@ -836,6 +874,27 @@ mod tests {
         let found = reexports_of("pub use a::{B as Bee};\n");
 
         assert_eq!(found, vec!["Bee".to_owned()]);
+    }
+
+    #[test]
+    fn a_use_at_the_files_own_level_binds_there() {
+        // The evidence `super::Name` inside an inline module asks for:
+        // a name the enclosing module itself binds.
+        let found = binds_of("use crate::sibling::Helper;\n");
+
+        assert_eq!(found, vec!["Helper".to_owned()]);
+    }
+
+    #[test]
+    fn a_use_inside_an_inline_module_binds_there_not_in_the_file() {
+        // The self-vouch this guards: `use super::helper_module;` in
+        // `mod tests` names a thing that exists nowhere. Recording its
+        // leaf as a binding of the file made the gap classifier read
+        // the parent module as binding it -- the statement testifying
+        // for itself -- and a genuine resolver gap stopped counting.
+        let found = binds_of("mod tests {\n    use super::helper_module;\n}\n");
+
+        assert_eq!(found, Vec::<String>::new());
     }
 
     #[test]
