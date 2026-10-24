@@ -223,6 +223,30 @@ impl BoundaryIndex {
         pairs
     }
 
+    /// The files that expose names across a boundary: every file owning a
+    /// boundary module, and every file implementing a boundary symbol.
+    ///
+    /// These files are called from outside the graph — from Python, from
+    /// the Java runtime, from JavaScript — so an analysis that cannot see
+    /// the caller (dead-code reachability above all) must treat them as
+    /// reached by definition. Sorted, as every list the index answers.
+    #[must_use]
+    pub fn exporting_files(&self) -> Vec<&str> {
+        let mut files: Vec<&str> = self
+            .modules
+            .values()
+            .map(|(file, _)| file.as_str())
+            .chain(
+                self.implemented_symbols
+                    .values()
+                    .map(|(file, _)| file.as_str()),
+            )
+            .collect();
+        files.sort_unstable();
+        files.dedup();
+        files
+    }
+
     /// The file and module a foreign import name resolves to, when exactly
     /// one file claims the name.
     #[must_use]
@@ -436,5 +460,37 @@ mod tests {
         );
 
         assert_eq!(index.symbol_pairs().len(), 0);
+    }
+
+    #[test]
+    fn exporting_files_lists_module_owners_and_implementers() {
+        let mut index = BoundaryIndex::default();
+        index.insert(
+            "rust/src/lib.rs",
+            FileBoundary {
+                modules: vec![module("myext", &[])],
+                symbols: Vec::new(),
+            },
+        );
+        index.insert(
+            "Native.java",
+            symbols_only(vec![symbol(
+                "Java_com_acme_Native_add",
+                BoundaryRole::Declares,
+                "add",
+            )]),
+        );
+        index.insert(
+            "native.c",
+            symbols_only(vec![symbol(
+                "Java_com_acme_Native_add",
+                BoundaryRole::Implements,
+                "Java_com_acme_Native_add",
+            )]),
+        );
+
+        // The declaring Java file is not an exporter: its callers are
+        // in-graph. The module owner and the implementer are.
+        assert_eq!(index.exporting_files(), ["native.c", "rust/src/lib.rs"]);
     }
 }

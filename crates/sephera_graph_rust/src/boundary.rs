@@ -1,4 +1,5 @@
-//! `PyO3` boundary harvest: the modules a Rust file exposes to Python.
+//! Rust boundary harvest: the modules a file exposes to Python through
+//! `PyO3`, and the names it exposes to JavaScript through `wasm_bindgen`.
 //!
 //! A `#[pymodule]` function is the whole boundary in one item: its name is
 //! what a Python `import` names, and the names it registers are what
@@ -31,21 +32,85 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use tree_sitter::{Node, Tree};
 
-use sephera_core::boundary::{BoundaryKind, BoundaryModule, FileBoundary};
+use sephera_core::boundary::{
+    BoundaryKind, BoundaryModule, BoundaryRole, BoundarySymbol, FileBoundary,
+};
 use sephera_core::plugins::node_text;
 
-/// Harvests the `PyO3` modules this source exposes, if any.
+/// Harvests the boundary evidence this source carries, if any: `PyO3`
+/// modules for the join, and `wasm_bindgen` exports as implemented symbols.
+///
+/// The two are recorded differently because they are used differently.
+/// A `PyO3` module is joined — Python imports it by name. A `wasm_bindgen`
+/// export's caller is generated JavaScript glue that does not live in the
+/// tree, so there is nothing to join; the record exists so analyses that
+/// cannot see the caller (dead-code reachability above all) know the file
+/// is reached from outside the graph.
 pub fn collect_boundary(source: &[u8], tree: &Tree) -> Option<FileBoundary> {
     let renames = collect_renames(source, tree.root_node());
     let mut modules = Vec::new();
     collect_modules(source, tree.root_node(), &renames, &mut modules);
-    if modules.is_empty() {
+    let mut symbols = Vec::new();
+    collect_wasm_exports(source, tree.root_node(), &mut symbols);
+    if modules.is_empty() && symbols.is_empty() {
         None
     } else {
-        Some(FileBoundary {
-            modules,
-            symbols: Vec::new(),
-        })
+        Some(FileBoundary { modules, symbols })
+    }
+}
+
+/// Every `#[wasm_bindgen]` item in the file, as an implemented symbol.
+///
+/// Items carry the attribute directly; methods carry it through their
+/// `impl` block, which is where `wasm_bindgen` is written for a type's
+/// whole surface. The recorded name honours a `js_name` override on the
+/// item itself.
+fn collect_wasm_exports(
+    source: &[u8],
+    node: Node<'_>,
+    symbols: &mut Vec<BoundarySymbol>,
+) {
+    match node.kind() {
+        "function_item" | "struct_item" | "enum_item"
+            if has_attribute(source, &node, "wasm_bindgen") =>
+        {
+            if let Some(name_node) = node.child_by_field_name("name") {
+                let local = node_text(source, &name_node);
+                let name = attribute_text(source, &node, "wasm_bindgen")
+                    .and_then(|text| name_argument(&text))
+                    .unwrap_or_else(|| local.clone());
+                symbols.push(BoundarySymbol {
+                    name,
+                    kind: BoundaryKind::WasmBindgen,
+                    role: BoundaryRole::Implements,
+                    local,
+                });
+            }
+        }
+        "impl_item" if has_attribute(source, &node, "wasm_bindgen") => {
+            if let Some(body) = node.child_by_field_name("body") {
+                let mut cursor = body.walk();
+                for child in body.children(&mut cursor) {
+                    if child.kind() == "function_item"
+                        && let Some(name_node) =
+                            child.child_by_field_name("name")
+                    {
+                        let local = node_text(source, &name_node);
+                        symbols.push(BoundarySymbol {
+                            name: local.clone(),
+                            kind: BoundaryKind::WasmBindgen,
+                            role: BoundaryRole::Implements,
+                            local,
+                        });
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    let mut cursor = node.walk();
+    for child in node.children(&mut cursor) {
+        collect_wasm_exports(source, child, symbols);
     }
 }
 
@@ -486,5 +551,50 @@ fn two(m: &Bound<'_, PyModule>) -> PyResult<()> { Ok(()) }
         )
         .expect("a boundary is harvested");
         assert_eq!(boundary.modules.len(), 2);
+    }
+
+    #[test]
+    fn wasm_bindgen_items_are_implemented_symbols() {
+        let boundary = harvest(
+            r#"
+#[wasm_bindgen]
+pub fn greet(name: &str) -> String { name.to_owned() }
+
+#[wasm_bindgen(js_name = "makePoint")]
+pub struct Point { x: f64 }
+"#,
+        )
+        .expect("a boundary is harvested");
+        assert_eq!(boundary.modules.len(), 0);
+        let names: Vec<(&str, &str)> = boundary
+            .symbols
+            .iter()
+            .map(|symbol| (symbol.name.as_str(), symbol.local.as_str()))
+            .collect();
+        assert_eq!(names, [("greet", "greet"), ("makePoint", "Point")]);
+        assert!(
+            boundary
+                .symbols
+                .iter()
+                .all(|symbol| symbol.kind == BoundaryKind::WasmBindgen
+                    && symbol.role == BoundaryRole::Implements)
+        );
+    }
+
+    #[test]
+    fn wasm_bindgen_impl_methods_are_implemented_symbols() {
+        let boundary = harvest(
+            r"
+pub struct Counter { value: i32 }
+
+#[wasm_bindgen]
+impl Counter {
+    pub fn bump(&mut self) { self.value += 1; }
+}
+",
+        )
+        .expect("a boundary is harvested");
+        assert_eq!(boundary.symbols.len(), 1);
+        assert_eq!(boundary.symbols[0].name, "bump");
     }
 }
