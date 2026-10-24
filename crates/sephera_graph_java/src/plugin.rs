@@ -34,6 +34,16 @@ impl ImportPlugin for JavaPlugin {
     ) -> Option<Vec<sephera_core::types::ImportStatement>> {
         crate::extract::extract_from_node(source, node)
     }
+
+    /// The JNI symbols this file declares through `native` methods, so a
+    /// C implementation of one can be joined to the class that promises it.
+    fn collect_boundary(
+        &self,
+        source: &[u8],
+        tree: &tree_sitter::Tree,
+    ) -> Option<sephera_core::boundary::FileBoundary> {
+        crate::boundary::collect_boundary(source, tree)
+    }
 }
 
 impl ResolverPlugin for JavaPlugin {
