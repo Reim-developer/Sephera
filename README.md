@@ -542,7 +542,10 @@ change is the working tree read against `HEAD` — or against a branch with
 `--against` — and for every file it touches the report gives the blast
 radius, the tests that reach it, and a warning for each file that history
 keeps changing with it but the change leaves behind: "you changed A; B has
-moved with A seven times and is not in this change."
+moved with A seven times and is not in this change." Between the changed
+files and those warnings sits a fourth answer: what broke by name — the
+symbols the change removed or reshaped, joined to the files that still name
+them, measured exactly as `breaking` measures them.
 
 ```bash
 # Review everything uncommitted
