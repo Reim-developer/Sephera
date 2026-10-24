@@ -1,6 +1,6 @@
 ---
 title: breaking
-description: Compare two refs and report which declared symbols broke, joined to the files that still use them.
+description: Compare two refs and report which declared symbols broke, joined to the files that still use them, with a fix suggestion when the newer tree says something actionable.
 ---
 
 # `breaking`
@@ -81,6 +81,36 @@ Each broken symbol also reports namespace users — files importing
 the file's namespace wholesale, which may use the symbol without
 naming it — and the files downstream of those consumers.
 
+## What to do about it
+
+A break list tells a reviewer what died; it does not tell them
+what to do next, so the fix is a second investigation. Each entry
+therefore carries a suggestion, first in the entry, when the newer
+tree says something actionable:
+
+- **Moved** — a removed name that survives in exactly one other
+  file suggests the move, with the kind it is declared as there.
+  The consumer is still broken until it updates its import; the
+  suggestion says where to point it, not that the break went away.
+- **New call shape** — a signature change suggests the shape
+  callers must now use, rendered as a call: `add(x, y: str)`.
+
+A suggestion is absent when the newer tree says nothing useful,
+and an absent suggestion is itself information. A name that
+vanished outright has no home to suggest. A name claimed by two
+files is a question, not an answer — suggesting one would send the
+consumer to the wrong file. A kind change carries none, because the
+change itself already states the new kind.
+
+One subtlety decides whether a move suggests at all. Python
+records imported names as bindings beside genuine assignments, so
+a consumer's `from lib import add` leaves the name in the newer
+index twice: once derived in the consumer, once real in the new
+home. A file that imports the name cannot be its new home, so
+importers are excluded from the claimant set before uniqueness is
+judged — the derived binding neither vetoes the move nor poses
+as one.
+
 ## A break nobody uses does not fail the run
 
 `--fail-on COUNT` exits with code 2 when at least that many broken
@@ -92,9 +122,11 @@ the exit code changes.
 ## Limits, stated plainly
 
 - A symbol that moved files — deleted from one file, added to
-  another — is reported as removed from the first. Consumers
-  importing it from the first file are broken; the report does not
-  guess that they meant the second.
+  another — is still reported as removed from the first. Consumers
+  importing it from the first file are broken until they update
+  the import. When exactly one other file declares the name, the
+  entry suggests the move (see "What to do about it" above)
+  rather than leaving the reviewer to find it.
 - The comparison is between two trees of tracked files: a worktree
   holds tracked files only, so an untracked file that exists in the
   working tree but in neither ref is not part of either side's
