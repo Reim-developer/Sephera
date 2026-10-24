@@ -7,6 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Component, Path, PathBuf},
+    sync::Mutex,
 };
 
 use anyhow::{Context, Result, bail};
@@ -175,6 +176,7 @@ pub fn build_graph_with_progress(
         known_files,
         declarations,
         manifests,
+        file_text: FileTextCache::new(base_path.to_path_buf()),
     };
     let (edges, node_map) = build_edges_and_nodes(&all_file_imports, &project);
     let selection = select_graph(&node_map, &focus_set, depth, query)?;
@@ -600,6 +602,7 @@ fn resolve_import_with(
         declarations: Some(&project.declarations),
         manifests: Some(&project.manifests),
         base_path: &project.base_path,
+        file_text: Some(&project.file_text),
     };
 
     match plugin.resolve(import_path, context) {
@@ -700,6 +703,7 @@ fn resolve_plain(
             known_files: known_files.clone(),
             declarations: declarations::DeclarationIndex::default(),
             manifests: manifests::ManifestIndex::default(),
+            file_text: FileTextCache::new(std::path::PathBuf::new()),
         },
     )
 }
@@ -714,6 +718,52 @@ struct ResolutionInputs {
     known_files: plugins::KnownFiles,
     declarations: declarations::DeclarationIndex,
     manifests: manifests::ManifestIndex,
+    file_text: FileTextCache,
+}
+
+/// One analysis' cache of project files' text.
+///
+/// Resolution asks for the same configs on every import that
+/// touches them -- every crate named in a Rust path re-read every
+/// crate's `Cargo.toml`; every bare import under a directory
+/// re-read its `tsconfig.json`. The files cannot change during an
+/// analysis, so each is read at most once here, misses included:
+/// "this directory has no `package.json`" is the common answer, and
+/// re-proving it from the disk per import was most of the cost.
+///
+/// Resolution runs on rayon's workers, so the cache is a mutex
+/// rather than a cell. Contention is not the concern it looks like:
+/// after the first pass over a tree's configs, nearly every lookup
+/// is a hit on a short string compare.
+struct FileTextCache {
+    base_path: PathBuf,
+    entries: Mutex<BTreeMap<String, Option<String>>>,
+}
+
+impl FileTextCache {
+    fn new(base_path: PathBuf) -> Self {
+        Self {
+            base_path,
+            entries: Mutex::new(BTreeMap::new()),
+        }
+    }
+}
+
+impl sephera_core::plugins::FileTextLookup for FileTextCache {
+    fn read_text(&self, relative_path: &str) -> Option<String> {
+        // A poisoned lock means another worker panicked mid-read;
+        // answer as a miss rather than failing this import's
+        // resolution too -- the resolver's contract is that a file
+        // it cannot read is external, never an error.
+        let mut entries = self.entries.lock().ok()?;
+        if let Some(cached) = entries.get(relative_path) {
+            return cached.clone();
+        }
+        let text =
+            std::fs::read_to_string(self.base_path.join(relative_path)).ok();
+        entries.insert(relative_path.to_owned(), text.clone());
+        text
+    }
 }
 
 /// Builds edges and populates the node map from extracted imports.
@@ -1609,6 +1659,7 @@ fn names_a_known_module(
             declarations: Some(&project.declarations),
             manifests: Some(&project.manifests),
             base_path: &project.base_path,
+            file_text: Some(&project.file_text),
         },
     )
 }
@@ -1820,6 +1871,35 @@ mod tests {
 
     fn known_files(paths: &[&str]) -> BTreeSet<String> {
         paths.iter().map(|path| (*path).to_owned()).collect()
+    }
+
+    #[test]
+    fn the_file_text_cache_reads_each_file_once_misses_included() {
+        use sephera_core::plugins::FileTextLookup as _;
+
+        let temp_dir = tempdir().unwrap();
+        let cache = FileTextCache::new(temp_dir.path().to_path_buf());
+        fs::write(temp_dir.path().join("cfg.txt"), "one").unwrap();
+
+        assert_eq!(
+            cache.read_text("cfg.txt"),
+            Some("one".to_owned())
+        );
+        // The file changes on disk; within one analysis the cache's
+        // first answer stands, which is the property the cache
+        // exists for -- and the proof the second read never reached
+        // the disk.
+        fs::write(temp_dir.path().join("cfg.txt"), "two").unwrap();
+        assert_eq!(
+            cache.read_text("cfg.txt"),
+            Some("one".to_owned())
+        );
+
+        // A miss is cached too: most directories hold no manifest,
+        // and re-proving that per import was most of the old cost.
+        assert_eq!(cache.read_text("absent.txt"), None);
+        fs::write(temp_dir.path().join("absent.txt"), "late").unwrap();
+        assert_eq!(cache.read_text("absent.txt"), None);
     }
 
     /// Build a statement of the given kind for filter tests.
@@ -3295,6 +3375,7 @@ mod tests {
                 known_files: files,
                 declarations: index,
                 manifests: manifests::ManifestIndex::default(),
+                file_text: FileTextCache::new(std::path::PathBuf::new()),
             },
         );
 
@@ -3423,6 +3504,7 @@ mod tests {
                 known_files: files.clone(),
                 declarations: index.clone(),
                 manifests: manifests::ManifestIndex::default(),
+                file_text: FileTextCache::new(std::path::PathBuf::new()),
             },
         )
         .file()
