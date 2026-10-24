@@ -73,11 +73,22 @@ with the short declared name. A symbol only one side evidences pairs with
 nothing, and a name claimed by two files on either side is ambiguous and
 pairs with nothing, for the same reason as an ambiguous module name.
 
+## Exported files are entry points
+
+wasm-bindgen and cgo have no in-tree caller to join onto — the caller is
+generated JavaScript glue or C code — so their harvest serves a different
+question: reachability. A file carrying `#[wasm_bindgen]` exports, or a
+Go file with `//export` directives, is entered from outside the graph.
+The graph report lists every such file — PyO3 module owners and JNI
+implementers included — as `boundary_files`, and `sephera dead` treats
+them as roots: code behind these boundaries is alive by evidence, not
+excused by a guess.
+
 ## Limits, stated plainly
 
 - PyO3 and JNI are the boundaries the join covers today. wasm-bindgen and
-  cgo exports are recorded by nobody yet, so code behind them still reads
-  as unreached by `dead` and unconnected in the graph.
+  cgo exports are recorded — enough for `dead` to treat their files as
+  entry points — but not joined: there is no in-tree caller to join.
 - A rename (`#[pyfunction(name = "…")]`) is honoured when the definition
   is in the same file as the registration. A function defined in another
   file and renamed there keeps its Rust name in the exposed set, so an
