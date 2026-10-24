@@ -85,7 +85,19 @@ language = "Rust"
 # `use_list` is not. So six internal edges were missing and five resolver gaps
 # were reported against names the crate does re-export. Both numbers moved for
 # the same reason and neither is a behaviour change.
-unresolved_local = 0
+#
+# One of the four item paths above was answered by accident, and the
+# correction is why this is 1 and not 0. `super::JsonLines` was excused
+# because the declaration walk filed the importing statement's own leaf
+# under the file's bindings -- a `use` inside `mod tests` binds in that
+# module, not in the file's, so the statement was testifying for itself.
+# With bindings recorded only at the file's own module level, the excuse
+# is gone, and what remains is the limitation the header of this file
+# already documents: `JsonLines` is declared inside a `pin_project!`
+# token tree, which tree-sitter does not parse into items, so the index
+# honestly has no entry for it. The count says so now instead of being
+# carried to zero by the bug it sat next to.
+unresolved_local = 1
 files = 307
 # Was 646 internal and 60 self-references before a qualifier-only path
 # (`use super::*;` recorded as the bare word `super`) learned to answer at
