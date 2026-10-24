@@ -77,6 +77,15 @@ anywhere. For those, the older report is the oracle: the same
 statement, from the same file, resolved to the target in the older
 tree. What it names has not changed; only its landing has.
 
+A statement from a file the older tree never saw — a new file, or
+an old file importing the name for the first time — has no such
+entry. For those, the path alone answers, but only under two
+guards: the path must have landed on the target and on nothing
+else in the older tree, and the newer tree gets a veto — when the
+file's parent statement lands on a different file, the import
+means that file, not the target. A consumer neither tree can
+place is an ambiguity, and breaking reports none of those.
+
 Each broken symbol also reports namespace users — files importing
 the file's namespace wholesale, which may use the symbol without
 naming it — and the files downstream of those consumers.

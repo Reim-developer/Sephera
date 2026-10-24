@@ -27,6 +27,18 @@
 //! file, resolved to the target in the old tree. What it names has
 //! not changed; only its landing has.
 //!
+//! And one shape has no (file, path) entry at all: a statement from
+//! a file the old tree never saw, because the file is new or the
+//! import is. For those, the path alone answers, but only under two
+//! guards that keep it from guessing. The path must have landed on
+//! the target and on nothing else in the old tree — a path spelled
+//! the same in two places stays silent. And the new tree gets a veto:
+//! when the file's parent statement lands on a different file, the
+//! import means that file, not the target, however the path used to
+//! read. A consumer the old tree cannot place and the new tree
+//! contradicts is not a consumer; it is an ambiguity, and breaking
+//! reports none of those.
+//!
 //! Only Rust and Python collect declarations today, so only their
 //! symbols can be reported broken. Consumers are read in every
 //! language: a JavaScript file importing a removed name from a Rust
@@ -290,11 +302,17 @@ fn import_binds_symbol(import_path: &str, symbol: &str) -> bool {
 /// statements the new tree cannot resolve at all.
 struct ResolutionOracle<'report> {
     landed: BTreeMap<(&'report str, &'report str), &'report str>,
+    /// Where one import path used to land, wherever it was written
+    /// from. A path that landed on two different files is ambiguous
+    /// and maps to both, so a lookup by path alone can refuse it
+    /// instead of guessing.
+    by_path: BTreeMap<&'report str, BTreeSet<&'report str>>,
 }
 
 impl<'report> ResolutionOracle<'report> {
     fn from_report(report: &'report GraphReport) -> Self {
         let mut landed = BTreeMap::new();
+        let mut by_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for edge in &report.edges {
             if edge.resolved
                 && let Some(to) = edge.to.as_deref()
@@ -303,13 +321,31 @@ impl<'report> ResolutionOracle<'report> {
                     (edge.from.as_str(), edge.import_path.as_str()),
                     to,
                 );
+                by_path
+                    .entry(edge.import_path.as_str())
+                    .or_default()
+                    .insert(to);
             }
         }
-        Self { landed }
+        Self { landed, by_path }
     }
 
     fn landed_on(&self, from: &str, import_path: &str) -> Option<&str> {
         self.landed.get(&(from, import_path)).copied()
+    }
+
+    /// The one file an import path used to land on, when the old
+    /// tree agrees with itself. `None` when the path landed nowhere
+    /// or on more than one file — the second case is a path spelled
+    /// the same in two places, and a lookup by path alone must not
+    /// pick one.
+    fn landed_uniquely_on(&self, import_path: &str) -> Option<&str> {
+        let targets = self.by_path.get(import_path)?;
+        if targets.len() == 1 {
+            targets.iter().next().copied()
+        } else {
+            None
+        }
     }
 }
 
@@ -372,7 +408,26 @@ fn consumers(
                     .is_some_and(|(_, leaf)| leaf == symbol)
                     && oracle.landed_on(&edge.from, &edge.import_path)
                         == Some(target);
-                if via_parent || via_oracle {
+                // A statement from a file the old tree never saw — a
+                // file created after the symbol was removed, or an
+                // old file importing it for the first time — has no
+                // (file, path) entry for the oracle to answer from.
+                // The path alone answers when the old tree agrees
+                // with itself: the path landed on the target and on
+                // nothing else. And the new tree gets a veto: when
+                // the file's parent statement lands somewhere else,
+                // the import means that file, not the target, however
+                // the path used to read.
+                let via_path_fallback = split_trailing_name(&edge.import_path)
+                    .is_some_and(|(parent, leaf)| {
+                        leaf == symbol
+                            && oracle.landed_uniquely_on(&edge.import_path)
+                                == Some(target)
+                            && module_targets
+                                .get(&(edge.from.as_str(), parent.as_str()))
+                                .is_none_or(|landed| *landed == target)
+                    });
+                if via_parent || via_oracle || via_path_fallback {
                     direct
                         .entry(edge.from.clone())
                         .or_default()
