@@ -3,16 +3,19 @@ use std::process::ExitCode;
 
 use anyhow::{Context, Result};
 use clap::Parser;
+use sephera_core::declarations::DeclarationIndex;
 use sephera_graph::{
     resolver::{
-        EdgeFilters, build_focus_set, build_graph, build_graph_with_progress,
+        EdgeFilters, build_focus_set, build_graph,
+        build_graph_with_declarations, build_graph_with_progress,
     },
-    types::{GraphFormat, GraphQuery},
+    types::{GraphFormat, GraphQuery, GraphReport},
 };
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-    build_context_report, changed_files, load_project_settings,
-    recent_commit_files, resolve_changed_files, resolve_source,
+    build_context_report, changed_files, checkout_worktree,
+    load_project_settings, recent_commit_files, resolve_changed_files,
+    resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -20,15 +23,16 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     affected_tests,
     args::{
-        AffectedTestsArgs, Cli, Commands, ContextArgs, CouplingArgs,
-        CouplingOutputFormat, DeadArgs, DeadOutputFormat, GraphArgs,
-        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
-        ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, ReviewArgs,
-        ReviewOutputFormat, RiskArgs, RiskOutputFormat, SettingsArgs,
-        SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
-        WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
+        AffectedTestsArgs, BreakingArgs, BreakingOutputFormat, Cli, Commands,
+        ContextArgs, CouplingArgs, CouplingOutputFormat, DeadArgs,
+        DeadOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs, IgnoreArgs,
+        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
+        ReviewArgs, ReviewOutputFormat, RiskArgs, RiskOutputFormat,
+        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
+        TestImpactOutputFormat, WatchArgs, WatchTarget, WhyArgs,
+        WhyOutputFormat,
     },
-    change_impact, configure,
+    breaking, change_impact, configure,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
@@ -130,6 +134,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Review(arguments) => run_review(&arguments).await,
         Commands::Risk(arguments) => run_risk(&arguments).await,
         Commands::Dead(arguments) => run_dead(&arguments).await,
+        Commands::Breaking(arguments) => run_breaking(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -1064,6 +1069,141 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
     progress.finish();
     emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
     Ok(Vec::new())
+}
+
+async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
+    // A remote source has no two local refs to compare — its checkout
+    // is one ref already — so breaking refuses it plainly rather than
+    // comparing a clone against a worktree of itself.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "breaking compares two refs of a local repository; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Comparing the two refs...");
+
+    // The older side always lives in a worktree: its tree must not
+    // move while the newer side is built. The newer side is the
+    // working tree when --to is absent, and a second worktree
+    // otherwise, so the working tree is never disturbed either way.
+    let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
+        .with_context(|| {
+            format!(
+                "breaking checks `{}` out of {} and git could not do it",
+                arguments.from,
+                source.repo_root.display()
+            )
+        })?;
+    let old_ignore = build_ignore_matcher(
+        old_worktree.path(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    progress.set_message("Extracting the older side...");
+    let (old_report, old_index) =
+        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
+
+    let to_label = arguments.to.as_deref().unwrap_or("working tree");
+    let (new_report, new_index) =
+        build_new_side(&source, arguments, &progress)?;
+    drop(old_worktree);
+
+    let measured = breaking::measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        &arguments.from,
+        to_label,
+    );
+
+    let rendered = match arguments.format {
+        BreakingOutputFormat::Markdown => breaking::render_markdown(&measured),
+        BreakingOutputFormat::Json => breaking::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A break nobody uses does not fail the run: it is the clean kind
+    // of breaking, and a gate that fired on it would train a pipeline
+    // to ignore the gate.
+    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+        let with_consumers = u64::try_from(
+            measured
+                .broken
+                .iter()
+                .filter(|broken| !broken.direct.is_empty())
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        if with_consumers >= limit {
+            vec![Gate::new(
+                "broken symbols with direct consumers",
+                with_consumers,
+                limit,
+            )]
+        } else {
+            Vec::new()
+        }
+    });
+    Ok(gates)
+}
+
+/// Build the newer side of a breaking comparison.
+///
+/// A named `--to` is checked out into a worktree; without one, the
+/// newer side is the working tree itself. Either way the returned
+/// report and index are plain data, so the worktree can drop before
+/// the measurement runs.
+fn build_new_side(
+    source: &ResolvedSource,
+    arguments: &BreakingArgs,
+    progress: &CliProgress,
+) -> Result<(GraphReport, DeclarationIndex)> {
+    if let Some(to) = &arguments.to {
+        let new_worktree = checkout_worktree(&source.repo_root, to)
+            .with_context(|| {
+                format!(
+                    "breaking checks `{to}` out of {} and git could not do it",
+                    source.repo_root.display()
+                )
+            })?;
+        let new_ignore = build_ignore_matcher(
+            new_worktree.path(),
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the newer side...");
+        let built =
+            build_graph_with_declarations(new_worktree.path(), &new_ignore)?;
+        drop(new_worktree);
+        Ok(built)
+    } else {
+        let new_ignore = build_ignore_matcher(
+            &source.analysis_path,
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the working tree...");
+        build_graph_with_declarations(&source.analysis_path, &new_ignore)
+    }
 }
 
 async fn run_affected_tests(

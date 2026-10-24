@@ -153,16 +153,14 @@ fn a_removed_symbol_lists_the_files_that_still_name_it() {
     assert_eq!(broken.file, "lib.py");
     assert_eq!(broken.symbol, "add");
     assert_eq!(broken.change, BreakChange::Removed);
-    assert_eq!(
-        direct_files(broken),
-        ["consumer_py.py", "consumer_rs.rs"]
-    );
+    assert_eq!(direct_files(broken), ["consumer_py.py", "consumer_rs.rs"]);
 }
 
 #[test]
 fn a_kind_changed_symbol_is_reported_with_its_new_kind() {
     let old_index = index(&[("lib.rs", &[("Point", DeclarationKind::Struct)])]);
-    let new_index = index(&[("lib.rs", &[("Point", DeclarationKind::Function)])]);
+    let new_index =
+        index(&[("lib.rs", &[("Point", DeclarationKind::Function)])]);
 
     let mut item_edge = edge("user.rs", "lib.rs", "crate::lib");
     item_edge.items = vec!["Point".to_owned()];
@@ -206,11 +204,6 @@ fn a_deleted_file_reports_every_symbol_with_no_consumers() {
     );
 
     assert_eq!(measured.broken.len(), 2);
-    assert!(
-        measured
-            .broken
-            .iter()
-            .all(|broken| broken.direct.is_empty()
-                && broken.change == BreakChange::Removed)
-    );
+    assert!(measured.broken.iter().all(|broken| broken.direct.is_empty()
+        && broken.change == BreakChange::Removed));
 }

@@ -2,6 +2,7 @@
 
 mod affected_tests;
 mod args;
+mod breaking;
 mod budget;
 mod change_impact;
 pub(crate) mod configure;

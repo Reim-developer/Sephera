@@ -164,7 +164,10 @@ impl<'report> ResolutionOracle<'report> {
             if edge.resolved
                 && let Some(to) = edge.to.as_deref()
             {
-                landed.insert((edge.from.as_str(), edge.import_path.as_str()), to);
+                landed.insert(
+                    (edge.from.as_str(), edge.import_path.as_str()),
+                    to,
+                );
             }
         }
         Self { landed }
@@ -192,7 +195,8 @@ fn consumers(
         if edge.resolved
             && let Some(to) = edge.to.as_deref()
         {
-            module_targets.insert((edge.from.as_str(), edge.import_path.as_str()), to);
+            module_targets
+                .insert((edge.from.as_str(), edge.import_path.as_str()), to);
         }
     }
 

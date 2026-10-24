@@ -184,6 +184,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera dead --path .\n  sephera dead --path . --root src/worker.rs\n  sephera dead --path . --format json"
     )]
     Dead(DeadArgs),
+    /// Compare two refs and report which declared symbols broke, joined to the files that still use them
+    #[command(
+        long_about = "Compare two refs and report which declared symbols broke, joined to the files that still use them.\\n\\nA diff between two declaration indexes says what vanished or changed shape — a list any semver checker can produce, and one that answers the wrong question. A removed name nobody imports breaks nothing; a removed name with nine importers breaks nine files. This command makes that join: every symbol the newer side no longer declares, or declares as a different kind of thing, is reported with the files in the newer tree that still name it from the file that used to declare it — read from the new tree's edges, where a statement that used to resolve and now lands nowhere is itself the evidence of the break.\\n\\n`--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree, which is the form a branch review takes before it is pushed. Only Rust and Python collect declarations today, so only their symbols can be reported broken — but consumers are read in every language, because a JavaScript file importing a removed name through a boundary is as broken as a Rust caller.\\n\\nThe analysis needs a git repository. A tree that is not one is an error, not an empty report.",
+        after_long_help = "Examples:\\n  sephera breaking --path . --from origin/main\\n  sephera breaking --path . --from v1.0.0 --to v2.0.0\\n  sephera breaking --path . --from origin/main --format json"
+    )]
+    Breaking(BreakingArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -1090,6 +1096,61 @@ tree_command_args!(
 
     }
 );
+
+tree_command_args!(
+    #[doc = "Compare two refs and report which declared symbols broke, joined to the files that still use them."]
+    BreakingArgs {
+        /// The older reference: the side symbols are compared from
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The older reference to compare from.",
+        long_help = "The older reference: a branch, tag, or commit the symbols are compared from. Required, because a comparison without a starting point compares against nothing. `origin/main` is the usual spelling for a branch review."
+    )]
+    pub from: String,
+
+    /// The newer reference; when absent, the working tree
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The newer reference to compare to; the working tree when absent.",
+        long_help = "The newer reference to compare to. When absent, the newer side is the working tree itself — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. When present, both sides are checked out into temporary worktrees, so the working tree is left untouched."
+    )]
+    pub to: Option<String>,
+
+    /// Fail with exit code 2 when this many broken symbols have direct consumers
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many broken symbols with direct consumers.",
+        long_help = "Exit with code 2 when at least this many broken symbols still have direct consumers in the newer tree. A break nobody uses does not fail the run: it is the clean kind of breaking, and a gate that fired on it would train a pipeline to ignore the gate. The report is still printed; only the exit code changes."
+    )]
+    pub fail_on: Option<u64>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: BreakingOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BreakingOutputFormat {
+    /// Markdown list of broken symbols.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DeadOutputFormat {
