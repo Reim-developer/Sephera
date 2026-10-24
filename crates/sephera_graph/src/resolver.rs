@@ -986,11 +986,12 @@ fn build_edges_and_nodes(
 ///   from-import) lands on the file that declares the `#[pymodule]`;
 /// - an item reference (`from myext import add`, whose item half is spelled
 ///   `myext.add`) whose leaf the module exposes lands on the file that
-///   declares the leaf when exactly one Rust file does — a registered
-///   function commonly lives in a different file from the module that
-///   registers it — and on the module file otherwise. An item reference
-///   whose leaf the module does not expose is left unplaced, as the item
-///   halves of within-language imports are.
+///   declares the leaf when the evidence singles one out (see
+///   `declaring_file_for`) — a registered function commonly lives in a
+///   different file from the module that registers it — and on the module
+///   file otherwise. An item reference whose leaf the module does not
+///   expose is left unplaced, as the item halves of within-language
+///   imports are.
 ///
 /// Nothing already resolved is touched: a real Python module of the same
 /// name wins by having resolved first, which is the precedence Python's own
@@ -1032,18 +1033,54 @@ fn join_across_boundary(
         if !module.exposed.contains(leaf) {
             return (resolved, false);
         }
-        let target = project
-            .declarations
-            .file_declaring(leaf)
-            .filter(|file| {
-                Path::new(file)
-                    .extension()
-                    .is_some_and(|extension| extension == "rs")
-            })
+        let target = declaring_file_for(leaf, module_file, project)
             .unwrap_or(module_file);
         return (Resolution::File(target.to_owned()), true);
     }
     (Resolution::File(module_file.to_owned()), true)
+}
+
+/// The Rust file that declares an exposed name, when the evidence singles
+/// one out.
+///
+/// A registration names a function, not a file, so the declaring file is
+/// found by lookup — and a name lookup over a whole repository is only an
+/// answer when it is scoped. The scope that means something here is the
+/// module's own directory: a `#[pymodule]` registers functions from its
+/// own crate, whose files sit beside it, so exactly one Rust declarer in
+/// that directory wins over any number elsewhere. With none beside it,
+/// exactly one Rust declarer in the whole analysis is still an answer.
+/// Anything else — several beside it, or several scattered — is
+/// ambiguity, and the caller falls back to the module file rather than
+/// guessing.
+fn declaring_file_for<'inputs>(
+    leaf: &str,
+    module_file: &str,
+    project: &'inputs ResolutionInputs,
+) -> Option<&'inputs str> {
+    let declarers: Vec<&str> = project
+        .declarations
+        .files_declaring(leaf)
+        .into_iter()
+        .filter(|file| {
+            Path::new(file)
+                .extension()
+                .is_some_and(|extension| extension == "rs")
+        })
+        .collect();
+    let module_dir = module_file.rsplit_once('/').map(|(dir, _)| dir);
+    let beside: Vec<&str> = declarers
+        .iter()
+        .copied()
+        .filter(|file| file.rsplit_once('/').map(|(dir, _)| dir) == module_dir)
+        .collect();
+    if beside.len() == 1 {
+        return beside.first().copied();
+    }
+    if beside.is_empty() && declarers.len() == 1 {
+        return declarers.first().copied();
+    }
+    None
 }
 
 fn select_graph(
@@ -2127,6 +2164,53 @@ mod tests {
 
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].to.as_deref(), Some("native/math.rs"));
+        assert_eq!(edges[0].kind, ImportKind::Ffi);
+    }
+
+    #[test]
+    fn a_same_named_declarer_elsewhere_does_not_steal_the_item_edge() {
+        let mut inputs = boundary_inputs();
+        let mut other_names = declarations::DeclaredNames::default();
+        other_names.declare("add");
+        inputs.declarations.insert("other/add.rs", other_names);
+        let imports = vec![
+            file_data(
+                "app.py",
+                SupportedLanguage::Python,
+                vec![statement("myext.add", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+            file_data("native/math.rs", SupportedLanguage::Rust, Vec::new()),
+            file_data("other/add.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &inputs);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to.as_deref(), Some("native/math.rs"));
+    }
+
+    #[test]
+    fn two_declarers_beside_the_module_fall_back_to_the_module_file() {
+        let mut inputs = boundary_inputs();
+        let mut more_names = declarations::DeclaredNames::default();
+        more_names.declare("add");
+        inputs.declarations.insert("native/more.rs", more_names);
+        let imports = vec![
+            file_data(
+                "app.py",
+                SupportedLanguage::Python,
+                vec![statement("myext.add", ImportKind::Dependency)],
+            ),
+            file_data("native/lib.rs", SupportedLanguage::Rust, Vec::new()),
+            file_data("native/math.rs", SupportedLanguage::Rust, Vec::new()),
+            file_data("native/more.rs", SupportedLanguage::Rust, Vec::new()),
+        ];
+
+        let (edges, _) = build_edges_and_nodes(&imports, &inputs);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].to.as_deref(), Some("native/lib.rs"));
         assert_eq!(edges[0].kind, ImportKind::Ffi);
     }
 
