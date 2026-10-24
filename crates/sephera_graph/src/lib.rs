@@ -10,6 +10,7 @@
 pub mod affected_tests;
 pub mod blast_radius;
 pub mod coupling;
+pub mod dead;
 pub mod dependency_path;
 pub mod manifests;
 pub mod plugins;
