@@ -26,6 +26,8 @@ export default defineConfig({
 						{ slug: 'commands/graph' },
 						{ slug: 'commands/impact' },
 						{ slug: 'commands/affected-tests' },
+						{ slug: 'commands/why' },
+						{ slug: 'commands/coupling' },
 						{ slug: 'commands/guard' },
 						{ slug: 'commands/watch' },
 						{ slug: 'commands/mcp' },

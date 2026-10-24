@@ -22,20 +22,26 @@ cargo install sephera
 ## The graph is checked against real repositories
 
 A dependency tool that reports confident nonsense is worse than no tool. So the
-numbers are measured on three real projects at pinned commits, asserted in CI,
-and reproducible:
+numbers are measured on nine real projects at pinned commits — one or two per
+supported language — asserted in CI, and reproducible:
 
 ```bash
-python scripts/fetch_corpus.py      # clone the three repositories
+python scripts/fetch_corpus.py      # clone the nine repositories
 python scripts/measure_accuracy.py --verify
 ```
 
 ```
 repository  files  internal  self-refs  unresolved  cycles  cfg-gated
 ----------  -----  --------  ---------  ----------  ------  ---------
-      axum    307       640         66           8      19         86
-     flask     80       185          5           0      43          0
+      axum    307      1596         70           1      20         86
+     flask     83       188          6           0      44          0
    express    141       159          0           0       0          0
+       vue    527      1890          0           1     205          0
+       gin     99        31          0           0       0          0
+      gson    264      1085          0           0      25          0
+       fmt     78       158          0           0       2        218
+      curl   1125      3087          0           0       7       1638
+    pytest    274       870          4           0      91          0
 ```
 
 `unresolved` counts imports meant for this project that could not be placed to a
@@ -49,14 +55,31 @@ The `axum` row is the honest one. An earlier version reported **66 unresolved
 paths and 54 cycles** on it. Those were module-tree artifacts — a parent
 declaring a child and the child naming its parent with `super::` — not
 dependencies anyone could act on, and this README advertised two of them as bugs
-found in this repository's own source. The graph now reports 8 and 19.
+found in this repository's own source. The graph now reports 1 and 20.
 
 That cycle count went up by one when it went down by nineteen. Fixing the
 artifact also removed the `mod child;` edges from the graph entirely, which had
-been hiding real rings: the nineteenth is `response/mod.rs` and
+been hiding real rings: one of the twenty is `response/mod.rs` and
 `test_helpers/mod.rs` importing each other, which no edit can undo. Cycle
 detection now drops declaration edges by kind, where the blast radius keeps
 them.
+
+The last unresolved paths fell one class at a time, and every class turned out
+to be a way real code says something the resolver had not learned to hear:
+imports of files the project's own ignore rules mark as generated, C and C++
+includes behind preprocessor conditionals, Python names bound on every branch
+of a module-level conditional, Rust item paths spelled with `::`, and
+`#[macro_export]` macros. Seven of the nine repositories now sit at zero, and
+the two holdouts sit at one each, for reasons that are properties of the code
+rather than of the resolver. One is a Vue import of a file the sfc-playground
+synthesises at runtime — it does not exist in the repository, and no in-repo
+evidence says otherwise. The other is axum's `JsonLines`, a real struct
+declared inside a `pin_project!` macro invocation: tree-sitter does not parse
+the inside of a macro token tree into items, so the declaration index honestly
+has no entry for it. It was carried to zero for a while by a neighbouring bug
+— the importing statement testifying that its own name was bound — and when
+that was fixed the count went back to saying so. Both stay counted rather
+than classified away.
 
 Getting there was mostly measurement rather than design. Reading import
 statements by splitting text produced paths like `typing as t`,
@@ -116,12 +139,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 43 |
-| Internal edges | 233 |
-| External edges | 129 |
+| Internal edges | 235 |
+| External edges | 133 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 39 |
 | Local crate edges | 0 |
-| Standard library edges | 56 |
+| Standard library edges | 60 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -144,7 +167,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 56 |
+| `std` | stdlib | unknown | 60 |
 | `anyhow` | declared | 1.0.102 | 19 |
 | `context` | undeclared | unknown | 9 |
 | `rmcp` | declared | 1.3.0 | 9 |
@@ -162,7 +185,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | File | Imported by |
 |------|-------------|
 | `crates/sephera_context/src/lib.rs` | 40 |
-| `crates/sephera_runtime/src/lib.rs` | 32 |
+| `crates/sephera_runtime/src/lib.rs` | 34 |
 | `crates/sephera_context/src/types.rs` | 27 |
 | `crates/sephera_symbols/src/lib.rs` | 24 |
 | `crates/sephera_cli/src/output.rs` | 17 |
@@ -176,12 +199,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imports |
 |------|---------|
-| `crates/sephera_cli/src/run.rs` | 29 |
+| `crates/sephera_cli/src/run.rs` | 30 |
 | `crates/sephera_context/src/lib.rs` | 18 |
 | `crates/sephera_context/src/builder.rs` | 17 |
 | `crates/sephera_cli/src/output.rs` | 11 |
+| `crates/sephera_mcp/src/server.rs` | 11 |
 | `crates/sephera_mcp/src/render/tests.rs` | 10 |
-| `crates/sephera_mcp/src/server.rs` | 10 |
 | `crates/sephera_runtime/src/lib.rs` | 10 |
 | `crates/sephera_cli/src/lib.rs` | 9 |
 | `crates/sephera_cli/src/output/symbols.rs` | 9 |
@@ -418,6 +441,22 @@ means the analysis could not run. A broken install and a violated rule look the
 same in a log otherwise, and that is where someone adds `--ignore-failures` to
 the workflow and then never notices either.
 
+**One name, not the whole file** *(new in 2.0)*. `--symbol` narrows the report
+from the file to a single name it exports: the files that import *that name*,
+the files that import the file's namespace wholesale (reported apart, as
+may-use rather than use), and the files downstream of those. On this
+repository, `crates/sephera_core/src/declarations.rs` has 32 dependents as a
+file; its `DeclaredNames` type is named by exactly one of them. Both numbers
+are true — they answer different questions.
+
+```bash
+# Who imports this one type, as opposed to anything else in the file?
+sephera impact crates/sephera_core/src/declarations.rs --symbol DeclaredNames
+
+# The threshold compares against the symbol's users, not the file's
+sephera impact crates/sephera_core/src/declarations.rs --symbol DeclaredNames --fail-on 10
+```
+
 ### `affected-tests` — which tests answer for a change *(new in 2.0)*
 
 The follow-up question: not just what breaks, but what to run. The same walk,
@@ -459,6 +498,32 @@ files, but it is not why they are coupled — the coupling would survive its
 removal. When no chain exists the command says so and still succeeds; a path
 that matches no file in the analysis is the error.
 
+### `coupling` — the coupling the graph cannot see *(new in 2.0)*
+
+Every other command reads the source. This one reads the history, and reports
+where the two disagree: pairs of files that change together in commit after
+commit while neither imports the other. That coupling is real — an editor of
+one who does not know about the other breaks something — and invisible to
+source analysis, because there is no statement to read.
+
+```bash
+# Which file pairs change together with no import between them?
+sephera coupling --path .
+
+# A longer window and a stricter bar
+sephera coupling --path . --commits 1000 --min-co-changes 5
+```
+
+Pairs joined by an import in either direction are excluded (that coupling is
+`impact`'s to report), and commits touching more than fifty files in the tree
+are skipped, because a mass reformat couples everything and means nothing.
+Each pair carries a *containment*: the share of the quieter file's commits
+that also touched the other file, where 1.0 means it has never changed without
+the other. Run against this repository, the strongest pairs are the CLI's
+runner with the MCP server — every feature lands in both, and the two crates
+may not import each other by design — and the declaration index with the Rust
+plugin that consumes it.
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it
@@ -471,9 +536,9 @@ also exits **2**.
 sephera guard --file crates/sephera_graph/src/blast_radius.rs --path . --max-dependents 25
 ```
 
-The measurements are also MCP tools (`impact`, `affected_tests`, `why`), so
-an agent can ask before editing — `guard` exists for the moment before it
-thinks to ask.
+The measurements are also MCP tools (`impact`, `affected_tests`, `why`,
+`coupling`), so an agent can ask before editing — `guard` exists for the
+moment before it thinks to ask.
 
 ### `graph` — dependency structure and blast radius
 
@@ -614,7 +679,7 @@ sephera loc --path . --format markdown
 sephera mcp
 ```
 
-Serves `loc`, `symbols`, `context`, `graph`, and `impact` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
+Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, and `coupling` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
 
 ```json
 {
