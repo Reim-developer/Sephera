@@ -207,6 +207,12 @@ pub fn build_graph_with_progress(
         depth: selection.applied_depth,
         query: selection.query,
         nodes,
+        boundary_files: project
+            .boundaries
+            .exporting_files()
+            .into_iter()
+            .map(str::to_owned)
+            .collect(),
         edges: filtered_edges,
         metrics,
     })
@@ -2283,6 +2289,19 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].to, None);
         assert_eq!(edges[0].kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn a_pymodule_owner_is_listed_among_the_boundary_files() {
+        let report = graph_for(&[
+            (
+                "native/lib.rs",
+                "#[pymodule]\nfn myext(m: &Bound<'_, PyModule>) -> PyResult<()> { Ok(()) }\n",
+            ),
+            ("app.py", "import myext\n"),
+        ]);
+
+        assert_eq!(report.boundary_files, ["native/lib.rs".to_owned()]);
     }
 
     #[test]

@@ -138,6 +138,16 @@ pub fn measure_dead(
             .filter(|root| nodes.contains(root.as_str()))
             .cloned(),
     );
+    // A file exporting across a language boundary is called from
+    // outside the graph — from Python, JavaScript or C — so it is an
+    // entry point by evidence, not by path convention.
+    root_set.extend(
+        report
+            .boundary_files
+            .iter()
+            .filter(|root| nodes.contains(root.as_str()))
+            .cloned(),
+    );
     let roots: Vec<String> = root_set.into_iter().collect();
 
     // Forward reachability over resolved edges: the one direction
@@ -238,6 +248,7 @@ mod tests {
             query: None,
             nodes: nodes.iter().copied().map(node).collect(),
             edges,
+            boundary_files: Vec::new(),
             metrics: GraphMetrics {
                 total_files: 0,
                 total_internal_edges: 0,
@@ -256,6 +267,30 @@ mod tests {
                 cycles: vec![],
             },
         }
+    }
+
+    #[test]
+    fn a_boundary_file_is_a_root_by_evidence_not_convention() {
+        // native.rs matches no entry-point convention and nothing
+        // imports it: by path alone it is dead. But it exposes a PyO3
+        // module, so Python calls it from outside the graph -- the
+        // report's boundary list is evidence, and the file is a root.
+        let mut graph =
+            report(&["src/main.rs", "src/native.rs", "src/lonely.rs"], vec![]);
+        graph.boundary_files = vec!["src/native.rs".to_owned()];
+
+        let measured = measure_dead(&graph, &[]);
+
+        assert_eq!(
+            measured.roots,
+            vec!["src/main.rs".to_owned(), "src/native.rs".to_owned()]
+        );
+        let names: Vec<&str> = measured
+            .dead
+            .iter()
+            .map(|dead| dead.file.as_str())
+            .collect();
+        assert_eq!(names, vec!["src/lonely.rs"]);
     }
 
     #[test]

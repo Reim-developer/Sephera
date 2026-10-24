@@ -223,6 +223,7 @@ mod tests {
             query: None,
             nodes: nodes.iter().copied().map(node).collect(),
             edges,
+            boundary_files: Vec::new(),
             metrics: GraphMetrics {
                 total_files: 0,
                 total_internal_edges: 0,

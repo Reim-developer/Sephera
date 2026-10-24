@@ -267,6 +267,7 @@ mod tests {
                 edge("c.rs", "a.rs", "crate::a"),
                 edge("d.rs", "b.rs", "crate::b"),
             ],
+            boundary_files: Vec::new(),
             metrics: GraphMetrics {
                 total_files: 4,
                 total_internal_edges: 3,
