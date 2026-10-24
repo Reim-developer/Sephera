@@ -152,13 +152,10 @@ impl ResolveContext<'_> {
     /// to end were each a direct `read_to_string` in a plugin.
     #[must_use]
     pub fn read_project_file(&self, relative_path: &str) -> Option<String> {
-        match self.file_text {
-            Some(cache) => cache.read_text(relative_path),
-            None => {
-                std::fs::read_to_string(self.base_path.join(relative_path))
-                    .ok()
-            }
-        }
+        self.file_text.map_or_else(
+            || std::fs::read_to_string(self.base_path.join(relative_path)).ok(),
+            |cache| cache.read_text(relative_path),
+        )
     }
 }
 
