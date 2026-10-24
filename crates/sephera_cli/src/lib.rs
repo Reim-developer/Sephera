@@ -12,6 +12,7 @@ mod guard;
 mod impact;
 mod output;
 mod progress;
+mod review;
 mod run;
 mod watch;
 mod why;

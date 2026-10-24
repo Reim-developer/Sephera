@@ -166,6 +166,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera coupling --path .\n  sephera coupling --path . --commits 1000 --min-co-changes 5\n  sephera coupling --path . --format json"
     )]
     Coupling(CouplingArgs),
+    /// Review a change before it lands: blast radius, affected tests, and coupling warnings for the files it touches
+    #[command(
+        long_about = "Review a change before it lands: for each file the change touches, its blast radius, the tests that reach it, and a warning for every file that history keeps changing with it but the change does not touch.\n\nThe change is the working tree read against a reference -- HEAD by default, so staged edits, unstaged edits, deletions, and untracked files all count; `--against` names another reference to compare the working tree with, which is how a whole branch is reviewed before it is pushed. Dependents and tests are measured with the same walks `impact` and `affected-tests` use, and the coupling warnings come from the same measurement as `coupling`, read against the changed set: a pair where both sides changed is history working as it should and does not warn.\n\nA changed file the graph does not hold -- deleted by the change, or outside the analysis base -- is reported as absent rather than dropped: a deletion is the change whose dependents matter most, and the report says the graph cannot name them instead of implying there are none.\n\nThe analysis needs a git history for the coupling warnings. A tree that is not a git repository is an error, not an empty report.",
+        after_long_help = "Examples:\n  sephera review --path .\n  sephera review --path . --against master\n  sephera review --path . --format json"
+    )]
+    Review(ReviewArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -939,6 +945,64 @@ tree_command_args!(
 
     }
 );
+
+tree_command_args!(
+    #[doc = "Review a change before it lands."]
+    ReviewArgs {
+        /// Reference the working tree is compared against
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "Compare the working tree against this reference (default: HEAD).",
+        long_help = "The reference the change is read against. The default, HEAD, reviews everything uncommitted -- staged, unstaged, deleted, and untracked. Naming a branch or tag reviews the whole body of work since that point, committed and uncommitted together, which is the form a branch review takes before a push."
+    )]
+    pub against: Option<String>,
+
+        /// How many commits of history to read for coupling warnings
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits for the coupling warnings.",
+        long_help = "How far back the history window reaches, in commits, for the coupling warnings. The window bounds every count behind a warning: a partner is only named on co-changes inside it. It means the same thing it means for `coupling`, whose report can be consulted for the pairs themselves."
+    )]
+    pub commits: u32,
+
+    /// Minimum shared commits for a coupling warning
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "3",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Warn about partners that changed together at least this many times.",
+        long_help = "The bar a hidden pair has to clear before the review warns about it. One shared commit is a coincidence any two files can have; three inside a few hundred is a pattern. The report states the bar it used."
+    )]
+    pub min_co_changes: u64,
+
+    /// Output format for the review
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the review. Supports markdown and json.",
+        long_help = "Output format for the review. Supports markdown and json."
+    )]
+    pub format: ReviewOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ReviewOutputFormat {
+    /// Markdown review of the change.
+    #[value(name = "markdown", help = "Render the review as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the review as JSON.")]
+    Json,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum CouplingOutputFormat {

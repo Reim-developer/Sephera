@@ -9,8 +9,8 @@ use sephera_graph::{
 };
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-    build_context_report, load_project_settings, recent_commit_files,
-    resolve_changed_files, resolve_source,
+    build_context_report, changed_files, load_project_settings,
+    recent_commit_files, resolve_changed_files, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -21,9 +21,9 @@ use crate::{
         AffectedTestsArgs, Cli, Commands, ContextArgs, CouplingArgs,
         CouplingOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs,
         IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
-        OutputArgs, SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
-        TestImpactOutputFormat, WatchArgs, WatchTarget, WhyArgs,
-        WhyOutputFormat,
+        OutputArgs, ReviewArgs, ReviewOutputFormat, SettingsArgs, SourceArgs,
+        SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat, WatchArgs,
+        WatchTarget, WhyArgs, WhyOutputFormat,
     },
     change_impact, configure,
     context_config::{
@@ -39,7 +39,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    watch, why,
+    review, watch, why,
 };
 
 #[must_use]
@@ -124,6 +124,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         }
         Commands::Why(arguments) => run_why(&arguments).await,
         Commands::Coupling(arguments) => run_coupling(&arguments).await,
+        Commands::Review(arguments) => run_review(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -800,6 +801,96 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
             coupling::render_markdown(&measured, arguments.min_co_changes)
         }
         CouplingOutputFormat::Json => coupling::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
+async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Reviewing the change...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // The change and the history first, for the reason `coupling`
+    // reads its history first: both errors are about git, and they
+    // should arrive before the graph build spends its time.
+    let against = arguments.against.as_deref();
+    let changed =
+        changed_files(&source.repo_root, against).with_context(|| {
+            format!(
+                "review reads the working tree of {} against {}, and \
+                 git could not make the comparison",
+                source.repo_root.display(),
+                against.unwrap_or("HEAD")
+            )
+        })?;
+    let commits = recent_commit_files(&source.repo_root, arguments.commits)
+        .with_context(|| {
+            format!(
+                "review reads the git history of {} for its coupling \
+                 warnings, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    progress.set_message("Extracting imports...");
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased_commits = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let rebased_changed = review::rebase_changed_paths(&changed, &base_prefix);
+    let measured = review::measure_review(
+        &report,
+        &rebased_changed,
+        &rebased_commits,
+        review::ReviewOptions {
+            depth: None,
+            coupling: coupling::CouplingOptions {
+                min_co_changes: arguments.min_co_changes,
+                ..coupling::CouplingOptions::default()
+            },
+        },
+    );
+
+    let against_label = against.unwrap_or("HEAD");
+    let rendered = match arguments.format {
+        ReviewOutputFormat::Markdown => {
+            review::render_markdown(&measured, against_label)
+        }
+        ReviewOutputFormat::Json => {
+            review::render_json(&measured, against_label)
+        }
     };
 
     if arguments.output_args.output.is_some() {
