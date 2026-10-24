@@ -708,6 +708,35 @@ fn resolve_plain(
     )
 }
 
+/// The graph as a forward adjacency map: each file to the resolved
+/// in-project files it imports, sorted and deduplicated, self-imports
+/// excluded.
+///
+/// The shape the context pack's dependency closure consumes, and
+/// the natural dual of the dependent walks: those are computed per
+/// query because they carry distances, while this one is the whole
+/// graph's forward edges as plain data a caller can keep.
+#[must_use]
+pub fn forward_dependencies(
+    report: &super::types::GraphReport,
+) -> BTreeMap<String, Vec<String>> {
+    let mut map: BTreeMap<String, Vec<String>> = BTreeMap::new();
+    for edge in &report.edges {
+        if edge.resolved {
+            if let Some(to) = &edge.to {
+                if edge.from != *to {
+                    map.entry(edge.from.clone()).or_default().push(to.clone());
+                }
+            }
+        }
+    }
+    for imports in map.values_mut() {
+        imports.sort();
+        imports.dedup();
+    }
+    map
+}
+
 /// The project-wide facts every resolution reads.
 ///
 /// Grouped because the argument list outgrew what a reader can hold: the eighth
@@ -741,7 +770,7 @@ struct FileTextCache {
 }
 
 impl FileTextCache {
-    fn new(base_path: PathBuf) -> Self {
+    const fn new(base_path: PathBuf) -> Self {
         Self {
             base_path,
             entries: Mutex::new(BTreeMap::new()),
@@ -1881,19 +1910,13 @@ mod tests {
         let cache = FileTextCache::new(temp_dir.path().to_path_buf());
         fs::write(temp_dir.path().join("cfg.txt"), "one").unwrap();
 
-        assert_eq!(
-            cache.read_text("cfg.txt"),
-            Some("one".to_owned())
-        );
+        assert_eq!(cache.read_text("cfg.txt"), Some("one".to_owned()));
         // The file changes on disk; within one analysis the cache's
         // first answer stands, which is the property the cache
         // exists for -- and the proof the second read never reached
         // the disk.
         fs::write(temp_dir.path().join("cfg.txt"), "two").unwrap();
-        assert_eq!(
-            cache.read_text("cfg.txt"),
-            Some("one".to_owned())
-        );
+        assert_eq!(cache.read_text("cfg.txt"), Some("one".to_owned()));
 
         // A miss is cached too: most directories hold no manifest,
         // and re-proving that per import was most of the old cost.
