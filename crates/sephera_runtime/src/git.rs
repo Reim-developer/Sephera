@@ -184,6 +184,55 @@ pub fn recent_commit_files(
     Ok(parse_commit_files(&output))
 }
 
+/// The files a change touches, spelled from the repository root.
+///
+/// The change is the working tree read against `reference` -- `HEAD`
+/// when none is named, so an unstaged edit, a staged one, and a
+/// deletion all count. Committed differences between two refs are
+/// the caller's `git diff A..B` concern; this answers the question a
+/// review asks before anything is committed.
+///
+/// Untracked files are always included. A new file is the likeliest
+/// thing in a change to break the build -- it is the one nothing
+/// references yet and the one whose own imports nobody has run --
+/// and a review that ignored it for having no history in the index
+/// would miss exactly the file it exists to check.
+///
+/// # Errors
+///
+/// Returns an error when git cannot make the comparison, most often
+/// because `repo_root` is not a repository or the reference does not
+/// exist. That is reported rather than read as "nothing changed":
+/// an empty change and an unreadable one warrant different responses.
+pub fn changed_files(
+    repo_root: &Path,
+    reference: Option<&str>,
+) -> Result<Vec<String>> {
+    let diff = git_stdout_string(
+        repo_root,
+        ["diff", "--name-only", "-z", reference.unwrap_or("HEAD")],
+        "read the changed files",
+    )?;
+    let untracked = git_stdout_string(
+        repo_root,
+        ["ls-files", "--others", "--exclude-standard", "-z"],
+        "read the untracked files",
+    )?;
+
+    let mut files: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
+    for output in [&diff, &untracked] {
+        files.extend(
+            output
+                .split('\0')
+                .map(str::trim)
+                .filter(|path| !path.is_empty())
+                .map(ToOwned::to_owned),
+        );
+    }
+    Ok(files.into_iter().collect())
+}
+
 /// Split `git log --name-only` output into one file list per commit.
 ///
 /// Records begin with a unit-separator byte and the commit hash, so
@@ -224,7 +273,7 @@ where
 mod tests {
     use std::{fs, path::Path, process::Command};
 
-    use super::{parse_commit_files, recent_commit_files};
+    use super::{changed_files, parse_commit_files, recent_commit_files};
 
     #[test]
     fn parse_splits_records_and_drops_the_hash_line() {
@@ -280,6 +329,52 @@ mod tests {
 
         let one = recent_commit_files(dir, 1).expect("history reads");
         assert_eq!(one.len(), 1, "the limit is honoured");
+    }
+
+    #[test]
+    fn changed_files_reads_the_working_tree_against_a_reference() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        fs::write(dir.join("gone.txt"), "soon\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+
+        // An unstaged edit, a deletion, and a file git has never seen.
+        fs::write(dir.join("a.txt"), "one more\n").expect("write");
+        fs::remove_file(dir.join("gone.txt")).expect("remove");
+        fs::write(dir.join("new.txt"), "uncommitted\n").expect("write");
+
+        let changed = changed_files(dir, None).expect("the change reads");
+        assert_eq!(
+            changed,
+            vec![
+                "a.txt".to_owned(),
+                "gone.txt".to_owned(),
+                "new.txt".to_owned()
+            ],
+            "edited, deleted and untracked, sorted, each once"
+        );
+
+        // A commit makes the same tree clean against the new HEAD and
+        // changed against the first commit.
+        git(dir, &["add", "-A"]);
+        git(dir, &["commit", "-qm", "second"]);
+        assert_eq!(
+            changed_files(dir, None).expect("clean reads"),
+            Vec::<String>::new()
+        );
+        let against_first = changed_files(dir, Some("HEAD~1"))
+            .expect("the older reference reads");
+        assert_eq!(
+            against_first,
+            vec![
+                "a.txt".to_owned(),
+                "gone.txt".to_owned(),
+                "new.txt".to_owned()
+            ]
+        );
     }
 
     #[test]
