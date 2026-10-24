@@ -1,14 +1,14 @@
 ---
 title: review
-description: Review a change before it lands — blast radius, affected tests, and coupling warnings for the files it touches.
+description: Review a change before it lands — blast radius, affected tests, breaking symbols, and coupling warnings for the files it touches.
 ---
 
 # `review`
 
-`impact`, `affected-tests`, and `coupling` each answer one question
-about a file. A review asks all three about the files a change
-actually touches, in one report, at the moment the answers can still
-change the change: before it lands.
+`impact`, `affected-tests`, `breaking`, and `coupling` each answer
+one question about a file. A review asks all four about the files
+a change actually touches, in one report, at the moment the answers
+can still change the change: before it lands.
 
 ## Basic usage
 
@@ -19,9 +19,10 @@ sephera review --path .
 The change is the working tree read against `HEAD`: staged edits,
 unstaged edits, deletions, and untracked files all count. For each
 changed file the report gives its blast radius (direct dependents,
-and the transitive count), the tests that reach it, and a warning
-for every file that history keeps changing with it but the change
-does not touch:
+and the transitive count) and the tests that reach it. Then, in
+order of certainty, it names what broke by name, and last the
+heuristic warnings for every file that history keeps changing with
+a changed file but the change does not touch:
 
 ```text
 # Change review
@@ -31,8 +32,42 @@ does not touch:
 ## `crates/sephera_graph/src/resolver.rs`
 - 6 direct dependent(s), 41 in total.
 - Affected tests (3): `crates/sephera_graph/tests/...`
-- Warning: `crates/sephera_mcp/src/server.rs` changed with this file 7 times (containment 0.636) and is not in this change.
+
+## Breaking changes: `HEAD` → `working tree`
+
+1 symbol(s) broke; 1 of them still have direct consumers.
+
+### `crates/sephera_graph/src/types.rs` — `OldName` (function, removed)
+
+Direct consumers:
+- `crates/sephera_cli/src/run.rs` via `graph.types.OldName`
+
+## Coupling warnings
+
+- Warning: `crates/sephera_mcp/src/server.rs` changed with `crates/sephera_graph/src/resolver.rs` 7 times (containment 0.636) and is not in this change.
 ```
+
+## What broke by name
+
+Between the changed files and the coupling warnings sits the
+breaking section: the symbols the change removed or reshaped,
+joined to the files that still name them. It is the
+[`breaking`](/commands/breaking/) measurement, embedded rather
+than recomputed, so the two commands cannot disagree — and it is
+never omitted. When nothing broke it is one line saying so,
+because an omitted section reads as "not measured", and a review
+must not leave the reader guessing whether breaking was checked.
+
+The section carries `breaking`'s limits unchanged, stated there
+rather than repeated here: only Rust and Python collect
+declarations, so only their symbols can break; consumers are read
+in every language; a symbol that moved files reads as removed
+from the first. A broken symbol's consumers will often already
+appear in some changed file's blast radius. That is not
+duplication to deduplicate: blast radius says "this file depends
+on a changed file", breaking says "this file names a symbol that
+no longer exists". Different questions, different lists, both
+kept.
 
 Warnings come from the same measurement as
 [`coupling`](/commands/coupling/), read against the changed set. A
@@ -75,9 +110,9 @@ sephera review --path . --format json
 ```
 
 The JSON carries `against`, `commits_scanned`, and `commits_counted`
-beside `changed` and `warnings`, so a consumer comparing two reviews
-can tell whether they were read against the same point and the same
-history before comparing their numbers.
+beside `changed`, `breaking`, and `warnings`, so a consumer comparing
+two reviews can tell whether they were read against the same point
+and the same history before comparing their numbers.
 
 ## Exit codes
 
@@ -88,8 +123,9 @@ history before comparing their numbers.
 
 ## Related commands
 
-`review` is the three questions fused over a change. Separately:
+`review` is the four questions fused over a change. Separately:
 [`impact`](/commands/impact/) for one file's blast radius,
 [`affected-tests`](/commands/affected-tests/) for the tests and the
-commands that run them, and [`coupling`](/commands/coupling/) for
-every hidden pair in the tree.
+commands that run them, [`breaking`](/commands/breaking/) for the
+symbols two refs disagree on, and [`coupling`](/commands/coupling/)
+for every hidden pair in the tree.

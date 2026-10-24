@@ -44,8 +44,19 @@ pub fn rebase_changed_paths(
 /// the window they were counted in, and a review against HEAD is a
 /// different claim from the same files reviewed against a branch
 /// point.
+///
+/// The sections run in order of certainty: the changed files first,
+/// then what broke by name, then the heuristic coupling warnings
+/// last. The breaking section is never omitted: when nothing broke
+/// it is one line saying so, because an omitted section reads as
+/// "not measured", and a review must not leave the reader guessing
+/// whether breaking was checked.
 #[must_use]
-pub fn render_markdown(report: &ReviewReport, against: &str) -> String {
+pub fn render_markdown(
+    report: &ReviewReport,
+    against: &str,
+    breaking: &sephera_graph::breaking::BreakingReport,
+) -> String {
     let mut output = String::new();
     writeln!(output, "# Change review\n")
         .expect("writing to a String must succeed");
@@ -62,6 +73,8 @@ pub fn render_markdown(report: &ReviewReport, against: &str) -> String {
     if report.changed.is_empty() {
         writeln!(output, "\nNothing to review: the working tree matches `{against}`, and no untracked files were found.")
             .expect("writing to a String must succeed");
+        output.push('\n');
+        output.push_str(&crate::breaking::render_markdown_section(breaking));
         return output;
     }
 
@@ -115,16 +128,23 @@ pub fn render_markdown(report: &ReviewReport, against: &str) -> String {
             )
             .expect("writing to a String must succeed");
         }
-        for warning in report
-            .warnings
-            .iter()
-            .filter(|warning| warning.changed == entry.file)
-        {
+    }
+
+    output.push('\n');
+    output.push_str(&crate::breaking::render_markdown_section(breaking));
+
+    if !report.warnings.is_empty() {
+        writeln!(output, "\n## Coupling warnings")
+            .expect("writing to a String must succeed");
+        for warning in &report.warnings {
             writeln!(
                 output,
-                "- Warning: `{}` changed with this file {} times \
+                "- Warning: `{}` changed with `{}` {} times \
                  (containment {}) and is not in this change.",
-                warning.partner, warning.co_changes, warning.containment
+                warning.partner,
+                warning.changed,
+                warning.co_changes,
+                warning.containment
             )
             .expect("writing to a String must succeed");
         }
@@ -137,9 +157,16 @@ pub fn render_markdown(report: &ReviewReport, against: &str) -> String {
 /// The reference and the window ride along with the entries, as they
 /// do in Markdown: a consumer comparing two reviews needs to know
 /// whether they were read against the same point and the same
-/// history before it compares their numbers.
+/// history before it compares their numbers. The breaking report
+/// rides as a `"breaking"` key in the same order as the Markdown
+/// sections — changed, breaking, warnings — not as a second
+/// document concatenated onto the first.
 #[must_use]
-pub fn render_json(report: &ReviewReport, against: &str) -> String {
+pub fn render_json(
+    report: &ReviewReport,
+    against: &str,
+    breaking: &sephera_graph::breaking::BreakingReport,
+) -> String {
     let changed: Vec<serde_json::Value> = report
         .changed
         .iter()
@@ -171,6 +198,7 @@ pub fn render_json(report: &ReviewReport, against: &str) -> String {
         "commits_scanned": report.commits_scanned,
         "commits_counted": report.commits_counted,
         "changed": changed,
+        "breaking": crate::breaking::json_value(breaking),
         "warnings": warnings,
     });
 
@@ -181,6 +209,9 @@ pub fn render_json(report: &ReviewReport, against: &str) -> String {
 
 #[cfg(test)]
 mod tests {
+    use sephera_core::declarations::DeclarationKind;
+    use sephera_graph::SymbolUser;
+    use sephera_graph::breaking::{BreakChange, BreakingReport, BrokenSymbol};
     use sephera_graph::review::{
         ChangedFileReview, CouplingWarning, ReviewReport,
     };
@@ -216,14 +247,41 @@ mod tests {
         }
     }
 
+    fn breaking() -> BreakingReport {
+        BreakingReport {
+            from_ref: "HEAD".to_owned(),
+            to_ref: "working tree".to_owned(),
+            broken: Vec::new(),
+        }
+    }
+
+    fn breaking_with_removal() -> BreakingReport {
+        BreakingReport {
+            from_ref: "HEAD".to_owned(),
+            to_ref: "working tree".to_owned(),
+            broken: vec![BrokenSymbol {
+                file: "lib.py".to_owned(),
+                symbol: "add".to_owned(),
+                kind: DeclarationKind::Function,
+                change: BreakChange::Removed,
+                direct: vec![SymbolUser {
+                    file: "consumer.py".to_owned(),
+                    imports: vec!["lib.add".to_owned()],
+                }],
+                namespace_users: Vec::new(),
+                downstream: Vec::new(),
+            }],
+        }
+    }
+
     #[test]
     fn markdown_states_the_reference_and_the_window_first() {
-        let rendered = render_markdown(&report(), "HEAD");
+        let rendered = render_markdown(&report(), "HEAD", &breaking());
 
         assert!(rendered.contains("against `HEAD`"), "{rendered}");
         assert!(rendered.contains("500 commits"), "{rendered}");
         assert!(
-            rendered.contains("`docs.py` changed with this file 5 times"),
+            rendered.contains("`docs.py` changed with `core.py` 5 times"),
             "{rendered}"
         );
         assert!(rendered.contains("Not in the analysed tree"), "{rendered}");
@@ -236,17 +294,54 @@ mod tests {
             warnings: Vec::new(),
             ..report()
         };
-        let rendered = render_markdown(&empty, "master");
+        let rendered = render_markdown(&empty, "master", &breaking());
 
         assert!(rendered.contains("Nothing to review"), "{rendered}");
         assert!(rendered.contains("`master`"), "{rendered}");
     }
 
     #[test]
+    fn the_breaking_section_is_never_omitted_even_when_empty() {
+        let rendered = render_markdown(&report(), "HEAD", &breaking());
+
+        assert!(rendered.contains("## Breaking changes"), "{rendered}");
+        assert!(
+            rendered.contains(
+                "Nothing any consumer names was removed or changed shape"
+            ),
+            "{rendered}"
+        );
+    }
+
+    #[test]
+    fn the_breaking_section_sits_between_changed_and_warnings() {
+        let rendered =
+            render_markdown(&report(), "HEAD", &breaking_with_removal());
+
+        let changed_at = rendered.find("## `core.py`").expect("changed");
+        let breaking_at =
+            rendered.find("## Breaking changes").expect("breaking");
+        let warnings_at =
+            rendered.find("## Coupling warnings").expect("warnings");
+        assert!(
+            changed_at < breaking_at && breaking_at < warnings_at,
+            "{rendered}"
+        );
+        assert!(rendered.contains("### `lib.py` — `add`"), "{rendered}");
+        assert!(
+            rendered.contains("`consumer.py` via `lib.add`"),
+            "{rendered}"
+        );
+    }
+
+    #[test]
     fn json_carries_the_reference_the_entries_and_the_warnings() {
-        let parsed: serde_json::Value =
-            serde_json::from_str(&render_json(&report(), "HEAD~3"))
-                .expect("valid json");
+        let parsed: serde_json::Value = serde_json::from_str(&render_json(
+            &report(),
+            "HEAD~3",
+            &breaking(),
+        ))
+        .expect("valid json");
 
         assert_eq!(parsed["against"], "HEAD~3");
         assert_eq!(parsed["changed"][0]["file"], "core.py");
@@ -254,6 +349,24 @@ mod tests {
         assert_eq!(parsed["changed"][1]["present"], false);
         assert_eq!(parsed["warnings"][0]["partner"], "docs.py");
         assert_eq!(parsed["warnings"][0]["co_changes"], 5);
+    }
+
+    #[test]
+    fn json_carries_the_breaking_report_as_a_key() {
+        let parsed: serde_json::Value = serde_json::from_str(&render_json(
+            &report(),
+            "HEAD",
+            &breaking_with_removal(),
+        ))
+        .expect("valid json");
+
+        assert_eq!(parsed["breaking"]["from"], "HEAD");
+        assert_eq!(parsed["breaking"]["to"], "working tree");
+        assert_eq!(parsed["breaking"]["broken"][0]["symbol"], "add");
+        assert_eq!(
+            parsed["breaking"]["broken"][0]["direct"][0]["file"],
+            "consumer.py"
+        );
     }
 
     #[test]

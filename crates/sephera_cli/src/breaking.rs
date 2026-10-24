@@ -30,7 +30,35 @@ pub fn render_markdown(report: &BreakingReport) -> String {
         report.from_ref, report.to_ref
     )
     .expect("writing to a String must succeed");
+    output.push_str(&render_body(report, "##"));
+    output
+}
 
+/// Render the report as a section of a larger document, at the
+/// heading level a section takes.
+///
+/// `review` embeds exactly this: the same count line, the same
+/// empty-state line, the same per-symbol entries, only nested one
+/// level deeper, so the two commands can never disagree about what
+/// broke.
+#[must_use]
+pub fn render_markdown_section(report: &BreakingReport) -> String {
+    let mut output = String::new();
+    writeln!(
+        output,
+        "## Breaking changes: `{}` → `{}`\n",
+        report.from_ref, report.to_ref
+    )
+    .expect("writing to a String must succeed");
+    output.push_str(&render_body(report, "###"));
+    output
+}
+
+/// The body shared by the standalone document and the embedded
+/// section: the count line, then the empty-state line or one entry
+/// per broken symbol, widest exposure first.
+fn render_body(report: &BreakingReport, symbol_heading: &str) -> String {
+    let mut output = String::new();
     let with_consumers = report
         .broken
         .iter()
@@ -70,7 +98,7 @@ pub fn render_markdown(report: &BreakingReport) -> String {
         };
         writeln!(
             output,
-            "## `{}` — `{}` ({:?}, {change})",
+            "{symbol_heading} `{}` — `{}` ({:?}, {change})",
             broken.file, broken.symbol, broken.kind
         )
         .expect("writing to a String must succeed");
@@ -125,6 +153,15 @@ pub fn render_markdown(report: &BreakingReport) -> String {
 /// this output does not parse prose to tell the two apart.
 #[must_use]
 pub fn render_json(report: &BreakingReport) -> String {
+    let payload = json_value(report);
+    serde_json::to_string_pretty(&payload).expect("the report serializes")
+}
+
+/// The JSON shape of the report, shared by the standalone document
+/// and by `review`, which embeds it under its `"breaking"` key
+/// rather than concatenating two documents.
+#[must_use]
+pub fn json_value(report: &BreakingReport) -> serde_json::Value {
     let broken: Vec<serde_json::Value> = report
         .broken
         .iter()
@@ -146,10 +183,9 @@ pub fn render_json(report: &BreakingReport) -> String {
         })
         .collect();
 
-    let payload = serde_json::json!({
+    serde_json::json!({
         "from": report.from_ref,
         "to": report.to_ref,
         "broken": broken,
-    });
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
+    })
 }

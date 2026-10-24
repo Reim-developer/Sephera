@@ -1350,3 +1350,84 @@ async fn why_tool_rejects_a_path_that_is_not_in_the_graph() {
         "a mistyped path must not come back as 'no chain': {result:?}"
     );
 }
+
+/// One committed version of a library, its consumer, and then the
+/// removal uncommitted — the same fixture the CLI review test uses,
+/// so the tool and the command are held to the same answer.
+fn repo_with_uncommitted_removal() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "lib.py", b"def add(x, y):\n    return x + y\n");
+    write_file(
+        dir,
+        "consumer.py",
+        b"from lib import add\n\nprint(add(1, 2))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v1 declares add"]);
+    write_file(dir, "lib.py", b"def keep(x):\n    return x\n");
+    temp_dir
+}
+
+fn review_input(dir: &Path, format: Option<String>) -> ReviewInput {
+    ReviewInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        ignore: None,
+        no_gitignore: None,
+        against: None,
+        commits: None,
+        min_co_changes: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn review_tool_carries_the_breaking_section_as_a_key() {
+    let repo = repo_with_uncommitted_removal();
+    let server = SepheraServer::new();
+
+    let output = server
+        .review(param_for(review_input(repo.path(), None)))
+        .await
+        .expect("review tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("review output must be JSON");
+
+    assert_eq!(parsed["breaking"]["from"], "HEAD");
+    assert_eq!(parsed["breaking"]["to"], "working tree");
+    assert_eq!(parsed["breaking"]["broken"][0]["symbol"], "add");
+    assert_eq!(
+        parsed["breaking"]["broken"][0]["direct"][0]["file"], "consumer.py",
+        "{output}"
+    );
+    assert_eq!(parsed["changed"][0]["file"], "lib.py");
+}
+
+#[tokio::test]
+async fn review_tool_markdown_orders_breaking_before_warnings() {
+    let repo = repo_with_uncommitted_removal();
+    let server = SepheraServer::new();
+
+    let markdown = server
+        .review(param_for(review_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("review tool should succeed for a temp repo");
+
+    let changed_at = markdown
+        .find("## `lib.py`")
+        .expect("review markdown must name the changed file");
+    let breaking_at = markdown
+        .find("## Breaking changes")
+        .expect("review markdown must carry the breaking section");
+    assert!(changed_at < breaking_at, "{markdown}");
+    assert!(
+        markdown.contains("`consumer.py` via `lib.add`"),
+        "{markdown}"
+    );
+}

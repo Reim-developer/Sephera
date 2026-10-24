@@ -139,12 +139,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 42 |
-| Internal edges | 236 |
-| External edges | 117 |
+| Internal edges | 237 |
+| External edges | 119 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 39 |
 | Local crate edges | 0 |
-| Standard library edges | 68 |
+| Standard library edges | 70 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -542,7 +542,10 @@ change is the working tree read against `HEAD` — or against a branch with
 `--against` — and for every file it touches the report gives the blast
 radius, the tests that reach it, and a warning for each file that history
 keeps changing with it but the change leaves behind: "you changed A; B has
-moved with A seven times and is not in this change."
+moved with A seven times and is not in this change." Between the changed
+files and those warnings sits a fourth answer: what broke by name — the
+symbols the change removed or reshaped, joined to the files that still name
+them, measured exactly as `breaking` measures them.
 
 ```bash
 # Review everything uncommitted

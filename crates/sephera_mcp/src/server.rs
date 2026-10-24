@@ -29,10 +29,11 @@ use sephera_graph::{
 };
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
-    SourceRequest, build_context_report, changed_files, checkout_worktree,
-    recent_commit_files, resolve_context_command, resolve_source,
+    ResolvedSource, SourceRequest, build_context_report, changed_files,
+    checkout_worktree, recent_commit_files, resolve_context_command,
+    resolve_source,
 };
-use sephera_scan::CodeLoc;
+use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
@@ -718,7 +719,7 @@ impl SepheraServer {
     /// `review` command, so the two cannot disagree.
     #[tool(
         name = "review",
-        description = "Review a change before it lands: for each file the change touches, its blast radius (direct dependents and the transitive count), the tests that reach it, and a warning for every file that history keeps changing with it but the change does not touch. The change is the working tree read against a reference (against, default HEAD: staged, unstaged, deleted and untracked files all count; naming a branch reviews the whole body of work since that point). Dependents and tests are the same measurements as the impact and affected_tests tools, and the warnings come from the same hidden-coupling measurement as the coupling tool, read against the changed set -- a pair where both sides changed does not warn. A changed file the graph does not hold (deleted, or outside the analysis base) is reported with present=false rather than dropped. Requires a git history for the warnings; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+        description = "Review a change before it lands: for each file the change touches, its blast radius (direct dependents and the transitive count), the tests that reach it, and a warning for every file that history keeps changing with it but the change does not touch. The change is the working tree read against a reference (against, default HEAD: staged, unstaged, deleted and untracked files all count; naming a branch reviews the whole body of work since that point). Dependents and tests are the same measurements as the impact and affected_tests tools, and the warnings come from the same hidden-coupling measurement as the coupling tool, read against the changed set -- a pair where both sides changed does not warn. A changed file the graph does not hold (deleted, or outside the analysis base) is reported with present=false rather than dropped. The report also carries a breaking section: the symbols the change removed or reshaped, joined to the files that still name them -- the breaking tool's measurement, embedded so the two cannot disagree. When nothing broke, the section says so in one line rather than being omitted. Requires a git history for the warnings; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
     )]
     #[allow(
         clippy::unused_self,
@@ -795,7 +796,13 @@ impl SepheraServer {
             },
         );
         let against = param.against.as_deref().unwrap_or("HEAD");
-        let built = ReviewReport::from_measured(&measured, against);
+        // The fourth review question, composed rather than measured
+        // inside review: what broke by name between the ref and the
+        // working tree, computed exactly the way the `breaking` tool
+        // computes it with `to` absent, so the two cannot disagree.
+        let breaking =
+            measure_review_breaking(&source, &ignore_matcher, against)?;
+        let built = ReviewReport::from_measured(&measured, against, &breaking);
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&built),
@@ -1412,6 +1419,35 @@ fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
     output
 }
 
+/// The breaking side of a review: the ref in a detached worktree
+/// against the working tree, each built whole-tree — the same
+/// discipline the `breaking` tool uses, so the two cannot disagree.
+/// The review's own graph build cannot serve as the new side: it
+/// keeps no declarations.
+fn measure_review_breaking(
+    source: &ResolvedSource,
+    ignore_matcher: &IgnoreMatcher,
+    against: &str,
+) -> Result<breaking::BreakingReport, rmcp::ErrorData> {
+    let old_worktree = checkout_worktree(&source.repo_root, against)
+        .map_err(map_internal_error("old ref checkout failed"))?;
+    let (old_report, old_index) =
+        build_graph_with_declarations(old_worktree.path(), ignore_matcher)
+            .map_err(map_internal_error("old graph build failed"))?;
+    let (new_report, new_index) =
+        build_graph_with_declarations(&source.analysis_path, ignore_matcher)
+            .map_err(map_internal_error("working tree graph build failed"))?;
+    drop(old_worktree);
+    Ok(breaking::measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        against,
+        "working tree",
+    ))
+}
+
 /// The JSON shape the `review` tool returns.
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct ReviewReport {
@@ -1423,6 +1459,10 @@ pub struct ReviewReport {
     pub commits_counted: u64,
     /// One entry per changed file, sorted by path.
     pub changed: Vec<ReviewedFile>,
+    /// What broke by name between the ref and the working tree,
+    /// joined to the files that still name it — the `breaking`
+    /// tool's report, embedded rather than recomputed.
+    pub breaking: BreakingReport,
     /// Coupling warnings, strongest first.
     pub warnings: Vec<ReviewWarning>,
 }
@@ -1459,7 +1499,11 @@ pub struct ReviewWarning {
 }
 
 impl ReviewReport {
-    fn from_measured(measured: &review::ReviewReport, against: &str) -> Self {
+    fn from_measured(
+        measured: &review::ReviewReport,
+        against: &str,
+        measured_breaking: &breaking::BreakingReport,
+    ) -> Self {
         Self {
             against: against.to_owned(),
             commits_scanned: measured.commits_scanned,
@@ -1475,6 +1519,7 @@ impl ReviewReport {
                     tests: entry.tests.clone(),
                 })
                 .collect(),
+            breaking: BreakingReport::from_measured(measured_breaking),
             warnings: measured
                 .warnings
                 .iter()
@@ -1816,6 +1861,39 @@ fn breaking_markdown(report: &BreakingReport) -> String {
         "# Breaking changes: `{}` → `{}`\n",
         report.from, report.to
     );
+    output.push_str(&breaking_markdown_body(report, "##"));
+    output
+}
+
+/// Render the breaking report as a section of a larger document, at
+/// the heading level a section takes.
+///
+/// `review` embeds exactly this: the same count line, the same
+/// empty-state line, the same per-symbol entries, only nested one
+/// level deeper, so the two tools cannot disagree about what broke.
+fn breaking_markdown_section(report: &BreakingReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "## Breaking changes: `{}` → `{}`\n",
+        report.from, report.to
+    );
+    output.push_str(&breaking_markdown_body(report, "###"));
+    output
+}
+
+/// The body shared by the standalone document and the embedded
+/// section: the count line, then the empty-state line or one entry
+/// per broken symbol, widest exposure first.
+fn breaking_markdown_body(
+    report: &BreakingReport,
+    symbol_heading: &str,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
     let with_consumers = report
         .broken
         .iter()
@@ -1858,7 +1936,7 @@ fn breaking_markdown(report: &BreakingReport) -> String {
         };
         let _ = writeln!(
             output,
-            "## `{}` — `{}` ({}, {change})",
+            "{symbol_heading} `{}` — `{}` ({}, {change})",
             broken.file, broken.symbol, broken.kind
         );
         if broken.direct.is_empty() && broken.namespace_users.is_empty() {
@@ -1902,7 +1980,10 @@ fn breaking_markdown(report: &BreakingReport) -> String {
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's: the same measurement should not
-/// need two phrasings learned.
+/// need two phrasings learned. The sections run in order of
+/// certainty — changed files, then what broke by name, then the
+/// heuristic coupling warnings last — and the breaking section is
+/// never omitted: when nothing broke it is one line saying so.
 fn review_markdown(report: &ReviewReport) -> String {
     use std::fmt::Write as _;
 
@@ -1925,6 +2006,8 @@ fn review_markdown(report: &ReviewReport) -> String {
              no untracked files were found.",
             report.against
         );
+        output.push('\n');
+        output.push_str(&breaking_markdown_section(&report.breaking));
         return output;
     }
 
@@ -1961,16 +2044,22 @@ fn review_markdown(report: &ReviewReport) -> String {
                     .join(", ")
             );
         }
-        for warning in report
-            .warnings
-            .iter()
-            .filter(|warning| warning.changed == entry.file)
-        {
+    }
+
+    output.push('\n');
+    output.push_str(&breaking_markdown_section(&report.breaking));
+
+    if !report.warnings.is_empty() {
+        let _ = writeln!(output, "\n## Coupling warnings");
+        for warning in &report.warnings {
             let _ = writeln!(
                 output,
-                "- Warning: `{}` changed with this file {} times \
+                "- Warning: `{}` changed with `{}` {} times \
                  (containment {}) and is not in this change.",
-                warning.partner, warning.co_changes, warning.containment
+                warning.partner,
+                warning.changed,
+                warning.co_changes,
+                warning.containment
             );
         }
     }
