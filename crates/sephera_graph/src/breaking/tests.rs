@@ -99,13 +99,15 @@ fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
     index
 }
 
+/// One declared name with the call shape the test gives it, when
+/// the test gives one.
+type SignedName<'a> =
+    (&'a str, DeclarationKind, Option<(&'a str, Option<&'a str>)>);
+
 /// Like `index`, but each name may also carry a call shape, for
 /// the tests that compare signatures.
 fn index_with_signatures(
-    files: &[(
-        &str,
-        &[(&str, DeclarationKind, Option<(&str, Option<&str>)>)],
-    )],
+    files: &[(&str, &[SignedName<'_>])],
 ) -> DeclarationIndex {
     let mut index = DeclarationIndex::default();
     for (file, names) in files {
