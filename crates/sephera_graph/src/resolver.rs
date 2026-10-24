@@ -1522,7 +1522,9 @@ const fn module_suffixes(
 /// gap rule already counts on its own account, and no declaration index holds a
 /// name spelled `*` -- every one of them is read out of a grammar's `name`
 /// field, so the lookup finds nothing and the answer was false anyway.
-fn split_trailing_name(import_path: &str) -> Option<(String, String)> {
+pub(crate) fn split_trailing_name(
+    import_path: &str,
+) -> Option<(String, String)> {
     // The last separator, with Rust's `::` read as one separator rather
     // than two colons. Slicing between its halves left the parent
     // ending in a colon -- `super:` for `super::JsonLines` -- which the

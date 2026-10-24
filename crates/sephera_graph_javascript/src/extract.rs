@@ -199,7 +199,8 @@ mod tests {
     }
 
     #[test]
-    fn a_default_import_records_default_and_a_namespace_import_records_nothing() {
+    fn a_default_import_records_default_and_a_namespace_import_records_nothing()
+    {
         let source = b"import routes, { helper } from './a';\n\
                       import * as ns from './b';\n\
                       import './side';\n";

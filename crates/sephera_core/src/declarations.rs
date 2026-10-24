@@ -514,7 +514,15 @@ fn walk(
 
     let mut cursor = node.walk();
     for child in node.children(&mut cursor) {
-        walk(source, child, declared, reexported, bound, macro_exports, rules);
+        walk(
+            source,
+            child,
+            declared,
+            reexported,
+            bound,
+            macro_exports,
+            rules,
+        );
     }
 }
 
@@ -739,10 +747,7 @@ mod tests {
                       macro_rules! exported { () => {}; }\n\
                       macro_rules! local { () => {}; }\n";
 
-        assert_eq!(
-            macro_exports_of(source),
-            vec!["exported".to_owned()]
-        );
+        assert_eq!(macro_exports_of(source), vec!["exported".to_owned()]);
         let names = names_of(source);
         assert!(names.contains(&"exported".to_owned()), "{names:?}");
         assert!(names.contains(&"local".to_owned()), "{names:?}");
@@ -757,10 +762,7 @@ mod tests {
                       #[macro_export]\n\
                       macro_rules! documented { () => {}; }\n";
 
-        assert_eq!(
-            macro_exports_of(source),
-            vec!["documented".to_owned()]
-        );
+        assert_eq!(macro_exports_of(source), vec!["documented".to_owned()]);
     }
 
     #[test]

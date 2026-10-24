@@ -1134,8 +1134,7 @@ mod tests {
             },
         )
         .expect("a parser exists");
-        let mut index =
-            sephera_core::declarations::DeclarationIndex::default();
+        let mut index = sephera_core::declarations::DeclarationIndex::default();
         index.insert("src/macros.rs", declared);
 
         let context = sephera_core::plugins::ResolveContext {
