@@ -9,6 +9,7 @@
 
 pub mod affected_tests;
 pub mod blast_radius;
+pub mod breaking;
 pub mod coupling;
 pub mod dead;
 pub mod dependency_path;

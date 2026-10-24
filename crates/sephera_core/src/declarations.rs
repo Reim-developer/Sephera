@@ -184,6 +184,11 @@ impl DeclarationIndex {
         self.by_file.insert(file.to_owned(), names);
     }
 
+    /// Every file the index covers, in path order.
+    pub fn files(&self) -> impl Iterator<Item = &str> {
+        self.by_file.keys().map(String::as_str)
+    }
+
     /// Whether any file was indexed.
     #[must_use]
     pub fn is_empty(&self) -> bool {
