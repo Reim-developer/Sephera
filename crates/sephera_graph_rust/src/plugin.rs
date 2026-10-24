@@ -307,7 +307,17 @@ fn resolve_qualified(
     // `pub type BoxError = ...` declared directly in the root, which is how
     // `crate::BoxError` failed to resolve at all.
     let root_file = crate_root_file(context, context.source_file)?;
-    if index.file_reaches(&root_file, name) {
+    // A module declaration names a file beside the declaring one, never
+    // the declaring file itself: `mod missing;` in `main.rs` declares
+    // a module whose file is absent, and landing the path on
+    // `main.rs` because the root "declares" the name would report a
+    // resolved self-edge for a file that is not there. An item path
+    // may land on its own root -- the name lives in that file -- so
+    // the refusal is for module declarations alone.
+    if index.file_reaches(&root_file, name)
+        && !(root_file == context.source_file
+            && context.kind == ImportKind::ModuleDeclaration)
+    {
         return Some(root_file);
     }
 
@@ -409,12 +419,12 @@ fn resolve_by_crate_name(
 /// named in a path (`axum_core`). A `[lib] path` replaces `src/lib.rs`
 /// as the root when the file it names is in the set.
 fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
-    context
+    let mut matches = context
         .files()
         .filter(|known| {
             known.as_str() == "src/lib.rs" || known.ends_with("/src/lib.rs")
         })
-        .find_map(|lib_rs| {
+        .filter_map(|lib_rs| {
             let crate_dir = shared_paths::parent(&shared_paths::parent(lib_rs));
             let manifest = if crate_dir.is_empty() {
                 "Cargo.toml".to_owned()
@@ -439,7 +449,17 @@ fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
                 }
             }
             Some(lib_rs.clone())
-        })
+        });
+    let first = matches.next()?;
+    // Two crates in one tree can declare the same name -- a vendored
+    // copy, a fixture, an example crate. Taking whichever path sorts
+    // first would invent an edge no compiler produces; the
+    // declaration index refuses an ambiguous name for the same
+    // reason, and so does this (CodeRabbit on PR #41).
+    if matches.any(|other| other != first) {
+        return None;
+    }
+    Some(first)
 }
 
 /// What a manifest declares about its lib target.
@@ -923,6 +943,47 @@ mod tests {
         std::fs::create_dir_all(path.parent().expect("a parent"))
             .expect("the tree is written");
         std::fs::write(path, contents).expect("the manifest is written");
+    }
+
+    #[test]
+    fn a_crate_name_two_manifests_declare_resolves_nowhere() {
+        // A vendored copy and the crate it copies share a name. The
+        // lookup took whichever `src/lib.rs` sorted first, inventing
+        // an edge no compiler produces; an ambiguous name is no name,
+        // the rule the declaration index already follows
+        // (CodeRabbit on PR #41).
+        let directory = tempfile::tempdir().expect("a writable directory");
+        write_manifest(
+            directory.path(),
+            "crates/one",
+            "[package]\nname = \"dup\"\n",
+        );
+        write_manifest(
+            directory.path(),
+            "crates/two",
+            "[package]\nname = \"dup\"\n",
+        );
+        write_manifest(
+            directory.path(),
+            "crates/app",
+            "[package]\nname = \"app\"\n",
+        );
+        let files = [
+            "crates/app/src/lib.rs",
+            "crates/one/src/lib.rs",
+            "crates/two/src/lib.rs",
+        ];
+
+        assert_eq!(
+            resolve_on_disk(
+                directory.path(),
+                "dup",
+                "crates/app/src/lib.rs",
+                &files
+            ),
+            None,
+            "two roots declare `dup`; picking either invents the edge"
+        );
     }
 
     #[test]
