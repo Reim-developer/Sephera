@@ -36,14 +36,16 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use serde::Serialize;
 
-use sephera_core::declarations::{DeclarationIndex, DeclarationKind};
+use sephera_core::declarations::{
+    DeclarationIndex, DeclarationKind, Signature,
+};
 
 use super::resolver::split_trailing_name;
 use super::symbol_impact::SymbolUser;
 use super::types::{GraphReport, ImportKind};
 
 /// How one symbol broke.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(rename_all = "snake_case", tag = "type")]
 pub enum BreakChange {
     /// The new tree no longer declares the name in that file.
@@ -52,6 +54,16 @@ pub enum BreakChange {
     KindChanged {
         /// The kind the new tree declares it as.
         to: DeclarationKind,
+    },
+    /// The name is still declared as a function, but its call shape
+    /// changed: a parameter type, a parameter name in Python, or the
+    /// return annotation. A signature is what a caller breaks
+    /// against, so this is a break even though the name survives.
+    SignatureChanged {
+        /// The call shape the old tree declared.
+        from: Signature,
+        /// The call shape the new tree declares.
+        to: Signature,
     },
 }
 
@@ -110,6 +122,28 @@ pub fn measure_breaking(
                 None => BreakChange::Removed,
                 Some(new_kind) if new_kind != kind => {
                     BreakChange::KindChanged { to: new_kind }
+                }
+                // Same name, same kind, different call shape: the
+                // only break kind where the symbol still exists, so
+                // consumers are found by the same rules as for a
+                // kind change — the statement still resolves, and
+                // its import path still names the symbol. A shape
+                // recorded on only one side, or on neither, is not
+                // a comparison: it stays silent rather than
+                // inventing a shape the other side never had.
+                Some(DeclarationKind::Function) => {
+                    match (
+                        old_index.signature_in(file, name),
+                        new_index.signature_in(file, name),
+                    ) {
+                        (Some(from), Some(to)) if from != to => {
+                            BreakChange::SignatureChanged {
+                                from: from.clone(),
+                                to: to.clone(),
+                            }
+                        }
+                        _ => continue,
+                    }
                 }
                 Some(_) => continue,
             };

@@ -1606,16 +1606,40 @@ pub struct BrokenSymbolReport {
     pub symbol: String,
     /// The kind it was declared as in the old tree.
     pub kind: String,
-    /// `removed`, or `kind_changed`.
+    /// `removed`, `kind_changed`, or `signature_changed`.
     pub change: String,
     /// The kind the new tree declares it as, for a kind change.
     pub new_kind: Option<String>,
+    /// The call shape the old tree declared, for a signature change.
+    pub old_signature: Option<SignatureReport>,
+    /// The call shape the new tree declares, for a signature change.
+    pub new_signature: Option<SignatureReport>,
     /// Files in the new tree that name the symbol from that file.
     pub direct: Vec<DirectConsumerReport>,
     /// Files importing the file's namespace wholesale.
     pub namespace_users: Vec<String>,
     /// Files downstream of a direct or namespace user.
     pub downstream: Vec<String>,
+}
+
+/// One call shape, as the breaking report renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SignatureReport {
+    /// The comma-joined parameter spellings.
+    pub parameters: String,
+    /// The return annotation, when one is written.
+    pub returns: Option<String>,
+}
+
+impl SignatureReport {
+    /// Render the shape the way a reader would write it, the same
+    /// spelling the graph type renders.
+    fn render(&self) -> String {
+        self.returns.as_ref().map_or_else(
+            || format!("({})", self.parameters),
+            |returns| format!("({}) -> {returns}", self.parameters),
+        )
+    }
 }
 
 /// One file that names a broken symbol, with the evidence.
@@ -1636,21 +1660,41 @@ impl BreakingReport {
                 .broken
                 .iter()
                 .map(|broken| {
-                    let (change, new_kind) = match broken.change {
-                        breaking::BreakChange::Removed => {
-                            ("removed".to_owned(), None)
-                        }
-                        breaking::BreakChange::KindChanged { to } => (
-                            "kind_changed".to_owned(),
-                            Some(format!("{to:?}").to_lowercase()),
-                        ),
-                    };
+                    let (change, new_kind, old_signature, new_signature) =
+                        match &broken.change {
+                            breaking::BreakChange::Removed => {
+                                ("removed".to_owned(), None, None, None)
+                            }
+                            breaking::BreakChange::KindChanged { to } => (
+                                "kind_changed".to_owned(),
+                                Some(format!("{to:?}").to_lowercase()),
+                                None,
+                                None,
+                            ),
+                            breaking::BreakChange::SignatureChanged {
+                                from,
+                                to,
+                            } => (
+                                "signature_changed".to_owned(),
+                                None,
+                                Some(SignatureReport {
+                                    parameters: from.parameters.clone(),
+                                    returns: from.returns.clone(),
+                                }),
+                                Some(SignatureReport {
+                                    parameters: to.parameters.clone(),
+                                    returns: to.returns.clone(),
+                                }),
+                            ),
+                        };
                     BrokenSymbolReport {
                         file: broken.file.clone(),
                         symbol: broken.symbol.clone(),
                         kind: format!("{:?}", broken.kind).to_lowercase(),
                         change,
                         new_kind,
+                        old_signature,
+                        new_signature,
                         direct: broken
                             .direct
                             .iter()
@@ -1703,11 +1747,23 @@ fn breaking_markdown(report: &BreakingReport) -> String {
 
     for broken in &report.broken {
         let _ = writeln!(output);
-        let change = match (&broken.change, &broken.new_kind) {
-            (change, None) => change.clone(),
-            (_, Some(to)) => {
+        let change = match (
+            &broken.change,
+            &broken.new_kind,
+            &broken.old_signature,
+            &broken.new_signature,
+        ) {
+            (_, _, Some(from), Some(to)) => {
+                format!(
+                    "changed signature: {} → {}",
+                    from.render(),
+                    to.render()
+                )
+            }
+            (_, Some(to), _, _) => {
                 format!("changed kind: {} → {to}", broken.kind)
             }
+            (change, None, _, _) => change.clone(),
         };
         let _ = writeln!(
             output,

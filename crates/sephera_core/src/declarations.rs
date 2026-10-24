@@ -78,10 +78,41 @@ pub enum DeclarationKind {
 /// declare `Thing`" answer yes for any file that merely mentions `Thing`, so a
 /// path could resolve to the very file that referenced it -- self-edges went from
 /// 105 to 686 when that happened, every one of them invented.
+/// The call shape of a function, as a caller experiences it.
+///
+/// Parameters are the comma-joined parameter spellings, returns the
+/// return annotation when one is written. What a spelling contains
+/// is the extractor's decision, and it is the honest one: a Rust
+/// signature compares parameter *types*, because a caller breaks
+/// when a type changes and does not care what the parameter is
+/// called; a Python signature compares names and annotations,
+/// because a caller breaks when a keyword name changes, and default
+/// values are dropped, because they change no call shape.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct Signature {
+    /// The comma-joined parameter spellings.
+    pub parameters: String,
+    /// The return annotation, when one is written.
+    pub returns: Option<String>,
+}
+
+impl Signature {
+    /// Render the shape the way a reader would write it.
+    #[must_use]
+    pub fn render(&self) -> String {
+        self.returns.as_ref().map_or_else(
+            || format!("({})", self.parameters),
+            |returns| format!("({}) -> {returns}", self.parameters),
+        )
+    }
+}
+
 #[derive(Debug, Clone, Default)]
 pub struct DeclaredNames {
     /// The names, each with the kind of thing it is.
     declared: BTreeMap<String, DeclarationKind>,
+    /// The call shapes of the functions declared here, by name.
+    signatures: BTreeMap<String, Signature>,
     reexported: BTreeSet<String>,
     /// Names bound by a `use` at this file's own module level, public
     /// or not.
@@ -139,6 +170,21 @@ impl DeclaredNames {
     #[must_use]
     pub fn kind_of(&self, name: &str) -> Option<DeclarationKind> {
         self.declared.get(name).copied()
+    }
+
+    /// Record the call shape of a function this file declares.
+    pub fn declare_signature(
+        &mut self,
+        name: impl Into<String>,
+        signature: Signature,
+    ) {
+        self.signatures.insert(name.into(), signature);
+    }
+
+    /// The call shape of `name`, when it is a function with one.
+    #[must_use]
+    pub fn signature_of(&self, name: &str) -> Option<&Signature> {
+        self.signatures.get(name)
     }
 
     /// Every declared name with its kind, in name order.
@@ -243,6 +289,15 @@ impl DeclarationIndex {
             .and_then(|declared| declared.kind_of(name))
     }
 
+    /// The call shape of `name` in `file`, when it is a function
+    /// with one.
+    #[must_use]
+    pub fn signature_in(&self, file: &str, name: &str) -> Option<&Signature> {
+        self.by_file
+            .get(file)
+            .and_then(|declared| declared.signature_of(name))
+    }
+
     /// Whether `file` itself declares `name`.
     ///
     /// The scope check that keeps a global name lookup honest. A name declared in
@@ -310,6 +365,7 @@ impl DeclaredNames {
                 .into_iter()
                 .map(|name| (name.to_owned(), DeclarationKind::Other))
                 .collect(),
+            signatures: BTreeMap::new(),
             reexported: BTreeSet::new(),
             bound: BTreeSet::new(),
             macro_exports: BTreeSet::new(),
@@ -333,6 +389,7 @@ impl DeclaredNames {
                 .into_iter()
                 .map(|name| (name.to_owned(), DeclarationKind::Other))
                 .collect(),
+            signatures: BTreeMap::new(),
             reexported: reexported.into_iter().map(ToOwned::to_owned).collect(),
             bound: BTreeSet::new(),
             macro_exports: BTreeSet::new(),
@@ -405,6 +462,104 @@ const RUST_DECLARATION_KINDS: [(&str, DeclarationKind); 10] = [
 /// both are Rust's, and the two are read together when adding a language.
 const RUST_REEXPORT_KINDS: [&str; 1] = ["use_declaration"];
 
+/// Collapse every whitespace run to one space, and trim.
+///
+/// Signatures are compared as text, so two spellings of one shape
+/// must compare equal: a line break inside a parameter list is not a
+/// breaking change, and a comparison that said otherwise would
+/// report formatting as breakage.
+fn normalize(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+/// Read a Rust function node's call shape: its parameter types in
+/// order, and its return type when written.
+///
+/// Parameter *names* are deliberately absent: renaming a parameter
+/// breaks no caller, and a comparison that reported it would cry
+/// wolf on every cosmetic edit. A `self` parameter keeps its
+/// spelling, because a method that stops borrowing its receiver
+/// changes how it is called.
+fn rust_signature(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+) -> Option<Signature> {
+    let parameters = node.child_by_field_name("parameters")?;
+    let mut parts = Vec::new();
+    let mut cursor = parameters.walk();
+    for child in parameters.named_children(&mut cursor) {
+        match child.kind() {
+            "parameter" => {
+                if let Some(ty) = child.child_by_field_name("type") {
+                    parts.push(normalize(node_text(source, ty)));
+                }
+            }
+            // Everything else keeps its spelling: a `self`
+            // parameter (`&self`, `&mut self`, `self`) because a
+            // method that stops borrowing its receiver changes how
+            // it is called, and anything unrecognized because
+            // dropping it would understate the shape.
+            _ => parts.push(normalize(node_text(source, child))),
+        }
+    }
+    let returns = node
+        .child_by_field_name("return_type")
+        .map(|ty| normalize(node_text(source, ty)));
+    Some(Signature {
+        parameters: parts.join(", "),
+        returns,
+    })
+}
+
+/// Read a Python function node's call shape: its parameter names
+/// and annotations, and its return annotation when written.
+///
+/// Names are kept because a Python caller breaks when a keyword
+/// name changes, and default values are dropped because they
+/// change no call shape: `f(a, b=3)` and `f(a, b=4)` take the same
+/// calls.
+///
+/// Public because the Python plugin supplies it to the shared walk
+/// from its own rules, the way it supplies its own node kinds.
+#[must_use]
+pub fn python_signature(
+    source: &[u8],
+    node: tree_sitter::Node<'_>,
+) -> Option<Signature> {
+    let parameters = node.child_by_field_name("parameters")?;
+    let mut parts = Vec::new();
+    let mut cursor = parameters.walk();
+    for child in parameters.named_children(&mut cursor) {
+        let mut named = child.walk();
+        let named: Vec<_> = child.named_children(&mut named).collect();
+        let part = match child.kind() {
+            "typed_parameter" | "typed_default_parameter" => {
+                match (named.first(), named.get(1)) {
+                    (Some(name), Some(ty)) => format!(
+                        "{}: {}",
+                        normalize(node_text(source, *name)),
+                        normalize(node_text(source, *ty))
+                    ),
+                    _ => normalize(node_text(source, child)),
+                }
+            }
+            "default_parameter" => named.first().map_or_else(
+                || normalize(node_text(source, child)),
+                |name| normalize(node_text(source, *name)),
+            ),
+            _ => normalize(node_text(source, child)),
+        };
+        parts.push(part);
+    }
+    let returns = node
+        .child_by_field_name("return_type")
+        .map(|ty| normalize(node_text(source, ty)));
+    Some(Signature {
+        parameters: parts.join(", "),
+        returns,
+    })
+}
+
 /// Collect every name a Rust source file declares, at any depth.
 ///
 /// Depth does not matter: an inline `mod tests { pub struct Fixture; }` is still
@@ -429,6 +584,7 @@ pub fn collect_declared_names(
         DeclarationRules {
             declaration_kinds: &RUST_DECLARATION_KINDS,
             reexport_kinds: &RUST_REEXPORT_KINDS,
+            signature_of: Some(rust_signature),
         },
     )
 }
@@ -442,6 +598,11 @@ pub fn collect_declared_names(
 /// language with no re-export construct passes an empty list, which is what
 /// Python does -- every top-level name in a module is importable, so there is
 /// nothing to distinguish.
+///
+/// How a function node's call shape is read from its syntax tree.
+pub type SignatureReader =
+    fn(&[u8], tree_sitter::Node<'_>) -> Option<Signature>;
+
 #[derive(Debug, Clone, Copy)]
 pub struct DeclarationRules<'rules> {
     /// Node kinds whose `name` field names something this file
@@ -449,6 +610,10 @@ pub struct DeclarationRules<'rules> {
     pub declaration_kinds: &'rules [(&'rules str, DeclarationKind)],
     /// Node kinds that re-export. Empty for a language with no such construct.
     pub reexport_kinds: &'rules [&'rules str],
+    /// How a function node's call shape is read, when the language
+    /// has one. `None` for a language whose declarations carry no
+    /// call shape worth comparing.
+    pub signature_of: Option<SignatureReader>,
 }
 
 /// Collect what a file declares, under one language's grammar.
@@ -459,6 +624,7 @@ pub fn collect_declared_names_with(
     rules: DeclarationRules<'_>,
 ) -> DeclaredNames {
     let mut declared = BTreeMap::new();
+    let mut signatures = BTreeMap::new();
     let mut reexported = BTreeSet::new();
     let mut bound = BTreeSet::new();
     let mut macro_exports = BTreeSet::new();
@@ -467,6 +633,7 @@ pub fn collect_declared_names_with(
         tree.root_node(),
         &mut NameSets {
             declared: &mut declared,
+            signatures: &mut signatures,
             reexported: &mut reexported,
             bound: &mut bound,
             macro_exports: &mut macro_exports,
@@ -476,6 +643,7 @@ pub fn collect_declared_names_with(
     );
     DeclaredNames {
         declared,
+        signatures,
         reexported,
         bound,
         macro_exports,
@@ -576,6 +744,7 @@ fn collect_use_leaves(
 /// recursion passes a single argument instead of four siblings.
 struct NameSets<'sets> {
     declared: &'sets mut BTreeMap<String, DeclarationKind>,
+    signatures: &'sets mut BTreeMap<String, Signature>,
     reexported: &'sets mut BTreeSet<String>,
     bound: &'sets mut BTreeSet<String>,
     macro_exports: &'sets mut BTreeSet<String>,
@@ -599,8 +768,17 @@ fn walk(
         .find(|(node_kind, _)| *node_kind == node.kind())
         && let Some(name) = node.child_by_field_name("name")
     {
-        sets.declared
-            .insert(node_text(source, name).to_owned(), *kind);
+        let name_text = node_text(source, name).to_owned();
+        // A call shape is recorded only for functions: a struct or
+        // a class has no call shape a caller breaks against, and a
+        // signature for one would be a comparison against nothing.
+        if *kind == DeclarationKind::Function
+            && let Some(read) = rules.signature_of
+            && let Some(signature) = read(source, node)
+        {
+            sets.signatures.insert(name_text.clone(), signature);
+        }
+        sets.declared.insert(name_text, *kind);
     }
 
     // A derive macro's name lives in its attribute, not on the item it
@@ -1194,6 +1372,7 @@ pub struct JsonLines<S, T = AsExtractor> {
                     ("function_definition", DeclarationKind::Function),
                 ],
                 reexport_kinds: &[],
+                signature_of: None,
             },
         );
         assert_eq!(python.into_sorted_vec(), vec!["Flask", "helper"]);
@@ -1203,6 +1382,7 @@ pub struct JsonLines<S, T = AsExtractor> {
         let rust_rules = DeclarationRules {
             declaration_kinds: &RUST_DECLARATION_KINDS,
             reexport_kinds: &RUST_REEXPORT_KINDS,
+            signature_of: Some(rust_signature),
         };
         assert!(
             collect_declared_names_with(source.as_bytes(), &tree, rust_rules)
@@ -1330,5 +1510,33 @@ pub struct JsonLines<S, T = AsExtractor> {
             ]
         );
         assert_eq!(index.declared_in("src/other.rs").len(), 0);
+    }
+
+    #[test]
+    fn rust_signatures_compare_types_not_names() {
+        let first = "pub fn add(first: i32, second: i32) -> i32 { first + second }\n\
+                     impl Thing {\n\
+                     \x20   pub fn get(&self, key: &str) -> Option<i32> { None }\n\
+                     }\n";
+        let renamed = "pub fn add(a: i32, b: i32) -> i32 { a + b }\n";
+        let mut parser = rust_parser();
+        let tree = parser.parse(first, None).expect("the snippet parses");
+        let names = collect_declared_names(first.as_bytes(), &tree);
+        let add = names.signature_of("add").expect("add has a signature");
+        assert_eq!(add.parameters, "i32, i32");
+        assert_eq!(add.returns.as_deref(), Some("i32"));
+        let get = names.signature_of("get").expect("get has a signature");
+        assert_eq!(get.parameters, "&self, &str");
+        assert_eq!(get.returns.as_deref(), Some("Option<i32>"));
+
+        // Renaming parameters changes no call shape, so the two
+        // spellings compare equal: a comparison that reported the
+        // rename would cry wolf on every cosmetic edit.
+        let tree = parser.parse(renamed, None).expect("the snippet parses");
+        let renamed_names = collect_declared_names(renamed.as_bytes(), &tree);
+        assert_eq!(
+            names.signature_of("add"),
+            renamed_names.signature_of("add")
+        );
     }
 }

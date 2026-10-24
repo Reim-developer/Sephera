@@ -39,11 +39,25 @@ Two changes, and only two:
   of thing: a function that became a class, a struct that became an
   enum. Callers break differently for each, so the report names the
   new kind rather than flattening both into "changed".
+- **Signature-changed** — the name is still declared as a function,
+  but its call shape changed: a parameter type, a parameter name in
+  Python, or the return annotation. A signature is what a caller
+  breaks against, so this is a break even though the name survives.
 
 Only Rust and Python collect declarations today, so only their
 symbols can be reported broken. Consumers are read in every
 language: a JavaScript file importing a removed name through a
 boundary is as broken as a Rust caller.
+
+What a signature compares is the honest reading of each language.
+A Rust signature compares parameter *types*, because a caller breaks
+when a type changes and does not care what the parameter is called
+— renaming a parameter reports nothing. A Python signature compares
+names and annotations, because a caller breaks when a keyword name
+changes, and drops default values, because they change no call
+shape. A function whose shape was recorded on only one side is not
+compared: the comparison stays silent rather than inventing a shape
+the other side never had.
 
 ## How consumers are found
 
@@ -77,9 +91,6 @@ the exit code changes.
 
 ## Limits, stated plainly
 
-- Signatures are not compared yet: a function whose parameters
-  changed but whose name and kind did not is not reported. That is
-  the next beat of this command.
 - A symbol that moved files — deleted from one file, added to
   another — is reported as removed from the first. Consumers
   importing it from the first file are broken; the report does not

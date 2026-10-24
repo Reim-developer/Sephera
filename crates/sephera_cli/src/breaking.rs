@@ -55,10 +55,17 @@ pub fn render_markdown(report: &BreakingReport) -> String {
 
     for broken in &report.broken {
         writeln!(output).expect("writing to a String must succeed");
-        let change = match broken.change {
+        let change = match &broken.change {
             Change::Removed => "removed".to_owned(),
             Change::KindChanged { to } => {
                 format!("changed kind: {:?} → {:?}", broken.kind, to)
+            }
+            Change::SignatureChanged { from, to } => {
+                format!(
+                    "changed signature: {} → {}",
+                    from.render(),
+                    to.render()
+                )
             }
         };
         writeln!(

@@ -10,7 +10,7 @@
 use std::path::PathBuf;
 
 use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames,
+    DeclarationIndex, DeclarationKind, DeclaredNames, Signature,
 };
 
 use crate::types::{
@@ -93,6 +93,34 @@ fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
         let mut declared = DeclaredNames::default();
         for (name, kind) in *names {
             declared.declare_as(*name, *kind);
+        }
+        index.insert(file, declared);
+    }
+    index
+}
+
+/// Like `index`, but each name may also carry a call shape, for
+/// the tests that compare signatures.
+fn index_with_signatures(
+    files: &[(
+        &str,
+        &[(&str, DeclarationKind, Option<(&str, Option<&str>)>)],
+    )],
+) -> DeclarationIndex {
+    let mut index = DeclarationIndex::default();
+    for (file, names) in files {
+        let mut declared = DeclaredNames::default();
+        for (name, kind, signature) in *names {
+            declared.declare_as(*name, *kind);
+            if let Some((parameters, returns)) = signature {
+                declared.declare_signature(
+                    *name,
+                    Signature {
+                        parameters: (*parameters).to_owned(),
+                        returns: returns.map(str::to_owned),
+                    },
+                );
+            }
         }
         index.insert(file, declared);
     }
@@ -206,4 +234,83 @@ fn a_deleted_file_reports_every_symbol_with_no_consumers() {
     assert_eq!(measured.broken.len(), 2);
     assert!(measured.broken.iter().all(|broken| broken.direct.is_empty()
         && broken.change == BreakChange::Removed));
+}
+
+#[test]
+fn a_signature_change_is_a_break_with_the_same_consumers() {
+    // `add` stays a function, but its second parameter gains an
+    // annotation: every caller that passed an integer breaks, and
+    // the report must say so rather than staying silent because
+    // the name survived. The symbol still exists, so the consumer's
+    // statement still resolves — its import path names the symbol,
+    // which is the evidence here, not a gap.
+    let old_index = index_with_signatures(&[(
+        "lib.py",
+        &[
+            ("add", DeclarationKind::Function, Some(("x, y", None))),
+            ("keep", DeclarationKind::Function, Some(("x", None))),
+        ],
+    )]);
+    let new_index = index_with_signatures(&[(
+        "lib.py",
+        &[
+            ("add", DeclarationKind::Function, Some(("x, y: str", None))),
+            ("keep", DeclarationKind::Function, Some(("x", None))),
+        ],
+    )]);
+    let report = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(
+            &["consumer.py", "lib.py"],
+            vec![edge("consumer.py", "lib.py", "lib.add")],
+        ),
+        &report(
+            &["consumer.py", "lib.py"],
+            vec![edge("consumer.py", "lib.py", "lib.add")],
+        ),
+        "v1",
+        "v2",
+    );
+    assert_eq!(report.broken.len(), 1);
+    let broken = &report.broken[0];
+    assert_eq!(broken.symbol, "add");
+    assert_eq!(
+        broken.change,
+        BreakChange::SignatureChanged {
+            from: Signature {
+                parameters: "x, y".to_owned(),
+                returns: None,
+            },
+            to: Signature {
+                parameters: "x, y: str".to_owned(),
+                returns: None,
+            },
+        }
+    );
+    assert_eq!(direct_files(broken), vec!["consumer.py"]);
+}
+
+#[test]
+fn a_function_without_a_signature_on_either_side_is_not_a_break() {
+    // Signatures arrive only from languages that collect them. A
+    // function whose shape was never recorded cannot be compared,
+    // and the comparison must stay silent rather than invent one.
+    let old_index = index_with_signatures(&[(
+        "lib.py",
+        &[("add", DeclarationKind::Function, None)],
+    )]);
+    let new_index = index_with_signatures(&[(
+        "lib.py",
+        &[("add", DeclarationKind::Function, None)],
+    )]);
+    let report = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py"], vec![]),
+        &report(&["lib.py"], vec![]),
+        "v1",
+        "v2",
+    );
+    assert_eq!(report.broken.len(), 0);
 }

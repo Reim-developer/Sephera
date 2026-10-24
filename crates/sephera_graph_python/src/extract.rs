@@ -20,7 +20,7 @@ use tree_sitter::Node;
 use sephera_core::{
     declarations::{
         DeclarationKind, DeclarationRules, DeclaredNames,
-        collect_declared_names_with,
+        collect_declared_names_with, python_signature,
     },
     types::{ImportKind, ImportStatement},
 };
@@ -59,6 +59,7 @@ pub fn declared_names(
             // Every top-level name in a Python module is importable, so there is
             // no re-export construct to look for: they are all declared.
             reexport_kinds: &[],
+            signature_of: Some(python_signature),
         },
     );
     collect_module_level_assignments(source, tree.root_node(), &mut declared);
@@ -483,6 +484,22 @@ mod tests {
             Ok(declared_names(source, &tree).into_sorted_vec())
         })
         .expect("a parser exists")
+    }
+
+    #[test]
+    fn signatures_keep_names_and_annotations_but_drop_defaults() {
+        let source = b"def serve(host, port: int = 8080, *args, **options) -> bool:\n    return True\n";
+        let signature =
+            with_parser(SupportedLanguage::Python, source.len(), |parser| {
+                let tree =
+                    parser.parse(source, None).expect("the source parses");
+                Ok(declared_names(source, &tree).signature_of("serve").cloned())
+            })
+            .expect("a parser exists");
+
+        let signature = signature.expect("serve has a signature");
+        assert_eq!(signature.parameters, "host, port: int, *args, **options");
+        assert_eq!(signature.returns.as_deref(), Some("bool"));
     }
 
     #[test]
