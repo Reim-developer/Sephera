@@ -23,6 +23,7 @@ use sephera_graph::{
     blast_radius, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
+    symbol_impact,
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
@@ -331,7 +332,7 @@ impl SepheraServer {
     /// node array to find a count.
     #[tool(
         name = "impact",
-        description = "Report the blast radius of one or more files: every file that transitively imports each one, with the names they import. Run this BEFORE editing a file to find out what else breaks. Accepts one or more files plus exactly one of path or url, and an optional ref for repo URLs. Several files cost about the same as one because the graph is built once, and results come back widest first. Use depth to limit how far the reach travels, focus to report only dependents inside a subtree, and format=markdown for a compact summary that fits an agent's context or json for dependent_count as a number."
+        description = "Report the blast radius of one or more files: every file that transitively imports each one, with the names they import. Run this BEFORE editing a file to find out what else breaks. Accepts one or more files plus exactly one of path or url, and an optional ref for repo URLs. Several files cost about the same as one because the graph is built once, and results come back widest first. Use depth to limit how far the reach travels, focus to report only dependents inside a subtree, and format=markdown for a compact summary that fits an agent's context or json for dependent_count as a number. Pass symbol to narrow from a file to one name it exports: dependents become the files that import that name, and the entry also reports namespace importers (may use the name without naming it) and files downstream of those -- the answer to give before renaming or removing a single exported name."
     )]
     #[allow(
         clippy::unused_self,
@@ -399,16 +400,32 @@ impl SepheraServer {
         .into_iter()
         .collect::<Vec<_>>();
 
-        let radii = blast_radius::measure_all(
-            &report,
-            &param.files,
-            &base_prefix,
-            param.depth,
-            &focus,
-        )
-        .map_err(map_internal_error("blast radius measurement failed"))?;
-
-        let built = ImpactReport::new(&radii, param.fail_on);
+        // One build, two questions: the file's whole radius, or the
+        // radius of one name inside it when `symbol` is set. The symbol
+        // answer is built by the same code the CLI renders, so the two
+        // entry points cannot disagree about who uses a name.
+        let built = if let Some(symbol) = &param.symbol {
+            let impacts = symbol_impact::measure_symbol_all(
+                &report,
+                &param.files,
+                &base_prefix,
+                symbol,
+                param.depth,
+                &focus,
+            )
+            .map_err(map_internal_error("symbol impact measurement failed"))?;
+            ImpactReport::from_symbol_impacts(&impacts, param.fail_on)
+        } else {
+            let radii = blast_radius::measure_all(
+                &report,
+                &param.files,
+                &base_prefix,
+                param.depth,
+                &focus,
+            )
+            .map_err(map_internal_error("blast radius measurement failed"))?;
+            ImpactReport::new(&radii, param.fail_on)
+        };
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&built),
@@ -926,11 +943,29 @@ pub struct ImpactEntry {
     pub target: String,
     /// How many files depend on it. The number worth comparing against a
     /// threshold without walking the dependent list.
+    ///
+    /// When `symbol` is set this counts the files that import the symbol,
+    /// not every dependent of the file.
     pub dependent_count: u64,
     /// The depth limit applied, if any.
     pub depth: Option<u32>,
     /// The dependents, each with the names it imports from the target.
+    ///
+    /// When `symbol` is set these are the files that import the symbol,
+    /// each with the import paths that name it.
     pub dependents: Vec<ImpactDependent>,
+    /// The name the report was narrowed to, when it was. Serialised as
+    /// `null` at file level rather than omitted, as `depth` and `gate`
+    /// already spell absence, so a caller learns one convention.
+    pub symbol: Option<String>,
+    /// Files that import the target's namespace wholesale and so may use
+    /// the symbol without naming it. `null` unless `symbol` is set: at
+    /// file level the distinction does not exist, and spelling it as an
+    /// empty list would claim a measurement that was never made.
+    pub namespace_users: Option<Vec<String>>,
+    /// Files downstream of a direct or namespace user. `null` unless
+    /// `symbol` is set, for the same reason as `namespace_users`.
+    pub downstream: Option<Vec<String>>,
 }
 
 /// One dependent of a target.
@@ -959,13 +994,69 @@ impl ImpactReport {
                         imports: dependent.imports.clone(),
                     })
                     .collect(),
+                symbol: None,
+                namespace_users: None,
+                downstream: None,
             })
             .collect();
 
+        Self {
+            gate: Self::gate_for(&targets, fail_on),
+            targets,
+        }
+    }
+
+    /// Build the report for a symbol-narrowed run.
+    ///
+    /// The entry keeps the file-level shape so a caller parses one
+    /// report either way: `dependents` carries the symbol's direct
+    /// users and `dependent_count` counts them, which is what makes
+    /// the shared gate compare against the symbol's reach rather than
+    /// the file's. The two lists that only exist at symbol level ride
+    /// along as their own fields.
+    fn from_symbol_impacts(
+        impacts: &[symbol_impact::SymbolImpact],
+        fail_on: Option<u64>,
+    ) -> Self {
+        let targets: Vec<ImpactEntry> = impacts
+            .iter()
+            .map(|impact| ImpactEntry {
+                target: impact.target.clone(),
+                dependent_count: symbol_impact::direct_count(impact),
+                depth: impact.depth,
+                dependents: impact
+                    .direct
+                    .iter()
+                    .map(|user| ImpactDependent {
+                        file: user.file.clone(),
+                        imports: user.imports.clone(),
+                    })
+                    .collect(),
+                symbol: Some(impact.symbol.clone()),
+                namespace_users: Some(impact.namespace_users.clone()),
+                downstream: Some(impact.downstream.clone()),
+            })
+            .collect();
+
+        Self {
+            gate: Self::gate_for(&targets, fail_on),
+            targets,
+        }
+    }
+
+    /// The verdict on a `fail_on` threshold over already-built entries.
+    ///
+    /// Shared by the file-level and symbol-level reports: the rule is
+    /// the same, only the count it compares differs, and each entry
+    /// already carries the count its own question produced.
+    fn gate_for(
+        targets: &[ImpactEntry],
+        fail_on: Option<u64>,
+    ) -> Option<ImpactGate> {
         // One violation per offending target rather than a single flag, so the
         // caller learns *which* file broke the rule. The CLI does the same, and
         // for the same reason: a count with no owner cannot be acted on.
-        let gate = fail_on.map(|limit| {
+        fail_on.map(|limit| {
             let violations: Vec<ImpactViolation> = targets
                 .iter()
                 .filter(|entry| entry.dependent_count >= limit)
@@ -981,9 +1072,7 @@ impl ImpactReport {
                 exit_code: if violations.is_empty() { 0 } else { 2 },
                 violations,
             }
-        });
-
-        Self { targets, gate }
+        })
     }
 }
 
@@ -1000,6 +1089,18 @@ impl ImpactReport {
 /// gate, and acting on them is the reason for the gate.
 fn impact_markdown(report: &ImpactReport) -> String {
     use std::fmt::Write as _;
+
+    // A symbol-narrowed report renders by its own wording, as the CLI's
+    // does. Decided from the first entry because a run is narrowed for
+    // every target or for none -- the parameter is the run's, not a
+    // target's.
+    if report
+        .targets
+        .first()
+        .is_some_and(|entry| entry.symbol.is_some())
+    {
+        return symbol_impact_markdown(report);
+    }
 
     let mut output = String::new();
     let several = report.targets.len() > 1;
@@ -1058,6 +1159,20 @@ fn impact_markdown(report: &ImpactReport) -> String {
         output.push('\n');
     }
 
+    write_impact_gate(&mut output, report);
+
+    output
+}
+
+/// Append the threshold verdict to an impact report's Markdown.
+///
+/// Shared by the file-level and symbol-level renderers: the verdict's
+/// wording is about the gate, not about which question produced the
+/// counts, and the two reports should not be able to drift on how a
+/// crossed threshold reads.
+fn write_impact_gate(output: &mut String, report: &ImpactReport) {
+    use std::fmt::Write as _;
+
     if let Some(gate) = &report.gate {
         let _ = writeln!(output, "\n## Threshold\n");
         if gate.crossed {
@@ -1084,6 +1199,133 @@ fn impact_markdown(report: &ImpactReport) -> String {
             );
         }
     }
+}
+
+/// Render a symbol-narrowed impact report as Markdown.
+///
+/// The wording follows the CLI's symbol report, because an agent
+/// reading the tool's answer and a person reading the terminal's are
+/// reading the same measurement and should not have to learn two
+/// phrasings of it. The three lists stay apart for the CLI's reason:
+/// a namespace importer is a may-use, not a use.
+fn symbol_impact_markdown(report: &ImpactReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let several = report.targets.len() > 1;
+    let symbol = report
+        .targets
+        .first()
+        .and_then(|entry| entry.symbol.as_deref())
+        .unwrap_or_default();
+
+    if several {
+        let _ = writeln!(
+            output,
+            "# Symbol impact for `{symbol}` in {} files\n",
+            report.targets.len()
+        );
+        let _ = writeln!(output, "Widest first.");
+    }
+
+    for entry in &report.targets {
+        if several {
+            let _ = writeln!(
+                output,
+                "\n## Symbol impact for `{symbol}` in `{}`\n",
+                entry.target
+            );
+        } else {
+            let _ = writeln!(
+                output,
+                "# Symbol impact for `{symbol}` in `{}`\n",
+                entry.target
+            );
+        }
+        let _ = writeln!(
+            output,
+            "{}",
+            match entry.dependent_count {
+                0 => format!("No file imports `{symbol}` from this file."),
+                1 => format!("1 file imports `{symbol}` from this file."),
+                other => {
+                    format!("{other} files import `{symbol}` from this file.")
+                }
+            }
+        );
+        if let Some(namespace) = &entry.namespace_users
+            && !namespace.is_empty()
+        {
+            let _ = writeln!(
+                output,
+                "{}",
+                match namespace.len() {
+                    1 => format!(
+                        "1 file imports this file's namespace and may use \
+                         `{symbol}` without naming it."
+                    ),
+                    other => format!(
+                        "{other} files import this file's namespace and may \
+                         use `{symbol}` without naming it."
+                    ),
+                }
+            );
+        }
+        if let Some(downstream) = &entry.downstream
+            && !downstream.is_empty()
+        {
+            let _ = writeln!(
+                output,
+                "{}",
+                match downstream.len() {
+                    1 => "1 more file is downstream of those.".to_owned(),
+                    other => {
+                        format!("{other} more files are downstream of those.")
+                    }
+                }
+            );
+        }
+        if let Some(depth) = entry.depth {
+            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
+        }
+
+        let sub = if several { "###" } else { "##" };
+        if !entry.dependents.is_empty() {
+            let _ = writeln!(output, "\n{sub} Files that import `{symbol}`\n");
+            for dependent in &entry.dependents {
+                let names: Vec<String> = dependent
+                    .imports
+                    .iter()
+                    .map(|path| format!("`{path}`"))
+                    .collect();
+                let _ = writeln!(
+                    output,
+                    "- `{}` via {}",
+                    dependent.file,
+                    names.join(", ")
+                );
+            }
+        }
+        if let Some(namespace) = &entry.namespace_users
+            && !namespace.is_empty()
+        {
+            let _ = writeln!(output, "\n{sub} Namespace importers\n");
+            for file in namespace {
+                let _ = writeln!(output, "- `{file}`");
+            }
+        }
+        if let Some(downstream) = &entry.downstream
+            && !downstream.is_empty()
+        {
+            let _ = writeln!(output, "\n{sub} Downstream\n");
+            for file in downstream {
+                let _ = writeln!(output, "- `{file}`");
+            }
+        }
+        output.push('\n');
+    }
+
+    write_impact_gate(&mut output, report);
 
     output
 }

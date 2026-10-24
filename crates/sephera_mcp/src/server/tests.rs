@@ -38,6 +38,7 @@ async fn impact_tool_reports_a_blast_radius() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: None,
         }))
         .await;
@@ -54,6 +55,81 @@ async fn impact_tool_reports_a_blast_radius() {
     let dependent = &parsed["targets"][0]["dependents"][0];
     assert_eq!(dependent["file"], "src/user.rs");
     assert_eq!(dependent["imports"][0], "crate::a");
+}
+
+#[tokio::test]
+async fn impact_tool_with_a_symbol_reports_only_its_users() {
+    // The file-level radius of a.rs in this fixture is every other
+    // file. Narrowed to Router it is one named user, one namespace
+    // importer, and the crate root downstream of them -- and the file
+    // that imports a.rs for Json is in none of the lists, which is
+    // the answer an agent needs before renaming Router.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(
+        temp_dir.path(),
+        "src/lib.rs",
+        b"pub mod a;\npub mod b;\npub mod g;\npub mod other;\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/a.rs",
+        b"pub struct Router;\npub struct Json;\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/b.rs",
+        b"use crate::a::Router;\npub fn make() -> Router { Router }\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/other.rs",
+        b"use crate::a::Json;\npub fn make() -> Json { Json }\n",
+    );
+    write_file(
+        temp_dir.path(),
+        "src/g.rs",
+        b"use crate::a::*;\npub fn make() -> Router { Router }\n",
+    );
+
+    let input = |format: Option<String>| ImpactInput {
+        files: vec!["src/a.rs".to_owned()],
+        path: Some(temp_dir.path().to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        focus: None,
+        ignore: None,
+        no_gitignore: None,
+        depth: None,
+        fail_on: None,
+        symbol: Some("Router".to_owned()),
+        format,
+    };
+
+    let result = server.impact(param_for(input(None))).await;
+    let output = result.expect("impact tool should succeed for a temp dir");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("impact output must be JSON");
+    let target = &parsed["targets"][0];
+
+    assert_eq!(target["symbol"], "Router");
+    assert_eq!(target["dependent_count"], 1, "{output}");
+    assert_eq!(target["dependents"][0]["file"], "src/b.rs");
+    assert_eq!(target["namespace_users"][0], "src/g.rs");
+    assert_eq!(target["downstream"][0], "src/lib.rs");
+
+    let result = server
+        .impact(param_for(input(Some("markdown".to_owned()))))
+        .await;
+    let markdown = result.expect("markdown format should succeed");
+    assert!(
+        markdown.contains("Symbol impact for `Router` in `src/a.rs`"),
+        "{markdown}"
+    );
+    assert!(
+        markdown.contains("1 file imports `Router` from this file."),
+        "{markdown}"
+    );
 }
 
 #[tokio::test]
@@ -88,6 +164,7 @@ async fn impact_tool_accepts_several_files_at_once() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: None,
         }))
         .await;
@@ -127,6 +204,7 @@ async fn impact_tool_rejects_a_path_that_is_not_in_the_graph() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: None,
         }))
         .await;
@@ -173,6 +251,7 @@ async fn impact_tool_reports_a_crossed_gate_as_data_not_as_an_error() {
             no_gitignore: None,
             depth: None,
             fail_on: Some(2),
+            symbol: None,
             format: None,
         }))
         .await;
@@ -217,6 +296,7 @@ async fn impact_tool_reports_a_gate_that_held() {
             no_gitignore: None,
             depth: None,
             fail_on: Some(10),
+            symbol: None,
             format: None,
         }))
         .await;
@@ -258,6 +338,7 @@ async fn impact_tool_reports_null_for_a_gate_that_was_never_set() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: None,
         }))
         .await;
@@ -299,6 +380,7 @@ async fn impact_tool_states_the_verdict_in_markdown_too() {
             no_gitignore: None,
             depth: None,
             fail_on: Some(1),
+            symbol: None,
             format: Some("markdown".to_owned()),
         }))
         .await;
@@ -334,6 +416,7 @@ async fn impact_tool_refuses_an_empty_file_list() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: None,
         }))
         .await;
@@ -361,6 +444,7 @@ async fn impact_tool_rejects_an_unknown_format_instead_of_returning_json() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: Some("md".to_owned()),
         }))
         .await;
@@ -404,6 +488,7 @@ async fn impact_tool_markdown_has_one_title_for_several_targets() {
             no_gitignore: None,
             depth: None,
             fail_on: None,
+            symbol: None,
             format: Some("markdown".to_owned()),
         }))
         .await;
@@ -440,6 +525,7 @@ async fn impact_tool_renders_markdown_for_an_agents_context() {
             no_gitignore: None,
             depth: Some(1),
             fail_on: None,
+            symbol: None,
             format: Some("markdown".to_owned()),
         }))
         .await;

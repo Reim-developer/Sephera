@@ -173,6 +173,13 @@ pub struct ImpactInput {
     /// tell those apart would have to treat every threshold as fatal. The CLI exit
     /// code is included so a wrapper gets the same number the shell would.
     pub fail_on: Option<u64>,
+    /// Narrow the report to one exported name in each file, mirroring the
+    /// CLI's `--symbol`: `dependents` becomes the files that import that
+    /// name, `dependent_count` counts them (so `fail_on` compares against
+    /// the symbol's users), and the entry gains `namespace_users` (files
+    /// that import the file's namespace and may use the name without
+    /// naming it) and `downstream` (files downstream of those).
+    pub symbol: Option<String>,
     /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
     /// compact summary that fits an agent's context.
     pub format: Option<String>,
