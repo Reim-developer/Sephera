@@ -20,6 +20,7 @@
 //! | `why`     | Explain why one file depends on another, as the shortest import chain |
 //! | `coupling` | Find file pairs that change together in history but share no import |
 //! | `review` | Review a change: blast radius, affected tests, and coupling warnings for the files it touches |
+//! | `risk` | Rank the files where a change is most likely to hurt, by dependents × churn × coupling |
 //!
 //! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
 //! the CLI exactly: the same arguments produce the same file set, because an

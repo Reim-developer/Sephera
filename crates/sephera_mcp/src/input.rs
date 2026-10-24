@@ -330,6 +330,42 @@ pub struct ReviewInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `risk` tool.
+///
+/// A ranking is a question about a whole tree and its history, so
+/// there is no file argument: the tool reads the recent commits,
+/// builds the graph, and ranks what the two put at risk together.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct RiskInput {
+    /// Absolute or relative path to the repository root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// How many recent commits to read. Defaults to 500, the CLI's
+    /// window. The window bounds every count in the ranking.
+    pub commits: Option<u32>,
+    /// Count a hidden pair as a coupled partner only at this many
+    /// co-changes. Defaults to 3.
+    pub min_co_changes: Option<u64>,
+    /// How many files the ranking returns, riskiest first. Defaults
+    /// to 20, the CLI's limit.
+    pub limit: Option<u32>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

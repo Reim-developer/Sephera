@@ -23,7 +23,7 @@ use sephera_graph::{
     blast_radius, coupling, dependency_path,
     render::render_graph,
     resolver::{build_focus_set, build_graph},
-    review, symbol_impact,
+    review, risk, symbol_impact,
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
@@ -38,7 +38,7 @@ use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
         AffectedTestsInput, ContextInput, CouplingInput, GraphInput,
-        ImpactInput, LocInput, ReviewInput, SymbolsInput, WhyInput,
+        ImpactInput, LocInput, ReviewInput, RiskInput, SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -803,6 +803,84 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// The files where a change is most likely to hurt, ranked by
+    /// dependents × churn × hidden coupling. The measurement is
+    /// `sephera_graph::risk`'s, shared with the `risk` command, so
+    /// the two cannot disagree.
+    #[tool(
+        name = "risk",
+        description = "Rank the files where a change is most likely to hurt. Three readings of a tree each name a different danger: how much depends on a file (its blast radius), how often it changes in the recent history (churn, over the most recent commits, default 500), and how many hidden-coupling partners its changes drag along. The score is a product -- dependents x churn x (1 + coupled partners) -- because the danger compounds rather than adds, and the coupling term amplifies a risk that already exists rather than creating one in a file nothing depends on. Every row prints the score's factors beside it, and each factor is a count the impact and coupling tools also report, so a row can be audited rather than taken on faith. Only files both depended on and in motion inside the window are listed. Requires a git history; a tree without one is an error rather than an empty ranking. Use format=markdown for a compact summary or json for the rows as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn risk(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<RiskInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // History first, as the CLI reads it: a tree with no readable
+        // history is the error this tool exists to state.
+        let commits = recent_commit_files(
+            &source.repo_root,
+            param.commits.unwrap_or(500),
+        )
+        .map_err(map_internal_error("commit history could not be read"))?;
+
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+        let measured = risk::measure_risk(
+            &report,
+            &rebased,
+            risk::RiskOptions {
+                coupling: coupling::CouplingOptions {
+                    min_co_changes: param.min_co_changes.unwrap_or(3),
+                    ..coupling::CouplingOptions::default()
+                },
+                limit: usize::try_from(param.limit.unwrap_or(20)).unwrap_or(20),
+            },
+        );
+        let built = RiskReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(risk_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported risk format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -1164,6 +1242,93 @@ impl ReviewReport {
                 .collect(),
         }
     }
+}
+
+/// The JSON shape the `risk` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RiskReport {
+    /// Commits handed to the measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it.
+    pub commits_counted: u64,
+    /// The riskiest files, highest score first.
+    pub files: Vec<RiskyFile>,
+}
+
+/// One file's risk, with the counts the score is built from.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct RiskyFile {
+    /// Path of the file.
+    pub file: String,
+    /// Files that depend on it at any depth.
+    pub dependents: usize,
+    /// Counted commits in the window that touched it.
+    pub churn: u64,
+    /// Hidden-coupling pairs it takes part in.
+    pub coupled_partners: usize,
+    /// `dependents × churn × (1 + coupled_partners)`.
+    pub score: u64,
+}
+
+impl RiskReport {
+    fn from_measured(measured: &risk::RiskReport) -> Self {
+        Self {
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            files: measured
+                .files
+                .iter()
+                .map(|file| RiskyFile {
+                    file: file.file.clone(),
+                    dependents: file.dependents,
+                    churn: file.churn,
+                    coupled_partners: file.coupled_partners,
+                    score: file.score,
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a risk ranking as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn risk_markdown(report: &RiskReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Risk ranking\n");
+    let _ = writeln!(
+        output,
+        "History: {} commits scanned, {} counted. Score is dependents \
+         × churn × (1 + coupled partners); only files both depended on \
+         and in motion are listed.",
+        report.commits_scanned, report.commits_counted
+    );
+
+    if report.files.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo file in this tree is both depended on and changing \
+             inside the window."
+        );
+        return output;
+    }
+
+    let _ = writeln!(output);
+    for file in &report.files {
+        let _ = writeln!(
+            output,
+            "- `{}` — score {}, {} dependents, {} changes, {} coupled partner(s)",
+            file.file,
+            file.score,
+            file.dependents,
+            file.churn,
+            file.coupled_partners
+        );
+    }
+    output
 }
 
 /// Render a review as Markdown for an agent's context window.
