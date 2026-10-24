@@ -225,17 +225,23 @@ language = "TypeScript"
 # mappings, and they are most of the internal count -- the graph that holds
 # the monorepo together was the part that went missing.
 #
-# The 27 that remain are not resolver gaps. Twenty-six import built bundles
-# (`./dist/*.cjs.js`, `../dist/*.prod`) from package index shims and
-# benchmarks: a source checkout does not contain build output, and no
-# resolver should invent it. The last is the sfc-playground's template
-# importing the `App.vue` of the project the template generates when copied
-# out; no such file stands beside it in this tree.
+# Twenty-six of the twenty-seven that used to stand here imported built
+# bundles (`./dist/*.cjs.js`, `../dist/*.prod`) from package index shims
+# and benchmarks. They are excused now, on the project's own evidence:
+# the root `.gitignore` names `dist`, which is the project declaring the
+# bundles build output rather than source. The gap rule asks the ignore
+# files about a path it could not place before calling it a gap, so a
+# path no rule covers still counts -- `./missing.js` in a fixture does.
+#
+# The one that remains is the sfc-playground's template importing the
+# `App.vue` of the project the template generates when copied out; no
+# such file stands beside it in this tree, and no ignore rule names it.
+# It stays a floor.
 #
 # Files is 527 rather than 524 because the playground's three template
 # assets (index.html, package.json, README.md) became nodes when the
 # `?raw` imports naming them started resolving.
-unresolved_local = 27
+unresolved_local = 1
 files = 527
 internal_edges = 1890
 self_references = 0
@@ -299,10 +305,20 @@ structural_cycles = 0
 [[corpus]]
 name = "curl"
 language = "C"
-# Three unresolved, all of one family: headers the build generates --
-# `curl_config.h` from configure, `cipher.mih` and `unitprotos.h` from
-# their generators -- which a source checkout legitimately does not
-# hold.
+# One unresolved: `cipher.mih`, an OS/400 system header included only
+# under `#elif defined(USE_OS400CRYPTO)`. It is not generated and no
+# ignore rule names it; what excuses it -- when it is excused -- is the
+# conditional, not the file.
+#
+# Two of the three that stood here are gone, both generated headers:
+# `curl_config.h` from configure and `unitprotos.h`, which the build
+# writes into `lib/` (its generators are in `lib/CMakeLists.txt` and
+# `lib/Makefile.am`) while the include sits in `tests/libtest/`. The
+# evidence in both cases is `lib/.gitignore`, which names each file:
+# the project's own declaration that neither is source. A generated
+# header's home need not be beside its includer, so the gap rule also
+# asks each directory's own ignore files about a bare include's name,
+# and accepts the answer only when exactly one directory names it.
 #
 # There were seven. The other four were Python, not C: `from . import
 # CurlClient` and its siblings in `tests/http/testenv`, naming names
@@ -312,7 +328,7 @@ language = "C"
 # what a Python file declares and the gap rule can ask the package
 # about a name bound against it. No edge moved -- the module halves
 # carried those couplings all along. Only the gap count was wrong.
-unresolved_local = 3
+unresolved_local = 1
 files = 1125
 internal_edges = 3087
 self_references = 0
@@ -335,18 +351,22 @@ language = "Python"
 # in an `__init__` is most of them. Fifty statements were counted
 # as resolver gaps on that account; eight are.
 #
-# The eight, in two families. Seven name `_pytest._version`, a
+# The eight were in two families. Seven named `_pytest._version`, a
 # module setuptools_scm generates at build time; a source checkout
 # legitimately does not hold it, and `src/_pytest/__init__.py` says
-# so itself by catching the ImportError. (The names that `__init__`
+# so itself by catching the ImportError. They are excused now on the
+# project's own evidence: the root `.gitignore` names
+# `src/_pytest/_version.py` outright. (The names that `__init__`
 # binds in the `try` and the `except` are declared, which is why
-# `__version__` itself is not among the eight.) The eighth is
-# `_pytest._argcomplete.filescompleter`: the name is bound under
-# `if os.environ.get("_ARGCOMPLETE"):` in `_argcomplete.py`, a
-# runtime-conditional definition. The declarations do not look
-# through a module-level `if` -- the same restraint that keeps
-# `if TYPE_CHECKING:` names out -- so this one stays a floor.
-unresolved_local = 8
+# `__version__` itself was never among the eight.)
+#
+# The one that remains is `_pytest._argcomplete.filescompleter`: the
+# name is bound under `if os.environ.get("_ARGCOMPLETE"):` in
+# `_argcomplete.py`, a runtime-conditional definition. The
+# declarations do not look through a module-level `if` -- the same
+# restraint that keeps `if TYPE_CHECKING:` names out -- so this one
+# stays a floor for now.
+unresolved_local = 1
 files = 274
 internal_edges = 870
 self_references = 4

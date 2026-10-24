@@ -15,7 +15,7 @@ use rayon::prelude::*;
 use sephera_compression::{SupportedLanguage, with_parser};
 use sephera_core::plugins::walk_with_declarations;
 use sephera_core::progress::{NoProgress, Progress};
-use sephera_ignore::IgnoreMatcher;
+use sephera_ignore::{IgnoreMatcher, path_is_ignored, read_directory_rules};
 use sephera_scan::project_files::{ProjectFile, collect_project_files};
 
 use sephera_core::declarations;
@@ -773,7 +773,8 @@ fn build_edges_and_nodes(
                 // language has, and there is no file for it to bind to.
                 && (statement.kind.is_namespace()
                     == statement.raw_path.ends_with('*'))
-                && !names_a_declared_symbol(statement, file_data, project);
+                && !names_a_declared_symbol(statement, file_data, project)
+                && !names_a_generated_file(statement, file_data, project);
 
             // Every resolved edge goes in the adjacency, including a parent naming its own
             // child with `mod child;`.
@@ -1318,6 +1319,167 @@ fn names_a_declared_symbol(
     }
 
     project.declarations.file_reaches(&parent_file, &name)
+}
+
+/// Whether an unresolved path names a file the build generates.
+///
+/// A source checkout does not hold every file a project imports. Vue's
+/// package entry points re-export from `dist/`, which rollup writes;
+/// pytest imports `_pytest._version`, which setuptools_scm writes; curl
+/// includes `curl_config.h`, which configure writes. The resolver cannot
+/// place those, and reporting them beside a genuinely broken import --
+/// the one count a reader trusts to mean "something here is wrong" --
+/// made the count a liar in both directions: too large to act on, and
+/// easy to dismiss when it mattered.
+///
+/// The evidence is the project's own: each of those paths is named by
+/// the project's ignore files, which is the project's declaration that
+/// the file is not source. A path no ignore rule covers gets no such
+/// reading and stays a gap, so a broken import in a project that happens
+/// to ignore other things is still reported.
+fn names_a_generated_file(
+    statement: &ImportStatement,
+    file_data: &FileImportData,
+    project: &ResolutionInputs,
+) -> bool {
+    if generated_candidates(statement, file_data, project)
+        .iter()
+        .any(|candidate| path_is_ignored(&project.base_path, candidate))
+    {
+        return true;
+    }
+
+    // A generated header does not have to land beside its includer: the
+    // build writes it where the build system says, and an include path
+    // carries the includer there. curl generates `unitprotos.h` into
+    // `lib/` -- its `lib/CMakeLists.txt` says so, and `lib/.gitignore`
+    // names it -- while the include sits in `tests/libtest/`. So a bare
+    // C include also asks every directory in the project whether its own
+    // ignore files name this file. Only a directory's own files count:
+    // an unanchored pattern is inherited by every directory below the
+    // one that wrote it, so asking the accumulated set would have `lib/`
+    // and each of its subdirectories all "naming" the same header.
+    // Exactly one directory may name it: two would be two different
+    // generated files with one name, and which one the include means is
+    // not written anywhere in the source.
+    if matches!(
+        file_data.ts_language,
+        SupportedLanguage::C | SupportedLanguage::Cpp
+    ) && !statement.raw_path.starts_with('<')
+        && !statement.raw_path.contains('/')
+    {
+        let mut directories: Vec<String> = project
+            .known_files
+            .iter()
+            .map(|file| sephera_core::path_utils::parent(file))
+            .collect();
+        directories.push(String::new());
+        directories.sort();
+        directories.dedup();
+
+        let mut naming: usize = 0;
+        for directory in directories {
+            let on_disk = if directory.is_empty() {
+                project.base_path.clone()
+            } else {
+                project.base_path.join(&directory)
+            };
+            let entries: Vec<std::fs::DirEntry> = std::fs::read_dir(&on_disk)
+                .map(|read| read.filter_map(Result::ok).collect())
+                .unwrap_or_default();
+            let own = read_directory_rules(&on_disk, &entries);
+            if own.matched(&statement.raw_path, false)
+                == Some(sephera_ignore::Decision::Ignore)
+            {
+                naming += 1;
+            }
+        }
+        return naming == 1;
+    }
+
+    false
+}
+
+/// The files an unresolved path could name, spelled as project paths.
+///
+/// Three spellings, because languages name generated files the same ways
+/// they name source files. A relative path joins against the importing
+/// file. A C include may also sit beside the includer or on an include
+/// path spelled from the root. A module path is rebuilt from the parent
+/// that did resolve: `_pytest._version.version` is a claim about the
+/// module `_pytest._version`, whose file would sit beside the `_pytest`
+/// package file that resolution did find, so every split of the path is
+/// tried, longest first.
+fn generated_candidates(
+    statement: &ImportStatement,
+    file_data: &FileImportData,
+    project: &ResolutionInputs,
+) -> Vec<String> {
+    use sephera_core::path_utils;
+
+    let raw = &statement.raw_path;
+    let source_dir = path_utils::parent(&file_data.file_path);
+    let mut candidates: Vec<String> = Vec::new();
+
+    if raw.starts_with("./") || raw.starts_with("../") {
+        candidates.push(path_utils::resolve_relative(&source_dir, raw));
+    }
+
+    // A quoted C include is searched beside the includer first and then
+    // along the include path, whose entries are project-relative. An
+    // angle include names a system header and is never a project file.
+    if matches!(
+        file_data.ts_language,
+        SupportedLanguage::C | SupportedLanguage::Cpp
+    ) && !raw.starts_with('<')
+    {
+        candidates.push(path_utils::resolve_relative(&source_dir, raw));
+        candidates.push(raw.clone());
+    }
+
+    // Each split of a module path, longest parent first. The loop ends
+    // where the splits do: a parent is a strict prefix of the path it was
+    // split from, so `rest` shrinks on every pass.
+    let mut rest = raw.clone();
+    while let Some((parent, name)) = split_trailing_name(&rest) {
+        if let Resolution::File(parent_file) = resolve_import_with(
+            &parent,
+            &file_data.file_path,
+            statement.module_depth,
+            statement.kind,
+            file_data.ts_language,
+            project,
+        ) {
+            let directory = path_utils::parent(&parent_file);
+            for suffix in module_suffixes(file_data.ts_language) {
+                let candidate = if directory.is_empty() {
+                    format!("{name}{suffix}")
+                } else {
+                    format!("{directory}/{name}{suffix}")
+                };
+                if !candidates.contains(&candidate) {
+                    candidates.push(candidate);
+                }
+            }
+        }
+        rest = parent;
+    }
+
+    candidates
+}
+
+/// The spellings one module name takes as a file, per language.
+///
+/// Only the languages whose module paths reach the split loop with a
+/// name that differs from the file it names. A path that already spells
+/// the whole file -- every JavaScript and C candidate -- needs no suffix,
+/// and inventing spellings for it would manufacture evidence.
+fn module_suffixes(language: SupportedLanguage) -> &'static [&'static str] {
+    match language {
+        SupportedLanguage::Python => &["", ".py", "/__init__.py"],
+        SupportedLanguage::Rust => &["", ".rs", "/mod.rs"],
+        _ => &[""],
+    }
 }
 
 /// Split a dotted path into everything before the last separator and the last
@@ -2389,6 +2551,58 @@ mod tests {
             .filter(|edge| edge.from == source && edge.resolved)
             .filter_map(|edge| edge.to.clone())
             .collect()
+    }
+
+    #[test]
+    fn an_import_of_a_generated_bundle_is_not_a_gap() {
+        // The bundle is build output: the project's own `.gitignore` names
+        // `dist`, which is the project saying the file is not source. The
+        // import beside it that names a file nothing generates and no rule
+        // covers stays a gap -- the excuse is the evidence, not the shape.
+        let report = graph_for(&[
+            (".gitignore", "dist\n"),
+            (
+                "packages/core/index.js",
+                "export * from \"./dist/core.cjs.js\";\nimport \"./missing.js\";\n",
+            ),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
+        assert!(
+            report
+                .metrics
+                .unresolved_local_samples
+                .iter()
+                .all(|sample| sample.contains("missing.js")),
+            "samples: {:?}",
+            report.metrics.unresolved_local_samples
+        );
+    }
+
+    #[test]
+    fn a_generated_python_module_is_not_a_gap() {
+        // `_version.py` is written by the build's version stamping and the
+        // `.gitignore` says so by path. `absent` has no such evidence: it
+        // names a module in a package the analysis holds, and stays a gap.
+        let report = graph_for(&[
+            (".gitignore", "src/_pytest/_version.py\n"),
+            (
+                "src/_pytest/__init__.py",
+                "from _pytest._version import version\n",
+            ),
+            ("src/_pytest/plain.py", "import _pytest.absent\n"),
+        ]);
+
+        assert_eq!(report.metrics.unresolved_local_edges, 1);
+        assert!(
+            report
+                .metrics
+                .unresolved_local_samples
+                .iter()
+                .all(|sample| sample.contains("absent")),
+            "samples: {:?}",
+            report.metrics.unresolved_local_samples
+        );
     }
 
     #[test]
