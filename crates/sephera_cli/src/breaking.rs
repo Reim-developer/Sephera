@@ -10,6 +10,7 @@ use std::fmt::Write as _;
 // Re-exported so `run.rs` keeps one import site for the whole
 // breaking surface.
 use sephera_graph::breaking::BreakChange as Change;
+use sephera_graph::breaking::BreakSuggestion as Suggestion;
 pub use sephera_graph::breaking::{BreakingReport, measure_breaking};
 
 /// Render the report as Markdown.
@@ -102,6 +103,25 @@ fn render_body(report: &BreakingReport, symbol_heading: &str) -> String {
             broken.file, broken.symbol, broken.kind
         )
         .expect("writing to a String must succeed");
+        // The suggestion sits first, before the evidence: it is the
+        // one line a reviewer acts on, and the consumer lists below
+        // are why it is trustworthy.
+        match &broken.suggestion {
+            Some(Suggestion::Moved { file, kind }) => {
+                writeln!(output, "\nSuggestion: moved to `{file}` ({kind:?}).")
+                    .expect("writing to a String must succeed");
+            }
+            Some(Suggestion::NewCallShape { signature }) => {
+                writeln!(
+                    output,
+                    "\nSuggestion: call `{}{}`.",
+                    broken.symbol,
+                    signature.render()
+                )
+                .expect("writing to a String must succeed");
+            }
+            None => {}
+        }
         if broken.direct.is_empty() && broken.namespace_users.is_empty() {
             writeln!(output, "\nNo consumers in the new tree.")
                 .expect("writing to a String must succeed");
@@ -171,6 +191,7 @@ pub fn json_value(report: &BreakingReport) -> serde_json::Value {
                 "symbol": broken.symbol,
                 "kind": broken.kind,
                 "change": broken.change,
+                "suggestion": broken.suggestion,
                 "direct": broken.direct.iter().map(|user| {
                     serde_json::json!({
                         "file": user.file,
@@ -188,4 +209,109 @@ pub fn json_value(report: &BreakingReport) -> serde_json::Value {
         "to": report.to_ref,
         "broken": broken,
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use sephera_core::declarations::{DeclarationKind, Signature};
+    use sephera_graph::breaking::{BreakChange, BrokenSymbol};
+
+    use super::{render_json, render_markdown, render_markdown_section};
+
+    fn broken(
+        change: BreakChange,
+        suggestion: Option<super::Suggestion>,
+    ) -> super::BreakingReport {
+        super::BreakingReport {
+            from_ref: "v1".to_owned(),
+            to_ref: "v2".to_owned(),
+            broken: vec![BrokenSymbol {
+                file: "lib.py".to_owned(),
+                symbol: "add".to_owned(),
+                kind: DeclarationKind::Function,
+                change,
+                suggestion,
+                direct: vec![],
+                namespace_users: vec![],
+                downstream: vec![],
+            }],
+        }
+    }
+
+    #[test]
+    fn a_move_suggestion_renders_first_and_serializes_as_a_tagged_object() {
+        let report = broken(
+            BreakChange::Removed,
+            Some(super::Suggestion::Moved {
+                file: "other.py".to_owned(),
+                kind: DeclarationKind::Function,
+            }),
+        );
+
+        let markdown = render_markdown(&report);
+        assert!(
+            markdown.contains("Suggestion: moved to `other.py` (Function).")
+        );
+        // The suggestion precedes the evidence, not the other way round.
+        assert!(
+            markdown.find("Suggestion:").unwrap()
+                < markdown.find("No consumers").unwrap()
+        );
+        // The embedded section the review command renders carries it too.
+        assert!(
+            render_markdown_section(&report)
+                .contains("Suggestion: moved to `other.py` (Function).")
+        );
+
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json(&report)).expect("valid JSON");
+        assert_eq!(
+            json["broken"][0]["suggestion"],
+            serde_json::json!({
+                "type": "moved",
+                "file": "other.py",
+                "kind": "function",
+            })
+        );
+    }
+
+    #[test]
+    fn a_new_call_shape_suggestion_renders_as_a_call() {
+        let report = broken(
+            BreakChange::SignatureChanged {
+                from: Signature {
+                    parameters: "x, y".to_owned(),
+                    returns: None,
+                },
+                to: Signature {
+                    parameters: "x, y: str".to_owned(),
+                    returns: None,
+                },
+            },
+            Some(super::Suggestion::NewCallShape {
+                signature: Signature {
+                    parameters: "x, y: str".to_owned(),
+                    returns: None,
+                },
+            }),
+        );
+
+        let markdown = render_markdown(&report);
+        assert!(markdown.contains("Suggestion: call `add(x, y: str)`."));
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json(&report)).expect("valid JSON");
+        assert_eq!(
+            json["broken"][0]["suggestion"]["type"],
+            serde_json::json!("new_call_shape")
+        );
+    }
+
+    #[test]
+    fn no_suggestion_serializes_as_null_not_as_an_omission() {
+        let report = broken(BreakChange::Removed, None);
+        let json: serde_json::Value =
+            serde_json::from_str(&render_json(&report)).expect("valid JSON");
+        assert!(json["broken"][0]["suggestion"].is_null());
+        assert!(!render_markdown(&report).contains("Suggestion:"));
+    }
 }

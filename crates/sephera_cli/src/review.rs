@@ -264,6 +264,7 @@ mod tests {
                 symbol: "add".to_owned(),
                 kind: DeclarationKind::Function,
                 change: BreakChange::Removed,
+                suggestion: None,
                 direct: vec![SymbolUser {
                     file: "consumer.py".to_owned(),
                     imports: vec!["lib.add".to_owned()],
