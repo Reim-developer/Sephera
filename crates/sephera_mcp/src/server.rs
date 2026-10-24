@@ -20,16 +20,16 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, coupling, dead, dependency_path,
+    blast_radius, breaking, coupling, dead, dependency_path,
     render::render_graph,
-    resolver::{build_focus_set, build_graph},
+    resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, symbol_impact,
     types::{GraphFormat, GraphQuery},
 };
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
-    SourceRequest, build_context_report, changed_files, recent_commit_files,
-    resolve_context_command, resolve_source,
+    SourceRequest, build_context_report, changed_files, checkout_worktree,
+    recent_commit_files, resolve_context_command, resolve_source,
 };
 use sephera_scan::CodeLoc;
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -37,8 +37,9 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, ContextInput, CouplingInput, DeadInput, GraphInput,
-        ImpactInput, LocInput, ReviewInput, RiskInput, SymbolsInput, WhyInput,
+        AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
+        DeadInput, GraphInput, ImpactInput, LocInput, ReviewInput, RiskInput,
+        SymbolsInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -955,6 +956,85 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Compare two refs and report which declared symbols broke,
+    /// joined to the files that still use them. The measurement is
+    /// `sephera_graph::breaking`'s, shared with the `breaking`
+    /// command, so the two cannot disagree.
+    #[tool(
+        name = "breaking",
+        description = "Compare two refs of a local repository and report which declared symbols broke, joined to the files that still use them. A diff between two declaration indexes says what vanished or changed shape; this joins each break to its consumers in the newer tree, because a removed name nobody imports breaks nothing and a removed name with nine importers breaks nine files. `from` names the older side and is required; `to` names the newer side, and when it is absent the newer side is the working tree -- staged, unstaged, and untracked files included -- which is the form a branch review takes before it is pushed. Only Rust and Python collect declarations, so only their symbols can be reported broken, but consumers are read in every language. A symbol nobody uses is still listed, with no consumers: that is the clean kind of breaking. Requires a git repository; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn breaking(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<BreakingInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let old_worktree = checkout_worktree(&source.repo_root, &param.from)
+            .map_err(map_internal_error("old ref checkout failed"))?;
+        let (old_report, old_index) =
+            build_graph_with_declarations(old_worktree.path(), &ignore_matcher)
+                .map_err(map_internal_error("old graph build failed"))?;
+
+        let (new_report, new_index) = if let Some(to) = &param.to {
+            let new_worktree = checkout_worktree(&source.repo_root, to)
+                .map_err(map_internal_error("new ref checkout failed"))?;
+            let built = build_graph_with_declarations(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("new graph build failed"))?;
+            drop(new_worktree);
+            built
+        } else {
+            build_graph_with_declarations(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("working tree graph build failed"))?
+        };
+        drop(old_worktree);
+
+        let to_label = param.to.as_deref().unwrap_or("working tree");
+        let measured = breaking::measure_breaking(
+            &old_index,
+            &new_index,
+            &old_report,
+            &new_report,
+            &param.from,
+            to_label,
+        );
+        let built = BreakingReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(breaking_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported breaking format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// The JSON shape the `affected_tests` tool returns.
@@ -1502,6 +1582,171 @@ fn risk_markdown(report: &RiskReport) -> String {
             file.churn,
             file.coupled_partners
         );
+    }
+    output
+}
+
+/// The JSON shape the `breaking` tool returns.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BreakingReport {
+    /// The older ref, as the caller spelled it.
+    pub from: String,
+    /// The newer ref, as the caller spelled it, or "working tree".
+    pub to: String,
+    /// The broken symbols, widest consumer count first.
+    pub broken: Vec<BrokenSymbolReport>,
+}
+
+/// One broken symbol, with the files that still use it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BrokenSymbolReport {
+    /// The file that used to declare the symbol.
+    pub file: String,
+    /// The symbol's name.
+    pub symbol: String,
+    /// The kind it was declared as in the old tree.
+    pub kind: String,
+    /// `removed`, or `kind_changed`.
+    pub change: String,
+    /// The kind the new tree declares it as, for a kind change.
+    pub new_kind: Option<String>,
+    /// Files in the new tree that name the symbol from that file.
+    pub direct: Vec<DirectConsumerReport>,
+    /// Files importing the file's namespace wholesale.
+    pub namespace_users: Vec<String>,
+    /// Files downstream of a direct or namespace user.
+    pub downstream: Vec<String>,
+}
+
+/// One file that names a broken symbol, with the evidence.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DirectConsumerReport {
+    /// Path of the file.
+    pub file: String,
+    /// Import paths evidencing the use.
+    pub imports: Vec<String>,
+}
+
+impl BreakingReport {
+    fn from_measured(measured: &breaking::BreakingReport) -> Self {
+        Self {
+            from: measured.from_ref.clone(),
+            to: measured.to_ref.clone(),
+            broken: measured
+                .broken
+                .iter()
+                .map(|broken| {
+                    let (change, new_kind) = match broken.change {
+                        breaking::BreakChange::Removed => {
+                            ("removed".to_owned(), None)
+                        }
+                        breaking::BreakChange::KindChanged { to } => (
+                            "kind_changed".to_owned(),
+                            Some(format!("{to:?}").to_lowercase()),
+                        ),
+                    };
+                    BrokenSymbolReport {
+                        file: broken.file.clone(),
+                        symbol: broken.symbol.clone(),
+                        kind: format!("{:?}", broken.kind).to_lowercase(),
+                        change,
+                        new_kind,
+                        direct: broken
+                            .direct
+                            .iter()
+                            .map(|user| DirectConsumerReport {
+                                file: user.file.clone(),
+                                imports: user.imports.clone(),
+                            })
+                            .collect(),
+                        namespace_users: broken.namespace_users.clone(),
+                        downstream: broken.downstream.clone(),
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a breaking report as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn breaking_markdown(report: &BreakingReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Breaking changes: `{}` → `{}`\n",
+        report.from, report.to
+    );
+    let with_consumers = report
+        .broken
+        .iter()
+        .filter(|broken| !broken.direct.is_empty())
+        .count();
+    let _ = writeln!(
+        output,
+        "{} symbol(s) broke; {} of them still have direct consumers.",
+        report.broken.len(),
+        with_consumers
+    );
+
+    if report.broken.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNothing any consumer names was removed or changed shape."
+        );
+        return output;
+    }
+
+    for broken in &report.broken {
+        let _ = writeln!(output);
+        let change = match (&broken.change, &broken.new_kind) {
+            (change, None) => change.clone(),
+            (_, Some(to)) => {
+                format!("changed kind: {} → {to}", broken.kind)
+            }
+        };
+        let _ = writeln!(
+            output,
+            "## `{}` — `{}` ({}, {change})",
+            broken.file, broken.symbol, broken.kind
+        );
+        if broken.direct.is_empty() && broken.namespace_users.is_empty() {
+            let _ = writeln!(output, "\nNo consumers in the new tree.");
+        }
+        if !broken.direct.is_empty() {
+            let _ = writeln!(output, "\nDirect consumers:");
+            for user in &broken.direct {
+                let _ = writeln!(
+                    output,
+                    "- `{}` via {}",
+                    user.file,
+                    user.imports
+                        .iter()
+                        .map(|import| format!("`{import}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                );
+            }
+        }
+        if !broken.namespace_users.is_empty() {
+            let _ = writeln!(
+                output,
+                "\nNamespace users (may use it without naming it):"
+            );
+            for file in &broken.namespace_users {
+                let _ = writeln!(output, "- `{file}`");
+            }
+        }
+        if !broken.downstream.is_empty() {
+            let _ = writeln!(output, "\nDownstream of those consumers:");
+            for file in &broken.downstream {
+                let _ = writeln!(output, "- `{file}`");
+            }
+        }
     }
     output
 }
