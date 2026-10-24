@@ -1,3 +1,4 @@
+use std::collections::BTreeMap;
 use std::path::Path;
 
 use sephera_context::{
@@ -394,4 +395,109 @@ fn diff_selection_keeps_low_signal_changed_files_in_scope() {
         file.relative_path == ".venv/lib/python/site.py"
             && file.selection_class == SelectionClass::DiffFile
     }));
+}
+
+fn build_chain_repo() -> TempDir {
+    // Four general files whose sizes rank them a, d, b, c -- while
+    // the import chain runs a -> b -> c. Ranking alone therefore
+    // packs the unrelated d before either dependency.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "a.py", &[b'a'; 40]);
+    write_file(temp_dir.path(), "d.py", &[b'd'; 80]);
+    write_file(temp_dir.path(), "b.py", &[b'b'; 120]);
+    write_file(temp_dir.path(), "c.py", &[b'c'; 160]);
+    temp_dir
+}
+
+fn chain_dependencies() -> BTreeMap<String, Vec<String>> {
+    BTreeMap::from([
+        ("a.py".to_owned(), vec!["b.py".to_owned()]),
+        ("b.py".to_owned(), vec!["c.py".to_owned()]),
+    ])
+}
+
+#[test]
+fn without_closure_rank_order_is_selection_order() {
+    let temp_dir = build_chain_repo();
+    let report = ContextBuilder::new(
+        temp_dir.path(),
+        IgnoreMatcher::empty(),
+        Vec::new(),
+        64_000,
+    )
+    .build()
+    .unwrap();
+
+    let order: Vec<&str> = report
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect();
+    assert_eq!(order, vec!["a.py", "d.py", "b.py", "c.py"]);
+    assert_eq!(report.metadata.closure_pulled_files, 0);
+}
+
+#[test]
+fn closure_places_the_chain_directly_behind_its_importer() {
+    let temp_dir = build_chain_repo();
+    let report = ContextBuilder::new(
+        temp_dir.path(),
+        IgnoreMatcher::empty(),
+        Vec::new(),
+        64_000,
+    )
+    .with_dependency_closure(chain_dependencies())
+    .build()
+    .unwrap();
+
+    // b and c stand behind a, ahead of the unrelated d that
+    // outranked them both -- the whole chain, depth-first.
+    let order: Vec<&str> = report
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect();
+    assert_eq!(order, vec!["a.py", "b.py", "c.py", "d.py"]);
+    assert_eq!(report.metadata.closure_pulled_files, 2);
+}
+
+#[test]
+fn under_a_tight_budget_closure_keeps_the_dependency_not_the_bystander() {
+    // Excerpt budget is 45 tokens: a (10) plus exactly one of b
+    // (30) or d (20). Rank alone spends it on d, the smaller
+    // bystander; closure spends it on b, the file a actually
+    // imports -- the guarantee the flag exists to make.
+    let temp_dir = build_chain_repo();
+
+    let closed = ContextBuilder::new(
+        temp_dir.path(),
+        IgnoreMatcher::empty(),
+        Vec::new(),
+        50,
+    )
+    .with_dependency_closure(chain_dependencies())
+    .build()
+    .unwrap();
+    let closed_order: Vec<&str> = closed
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect();
+    assert_eq!(closed_order, vec!["a.py", "b.py"]);
+    assert_eq!(closed.metadata.closure_pulled_files, 1);
+
+    let open = ContextBuilder::new(
+        temp_dir.path(),
+        IgnoreMatcher::empty(),
+        Vec::new(),
+        50,
+    )
+    .build()
+    .unwrap();
+    let open_order: Vec<&str> = open
+        .files
+        .iter()
+        .map(|file| file.relative_path.as_str())
+        .collect();
+    assert_eq!(open_order, vec!["a.py", "d.py"]);
 }
