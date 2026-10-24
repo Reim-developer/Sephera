@@ -50,6 +50,31 @@ files, and the two answer different questions: one names a declaration, the othe
 names a change. Letting them combine would produce a pack whose contents depend on
 which of the two happened to match more.
 
+## Dependency closure: a pack that contains what it references
+
+Ranking alone packs a file and leaves what it imports to the general
+competition, where a dependency loses on size to unrelated files nothing in
+the pack needs. The result reads as a bag of files: the model holds the
+caller and not the callee. `--closure` builds the import graph and packs
+each file's dependency chain directly behind it:
+
+```bash
+sephera context --path . --focus crates/sephera_graph/src/risk.rs --budget 8k --closure
+```
+
+Each file's imports — and theirs, depth-first — are selected before any
+unrelated file that ranked below the file itself. Under a budget that runs
+out mid-chain, what is cut is the chain's tail or the unrelated files, never
+a dependency passed over for a bystander its importer outranked. The pack's
+metadata reports the count as **Dependency closure pulls**, so how much of
+the pack the graph is responsible for is stated rather than implied. On
+this repository, the command above packs 6 files, 5 of them pulled in by
+closure.
+
+`--closure` cannot be combined with `--focus-symbol`: closure packs whole
+files behind their importers, and `--focus-symbol` packs parts of files and
+nothing else.
+
 ## Basic usage
 
 Generate Markdown to standard output:

@@ -661,7 +661,16 @@ sephera context --path . --diff HEAD~1 --budget 32k
 
 # Machine-readable output
 sephera context --path . --format json --output reports/context.json
+
+# Pack a file with its dependency chain behind it, not a bag of ranked files
+sephera context --path . --focus crates/sephera_graph/src/risk.rs --budget 8k --closure
 ```
+
+With `--closure`, the pack is built over the import graph: each file's
+dependency chain is packed directly behind it, ahead of unrelated files
+that ranked below it, and the metadata counts the files closure pulled
+in. A packer without a graph can rank files; it cannot promise that what
+a packed file references is in the pack.
 
 AST compression (`--compress signatures` or `skeleton`) uses Tree-sitter to keep function signatures, types, imports, and trait declarations while replacing bodies with `{ ... }`.
 
