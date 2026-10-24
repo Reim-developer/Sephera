@@ -174,9 +174,7 @@ fn declaring_root(
     let module = module.strip_suffix(".rs").unwrap_or(module);
 
     let mut declaring = candidates.iter().filter(|candidate| {
-        let Ok(contents) =
-            std::fs::read_to_string(context.base_path.join(candidate))
-        else {
+        let Some(contents) = context.read_project_file(candidate) else {
             return false;
         };
         declares_module(&contents, module)
@@ -239,6 +237,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: std::path::Path::new(""),
+            file_text: None,
         }
     }
 
@@ -284,6 +283,7 @@ mod tests {
                 declarations: Some(&self.index),
                 manifests: None,
                 base_path: std::path::Path::new(""),
+                file_text: None,
             }
         }
     }

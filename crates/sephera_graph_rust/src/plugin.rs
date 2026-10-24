@@ -431,9 +431,12 @@ fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
             } else {
                 format!("{crate_dir}/Cargo.toml")
             };
-            let text =
-                std::fs::read_to_string(context.base_path.join(&manifest))
-                    .ok()?;
+            // Through the analysis' cache: this runs per crate
+            // named in a path and reads every crate's manifest, so
+            // uncached it multiplied the manifest reads by the
+            // number of cross-crate imports -- the cost the PR #41
+            // review flagged.
+            let text = context.read_project_file(&manifest)?;
             let declared = declared_crate(&text)?;
             if declared.name.replace('-', "_") != name {
                 return None;

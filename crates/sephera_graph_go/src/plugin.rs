@@ -213,6 +213,7 @@ mod tests {
             manifests: manifests
                 .map(|index| index as &dyn ModuleManifestLookup),
             base_path: std::path::Path::new("."),
+            file_text: None,
         }
     }
 

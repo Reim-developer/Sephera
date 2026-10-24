@@ -362,6 +362,7 @@ mod tests {
             declarations: None,
             manifests: None,
             base_path: directory.path(),
+            file_text: None,
         };
         JavaPlugin.resolve(import_path, context)
     }
