@@ -178,6 +178,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera risk --path .\n  sephera risk --path . --limit 10\n  sephera risk --path . --commits 1000 --format json"
     )]
     Risk(RiskArgs),
+    /// Find the files no entry point reaches
+    #[command(
+        long_about = "Find the files no entry point reaches: the part of the tree that is compiled, bundled, shipped, and reviewed as if it were alive, while nothing that runs ever imports it.\n\nThe walk starts from the tree's entry points and follows import edges forward. Roots are read off the paths by the conventions ecosystems agree on: test files, files named `main.*`, `lib.rs`, or `build.rs`, Python's `__main__.py`, files under a `bin`, `cmd`, `examples`, `benches`, or `scripts` directory, and `index.*` files. A file with no importers is not a root by that fact alone -- an orphaned cluster imports itself happily, and this analysis exists to refuse that reading: dead means unreachable from positive evidence of entry.\n\nThe report lists the roots it used, so a verdict can always be checked against the entry points it was measured from. Entry points a path cannot show -- a Java entry class, a plugin loaded by name, a file a framework scans for -- are named with `--root`, one per file.\n\nA dead file's importers and imports are printed with it: imported by nobody and importing nothing is one orphaned file; imported by three and importing five is an abandoned subsystem, and the second kind deserves a look before anything is deleted.",
+        after_long_help = "Examples:\n  sephera dead --path .\n  sephera dead --path . --root src/worker.rs\n  sephera dead --path . --format json"
+    )]
+    Dead(DeadArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -1049,6 +1055,42 @@ tree_command_args!(
 
     }
 );
+
+tree_command_args!(
+    #[doc = "Find the files no entry point reaches."]
+    DeadArgs {
+        /// Entry points the conventions cannot see (repeatable)
+    #[arg(
+        long,
+        value_name = "FILE",
+        help = "Name an entry point a path cannot show (repeatable).",
+        long_help = "An entry point the path conventions cannot see: a Java entry class, a plugin loaded by name at runtime, a file a framework's convention scans for. Named roots are listed in the report beside the conventional ones, so the verdict can be checked against the full set it was measured from. A root that matches no file in the analysis is an error."
+    )]
+    pub root: Vec<String>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: DeadOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DeadOutputFormat {
+    /// Markdown list of dead files.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum RiskOutputFormat {

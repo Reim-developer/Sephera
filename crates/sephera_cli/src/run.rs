@@ -19,18 +19,18 @@ use crate::{
     affected_tests,
     args::{
         AffectedTestsArgs, Cli, Commands, ContextArgs, CouplingArgs,
-        CouplingOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs,
-        IgnoreArgs, ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat,
-        OutputArgs, ReviewArgs, ReviewOutputFormat, RiskArgs, RiskOutputFormat,
-        SettingsArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
-        TestImpactOutputFormat, WatchArgs, WatchTarget, WhyArgs,
-        WhyOutputFormat,
+        CouplingOutputFormat, DeadArgs, DeadOutputFormat, GraphArgs,
+        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
+        ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs, ReviewArgs,
+        ReviewOutputFormat, RiskArgs, RiskOutputFormat, SettingsArgs,
+        SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
+        WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
     change_impact, configure,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
-    coupling,
+    coupling, dead,
     gate::{self, Gate},
     guard, impact,
     output::{
@@ -127,6 +127,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Coupling(arguments) => run_coupling(&arguments).await,
         Commands::Review(arguments) => run_review(&arguments).await,
         Commands::Risk(arguments) => run_risk(&arguments).await,
+        Commands::Dead(arguments) => run_dead(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
     }?;
     Ok(gate::evaluate(&gate))
@@ -965,6 +966,63 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
     let rendered = match arguments.format {
         RiskOutputFormat::Markdown => risk::render_markdown(&measured),
         RiskOutputFormat::Json => risk::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
+}
+
+async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Finding dead files...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    let report = build_graph_with_progress(
+        &source.analysis_path,
+        &ignore,
+        &[],
+        None,
+        change_impact::diff_query(),
+        EdgeFilters {
+            exclude_type_aliases: false,
+        },
+        &CliReporter(&progress),
+    )?;
+
+    // A named root that matches nothing is a typo in the one input
+    // the whole verdict rests on; refuse it the way every other
+    // command refuses a path that matches no file.
+    let mut extra_roots = Vec::new();
+    for raw in &arguments.root {
+        let matched =
+            impact::match_path(&report, raw, "").with_context(|| {
+                format!("no file in the analysis matches `{raw}`")
+            })?;
+        extra_roots.push(matched);
+    }
+
+    let measured = dead::measure_dead(&report, &extra_roots);
+
+    let rendered = match arguments.format {
+        DeadOutputFormat::Markdown => dead::render_markdown(&measured),
+        DeadOutputFormat::Json => dead::render_json(&measured),
     };
 
     if arguments.output_args.output.is_some() {

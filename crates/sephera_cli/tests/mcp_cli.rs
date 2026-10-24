@@ -260,6 +260,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "affected_tests",
             "context",
             "coupling",
+            "dead",
             "graph",
             "impact",
             "loc",
