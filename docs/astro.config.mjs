@@ -30,6 +30,7 @@ export default defineConfig({
 						{ slug: 'commands/coupling' },
 						{ slug: 'commands/review' },
 						{ slug: 'commands/risk' },
+						{ slug: 'commands/dead' },
 						{ slug: 'commands/guard' },
 						{ slug: 'commands/watch' },
 						{ slug: 'commands/mcp' },

@@ -562,6 +562,25 @@ On this repository the head of the ranking is the CLI's own argument
 definitions — every feature touches them, they change constantly, and six
 hidden partners move with them. That is what a hotspot looks like.
 
+### `dead` — the files no entry point reaches
+
+Every other command starts from a file and walks outward; `dead` starts
+from the tree's entry points — test files, `main.*` / `lib.rs` / `build.rs`,
+`__main__.py`, `bin`/`cmd`/`examples`/`benches`/`scripts` directories,
+`index.*` — and walks forward, reporting what the walk never reaches. A
+file with no importers is not excused by that fact: an orphaned cluster
+imports itself, and dead means unreachable from positive evidence of
+entry. Entry points a path cannot show are named with `--root`, and the
+report lists the roots it used.
+
+```bash
+sephera dead --path .
+```
+
+Its first run on this repository found a stale duplicate of the runtime
+crate's root that no `mod` statement declares — imported by nothing,
+importing five files, reviewed as if it were alive.
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it
@@ -717,7 +736,7 @@ sephera loc --path . --format markdown
 sephera mcp
 ```
 
-Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, `coupling`, `review`, and `risk` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
+Serves `loc`, `symbols`, `context`, `graph`, `impact`, `affected_tests`, `why`, `coupling`, `review`, `risk`, and `dead` as tools over stdio for Claude Desktop, Claude Code, Cursor, and any MCP-compatible client. `impact` is the one an agent should call before editing a file: it shares its counting with the command, so the answer an agent gets and the answer you get are the same one.
 
 ```json
 {
