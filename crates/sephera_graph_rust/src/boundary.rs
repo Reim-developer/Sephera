@@ -42,7 +42,10 @@ pub fn collect_boundary(source: &[u8], tree: &Tree) -> Option<FileBoundary> {
     if modules.is_empty() {
         None
     } else {
-        Some(FileBoundary { modules })
+        Some(FileBoundary {
+            modules,
+            symbols: Vec::new(),
+        })
     }
 }
 

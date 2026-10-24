@@ -972,6 +972,39 @@ fn build_edges_and_nodes(
         }
     }
 
+    // JNI pairs have no statement to rewrite: neither side names the other
+    // in an import, so there is nothing for the join above to place. The
+    // paired symbols become edges of their own, declaring file to
+    // implementing file, so every walk over the graph crosses this boundary
+    // the same way it crosses a module edge.
+    for pair in project.boundaries.symbol_pairs() {
+        if !node_map.contains_key(pair.declarer)
+            || !node_map.contains_key(pair.implementer)
+        {
+            continue;
+        }
+        node_map
+            .entry(pair.declarer.to_owned())
+            .or_default()
+            .imports
+            .push(pair.implementer.to_owned());
+        node_map
+            .entry(pair.implementer.to_owned())
+            .or_default()
+            .imported_by
+            .push(pair.declarer.to_owned());
+        edges.push(GraphEdge {
+            from: pair.declarer.to_owned(),
+            to: Some(pair.implementer.to_owned()),
+            import_path: pair.name.to_owned(),
+            items: vec![pair.local.to_owned()],
+            resolved: true,
+            kind: ImportKind::Ffi,
+            cfg_gated: false,
+            local_gap: false,
+        });
+    }
+
     (edges, node_map)
 }
 
@@ -2109,6 +2142,7 @@ mod tests {
                     kind: boundary::BoundaryKind::PyO3,
                     exposed: BTreeSet::from(["add".to_owned()]),
                 }],
+                symbols: Vec::new(),
             },
         );
         let mut declarations = declarations::DeclarationIndex::default();
@@ -2249,6 +2283,61 @@ mod tests {
         assert_eq!(edges.len(), 1);
         assert_eq!(edges[0].to, None);
         assert_eq!(edges[0].kind, ImportKind::Dependency);
+    }
+
+    #[test]
+    fn a_jni_pair_becomes_an_edge_of_its_own() {
+        let mut boundaries = boundary::BoundaryIndex::default();
+        boundaries.insert(
+            "Native.java",
+            boundary::FileBoundary {
+                modules: Vec::new(),
+                symbols: vec![boundary::BoundarySymbol {
+                    name: "Java_com_acme_Native_add".to_owned(),
+                    kind: boundary::BoundaryKind::Jni,
+                    role: boundary::BoundaryRole::Declares,
+                    local: "add".to_owned(),
+                }],
+            },
+        );
+        boundaries.insert(
+            "native.c",
+            boundary::FileBoundary {
+                modules: Vec::new(),
+                symbols: vec![boundary::BoundarySymbol {
+                    name: "Java_com_acme_Native_add".to_owned(),
+                    kind: boundary::BoundaryKind::Jni,
+                    role: boundary::BoundaryRole::Implements,
+                    local: "Java_com_acme_Native_add".to_owned(),
+                }],
+            },
+        );
+        let inputs = ResolutionInputs {
+            base_path: PathBuf::new(),
+            known_files: BTreeSet::new(),
+            declarations: declarations::DeclarationIndex::default(),
+            boundaries,
+            manifests: manifests::ManifestIndex::default(),
+            file_text: FileTextCache::new(PathBuf::new()),
+        };
+        let imports = vec![
+            file_data("Native.java", SupportedLanguage::Java, Vec::new()),
+            file_data("native.c", SupportedLanguage::C, Vec::new()),
+        ];
+
+        let (edges, node_map) = build_edges_and_nodes(&imports, &inputs);
+
+        assert_eq!(edges.len(), 1);
+        assert_eq!(edges[0].from, "Native.java");
+        assert_eq!(edges[0].to.as_deref(), Some("native.c"));
+        assert_eq!(edges[0].import_path, "Java_com_acme_Native_add");
+        assert_eq!(edges[0].items, ["add"]);
+        assert_eq!(edges[0].kind, ImportKind::Ffi);
+        assert!(edges[0].resolved);
+        assert_eq!(
+            node_map["native.c"].imported_by,
+            ["Native.java".to_owned()]
+        );
     }
 
     #[test]
