@@ -908,14 +908,6 @@ async fn run_affected_tests(
     Ok(gates)
 }
 
-/// Judge one agent edit before it happens.
-///
-/// Reads the hook payload, measures the edited file, prints the decision
-/// JSON on stdout and the reasoning on stderr. Every outcome that is not a
-/// denial is an allow, including "no file could be found in the payload"
-/// and "the file is not in the graph": a guard that blocked edits it could
-/// not judge would block them all the first time it was misconfigured, and
-/// be removed by lunch. See [`crate::guard`].
 /// The file a guard run judges: the one named by `--file`, or the one the
 /// hook payload on stdin names.
 ///
@@ -934,6 +926,14 @@ fn guard_target(arguments: &GuardArgs) -> Result<Option<String>> {
     Ok(guard::file_path_from_hook_input(&payload))
 }
 
+/// Judge one agent edit before it happens.
+///
+/// Reads the hook payload, measures the edited file, prints the decision
+/// JSON on stdout and the reasoning on stderr. Every outcome that is not a
+/// denial is an allow, including "no file could be found in the payload"
+/// and "the file is not in the graph": a guard that blocked edits it could
+/// not judge would block them all the first time it was misconfigured, and
+/// be removed by lunch. See [`crate::guard`].
 async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
     let edited = guard_target(arguments)?;
 
