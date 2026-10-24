@@ -31,13 +31,14 @@ On this repository's own tree, the first run reported:
 ...
 ```
 
-Both kinds of truth are in that list. `runtime.rs` is a stale
-duplicate of its crate's root that no `mod` statement declares —
+Both kinds of truth are in that list. `runtime.rs` was a stale
+duplicate of its crate's root that no `mod` statement declared —
 genuinely dead, caught on the tool's first run against its own
-tree. Most of the rest are entered by mechanisms a path cannot
-show: benchmark and end-to-end scripts run by invocation, fuzz
-targets entered by the fuzzing manifest, tool configuration files.
-Those are what `--root` is for.
+tree, and deleted on the strength of the finding; the same command
+now reports 24 dead of 222. Most of the rest are entered by
+mechanisms a path cannot show: benchmark and end-to-end scripts run
+by invocation, fuzz targets entered by the fuzzing manifest, tool
+configuration files. Those are what `--root` is for.
 
 ## What counts as an entry point
 

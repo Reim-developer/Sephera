@@ -138,9 +138,9 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Metric | Value |
 |--------|-------|
-| Files analyzed | 43 |
-| Internal edges | 239 |
-| External edges | 139 |
+| Files analyzed | 42 |
+| Internal edges | 234 |
+| External edges | 115 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 39 |
 | Local crate edges | 0 |
@@ -161,21 +161,17 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | `crates/sephera_context/src/lib.rs` | `self::types`, `types::ContextDiffMetadata`, `types::ContextDiffSelection`, `types::ContextExcerpt`, `types::ContextFile`, `types::ContextGroupKind`, `types::ContextGroupSummary`, `types::ContextLanguageSummary`, `types::ContextMetadata`, `types::ContextReport`, `types::SelectionClass` |
 | `crates/sephera_context/src/ranker.rs` | `super::types::SelectionClass` |
 
-**35 further files reach them indirectly**, through the files above.
+**34 further files reach them indirectly**, through the files above.
 
 ## Dependencies
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 60 |
+| `std` | stdlib | unknown | 66 |
 | `anyhow` | declared | 1.0.102 | 19 |
-| `context` | undeclared | unknown | 9 |
 | `rmcp` | declared | 1.3.0 | 9 |
 | `tempfile` | declared | 3.27.0 | 9 |
-| `settings` | undeclared | unknown | 6 |
-| `source` | undeclared | unknown | 5 |
 | `arbitrary` | undeclared | unknown | 4 |
-| `interrupt` | undeclared | unknown | 4 |
 | `libfuzzersys` | undeclared | unknown | 3 |
 | `clap` | declared | 4.6.0 | 1 |
 | `serde` | declared | 1.0.228 | 1 |
@@ -185,7 +181,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | File | Imported by |
 |------|-------------|
 | `crates/sephera_context/src/lib.rs` | 40 |
-| `crates/sephera_runtime/src/lib.rs` | 34 |
+| `crates/sephera_runtime/src/lib.rs` | 32 |
 | `crates/sephera_context/src/types.rs` | 27 |
 | `crates/sephera_symbols/src/lib.rs` | 24 |
 | `crates/sephera_cli/src/output.rs` | 17 |
@@ -199,11 +195,11 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imports |
 |------|---------|
-| `crates/sephera_cli/src/run.rs` | 30 |
+| `crates/sephera_cli/src/run.rs` | 31 |
+| `crates/sephera_context/src/builder.rs` | 18 |
 | `crates/sephera_context/src/lib.rs` | 18 |
-| `crates/sephera_context/src/builder.rs` | 17 |
+| `crates/sephera_mcp/src/server.rs` | 13 |
 | `crates/sephera_cli/src/output.rs` | 11 |
-| `crates/sephera_mcp/src/server.rs` | 11 |
 | `crates/sephera_mcp/src/render/tests.rs` | 10 |
 | `crates/sephera_runtime/src/lib.rs` | 10 |
 | `crates/sephera_cli/src/lib.rs` | 9 |
@@ -246,17 +242,16 @@ graph LR
     n29["tests.rs"]
     n30["context.rs"]
     n31["lib.rs"]
-    n32["runtime.rs"]
-    n33["lib.rs"]
-    n34["lookup.rs"]
-    n35["tests.rs"]
-    n36["build_context_report.rs"]
-    n37["render_context_markdown.rs"]
-    n38["render_loc_table.rs"]
-    n39["loc.rs"]
-    n40["mod.rs"]
-    n41["symbols.rs"]
-    n42["main.rs"]
+    n32["lib.rs"]
+    n33["lookup.rs"]
+    n34["tests.rs"]
+    n35["build_context_report.rs"]
+    n36["render_context_markdown.rs"]
+    n37["render_loc_table.rs"]
+    n38["loc.rs"]
+    n39["mod.rs"]
+    n40["symbols.rs"]
+    n41["main.rs"]
     n0 --> n31
     n1 --> n31
     n2 --> n0
@@ -270,9 +265,9 @@ graph LR
     n4 --> n15
     n5 --> n15
     n6 --> n1
-    n7 --> n33
+    n7 --> n32
     n8 --> n31
-    n8 --> n33
+    n8 --> n32
     n8 --> n0
     n8 --> n1
     n8 --> n3
@@ -307,8 +302,9 @@ graph LR
     n23 --> n15
     n23 --> n24
     n23 --> n25
-    %% ... and 35 more edges
+    %% ... and 34 more edges
 ```
+
 ````
 
 **Nine files reach `code_loc.rs`, five of them importing it directly.** You now know your blast radius before opening the file - not after CI turns red.
