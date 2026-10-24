@@ -67,6 +67,35 @@ pub enum BreakChange {
     },
 }
 
+/// What to do about one broken symbol, when the new tree says
+/// something actionable: where the name went, or the call shape
+/// it now takes.
+///
+/// Absent when the new tree says nothing useful — a name that
+/// vanished outright, or one claimed by two files, has no honest
+/// suggestion, and an ambiguous suggestion is worse than none. A
+/// kind change carries none either: the change itself already
+/// states the new kind, so a suggestion would only repeat it.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "type")]
+pub enum BreakSuggestion {
+    /// The name survives, declared exactly once in the new tree,
+    /// in a different file. A file that imports the name does not
+    /// count: its binding is derived from the import, not a home
+    /// of its own.
+    Moved {
+        /// The file that now declares it.
+        file: String,
+        /// The kind it is declared as there.
+        kind: DeclarationKind,
+    },
+    /// The name survives in place with a new call shape.
+    NewCallShape {
+        /// The shape callers must now use.
+        signature: Signature,
+    },
+}
+
 /// One symbol that broke, with the files that still use it.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BrokenSymbol {
@@ -78,6 +107,9 @@ pub struct BrokenSymbol {
     pub kind: DeclarationKind,
     /// How it broke.
     pub change: BreakChange,
+    /// What to do about it, when the new tree says something
+    /// actionable.
+    pub suggestion: Option<BreakSuggestion>,
     /// Files in the new tree that name the symbol from that file.
     pub direct: Vec<SymbolUser>,
     /// Files that import the file's namespace wholesale and so may
@@ -155,11 +187,13 @@ pub fn measure_breaking(
                 .chain(namespace_users.iter().map(String::as_str))
                 .collect();
             let downstream = downstream_of(new_report, file, &seeds);
+            let suggestion = suggest(new_index, new_report, &change, name);
             broken.push(BrokenSymbol {
                 file: file.to_owned(),
                 symbol: name.to_owned(),
                 kind,
                 change,
+                suggestion,
                 direct,
                 namespace_users,
                 downstream,
@@ -181,6 +215,73 @@ pub fn measure_breaking(
         to_ref: to_ref.to_owned(),
         broken,
     }
+}
+
+/// What to do about one break, when the new tree says something
+/// actionable.
+///
+/// A removal suggests the move only when the name survives in
+/// exactly one file: two claimants is not a suggestion, it is a
+/// question the report must not answer wrong. A signature change
+/// suggests its own new shape. Anything else suggests nothing —
+/// the change itself already says all there is to say.
+fn suggest(
+    new_index: &DeclarationIndex,
+    new_report: &GraphReport,
+    change: &BreakChange,
+    symbol: &str,
+) -> Option<BreakSuggestion> {
+    match change {
+        BreakChange::Removed => {
+            // A file that imports the name cannot be its new home:
+            // any binding it holds for the name is derived from the
+            // import, not a declaration of its own. This matters
+            // because Python records imported names as Value
+            // bindings beside genuine assignments, so the index
+            // alone cannot tell a consumer's `from lib import add`
+            // from a real new home — the edges can.
+            let importers: BTreeSet<&str> = new_report
+                .edges
+                .iter()
+                .filter(|edge| import_binds_symbol(&edge.import_path, symbol))
+                .map(|edge| edge.from.as_str())
+                .collect();
+            let mut matches = new_index.files().filter_map(|other| {
+                if importers.contains(other) {
+                    return None;
+                }
+                new_index.kind_in(other, symbol).map(|kind| (other, kind))
+            });
+            let (found_file, found_kind) = matches.next()?;
+            if matches.next().is_some() {
+                return None;
+            }
+            Some(BreakSuggestion::Moved {
+                file: found_file.to_owned(),
+                kind: found_kind,
+            })
+        }
+        BreakChange::SignatureChanged { to, .. } => {
+            Some(BreakSuggestion::NewCallShape {
+                signature: to.clone(),
+            })
+        }
+        BreakChange::KindChanged { .. } => None,
+    }
+}
+
+/// Whether an import statement binds `symbol` in the importing
+/// file: the trailing segment (`from lib import add`,
+/// `use crate::lib::add`) or the leading segment (`import add`,
+/// which binds the module name itself).
+fn import_binds_symbol(import_path: &str, symbol: &str) -> bool {
+    if path_names_symbol(import_path, symbol) {
+        return true;
+    }
+    import_path
+        .split(['.', '/', ':'])
+        .next()
+        .is_some_and(|first| first == symbol)
 }
 
 /// Where one statement used to land, by `(from file, import path)`.

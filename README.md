@@ -140,11 +140,11 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 |--------|-------|
 | Files analyzed | 42 |
 | Internal edges | 237 |
-| External edges | 119 |
+| External edges | 120 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 39 |
 | Local crate edges | 0 |
-| Standard library edges | 70 |
+| Standard library edges | 71 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -603,7 +603,10 @@ that still name it. A removed name nobody imports breaks nothing — a
 removed name with nine importers breaks nine files, and those files
 are the report. `--from` names the older side; without `--to`, the
 newer side is the working tree, which is the form a branch review
-takes before it is pushed.
+takes before it is pushed. Each entry also carries a fix
+suggestion when the newer tree says something actionable: where a
+removed name moved, when exactly one other file declares it, or
+the call shape a changed signature now takes.
 
 ```bash
 sephera breaking --path . --from origin/master

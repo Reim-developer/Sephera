@@ -971,7 +971,7 @@ impl SepheraServer {
     /// command, so the two cannot disagree.
     #[tool(
         name = "breaking",
-        description = "Compare two refs of a local repository and report which declared symbols broke, joined to the files that still use them. A diff between two declaration indexes says what vanished or changed shape; this joins each break to its consumers in the newer tree, because a removed name nobody imports breaks nothing and a removed name with nine importers breaks nine files. `from` names the older side and is required; `to` names the newer side, and when it is absent the newer side is the working tree -- staged, unstaged, and untracked files included -- which is the form a branch review takes before it is pushed. Only Rust and Python collect declarations, so only their symbols can be reported broken, but consumers are read in every language. A symbol nobody uses is still listed, with no consumers: that is the clean kind of breaking. Requires a git repository; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+        description = "Compare two refs of a local repository and report which declared symbols broke, joined to the files that still use them. A diff between two declaration indexes says what vanished or changed shape; this joins each break to its consumers in the newer tree, because a removed name nobody imports breaks nothing and a removed name with nine importers breaks nine files. `from` names the older side and is required; `to` names the newer side, and when it is absent the newer side is the working tree -- staged, unstaged, and untracked files included -- which is the form a branch review takes before it is pushed. Each broken symbol also carries a suggestion when the new tree says something actionable: where the name moved, when it survives in exactly one other file, or the call shape it now takes, for a signature change. Only Rust and Python collect declarations, so only their symbols can be reported broken, but consumers are read in every language. A symbol nobody uses is still listed, with no consumers: that is the clean kind of breaking. Requires a git repository; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
     )]
     #[allow(
         clippy::unused_self,
@@ -1750,6 +1750,9 @@ pub struct BrokenSymbolReport {
     pub old_signature: Option<SignatureReport>,
     /// The call shape the new tree declares, for a signature change.
     pub new_signature: Option<SignatureReport>,
+    /// What to do about the break, when the new tree says
+    /// something actionable.
+    pub suggestion: Option<SuggestionReport>,
     /// Files in the new tree that name the symbol from that file.
     pub direct: Vec<DirectConsumerReport>,
     /// Files importing the file's namespace wholesale.
@@ -1765,6 +1768,26 @@ pub struct SignatureReport {
     pub parameters: String,
     /// The return annotation, when one is written.
     pub returns: Option<String>,
+}
+
+/// What to do about one break, as the breaking report renders it.
+///
+/// The shape is flat on purpose: an agent reading the JSON should
+/// not have to unwrap a tagged enum to learn where a name went.
+/// `action` says which shape the other fields carry — `moved` fills
+/// `file` and `declaration_kind`, `new_call_shape` fills
+/// `signature` — and the absent fields stay null rather than
+/// disappearing.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SuggestionReport {
+    /// What the suggestion says: `moved` or `new_call_shape`.
+    pub action: String,
+    /// The file that now declares the name, for a move.
+    pub file: Option<String>,
+    /// The kind it is declared as there, for a move.
+    pub declaration_kind: Option<String>,
+    /// The call shape callers must now use, for a signature change.
+    pub signature: Option<SignatureReport>,
 }
 
 impl SignatureReport {
@@ -1823,6 +1846,31 @@ impl BreakingReport {
                                 }),
                             ),
                         };
+                    let suggestion = match &broken.suggestion {
+                        Some(breaking::BreakSuggestion::Moved {
+                            file,
+                            kind,
+                        }) => Some(SuggestionReport {
+                            action: "moved".to_owned(),
+                            file: Some(file.clone()),
+                            declaration_kind: Some(
+                                format!("{kind:?}").to_lowercase(),
+                            ),
+                            signature: None,
+                        }),
+                        Some(breaking::BreakSuggestion::NewCallShape {
+                            signature,
+                        }) => Some(SuggestionReport {
+                            action: "new_call_shape".to_owned(),
+                            file: None,
+                            declaration_kind: None,
+                            signature: Some(SignatureReport {
+                                parameters: signature.parameters.clone(),
+                                returns: signature.returns.clone(),
+                            }),
+                        }),
+                        None => None,
+                    };
                     BrokenSymbolReport {
                         file: broken.file.clone(),
                         symbol: broken.symbol.clone(),
@@ -1831,6 +1879,7 @@ impl BreakingReport {
                         new_kind,
                         old_signature,
                         new_signature,
+                        suggestion,
                         direct: broken
                             .direct
                             .iter()
@@ -1887,6 +1936,41 @@ fn breaking_markdown_section(report: &BreakingReport) -> String {
 /// The body shared by the standalone document and the embedded
 /// section: the count line, then the empty-state line or one entry
 /// per broken symbol, widest exposure first.
+/// The suggestion line for one broken symbol, when one exists.
+///
+/// The shape is read from which fields are filled, not from the
+/// action string — a move fills file and kind, a new call shape
+/// fills the signature. Extracted from `breaking_markdown_body`,
+/// which the suggestion block pushed past clippy's line limit.
+fn suggestion_markdown(broken: &BrokenSymbolReport) -> String {
+    use std::fmt::Write as _;
+
+    let Some(suggestion) = broken.suggestion.as_ref() else {
+        return String::new();
+    };
+    let mut output = String::new();
+    match (
+        suggestion.file.as_deref(),
+        suggestion.declaration_kind.as_deref(),
+        suggestion.signature.as_ref(),
+    ) {
+        (Some(file), Some(kind), _) => {
+            let _ =
+                writeln!(output, "\nSuggestion: moved to `{file}` ({kind}).");
+        }
+        (_, _, Some(signature)) => {
+            let _ = writeln!(
+                output,
+                "\nSuggestion: call `{}{}`.",
+                broken.symbol,
+                signature.render()
+            );
+        }
+        _ => {}
+    }
+    output
+}
+
 fn breaking_markdown_body(
     report: &BreakingReport,
     symbol_heading: &str,
@@ -1939,6 +2023,9 @@ fn breaking_markdown_body(
             "{symbol_heading} `{}` — `{}` ({}, {change})",
             broken.file, broken.symbol, broken.kind
         );
+        // The suggestion first, as in the CLI: the line an agent
+        // acts on, with the consumer lists below as its evidence.
+        output.push_str(&suggestion_markdown(broken));
         if broken.direct.is_empty() && broken.namespace_users.is_empty() {
             let _ = writeln!(output, "\nNo consumers in the new tree.");
         }

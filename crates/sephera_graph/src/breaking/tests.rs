@@ -17,7 +17,7 @@ use crate::types::{
     GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
 };
 
-use super::{BreakChange, measure_breaking};
+use super::{BreakChange, BreakSuggestion, measure_breaking};
 
 fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
     GraphEdge {
@@ -315,4 +315,193 @@ fn a_function_without_a_signature_on_either_side_is_not_a_break() {
         "v2",
     );
     assert_eq!(report.broken.len(), 0);
+}
+
+#[test]
+fn a_removed_symbol_with_one_new_home_suggests_the_move() {
+    let old_index = index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[
+        ("lib.py", &[]),
+        ("other.py", &[("add", DeclarationKind::Function)]),
+    ]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py", "other.py"], vec![]),
+        &report(&["lib.py", "other.py"], vec![]),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(
+        measured.broken[0].suggestion,
+        Some(BreakSuggestion::Moved {
+            file: "other.py".to_owned(),
+            kind: DeclarationKind::Function,
+        })
+    );
+}
+
+#[test]
+fn a_removed_symbol_claimed_by_two_files_suggests_nothing() {
+    // Two homes is a question, not an answer: suggesting one would
+    // send the consumer to the wrong file half the time.
+    let old_index = index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[
+        ("lib.py", &[]),
+        ("one.py", &[("add", DeclarationKind::Function)]),
+        ("two.py", &[("add", DeclarationKind::Function)]),
+    ]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py", "one.py", "two.py"], vec![]),
+        &report(&["lib.py", "one.py", "two.py"], vec![]),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(measured.broken[0].suggestion, None);
+}
+
+#[test]
+fn a_removed_symbol_with_no_new_home_suggests_nothing() {
+    let old_index = index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[("lib.py", &[])]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py"], vec![]),
+        &report(&["lib.py"], vec![]),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(measured.broken[0].suggestion, None);
+}
+
+#[test]
+fn a_signature_change_suggests_its_new_call_shape() {
+    let old_index = index_with_signatures(&[(
+        "lib.py",
+        &[("add", DeclarationKind::Function, Some(("x, y", None)))],
+    )]);
+    let new_index = index_with_signatures(&[(
+        "lib.py",
+        &[("add", DeclarationKind::Function, Some(("x, y: str", None)))],
+    )]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py"], vec![]),
+        &report(&["lib.py"], vec![]),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(
+        measured.broken[0].suggestion,
+        Some(BreakSuggestion::NewCallShape {
+            signature: Signature {
+                parameters: "x, y: str".to_owned(),
+                returns: None,
+            },
+        })
+    );
+}
+
+#[test]
+fn a_kind_change_suggests_nothing_because_the_change_says_it() {
+    let old_index = index(&[("lib.rs", &[("Point", DeclarationKind::Struct)])]);
+    let new_index =
+        index(&[("lib.rs", &[("Point", DeclarationKind::Function)])]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.rs"], vec![]),
+        &report(&["lib.rs"], vec![]),
+        "main",
+        "feature",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(measured.broken[0].suggestion, None);
+}
+
+#[test]
+fn a_consumer_import_binding_is_not_a_new_home() {
+    // This is the case the suggestion exists for, and the one that
+    // first broke it: the consumer's `from lib import add` binds
+    // `add` as a Value in the consumer, so the new index holds the
+    // name twice — once derived, once real. The derived binding
+    // must not veto the move, and must not be suggested as one.
+    let old_index = index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[
+        ("lib.py", &[]),
+        ("consumer.py", &[("add", DeclarationKind::Value)]),
+        ("other.py", &[("add", DeclarationKind::Function)]),
+    ]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py", "consumer.py", "other.py"], vec![]),
+        &report(
+            &["lib.py", "consumer.py", "other.py"],
+            vec![
+                edge("consumer.py", "lib.py", "lib"),
+                unresolved("consumer.py", "lib.add", true),
+            ],
+        ),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(
+        measured.broken[0].suggestion,
+        Some(BreakSuggestion::Moved {
+            file: "other.py".to_owned(),
+            kind: DeclarationKind::Function,
+        })
+    );
+}
+
+#[test]
+fn a_value_move_in_a_file_that_imports_nothing_of_the_name_suggests() {
+    // Filtering Value out entirely would be simpler, and wrong:
+    // a constant or lambda that moved is a real home, and its file
+    // imports nothing named after it.
+    let old_index = index(&[("lib.py", &[("pi", DeclarationKind::Value)])]);
+    let new_index = index(&[
+        ("lib.py", &[]),
+        ("other.py", &[("pi", DeclarationKind::Value)]),
+    ]);
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &report(&["lib.py", "other.py"], vec![]),
+        &report(&["lib.py", "other.py"], vec![]),
+        "v1",
+        "v2",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(
+        measured.broken[0].suggestion,
+        Some(BreakSuggestion::Moved {
+            file: "other.py".to_owned(),
+            kind: DeclarationKind::Value,
+        })
+    );
 }
