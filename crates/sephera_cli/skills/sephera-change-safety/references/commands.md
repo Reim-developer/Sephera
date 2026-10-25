@@ -1,9 +1,12 @@
 # CLI command reference for the change-safety workflow
 
-Every command takes `--path <DIR>` for the project to analyze
-(relative paths resolve from the current working directory) and
-`--format markdown|json`. The report is still printed when a
-`--fail-on` gate fires; only the exit code changes to 2.
+Every report command takes `--path <DIR>` for the project to
+analyze (relative paths resolve from the current working
+directory) and `--format markdown|json`. The report is still
+printed when a `--fail-on` gate fires; only the exit code
+changes to 2. `sephera guard` is the exception: it is a
+hook-only judgement, not a report, and takes `--path`,
+`--file`, `--depth`, and `--max-dependents` — no `--format`.
 
 ## Step 1–2: `sephera impact`
 
