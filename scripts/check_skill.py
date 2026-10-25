@@ -88,6 +88,12 @@ def main() -> int:
             )
         else:
             fail(problems, "frontmatter has no description")
+    elif not description.group(1).strip():
+        fail(
+            problems,
+            "description must not be empty: agents discover a skill "
+            "from its description, and an empty one loads nowhere",
+        )
     elif len(description.group(1)) > MAX_DESCRIPTION:
         fail(
             problems,
