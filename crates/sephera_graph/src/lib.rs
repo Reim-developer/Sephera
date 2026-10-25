@@ -21,6 +21,7 @@ pub mod render;
 pub mod resolver;
 pub mod review;
 pub mod risk;
+pub mod simulate;
 pub mod symbol_impact;
 pub mod types;
 pub mod untested;
