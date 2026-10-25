@@ -491,6 +491,43 @@ pub struct DiffInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `simulate` tool.
+///
+/// One tree, not two refs, so a remote checkout is as good a tree
+/// to simulate against as a local one: `url` and `git_ref` are
+/// accepted the way `impact` accepts them. `file`, `symbol`, and
+/// `to` are required; `to_file` moves the symbol instead of
+/// renaming it in place.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SimulateInput {
+    /// Absolute or relative path to the repository root.
+    pub path: Option<String>,
+    /// Optional remote repository URL to analyze.
+    pub url: Option<String>,
+    /// Optional ref to check out from the remote repository.
+    pub git_ref: Option<String>,
+    /// The file that declares the symbol today.
+    pub file: String,
+    /// The symbol's name today.
+    pub symbol: String,
+    /// The name the symbol would take.
+    pub to: String,
+    /// The file the symbol would live in. When absent, the rename
+    /// happens in place.
+    pub to_file: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 /// Arguments accepted by the `untested` tool.
 ///
 /// The question is about a whole tree, so there is no file

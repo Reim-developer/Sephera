@@ -23,7 +23,7 @@ use sephera_graph::{
     blast_radius, breaking, coupling, dead, dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
-    review, risk, symbol_impact,
+    review, risk, simulate, symbol_impact,
     types::{GraphFormat, GraphQuery},
     untested,
 };
@@ -41,7 +41,8 @@ use crate::{
     input::{
         AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
         DeadInput, DiffInput, GraphInput, ImpactInput, LocInput, MergeInput,
-        ReviewInput, RiskInput, SymbolsInput, UntestedInput, WhyInput,
+        ReviewInput, RiskInput, SimulateInput, SymbolsInput, UntestedInput,
+        WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1197,6 +1198,71 @@ impl SepheraServer {
         }
     }
 
+    /// Dry-run a rename or move: what a real rename would have
+    /// to touch, and what would block it, without editing the
+    /// tree. The measurement is `sephera_graph::simulate`'s,
+    /// shared with the `simulate` command, so the two cannot
+    /// disagree. A name that is not declared, a move target that
+    /// is not in the tree, and a rename to the name the symbol
+    /// already has are caller errors, not empty reports.
+    #[tool(
+        name = "simulate",
+        description = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree. The consumer set is exactly `breaking`'s — a resolved edge to the declaring file naming the symbol, an unresolved item half whose parent statement lands there, a namespace import of the whole file — plus the destination collision, which blocks the rename outright, and shadowing warnings for direct consumers that already declare the new name. Only Rust and Python collect declarations, so only their symbols can be renamed. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn simulate(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SimulateInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let (report, index) = build_graph_with_declarations(
+            &source.analysis_path,
+            &ignore_matcher,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let measured = simulate::measure_simulate(
+            &index,
+            &report,
+            &param.file,
+            &param.symbol,
+            &param.to,
+            param.to_file.as_deref(),
+        )
+        .map_err(|error| {
+            rmcp::ErrorData::invalid_params(error.to_string(), None)
+        })?;
+        let built = SimulateReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(simulate_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported simulate format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
     /// Report the declared symbols no test exercises, measured
     /// statically through the import graph. The measurement is
     /// `sephera_graph::untested`'s, shared with the `untested`
@@ -2050,6 +2116,146 @@ impl BreakingReport {
     }
 }
 
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SimulateReport {
+    /// The file that declares the symbol today.
+    pub file: String,
+    /// The symbol's name today.
+    pub symbol: String,
+    /// The name it would take.
+    pub new_name: String,
+    /// The file it would live in: the move target, or the file it
+    /// already lives in for a pure rename.
+    pub new_file: String,
+    /// True when a destination collision blocks the rename.
+    pub blocked: bool,
+    /// Files that name the symbol and so must update their import.
+    pub direct: Vec<SimulatedConsumerReport>,
+    /// Files importing the file's namespace wholesale.
+    pub namespace_users: Vec<String>,
+    /// Files downstream of a direct or namespace user.
+    pub downstream: Vec<String>,
+    /// Name collisions at the destination and in direct consumers.
+    pub collisions: Vec<SimulatedCollisionReport>,
+}
+
+/// One file a rename would have to touch, as the `simulate` tool
+/// renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SimulatedConsumerReport {
+    /// The file that names the symbol from its current file.
+    pub file: String,
+    /// Import paths evidencing the use.
+    pub imports: Vec<String>,
+}
+
+/// One name collision, as the `simulate` tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SimulatedCollisionReport {
+    /// The file where the new name already exists.
+    pub file: String,
+    /// `destination` blocks the rename; `shadowing` only warns.
+    pub kind: String,
+}
+
+impl SimulateReport {
+    fn from_measured(measured: &simulate::SimulateReport) -> Self {
+        Self {
+            file: measured.file.clone(),
+            symbol: measured.symbol.clone(),
+            new_name: measured.new_name.clone(),
+            new_file: measured.new_file.clone(),
+            blocked: measured.blocked,
+            direct: measured
+                .direct
+                .iter()
+                .map(|user| SimulatedConsumerReport {
+                    file: user.file.clone(),
+                    imports: user.imports.clone(),
+                })
+                .collect(),
+            namespace_users: measured.namespace_users.clone(),
+            downstream: measured.downstream.clone(),
+            collisions: measured
+                .collisions
+                .iter()
+                .map(|collision| SimulatedCollisionReport {
+                    file: collision.file.clone(),
+                    kind: match collision.kind {
+                        simulate::CollisionKind::Destination => {
+                            "destination".to_owned()
+                        }
+                        simulate::CollisionKind::Shadowing => {
+                            "shadowing".to_owned()
+                        }
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a simulate report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn simulate_markdown(report: &SimulateReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
+        report.symbol, report.file, report.new_name, report.new_file
+    );
+    let destination = report
+        .collisions
+        .iter()
+        .find(|collision| collision.kind == "destination");
+    if let Some(collision) = destination {
+        let _ = writeln!(
+            output,
+            "Blocked: `{}` already declares `{}`.",
+            collision.file, report.new_name
+        );
+    } else if report.direct.is_empty() {
+        let _ = writeln!(
+            output,
+            "Safe to rename: no file names this symbol, so the rename touches only its declaration."
+        );
+    } else {
+        let _ = writeln!(
+            output,
+            "Safe to rename: {} file(s) must update their import.",
+            report.direct.len()
+        );
+    }
+    for user in &report.direct {
+        let _ = writeln!(
+            output,
+            "\n- `{}` ({}).",
+            user.file,
+            user.imports.join(", ")
+        );
+    }
+    for file in &report.namespace_users {
+        let _ = writeln!(output, "\n- `{file}` (namespace).");
+    }
+    for file in &report.downstream {
+        let _ = writeln!(output, "\n- `{file}` (downstream).");
+    }
+    for collision in &report.collisions {
+        if collision.kind == "shadowing" {
+            let _ = writeln!(
+                output,
+                "\n- `{}` already declares `{}`: the renamed import would rebind a name the file owns.",
+                collision.file, report.new_name
+            );
+        }
+    }
+    output
+}
 /// Render a breaking report as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools'

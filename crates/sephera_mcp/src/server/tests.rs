@@ -1645,3 +1645,67 @@ async fn diff_tool_reports_added_and_removed_in_json_and_markdown() {
     assert!(markdown.contains("Added `fresh`"), "{markdown}");
     assert!(markdown.contains("Removed `gone`"), "{markdown}");
 }
+
+/// A plain tree, no git repository: `lib.py` declares `add`,
+/// `user.py` imports it, `other.py` already declares `sum`.
+fn tree_with_consumer() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    write_file(dir, "lib.py", b"def add(x, y):\n    return x + y\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import add\n\n\nprint(add(1, 2))\n",
+    );
+    write_file(dir, "other.py", b"def sum(x, y):\n    return x + y\n");
+    temp_dir
+}
+
+fn simulate_input(
+    dir: &Path,
+    to: &str,
+    to_file: Option<&str>,
+    format: Option<String>,
+) -> SimulateInput {
+    SimulateInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        file: "lib.py".to_owned(),
+        symbol: "add".to_owned(),
+        to: to.to_owned(),
+        to_file: to_file.map(str::to_owned),
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn simulate_tool_reports_consumers_and_a_blocked_move() {
+    let tree = tree_with_consumer();
+    let server = SepheraServer::new();
+
+    let output = server
+        .simulate(param_for(simulate_input(tree.path(), "total", None, None)))
+        .await
+        .expect("simulate tool should succeed for a plain tree");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("simulate output must be JSON");
+    assert_eq!(parsed["blocked"], false, "{output}");
+    assert_eq!(parsed["direct"][0]["file"], "user.py", "{output}");
+
+    let markdown = server
+        .simulate(param_for(simulate_input(
+            tree.path(),
+            "sum",
+            Some("other.py"),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("simulate tool should succeed for a plain tree");
+    assert!(
+        markdown.contains("Blocked: `other.py` already declares `sum`."),
+        "{markdown}"
+    );
+}
