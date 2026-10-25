@@ -23,6 +23,7 @@
 //! | `risk` | Rank the files where a change is most likely to hurt, by dependents × churn × coupling |
 //! | `dead` | Find the files no entry point reaches |
 //! | `breaking` | Compare two refs: which declared symbols broke, joined to the files that still use them |
+//! | `diff` | Compare two refs: every declared symbol added, removed, or reshaped |
 //! | `untested` | Report the declared symbols no test exercises, through the import graph |
 //! | `merge` | Predict the merges git completes cleanly but that break the build, across base, ours, theirs |
 //!

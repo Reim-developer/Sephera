@@ -1576,3 +1576,72 @@ async fn merge_tool_reports_a_removal_against_a_new_consumer() {
     );
     assert!(markdown.contains("new.py"), "{markdown}");
 }
+
+fn repo_with_diff() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "a.py",
+        b"def keep(x):\n    return x\n\n\ndef gone(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v1 declares keep and gone"]);
+    write_file(
+        dir,
+        "a.py",
+        b"def keep(x):\n    return x\n\n\ndef fresh(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v2 drops gone, adds fresh"]);
+    temp_dir
+}
+
+fn diff_input(dir: &Path, format: Option<String>) -> DiffInput {
+    DiffInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        from: "HEAD~1".to_owned(),
+        to: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn diff_tool_reports_added_and_removed_in_json_and_markdown() {
+    let repo = repo_with_diff();
+    let server = SepheraServer::new();
+
+    let output = server
+        .diff(param_for(diff_input(repo.path(), None)))
+        .await
+        .expect("diff tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("diff output must be JSON");
+
+    let changes = parsed["changes"].as_array().expect("changes is an array");
+    assert_eq!(changes.len(), 2, "{output}");
+    let kinds: Vec<(&str, &str)> = changes
+        .iter()
+        .map(|change| {
+            (
+                change["symbol"].as_str().unwrap(),
+                change["change"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(kinds.contains(&("fresh", "added")), "{kinds:?}");
+    assert!(kinds.contains(&("gone", "removed")), "{kinds:?}");
+
+    let markdown = server
+        .diff(param_for(diff_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("diff tool should succeed for a temp repo");
+    assert!(markdown.contains("Added `fresh`"), "{markdown}");
+    assert!(markdown.contains("Removed `gone`"), "{markdown}");
+}

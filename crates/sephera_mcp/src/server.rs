@@ -20,7 +20,7 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, breaking, coupling, dead, dependency_path, merge,
+    blast_radius, breaking, coupling, dead, dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, symbol_impact,
@@ -40,8 +40,8 @@ use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
         AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
-        DeadInput, GraphInput, ImpactInput, LocInput, MergeInput, ReviewInput,
-        RiskInput, SymbolsInput, UntestedInput, WhyInput,
+        DeadInput, DiffInput, GraphInput, ImpactInput, LocInput, MergeInput,
+        ReviewInput, RiskInput, SymbolsInput, UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1129,6 +1129,67 @@ impl SepheraServer {
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported merge format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    async fn diff(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<DiffInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let old_worktree = checkout_worktree(&source.repo_root, &param.from)
+            .map_err(map_internal_error("old ref checkout failed"))?;
+        let (_, old_index) =
+            build_graph_with_declarations(old_worktree.path(), &ignore_matcher)
+                .map_err(map_internal_error("old graph build failed"))?;
+
+        let (_, new_index) = if let Some(to) = &param.to {
+            let new_worktree = checkout_worktree(&source.repo_root, to)
+                .map_err(map_internal_error("new ref checkout failed"))?;
+            let built = build_graph_with_declarations(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("new graph build failed"))?;
+            drop(new_worktree);
+            built
+        } else {
+            build_graph_with_declarations(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("working tree graph build failed"))?
+        };
+        drop(old_worktree);
+
+        let to_label = param.to.as_deref().unwrap_or("working tree");
+        let measured =
+            diff::measure_diff(&old_index, &new_index, &param.from, to_label);
+        let built = DiffReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(diff_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported diff format `{other}`; expected \
                      json or markdown"
                 ),
                 None,
@@ -2463,6 +2524,93 @@ fn merge_markdown(report: &MergeReport) -> String {
                 let _ = writeln!(output, "- `{file}`");
             }
         }
+    }
+    output
+}
+
+pub struct DiffReport {
+    /// The older ref, as the caller spelled it.
+    pub from: String,
+    /// The newer ref, as the caller spelled it, or "working tree".
+    pub to: String,
+    /// The changed symbols, file then symbol.
+    pub changes: Vec<DiffSymbolReport>,
+}
+
+pub struct DiffSymbolReport {
+    /// The file that declares the symbol.
+    pub file: String,
+    /// The symbol's name.
+    pub symbol: String,
+    /// The kind on the side where the symbol exists: the old kind
+    /// for removals and changes, the new kind for additions.
+    pub kind: String,
+    /// `added`, `removed`, `kind_changed`, or `signature_changed`.
+    pub change: String,
+    /// The kind the new tree declares it as, for a kind change.
+    pub new_kind: Option<String>,
+    /// The call shape the old tree declared, for a signature change.
+    pub old_signature: Option<SignatureReport>,
+    /// The call shape the new tree declares, for a signature change.
+    pub new_signature: Option<SignatureReport>,
+}
+
+fn diff_markdown(report: &DiffReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Symbol diff: `{}` → `{}`\n",
+        report.from, report.to
+    );
+    let _ = writeln!(output, "{} symbol(s) changed.", report.changes.len());
+    if report.changes.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo declared symbol was added, removed, or reshaped."
+        );
+        return output;
+    }
+    for change in &report.changes {
+        let line = match change.change.as_str() {
+            "added" => {
+                format!(
+                    "Added `{}` in `{}` ({}).",
+                    change.symbol, change.file, change.kind
+                )
+            }
+            "removed" => {
+                format!(
+                    "Removed `{}` from `{}` ({}).",
+                    change.symbol, change.file, change.kind
+                )
+            }
+            "kind_changed" => {
+                format!(
+                    "Changed `{}` in `{}` from {} to {}.",
+                    change.symbol,
+                    change.file,
+                    change.kind,
+                    change.new_kind.as_deref().unwrap_or("?"),
+                )
+            }
+            _ => {
+                let from = change
+                    .old_signature
+                    .as_ref()
+                    .map_or_else(String::new, SignatureReport::render);
+                let to = change
+                    .new_signature
+                    .as_ref()
+                    .map_or_else(String::new, SignatureReport::render);
+                format!(
+                    "Changed signature of `{}` in `{}`: {from} → {to}.",
+                    change.symbol, change.file
+                )
+            }
+        };
+        let _ = writeln!(output, "\n- {line}");
     }
     output
 }
