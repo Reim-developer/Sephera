@@ -435,6 +435,41 @@ pub struct BreakingInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `merge` tool.
+///
+/// The comparison is between three refs of one local repository,
+/// so there is no `url` argument: a remote checkout is one ref
+/// already and has nothing to compare against. `ours` and
+/// `theirs` are required; `base` defaults to their merge base,
+/// the fork point git itself would merge from.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MergeInput {
+    /// Absolute or relative path to the repository root.
+    pub path: Option<String>,
+    /// One side of the merge: a branch, tag, or commit whose
+    /// contract changes are judged against the other side's new
+    /// consumers.
+    pub ours: String,
+    /// The other side of the merge: a branch, tag, or commit
+    /// whose new consumers are judged against the first side's
+    /// contract changes.
+    pub theirs: String,
+    /// The fork point the two sides diverged from. When absent,
+    /// the merge base of ours and theirs is used.
+    pub base: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 /// Arguments accepted by the `untested` tool.
 ///
 /// The question is about a whole tree, so there is no file
