@@ -500,6 +500,40 @@ fn removed_against_a_python_gap_half_consumer_is_proven() {
 }
 
 #[test]
+fn both_sides_removing_plus_a_new_consumer_is_not_a_conflict() {
+    // Both sides agree the symbol is gone; the consumer the
+    // theirs side added is broken on its own branch, not by
+    // the merge, so it is filtered out of the new consumers.
+    let base_index =
+        index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let base_report = report(&["lib.py"], vec![]);
+    let ours_index = index(&[]);
+    let ours_report = report(&["lib.py"], vec![]);
+    let theirs_index = index(&[]);
+    let theirs_report = report(
+        &["lib.py", "new.py"],
+        vec![
+            edge("new.py", "lib.py", "lib"),
+            unresolved("new.py", "lib.add"),
+        ],
+    );
+
+    let measured = measure(
+        &base_index,
+        &base_report,
+        &ours_index,
+        &ours_report,
+        &theirs_index,
+        &theirs_report,
+    );
+
+    assert!(
+        measured.conflicts.is_empty(),
+        "both sides removing plus a new consumer is not a merge conflict"
+    );
+}
+
+#[test]
 fn a_new_namespace_import_is_not_direct_evidence() {
     let base_index =
         index(&[("lib.py", &[("add", DeclarationKind::Function)])]);

@@ -235,6 +235,7 @@ pub fn measure_merge(
         &breaking_ours,
         theirs.report,
         base.report,
+        &breaking_theirs,
         MergeSide::Ours,
         &both_reshaped_keys,
         &mut conflicts,
@@ -243,6 +244,7 @@ pub fn measure_merge(
         &breaking_theirs,
         ours.report,
         base.report,
+        &breaking_ours,
         MergeSide::Theirs,
         &both_reshaped_keys,
         &mut conflicts,
@@ -295,10 +297,18 @@ fn signature_changes(
 /// consumers: a removal or kind change against a new consumer is
 /// proven; a signature change against one is a warning, unless
 /// both sides reshaped the pair (handled above).
+///
+/// A new consumer only counts when the consumer side itself
+/// agrees with base on the pair. A side that breaks the pair
+/// and adds a consumer of it in the same breath is broken on
+/// its own — the merged tree's break for that consumer is that
+/// side's doing, not the merge's — so consumers the consumer
+/// side's own breaking report already names are filtered out.
 fn push_side(
     breaking: &BreakingReport,
     consumer_report: &GraphReport,
     base_report: &GraphReport,
+    consumer_breaking: &BreakingReport,
     contract_side: MergeSide,
     both_reshaped_keys: &BTreeSet<(&str, &str)>,
     conflicts: &mut Vec<MergeConflict>,
@@ -312,6 +322,21 @@ fn push_side(
             &broken.symbol,
         );
         if new_consumers.is_empty() {
+            continue;
+        }
+        let broken_on_consumer_side =
+            consumer_breaking.broken.iter().find(|other| {
+                other.file == broken.file && other.symbol == broken.symbol
+            });
+        let consumers: Vec<String> = new_consumers
+            .into_iter()
+            .filter(|file| {
+                broken_on_consumer_side.is_none_or(|other| {
+                    other.direct.iter().all(|user| &user.file != file)
+                })
+            })
+            .collect();
+        if consumers.is_empty() {
             continue;
         }
         let kind = match &broken.change {
@@ -334,7 +359,7 @@ fn push_side(
             symbol: broken.symbol.clone(),
             kind,
             contract_side,
-            consumers: new_consumers,
+            consumers,
             suggestion: broken.suggestion.clone(),
         });
     }
