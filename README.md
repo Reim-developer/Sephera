@@ -626,6 +626,22 @@ that guesses identity is a diff that lies.
 sephera diff --path . --from origin/master
 ```
 
+### `simulate` — dry-run a rename before doing it
+
+A rename is the most common refactor and the one taken on faith:
+the tool renames the declaration and every import it can find,
+and the breakage shows up in CI. This one measures the rename
+beforehand — which files must update their import, and whether
+the new name already exists where it would land (a duplicate
+definition blocks the rename outright; a consumer that already
+owns the name warns instead). Nothing is edited, and even a
+blocked rename exits 0: a blocked rename is an answer, not a
+failure.
+
+```bash
+sephera simulate crates/sephera_graph/src/blast_radius.rs --symbol BlastRadius --to BlastRadiusSim --path .
+```
+
 ### `untested` — the symbols no test exercises, without running anything
 
 Coverage tools answer this by running the tests and watching what

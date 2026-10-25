@@ -33,6 +33,7 @@ export default defineConfig({
 						{ slug: 'commands/dead' },
 						{ slug: 'commands/breaking' },
 						{ slug: 'commands/diff' },
+						{ slug: 'commands/simulate' },
 						{ slug: 'commands/untested' },
 						{ slug: 'commands/merge' },
 						{ slug: 'commands/guard' },
