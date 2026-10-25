@@ -78,7 +78,15 @@ fn target_dir(arguments: &SkillArgs) -> Result<PathBuf> {
 /// An existing skill is an error unless forced: the target may hold
 /// a skill the user tuned by hand, and overwriting it without being
 /// asked would destroy work this tool cannot reconstruct.
+///
+/// A symlink at or under the target is refused even with `--force`:
+/// `fs::write` and `fs::create_dir_all` follow links, so a link a
+/// repository committed under `.claude/skills/` would send the
+/// install's bytes to whatever the link names. Links above the
+/// target are the caller's own path, not the skill's, and are not
+/// checked.
 fn install(target: &Path, force: bool) -> Result<()> {
+    reject_symlinks(target)?;
     if target.exists() && !force {
         anyhow::bail!(
             "skill already exists at {}; re-run with `install --force` to overwrite it",
@@ -96,5 +104,40 @@ fn install(target: &Path, force: bool) -> Result<()> {
             .with_context(|| format!("could not write {}", path.display()))?;
     }
     println!("Installed {SKILL_NAME} to {}", target.display());
+    Ok(())
+}
+
+/// Refuse a target that a symlink redirects.
+///
+/// Every path the install will create or overwrite is checked: the
+/// target itself, each written file's parent directories down to
+/// the target, and each written file. A link anywhere on those
+/// paths would redirect a write, so the install stops before
+/// writing anything. A path that does not exist yet is not a link.
+fn reject_symlinks(target: &Path) -> Result<()> {
+    let mut candidates = vec![target.to_path_buf()];
+    for (relative, _) in FILES {
+        let path = target.join(relative);
+        let mut ancestor = path.parent();
+        while let Some(dir) = ancestor {
+            if !dir.starts_with(target) {
+                break;
+            }
+            candidates.push(dir.to_path_buf());
+            ancestor = dir.parent();
+        }
+        candidates.push(path);
+    }
+    for path in candidates {
+        let is_link = path
+            .symlink_metadata()
+            .is_ok_and(|metadata| metadata.file_type().is_symlink());
+        if is_link {
+            anyhow::bail!(
+                "refusing to install over a symlink at {}; remove the link first",
+                path.display()
+            );
+        }
+    }
     Ok(())
 }

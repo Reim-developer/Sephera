@@ -148,6 +148,64 @@ fn install_honours_a_relative_dir_override() {
 }
 
 #[test]
+#[cfg(unix)]
+fn install_force_refuses_a_symlinked_skill_file() {
+    use std::os::unix::fs::symlink;
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+    assert!(
+        sephera(&["skill", "install", "--path", path])
+            .status
+            .success()
+    );
+    let skill = dir
+        .path()
+        .join(".claude")
+        .join("skills")
+        .join("sephera-change-safety");
+    let victim = dir.path().join("victim.txt");
+    std::fs::write(&victim, "do not touch\n").unwrap();
+    let skill_file = skill.join("SKILL.md");
+    std::fs::remove_file(&skill_file).unwrap();
+    symlink(&victim, &skill_file).unwrap();
+    let output = sephera(&["skill", "install", "--path", path, "--force"]);
+    assert!(
+        !output.status.success(),
+        "install over a symlink must fail, got: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).contains("symlink"));
+    assert_eq!(
+        std::fs::read_to_string(&victim).unwrap(),
+        "do not touch\n",
+        "the link's target must be untouched"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn install_force_refuses_a_symlinked_skill_dir() {
+    use std::os::unix::fs::symlink;
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+    let skills = dir.path().join(".claude").join("skills");
+    std::fs::create_dir_all(&skills).unwrap();
+    let elsewhere = dir.path().join("elsewhere");
+    std::fs::create_dir_all(&elsewhere).unwrap();
+    symlink(&elsewhere, skills.join("sephera-change-safety")).unwrap();
+    let output = sephera(&["skill", "install", "--path", path, "--force"]);
+    assert!(
+        !output.status.success(),
+        "install over a symlinked dir must fail"
+    );
+    assert!(stderr(&output).contains("symlink"));
+    assert!(
+        !elsewhere.join("SKILL.md").exists(),
+        "nothing may be written through the link"
+    );
+}
+
+#[test]
 fn print_and_install_together_are_an_error() {
     let dir = tempdir().unwrap();
     let path = dir.path().to_str().unwrap();

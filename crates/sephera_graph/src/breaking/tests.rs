@@ -546,7 +546,7 @@ fn an_old_file_importing_a_removed_symbol_for_the_first_time_is_reported() {
     let new_index = index(&[("lib.rs", &[])]);
 
     let old_report = report(
-        &["lib.rs", "other_user.rs"],
+        &["lib.rs", "other_user.rs", "user.rs"],
         vec![edge("other_user.rs", "lib.rs", "crate::lib::add")],
     );
     let new_report = report(
