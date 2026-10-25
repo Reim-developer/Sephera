@@ -612,6 +612,20 @@ the call shape a changed signature now takes.
 sephera breaking --path . --from origin/master
 ```
 
+### `diff` — the whole API changelog, additions included
+
+`breaking` only names what breaks consumers. This one names
+everything that changed in the API surface between two refs:
+added, removed, kind-changed, and signature-changed. A new symbol
+breaks nothing, so it never appears in a breaking report — but a
+changelog without additions hides half the release. A symbol that
+moved files reads as a removal plus an addition, because a diff
+that guesses identity is a diff that lies.
+
+```bash
+sephera diff --path . --from origin/master
+```
+
 ### `untested` — the symbols no test exercises, without running anything
 
 Coverage tools answer this by running the tests and watching what
