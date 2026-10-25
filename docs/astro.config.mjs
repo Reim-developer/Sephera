@@ -36,6 +36,7 @@ export default defineConfig({
 						{ slug: 'commands/guard' },
 						{ slug: 'commands/watch' },
 						{ slug: 'commands/mcp' },
+						{ slug: 'commands/skill' },
 					],
 				},
 				{
