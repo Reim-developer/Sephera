@@ -190,6 +190,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera breaking --path . --from origin/main\\n  sephera breaking --path . --from v1.0.0 --to v2.0.0\\n  sephera breaking --path . --from origin/main --format json"
     )]
     Breaking(BreakingArgs),
+    /// Predict the merges git completes cleanly but that break the build, by comparing the fork point against both sides
+    #[command(
+        long_about = "Predict the merges git completes cleanly but that break the build.\\n\\nGit compares lines, so contradictory changes in different files merge without complaint: one side renames, removes, or reshapes a symbol while the other side adds a consumer of the old contract. This command compares declarations and consumers across three trees — base, ours, theirs — and reports each contradiction by symbol, with the evidence on both sides and the fix when the changing side states one.\\n\\n`--ours` and `--theirs` name the two sides and are required. `--base` names the fork point; when it is absent, the merge base of the two sides is used. Only what is proven fails `--fail-on`: a removal or kind change against a new consumer, and two sides reshaping the same symbol differently. A signature change against a new consumer is a warning, never a gate failure, because without call-site shapes the tool cannot prove the new call matches the old shape rather than the new one. A consumer kept since base is never a conflict: it breaks because of the contract change alone, which breaking already reports.\\n\\nThe analysis needs a git repository. A tree that is not one is an error, not an empty report.",
+        after_long_help = "Examples:\\n  sephera merge --path . --ours feature-a --theirs feature-b\\n  sephera merge --path . --ours HEAD --theirs origin/main --base v1.0.0\\n  sephera merge --path . --ours a --theirs b --fail-on 1\\n  sephera merge --path . --ours a --theirs b --format json"
+    )]
+    Merge(MergeArgs),
     /// Report the declared symbols no test exercises
     #[command(
         long_about = "Report the declared symbols no test exercises, measured statically through the import graph — no test run, no instrumentation.\\n\\nA test file is a root; the files its imports reach are the code the tests can execute; a symbol is exercised when a reached file names it. A symbol a test file names itself is exercised directly, and one named only by a file the tests reach is exercised indirectly: both count as tested, and the report keeps the tiers apart because they mean different things. A namespace import names nothing, so it is never evidence, and only Rust and Python collect declarations, so only their symbols can be reported.\\n\\nTest files are found by the conventions ecosystems agree on: a test, tests, __tests__, spec, or specs directory, or a file named test_*, *_test.*, *.test.*, or *.spec.*. Inline unit tests do not cross an import edge — a Rust #[cfg(test)] module inside lib.rs tests its own file without importing it — so those symbols read as untested unless a separate test file names them; the report's limit, stated plainly, is that it measures coverage through the import graph, the way a new test file would see the code.",
@@ -1153,6 +1159,70 @@ tree_command_args!(
 
     }
 );
+
+tree_command_args!(
+    #[doc = "Predict the semantic conflicts between two sides of a merge."]
+    MergeArgs {
+        /// The ours reference: one side of the merge
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The ours reference: one side of the merge.",
+        long_help = "The ours reference: one side of the merge. A branch, tag, or commit whose contract changes are judged against the other side's new consumers. Required, because a comparison without both sides compares nothing."
+    )]
+    pub ours: String,
+
+    /// The theirs reference: the other side of the merge
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The theirs reference: the other side of the merge.",
+        long_help = "The theirs reference: the other side of the merge. A branch, tag, or commit whose new consumers are judged against the first side's contract changes. Required."
+    )]
+    pub theirs: String,
+
+    /// The base reference; when absent, the merge base of ours and theirs
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The base reference; the merge base of ours and theirs when absent.",
+        long_help = "The base reference: the fork point the two sides diverged from. When absent, the merge base of ours and theirs is used, which is the fork point git itself would merge from. Naming it explicitly is for the case where the fork point is a tag or a commit the branches no longer share."
+    )]
+    pub base: Option<String>,
+
+    /// Fail with exit code 2 when this many proven conflicts are predicted
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many proven conflicts.",
+        long_help = "Exit with code 2 when at least this many proven conflicts are predicted. Warnings are never counted: a signature change against a new consumer is suspicious, not proven, and a gate that fired on it would train a pipeline to ignore the gate. The report is still printed; only the exit code changes."
+    )]
+    pub fail_on: Option<u64>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: MergeOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum MergeOutputFormat {
+    /// Markdown list of predicted conflicts.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
 
 tree_command_args!(
     #[doc = "Report the declared symbols no test exercises."]

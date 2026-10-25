@@ -25,7 +25,8 @@ pub use context::{
     load_project_settings, resolve_changed_files, resolve_context_command,
 };
 pub use git::{
-    DetachedWorktree, changed_files, checkout_worktree, recent_commit_files,
+    DetachedWorktree, changed_files, checkout_worktree, merge_base,
+    recent_commit_files,
 };
 pub use interrupt::{
     CleanupGuard, INTERRUPTED_EXIT_CODE, Interrupt, interrupt,

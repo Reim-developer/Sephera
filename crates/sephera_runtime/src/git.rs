@@ -329,11 +329,7 @@ pub fn checkout_worktree(
     if trimmed.is_empty() {
         bail!("git ref must not be empty");
     }
-    let resolved =
-        super::source::resolve_commitish(repo, trimmed).or_else(|_| {
-            let remote_ref = format!("origin/{trimmed}");
-            super::source::resolve_commitish(repo, &remote_ref)
-        })?;
+    let resolved = resolve_ref(repo, trimmed)?;
     let dir =
         tempfile::tempdir().context("create a temporary worktree directory")?;
     run_git(
@@ -353,12 +349,50 @@ pub fn checkout_worktree(
     })
 }
 
+/// Resolve a ref to a commit, with the `origin/` fallback the
+/// source resolver uses for branch names: a bare branch name means
+/// the local branch when one exists, else the remote-tracking one.
+fn resolve_ref(repo: &Path, reference: &str) -> Result<String> {
+    super::source::resolve_commitish(repo, reference).or_else(|_| {
+        let remote_ref = format!("origin/{reference}");
+        super::source::resolve_commitish(repo, &remote_ref)
+    })
+}
+
+/// The fork point of two refs: the merge base git itself would use.
+///
+/// A three-way comparison needs this, not a guess. Base is where
+/// the two sides diverged, so base→ours and base→theirs are the two
+/// diffs whose interaction the comparison judges; any other base
+/// would blame one side for the other's history.
+///
+/// # Errors
+///
+/// Returns an error when `repo` is not a repository, either ref
+/// does not resolve to a commit, or the two histories share no
+/// ancestor. An unrelated pair has no fork point, and that is
+/// reported rather than read as an empty base.
+pub fn merge_base(repo: &Path, ours: &str, theirs: &str) -> Result<String> {
+    let ours_trimmed = ours.trim();
+    let theirs_trimmed = theirs.trim();
+    if ours_trimmed.is_empty() || theirs_trimmed.is_empty() {
+        bail!("git ref must not be empty");
+    }
+    let ours_resolved = resolve_ref(repo, ours_trimmed)?;
+    let theirs_resolved = resolve_ref(repo, theirs_trimmed)?;
+    git_stdout_string(
+        repo,
+        ["merge-base", &ours_resolved, &theirs_resolved],
+        "find the merge base",
+    )
+}
+
 #[cfg(test)]
 mod tests {
     use std::{fs, path::Path, process::Command};
 
     use super::{
-        changed_files, checkout_worktree, git_stdout_string,
+        changed_files, checkout_worktree, git_stdout_string, merge_base,
         parse_commit_files, recent_commit_files,
     };
 
@@ -390,6 +424,85 @@ mod tests {
             .output()
             .expect("git runs");
         assert!(status.status.success(), "{status:?}");
+    }
+
+    fn rev_parse(dir: &Path, reference: &str) -> String {
+        let output = Command::new("git")
+            .args(["rev-parse", reference])
+            .current_dir(dir)
+            .output()
+            .expect("git runs");
+        assert!(output.status.success(), "{output:?}");
+        String::from_utf8_lossy(&output.stdout).trim().to_owned()
+    }
+
+    #[test]
+    fn merge_base_is_the_fork_point_of_two_branches() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "base\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "base"]);
+        let base = rev_parse(dir, "HEAD");
+
+        // A branch recorded at the base, then one commit on each
+        // side — the default branch name is never spelled, so the
+        // test does not depend on what `init` chose.
+        git(dir, &["branch", "side"]);
+        fs::write(dir.join("a.txt"), "base main\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "main"]);
+        let main_tip = rev_parse(dir, "HEAD");
+        git(dir, &["checkout", "-q", "side"]);
+        fs::write(dir.join("b.txt"), "side\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "side"]);
+
+        assert_eq!(
+            merge_base(dir, "side", &main_tip).expect("base reads"),
+            base,
+            "the fork point, whichever order the sides are named"
+        );
+        assert_eq!(
+            merge_base(dir, &main_tip, "side").expect("base reads"),
+            base
+        );
+        // A ref against itself bases at itself, not at its parent.
+        assert_eq!(
+            merge_base(dir, "side", "side").expect("base reads"),
+            rev_parse(dir, "side")
+        );
+    }
+
+    #[test]
+    fn merge_base_without_a_common_ancestor_is_an_error() {
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("a.txt"), "one\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+        let first = rev_parse(dir, "HEAD");
+
+        git(dir, &["checkout", "-q", "--orphan", "unrelated"]);
+        git(dir, &["rm", "-rf", "."]);
+        fs::write(dir.join("other.txt"), "two\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "unrelated"]);
+
+        assert!(
+            merge_base(dir, &first, "unrelated").is_err(),
+            "unrelated histories have no fork point to report"
+        );
+        assert!(
+            merge_base(dir, &first, "no-such-ref").is_err(),
+            "an unknown ref fails before any base is computed"
+        );
+        assert!(
+            merge_base(dir, "", &first).is_err(),
+            "an empty ref is not a ref"
+        );
     }
 
     #[test]

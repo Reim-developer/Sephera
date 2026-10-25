@@ -14,6 +14,7 @@ pub mod coupling;
 pub mod dead;
 pub mod dependency_path;
 pub mod manifests;
+pub mod merge;
 pub mod plugins;
 pub mod render;
 pub mod resolver;

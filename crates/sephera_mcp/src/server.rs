@@ -20,7 +20,7 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, breaking, coupling, dead, dependency_path,
+    blast_radius, breaking, coupling, dead, dependency_path, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, symbol_impact,
@@ -30,8 +30,8 @@ use sephera_graph::{
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
     ResolvedSource, SourceRequest, build_context_report, changed_files,
-    checkout_worktree, recent_commit_files, resolve_context_command,
-    resolve_source,
+    checkout_worktree, merge_base, recent_commit_files,
+    resolve_context_command, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -40,8 +40,8 @@ use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
         AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
-        DeadInput, GraphInput, ImpactInput, LocInput, ReviewInput, RiskInput,
-        SymbolsInput, UntestedInput, WhyInput,
+        DeadInput, GraphInput, ImpactInput, LocInput, MergeInput, ReviewInput,
+        RiskInput, SymbolsInput, UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1037,6 +1037,98 @@ impl SepheraServer {
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported breaking format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Predict the merges git completes cleanly but that break
+    /// the build. The measurement is `sephera_graph::merge`'s,
+    /// shared with the `merge` command, so the two cannot
+    /// disagree.
+    #[tool(
+        name = "merge",
+        description = "Predict the merges git completes cleanly but that break the build, by comparing the fork point against both sides. Git compares lines, so contradictory changes in different files merge without complaint: one side renames, removes, or reshapes a symbol while the other side adds a consumer of the old contract. `ours` and `theirs` name the two sides and are required; `base` names the fork point, and when it is absent the merge base of the two sides is used. Only what is proven is a conflict that fails a gate: a removal or kind change against a new consumer, and two sides reshaping the same symbol differently. A signature change against a new consumer is a warning, never a gate failure, because without call-site shapes the tool cannot prove the new call matches the old shape rather than the new one. A consumer kept since base is never a conflict: it breaks because of the contract change alone, which the breaking tool already reports. Only Rust and Python collect declarations, so only their symbols can be reported, but consumers are read in every language. Requires a git repository; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn merge(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<MergeInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // The fork point is the merge base when the caller does
+        // not name one: it is where the two sides diverged, so
+        // the two diffs judged are the ones whose interaction
+        // matters.
+        let base_ref = match &param.base {
+            Some(base) => base.clone(),
+            None => merge_base(&source.repo_root, &param.ours, &param.theirs)
+                .map_err(map_internal_error("merge base failed"))?,
+        };
+
+        let build_side = |reference: &str| -> Result<
+            (
+                sephera_graph::types::GraphReport,
+                sephera_core::declarations::DeclarationIndex,
+            ),
+            rmcp::ErrorData,
+        > {
+            let worktree = checkout_worktree(&source.repo_root, reference)
+                .map_err(map_internal_error("ref checkout failed"))?;
+            let built =
+                build_graph_with_declarations(worktree.path(), &ignore_matcher)
+                    .map_err(map_internal_error("graph build failed"))?;
+            drop(worktree);
+            Ok(built)
+        };
+
+        let (base_report, base_index) = build_side(&base_ref)?;
+        let (ours_report, ours_index) = build_side(&param.ours)?;
+        let (theirs_report, theirs_index) = build_side(&param.theirs)?;
+
+        let measured = merge::measure_merge(
+            &merge::MergeSideAnalysis {
+                index: &base_index,
+                report: &base_report,
+                ref_name: &base_ref,
+            },
+            &merge::MergeSideAnalysis {
+                index: &ours_index,
+                report: &ours_report,
+                ref_name: &param.ours,
+            },
+            &merge::MergeSideAnalysis {
+                index: &theirs_index,
+                report: &theirs_report,
+                ref_name: &param.theirs,
+            },
+        );
+        let built = MergeReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(merge_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported merge format `{other}`; expected \
                      json or markdown"
                 ),
                 None,
@@ -2056,6 +2148,318 @@ fn breaking_markdown_body(
         if !broken.downstream.is_empty() {
             let _ = writeln!(output, "\nDownstream of those consumers:");
             for file in &broken.downstream {
+                let _ = writeln!(output, "- `{file}`");
+            }
+        }
+    }
+    output
+}
+
+/// One predicted merge conflict, as the merge report renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MergeReport {
+    /// The fork point, as the caller spelled it or the merge base.
+    pub base: String,
+    /// One side of the merge, as the caller spelled it.
+    pub ours: String,
+    /// The other side of the merge, as the caller spelled it.
+    pub theirs: String,
+    /// The predicted conflicts, proven first within a symbol.
+    pub conflicts: Vec<MergeConflictReport>,
+}
+
+/// One predicted conflict, with the evidence on both sides.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MergeConflictReport {
+    /// The file that used to declare the symbol.
+    pub file: String,
+    /// The symbol's name.
+    pub symbol: String,
+    /// `removed_vs_new_consumer`, `kind_changed_vs_new_consumer`,
+    /// `both_reshaped`, or `signature_vs_new_consumer`.
+    pub kind: String,
+    /// Whether the conflict is proven rather than a warning.
+    pub proven: bool,
+    /// Which side changed the contract: `ours`, `theirs`, or `both`.
+    pub contract_side: String,
+    /// The kind the changing side declares it as, for a kind change.
+    pub new_kind: Option<String>,
+    /// The call shape the old tree declared, for a signature change.
+    pub old_signature: Option<SignatureReport>,
+    /// The call shape the new tree declares, for a signature change.
+    pub new_signature: Option<SignatureReport>,
+    /// The call shape the ours side declares, for a both-reshaped.
+    pub ours_signature: Option<SignatureReport>,
+    /// The call shape the theirs side declares, for a both-reshaped.
+    pub theirs_signature: Option<SignatureReport>,
+    /// What to do about the conflict, when the changing side says
+    /// something actionable.
+    pub suggestion: Option<SuggestionReport>,
+    /// Files on the other side that newly name the symbol.
+    pub consumers: Vec<String>,
+}
+
+impl MergeReport {
+    fn from_measured(measured: &merge::MergeReport) -> Self {
+        Self {
+            base: measured.base_ref.clone(),
+            ours: measured.ours_ref.clone(),
+            theirs: measured.theirs_ref.clone(),
+            conflicts: measured
+                .conflicts
+                .iter()
+                .map(|conflict| {
+                    let (
+                        kind,
+                        new_kind,
+                        old_signature,
+                        new_signature,
+                        ours_signature,
+                        theirs_signature,
+                    ) = match &conflict.kind {
+                        merge::MergeConflictKind::RemovedVsNewConsumer => (
+                            "removed_vs_new_consumer".to_owned(),
+                            None,
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                        merge::MergeConflictKind::KindChangedVsNewConsumer {
+                            to,
+                        } => (
+                            "kind_changed_vs_new_consumer".to_owned(),
+                            Some(format!("{to:?}").to_lowercase()),
+                            None,
+                            None,
+                            None,
+                            None,
+                        ),
+                        merge::MergeConflictKind::BothReshaped {
+                            ours,
+                            theirs,
+                        } => (
+                            "both_reshaped".to_owned(),
+                            None,
+                            None,
+                            None,
+                            Some(SignatureReport {
+                                parameters: ours.parameters.clone(),
+                                returns: ours.returns.clone(),
+                            }),
+                            Some(SignatureReport {
+                                parameters: theirs.parameters.clone(),
+                                returns: theirs.returns.clone(),
+                            }),
+                        ),
+                        merge::MergeConflictKind::SignatureVsNewConsumer {
+                            from,
+                            to,
+                        } => (
+                            "signature_vs_new_consumer".to_owned(),
+                            None,
+                            Some(SignatureReport {
+                                parameters: from.parameters.clone(),
+                                returns: from.returns.clone(),
+                            }),
+                            Some(SignatureReport {
+                                parameters: to.parameters.clone(),
+                                returns: to.returns.clone(),
+                            }),
+                            None,
+                            None,
+                        ),
+                    };
+                    let suggestion = conflict
+                        .suggestion
+                        .as_ref()
+                        .map(merge_suggestion_report);
+                    MergeConflictReport {
+                        file: conflict.file.clone(),
+                        symbol: conflict.symbol.clone(),
+                        kind,
+                        proven: conflict.kind.is_proven(),
+                        contract_side: match conflict.contract_side {
+                            merge::MergeSide::Ours => "ours".to_owned(),
+                            merge::MergeSide::Theirs => "theirs".to_owned(),
+                            merge::MergeSide::Both => "both".to_owned(),
+                        },
+                        new_kind,
+                        old_signature,
+                        new_signature,
+                        ours_signature,
+                        theirs_signature,
+                        suggestion,
+                        consumers: conflict.consumers.clone(),
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+/// The flat suggestion shape of one breaking suggestion, shared
+/// with the breaking report: an agent reading the JSON should
+/// not have to unwrap a tagged enum to learn where a name went.
+fn merge_suggestion_report(
+    suggestion: &breaking::BreakSuggestion,
+) -> SuggestionReport {
+    match suggestion {
+        breaking::BreakSuggestion::Moved { file, kind } => SuggestionReport {
+            action: "moved".to_owned(),
+            file: Some(file.clone()),
+            declaration_kind: Some(format!("{kind:?}").to_lowercase()),
+            signature: None,
+        },
+        breaking::BreakSuggestion::NewCallShape { signature } => {
+            SuggestionReport {
+                action: "new_call_shape".to_owned(),
+                file: None,
+                declaration_kind: None,
+                signature: Some(SignatureReport {
+                    parameters: signature.parameters.clone(),
+                    returns: signature.returns.clone(),
+                }),
+            }
+        }
+    }
+}
+
+/// The kind line of one conflict: which side changed the
+/// contract, which side added the consumer, and — for a warning —
+/// why a human look is still needed.
+fn merge_kind_line(conflict: &MergeConflictReport) -> String {
+    let (contract, consumer) = match conflict.contract_side.as_str() {
+        "ours" => ("ours", "theirs"),
+        "theirs" => ("theirs", "ours"),
+        _ => ("both sides", "either side"),
+    };
+    match conflict.kind.as_str() {
+        "removed_vs_new_consumer" => {
+            format!("Removed on {contract}; {consumer} added a consumer.")
+        }
+        "kind_changed_vs_new_consumer" => {
+            let new_kind = conflict.new_kind.as_deref().unwrap_or("?");
+            format!(
+                "Changed kind to {new_kind} on {contract}; {consumer} added a consumer."
+            )
+        }
+        "both_reshaped" => {
+            let ours = conflict
+                .ours_signature
+                .as_ref()
+                .map_or_else(String::new, SignatureReport::render);
+            let theirs = conflict
+                .theirs_signature
+                .as_ref()
+                .map_or_else(String::new, SignatureReport::render);
+            format!("Reshaped differently: ours {ours} vs theirs {theirs}.")
+        }
+        _ => {
+            let from = conflict
+                .old_signature
+                .as_ref()
+                .map_or_else(String::new, SignatureReport::render);
+            let to = conflict
+                .new_signature
+                .as_ref()
+                .map_or_else(String::new, SignatureReport::render);
+            format!(
+                "Changed signature: {from} → {to} on {contract}; {consumer} added a consumer. \
+                 Warning: the new call's shape is unproven — a human look is needed."
+            )
+        }
+    }
+}
+
+/// The suggestion lines of one conflict, empty when the
+/// changing side says nothing actionable. The suggestion sits
+/// first, before the evidence: it is the one line a reviewer
+/// acts on, and the consumer list below is why it is
+/// trustworthy.
+fn merge_suggestion_lines(conflict: &MergeConflictReport) -> String {
+    match &conflict.suggestion {
+        Some(SuggestionReport {
+            action,
+            file,
+            declaration_kind,
+            signature,
+        }) if action == "moved" => {
+            format!(
+                "Suggestion: moved to `{}` ({}).",
+                file.as_deref().unwrap_or("?"),
+                declaration_kind.as_deref().unwrap_or("?")
+            )
+        }
+        Some(SuggestionReport {
+            action, signature, ..
+        }) if action == "new_call_shape" => {
+            let shape = signature
+                .as_ref()
+                .map_or_else(String::new, SignatureReport::render);
+            format!("Suggestion: call `{}{}`.", conflict.symbol, shape)
+        }
+        _ => String::new(),
+    }
+}
+
+/// Render a merge report as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's: the same measurement should
+/// not need two phrasings learned. The kind line states which
+/// side changed the contract and which side added the consumer
+/// before the evidence, and the suggestion sits first, as in
+/// the breaking report.
+fn merge_markdown(report: &MergeReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Predicted merge conflicts: `{}` vs `{}`\n",
+        report.ours, report.theirs
+    );
+    let _ = writeln!(output, "Base: `{}`.\n", report.base);
+    let proven = report.conflicts.iter().filter(|c| c.proven).count();
+    let _ = writeln!(
+        output,
+        "{} conflict(s) predicted; {} of them proven.",
+        report.conflicts.len(),
+        proven
+    );
+
+    if report.conflicts.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo contradiction between the two sides: nothing one side changed is newly used by the other."
+        );
+        return output;
+    }
+
+    for conflict in &report.conflicts {
+        let _ = writeln!(output);
+        let tier = if conflict.proven { "proven" } else { "warning" };
+        let _ = writeln!(
+            output,
+            "## `{}` — `{}` ({tier})",
+            conflict.file, conflict.symbol
+        );
+        let _ = writeln!(output, "\n{}", merge_kind_line(conflict));
+        let suggestion = merge_suggestion_lines(conflict);
+        if !suggestion.is_empty() {
+            let _ = writeln!(output, "\n{suggestion}");
+        }
+        if conflict.consumers.is_empty() {
+            let _ = writeln!(output, "\nNo consumers on the other side.");
+        } else {
+            let heading = if conflict.contract_side == "both" {
+                "Consumers:"
+            } else {
+                "New consumers:"
+            };
+            let _ = writeln!(output, "\n{heading}");
+            for file in &conflict.consumers {
                 let _ = writeln!(output, "- `{file}`");
             }
         }

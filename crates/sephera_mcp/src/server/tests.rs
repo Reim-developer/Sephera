@@ -1500,3 +1500,79 @@ async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
         "{markdown}"
     );
 }
+
+/// Two branches off one base: ours removes `add` from lib.py,
+/// theirs adds a new consumer of it. The merge tool reads all
+/// three trees from refs, never from the working tree.
+fn repo_with_merge_conflict() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x\n\ndef keep(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "base"]);
+    git(dir, &["branch", "ours"]);
+    git(dir, &["branch", "theirs"]);
+    git(dir, &["checkout", "-q", "ours"]);
+    write_file(dir, "lib.py", b"def keep(x):\n    return x\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "ours removes add"]);
+    git(dir, &["checkout", "-q", "theirs"]);
+    write_file(dir, "new.py", b"from lib import add\n\nprint(add(1))\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "theirs adds a consumer"]);
+    temp_dir
+}
+
+fn merge_input(dir: &Path, format: Option<String>) -> MergeInput {
+    MergeInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        ours: "ours".to_owned(),
+        theirs: "theirs".to_owned(),
+        base: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn merge_tool_reports_a_removal_against_a_new_consumer() {
+    let repo = repo_with_merge_conflict();
+    let server = SepheraServer::new();
+
+    let output = server
+        .merge(param_for(merge_input(repo.path(), None)))
+        .await
+        .expect("merge tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("merge output must be JSON");
+
+    let conflict = &parsed["conflicts"][0];
+    assert_eq!(conflict["symbol"], "add", "{output}");
+    assert_eq!(conflict["kind"], "removed_vs_new_consumer", "{output}");
+    assert_eq!(conflict["proven"], true, "{output}");
+    assert_eq!(conflict["contract_side"], "ours", "{output}");
+    assert_eq!(
+        conflict["consumers"],
+        serde_json::json!(["new.py"]),
+        "{output}"
+    );
+
+    let markdown = server
+        .merge(param_for(merge_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("merge tool should succeed for a temp repo");
+    assert!(
+        markdown.contains("Removed on ours; theirs added a consumer."),
+        "{markdown}"
+    );
+    assert!(markdown.contains("new.py"), "{markdown}");
+}

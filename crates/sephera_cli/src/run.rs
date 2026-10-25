@@ -5,6 +5,7 @@ use anyhow::{Context, Result};
 use clap::Parser;
 use sephera_core::declarations::DeclarationIndex;
 use sephera_graph::{
+    merge::MergeSideAnalysis,
     resolver::{
         EdgeFilters, build_focus_set, build_graph,
         build_graph_with_declarations, build_graph_with_progress,
@@ -14,8 +15,8 @@ use sephera_graph::{
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
     build_context_report, changed_files, checkout_worktree,
-    load_project_settings, recent_commit_files, resolve_changed_files,
-    resolve_source,
+    load_project_settings, merge_base, recent_commit_files,
+    resolve_changed_files, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -26,11 +27,11 @@ use crate::{
         AffectedTestsArgs, BreakingArgs, BreakingOutputFormat, Cli, Commands,
         ContextArgs, CouplingArgs, CouplingOutputFormat, DeadArgs,
         DeadOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs, IgnoreArgs,
-        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, OutputArgs,
-        ReviewArgs, ReviewOutputFormat, RiskArgs, RiskOutputFormat,
-        SettingsArgs, SkillArgs, SourceArgs, SymbolOutputFormat, SymbolsArgs,
-        TestImpactOutputFormat, UntestedArgs, UntestedOutputFormat, WatchArgs,
-        WatchTarget, WhyArgs, WhyOutputFormat,
+        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
+        MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
+        RiskArgs, RiskOutputFormat, SettingsArgs, SkillArgs, SourceArgs,
+        SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat, UntestedArgs,
+        UntestedOutputFormat, WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
     breaking, change_impact, configure,
     context_config::{
@@ -38,7 +39,7 @@ use crate::{
     },
     coupling, dead,
     gate::{self, Gate},
-    guard, impact,
+    guard, impact, merge,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
         print_symbol_report, print_symbols_by_file, render_context_json,
@@ -135,6 +136,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Risk(arguments) => run_risk(&arguments).await,
         Commands::Dead(arguments) => run_dead(&arguments).await,
         Commands::Breaking(arguments) => run_breaking(&arguments).await,
+        Commands::Merge(arguments) => run_merge(&arguments).await,
         Commands::Untested(arguments) => run_untested(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
         Commands::Skill(arguments) => run_skill(&arguments),
@@ -1171,6 +1173,124 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
                 with_consumers,
                 limit,
             )]
+        } else {
+            Vec::new()
+        }
+    });
+    Ok(gates)
+}
+
+/// Build one side of a three-way comparison in a worktree of its
+/// own: the side's tree must not move while the other sides are
+/// built, and the working tree is never disturbed either way.
+fn build_side_worktree(
+    source: &ResolvedSource,
+    arguments: &MergeArgs,
+    reference: &str,
+) -> Result<(GraphReport, DeclarationIndex)> {
+    let worktree = checkout_worktree(&source.repo_root, reference)
+        .with_context(|| {
+            format!(
+                "merge checks `{reference}` out of {} and git could not do it",
+                source.repo_root.display()
+            )
+        })?;
+    let ignore = build_ignore_matcher(
+        worktree.path(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    build_graph_with_declarations(worktree.path(), &ignore)
+}
+
+async fn run_merge(arguments: &MergeArgs) -> Result<Vec<Gate>> {
+    // A remote source has no three local refs to compare — its
+    // checkout is one ref already — so merge refuses it plainly
+    // rather than comparing a clone against worktrees of itself.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "merge compares three refs of a local repository; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Comparing the three sides...");
+
+    // The fork point is the merge base when the caller does not
+    // name one: it is where the two sides diverged, so the two
+    // diffs judged are the ones whose interaction matters.
+    let base_ref = match &arguments.base {
+        Some(base) => base.clone(),
+        None => {
+            merge_base(&source.repo_root, &arguments.ours, &arguments.theirs)
+                .context(
+                    "merge could not find the fork point of the two sides",
+                )?
+        }
+    };
+
+    progress.set_message("Extracting the base tree...");
+    let (base_report, base_index) =
+        build_side_worktree(&source, arguments, &base_ref)?;
+    progress.set_message("Extracting the ours tree...");
+    let (ours_report, ours_index) =
+        build_side_worktree(&source, arguments, &arguments.ours)?;
+    progress.set_message("Extracting the theirs tree...");
+    let (theirs_report, theirs_index) =
+        build_side_worktree(&source, arguments, &arguments.theirs)?;
+
+    let measured = merge::measure_merge(
+        &MergeSideAnalysis {
+            index: &base_index,
+            report: &base_report,
+            ref_name: &base_ref,
+        },
+        &MergeSideAnalysis {
+            index: &ours_index,
+            report: &ours_report,
+            ref_name: &arguments.ours,
+        },
+        &MergeSideAnalysis {
+            index: &theirs_index,
+            report: &theirs_report,
+            ref_name: &arguments.theirs,
+        },
+    );
+
+    let rendered = match arguments.format {
+        MergeOutputFormat::Markdown => merge::render_markdown(&measured),
+        MergeOutputFormat::Json => merge::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // Only proven conflicts fail the run: a warning is
+    // suspicious, not proven, and a gate that fired on it would
+    // train a pipeline to ignore the gate.
+    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+        let proven = u64::try_from(
+            measured
+                .conflicts
+                .iter()
+                .filter(|conflict| conflict.kind.is_proven())
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        if proven >= limit {
+            vec![Gate::new("proven merge conflicts", proven, limit)]
         } else {
             Vec::new()
         }
