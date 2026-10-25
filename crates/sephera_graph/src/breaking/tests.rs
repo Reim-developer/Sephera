@@ -505,3 +505,151 @@ fn a_value_move_in_a_file_that_imports_nothing_of_the_name_suggests() {
         })
     );
 }
+
+#[test]
+fn a_new_file_consuming_a_removed_symbol_is_reported() {
+    // The limitation this fix removes: a file the old tree never
+    // saw has no (file, path) entry for the oracle, so its dangling
+    // full-path edge was invisible even though the path landed on
+    // the target and on nothing else in the old tree.
+    let old_index = index(&[("lib.rs", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[("lib.rs", &[])]);
+
+    let old_report = report(
+        &["lib.rs", "old_user.rs"],
+        vec![edge("old_user.rs", "lib.rs", "crate::lib::add")],
+    );
+    let new_report = report(
+        &["lib.rs", "new_file.rs"],
+        vec![unresolved("new_file.rs", "crate::lib::add", true)],
+    );
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        "main",
+        "feature",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(measured.broken[0].symbol, "add");
+    assert_eq!(direct_files(&measured.broken[0]), ["new_file.rs"]);
+}
+
+#[test]
+fn an_old_file_importing_a_removed_symbol_for_the_first_time_is_reported() {
+    // Same fallback, the other shape: the file existed, but the
+    // import did not, so again no (file, path) entry exists.
+    let old_index = index(&[("lib.rs", &[("add", DeclarationKind::Function)])]);
+    let new_index = index(&[("lib.rs", &[])]);
+
+    let old_report = report(
+        &["lib.rs", "other_user.rs"],
+        vec![edge("other_user.rs", "lib.rs", "crate::lib::add")],
+    );
+    let new_report = report(
+        &["lib.rs", "user.rs"],
+        vec![unresolved("user.rs", "crate::lib::add", true)],
+    );
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        "main",
+        "feature",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(direct_files(&measured.broken[0]), ["user.rs"]);
+}
+
+#[test]
+fn an_ambiguous_path_is_never_guessed() {
+    // The path spelled the same in two places lands on two files
+    // in the old tree, so the path alone says nothing about which
+    // one the new file means. Silence, not a pick.
+    let old_index = index(&[
+        ("a.rs", &[("add", DeclarationKind::Function)]),
+        ("b.rs", &[("add", DeclarationKind::Function)]),
+    ]);
+    let new_index = index(&[
+        ("a.rs", &[]),
+        ("b.rs", &[("add", DeclarationKind::Function)]),
+    ]);
+
+    let old_report = report(
+        &["a.rs", "b.rs", "user_a.rs", "user_b.rs"],
+        vec![
+            edge("user_a.rs", "a.rs", "crate::add"),
+            edge("user_b.rs", "b.rs", "crate::add"),
+        ],
+    );
+    let new_report = report(
+        &["a.rs", "b.rs", "new_file.rs"],
+        vec![unresolved("new_file.rs", "crate::add", true)],
+    );
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        "main",
+        "feature",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(measured.broken[0].file, "a.rs");
+    assert!(
+        measured.broken[0].direct.is_empty(),
+        "an ambiguous path must stay silent, not pick a target"
+    );
+}
+
+#[test]
+fn a_parent_landing_elsewhere_vetoes_the_path_fallback() {
+    // The module was renamed and the name dropped in the move:
+    // the new file's parent statement lands on the renamed module,
+    // so its dangling full path means that module's missing name,
+    // not the old file's removed one, however the path used to read.
+    let old_index = index(&[
+        ("lib.rs", &[("add", DeclarationKind::Function)]),
+        ("other.rs", &[("keep", DeclarationKind::Function)]),
+    ]);
+    let new_index = index(&[
+        ("lib.rs", &[]),
+        ("other.rs", &[("keep", DeclarationKind::Function)]),
+    ]);
+
+    let old_report = report(
+        &["lib.rs", "other.rs", "user.rs"],
+        vec![edge("user.rs", "lib.rs", "crate::lib::add")],
+    );
+    let new_report = report(
+        &["lib.rs", "other.rs", "new_file.rs"],
+        vec![
+            edge("new_file.rs", "other.rs", "crate::lib"),
+            unresolved("new_file.rs", "crate::lib::add", true),
+        ],
+    );
+
+    let measured = measure_breaking(
+        &old_index,
+        &new_index,
+        &old_report,
+        &new_report,
+        "main",
+        "feature",
+    );
+
+    assert_eq!(measured.broken.len(), 1);
+    assert_eq!(measured.broken[0].file, "lib.rs");
+    assert!(
+        measured.broken[0].direct.is_empty(),
+        "a parent landing elsewhere vetoes the path fallback"
+    );
+}
