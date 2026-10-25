@@ -9,6 +9,7 @@ pub(crate) mod configure;
 pub(crate) mod context_config;
 mod coupling;
 mod dead;
+mod diff;
 mod gate;
 mod guard;
 mod impact;

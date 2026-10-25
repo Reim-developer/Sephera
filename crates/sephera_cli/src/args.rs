@@ -196,6 +196,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera merge --path . --ours feature-a --theirs feature-b\\n  sephera merge --path . --ours HEAD --theirs origin/main --base v1.0.0\\n  sephera merge --path . --ours a --theirs b --fail-on 1\\n  sephera merge --path . --ours a --theirs b --format json"
     )]
     Merge(MergeArgs),
+    /// Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog
+    #[command(
+        long_about = "Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog.\\n\\n`breaking` answers what breaks consumers; this answers what changed in the API surface at all, including additions, which break nothing and so never appear in a breaking report. A changelog without additions hides half the release. A symbol that moved files reads as what it is at the index level, a removal plus an addition: claiming a move would need the suggestion machinery, and a diff that guesses identity is a diff that lies.\\n\\n`--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree, which is the form a branch review takes before it is pushed. The comparison rules are the same as `breaking`'s, so the two commands never disagree about a symbol both name: kinds compared outright, call shapes for functions only, a shape on only one side stays silent. Only Rust and Python collect declarations today, so only their symbols can be reported.\\n\\nThe analysis needs a git repository. A tree that is not one is an error, not an empty report.",
+        after_long_help = "Examples:\\n  sephera diff --path . --from origin/main\\n  sephera diff --path . --from v1.0.0 --to v2.0.0\\n  sephera diff --path . --from origin/main --format json"
+    )]
+    Diff(DiffArgs),
     /// Report the declared symbols no test exercises
     #[command(
         long_about = "Report the declared symbols no test exercises, measured statically through the import graph — no test run, no instrumentation.\\n\\nA test file is a root; the files its imports reach are the code the tests can execute; a symbol is exercised when a reached file names it. A symbol a test file names itself is exercised directly, and one named only by a file the tests reach is exercised indirectly: both count as tested, and the report keeps the tiers apart because they mean different things. A namespace import names nothing, so it is never evidence, and only Rust and Python collect declarations, so only their symbols can be reported.\\n\\nTest files are found by the conventions ecosystems agree on: a test, tests, __tests__, spec, or specs directory, or a file named test_*, *_test.*, *.test.*, or *.spec.*. Inline unit tests do not cross an import edge — a Rust #[cfg(test)] module inside lib.rs tests its own file without importing it — so those symbols read as untested unless a separate test file names them; the report's limit, stated plainly, is that it measures coverage through the import graph, the way a new test file would see the code.",
@@ -1214,9 +1220,54 @@ tree_command_args!(
     }
 );
 
+tree_command_args!(
+    #[doc = "Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog."]
+    DiffArgs {
+        /// The older reference: the side symbols are compared from
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The older reference to compare from.",
+        long_help = "The older reference: a branch, tag, or commit the symbols are compared from. Required, because a comparison without a starting point compares against nothing. `origin/main` is the usual spelling for a branch review."
+    )]
+    pub from: String,
+
+    /// The newer reference; when absent, the working tree
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The newer reference to compare to; the working tree when absent.",
+        long_help = "The newer reference to compare to. When absent, the newer side is the working tree itself — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. When present, both sides are checked out into temporary worktrees, so the working tree is left untouched."
+    )]
+    pub to: Option<String>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: DiffOutputFormat,
+
+    }
+);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MergeOutputFormat {
     /// Markdown list of predicted conflicts.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiffOutputFormat {
+    /// Markdown list of changed symbols.
     #[value(name = "markdown", help = "Render the report as Markdown.")]
     Markdown,
     /// Structured JSON.

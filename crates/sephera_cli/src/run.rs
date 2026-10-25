@@ -26,8 +26,9 @@ use crate::{
     args::{
         AffectedTestsArgs, BreakingArgs, BreakingOutputFormat, Cli, Commands,
         ContextArgs, CouplingArgs, CouplingOutputFormat, DeadArgs,
-        DeadOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs, IgnoreArgs,
-        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
+        DeadOutputFormat, DiffArgs, DiffOutputFormat, GraphArgs,
+        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
+        ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
         MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
         RiskArgs, RiskOutputFormat, SettingsArgs, SkillArgs, SourceArgs,
         SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat, UntestedArgs,
@@ -137,6 +138,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Dead(arguments) => run_dead(&arguments).await,
         Commands::Breaking(arguments) => run_breaking(&arguments).await,
         Commands::Merge(arguments) => run_merge(&arguments).await,
+        Commands::Diff(arguments) => run_diff(&arguments).await,
         Commands::Untested(arguments) => run_untested(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
         Commands::Skill(arguments) => run_skill(&arguments),
@@ -1296,6 +1298,100 @@ async fn run_merge(arguments: &MergeArgs) -> Result<Vec<Gate>> {
         }
     });
     Ok(gates)
+}
+
+async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
+    // A remote source has no two local refs to compare — its checkout
+    // is one ref already — so diff refuses it plainly rather than
+    // comparing a clone against a worktree of itself.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "diff compares two refs of a local repository; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Comparing the two refs...");
+
+    // The older side always lives in a worktree: its tree must not
+    // move while the newer side is built. The newer side is the
+    // working tree when --to is absent, and a second worktree
+    // otherwise, so the working tree is never disturbed either way.
+    let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
+        .with_context(|| {
+            format!(
+                "diff checks `{}` out of {} and git could not do it",
+                arguments.from,
+                source.repo_root.display()
+            )
+        })?;
+    let old_ignore = build_ignore_matcher(
+        old_worktree.path(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) =
+        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
+    drop(old_worktree);
+
+    let to_label = arguments.to.as_deref().unwrap_or("working tree");
+    let (_, new_index) = if let Some(to) = &arguments.to {
+        let new_worktree = checkout_worktree(&source.repo_root, to)
+            .with_context(|| {
+                format!(
+                    "diff checks `{to}` out of {} and git could not do it",
+                    source.repo_root.display()
+                )
+            })?;
+        let new_ignore = build_ignore_matcher(
+            new_worktree.path(),
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the newer side...");
+        let built =
+            build_graph_with_declarations(new_worktree.path(), &new_ignore)?;
+        drop(new_worktree);
+        built
+    } else {
+        let new_ignore = build_ignore_matcher(
+            &source.analysis_path,
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the working tree...");
+        build_graph_with_declarations(&source.analysis_path, &new_ignore)?
+    };
+
+    let measured =
+        diff::measure_diff(&old_index, &new_index, &arguments.from, to_label);
+
+    let rendered = match arguments.format {
+        DiffOutputFormat::Markdown => diff::render_markdown(&measured),
+        DiffOutputFormat::Json => diff::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A diff is a report, not a gate: additions are the normal shape
+    // of a release, so no count of changes fails the run.
+    Ok(Vec::new())
 }
 
 async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
