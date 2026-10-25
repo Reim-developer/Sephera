@@ -1461,6 +1461,8 @@ dependencies = [
  "tempfile",
  "toml",
  "tree-sitter",
+ "tree-sitter-python",
+ "tree-sitter-rust",
 ]
 
 [[package]]
