@@ -341,39 +341,70 @@ fn push_side(
 }
 
 /// The (file, import path) pairs naming `symbol` from `target`
-/// in one tree: resolved edges only, namespace and module
-/// declarations excluded — a namespace import may use the
-/// symbol without naming it, so it is never direct evidence.
+/// in one tree: resolved edges that name it, plus the gap halves
+/// the Python shape produces.
 ///
-/// Both trees in this comparison still declare the symbol, so
-/// every naming edge resolves; the gap and oracle rules of the
-/// breaking comparison do not apply here, and this scan does
-/// not need them.
+/// A Python item import leaves two edges: the module edge, which
+/// lands on the target but names no symbol, and the item half,
+/// which names the symbol but never resolves as its own edge —
+/// even while the symbol still exists. The half is a consumer
+/// when its parent statement lands on the target, exactly the
+/// gap rule of the breaking comparison; a scan that read only
+/// resolved edges would miss every Python consumer. The oracle
+/// rule of that comparison does not apply here: the symbol
+/// still exists in this tree, so a full-path edge resolves
+/// rather than landing nowhere.
 fn direct_consumers(
     report: &GraphReport,
     target: &str,
     symbol: &str,
 ) -> BTreeSet<(String, String)> {
+    // Where each file's resolved module statements land, by the
+    // path as written — the parent an item half belongs to.
+    let mut module_targets: BTreeMap<(&str, &str), &str> = BTreeMap::new();
+    for edge in &report.edges {
+        if edge.resolved
+            && let Some(to) = edge.to.as_deref()
+        {
+            module_targets
+                .insert((edge.from.as_str(), edge.import_path.as_str()), to);
+        }
+    }
+
     let mut found = BTreeSet::new();
     for edge in &report.edges {
-        if edge.from == target || !edge.resolved {
+        if edge.from == target {
             continue;
         }
-        if edge.to.as_deref() != Some(target) {
-            continue;
-        }
-        if matches!(
-            edge.kind,
-            ImportKind::Namespace | ImportKind::ModuleDeclaration
-        ) {
-            continue;
-        }
-        if edge.items.iter().any(|item| item == symbol)
-            || split_trailing_name(&edge.import_path).is_some_and(
-                |(parent, leaf)| leaf == symbol && !parent.is_empty(),
-            )
-        {
-            found.insert((edge.from.clone(), edge.import_path.clone()));
+        match edge.to.as_deref() {
+            Some(to) if to == target && edge.resolved => {
+                if matches!(
+                    edge.kind,
+                    ImportKind::Namespace | ImportKind::ModuleDeclaration
+                ) {
+                    continue;
+                }
+                if edge.items.iter().any(|item| item == symbol)
+                    || split_trailing_name(&edge.import_path).is_some_and(
+                        |(parent, leaf)| leaf == symbol && !parent.is_empty(),
+                    )
+                {
+                    found.insert((edge.from.clone(), edge.import_path.clone()));
+                }
+            }
+            _ if !edge.resolved && edge.kind == ImportKind::Dependency => {
+                let via_parent = split_trailing_name(&edge.import_path)
+                    .is_some_and(|(parent, leaf)| {
+                        leaf == symbol
+                            && module_targets
+                                .get(&(edge.from.as_str(), parent.as_str()))
+                                == Some(&target)
+                    });
+                if via_parent {
+                    found.insert((edge.from.clone(), edge.import_path.clone()));
+                }
+            }
+            _ => {}
         }
     }
     found

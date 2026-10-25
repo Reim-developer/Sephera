@@ -52,6 +52,22 @@ fn namespace_edge(from: &str, to: &str, path: &str) -> GraphEdge {
     }
 }
 
+/// An unresolved item half: the shape a Python item import
+/// leaves beside its module edge. The half names the symbol but
+/// never resolves as its own edge.
+fn unresolved(from: &str, path: &str) -> GraphEdge {
+    GraphEdge {
+        from: from.to_owned(),
+        to: None,
+        import_path: path.to_owned(),
+        items: Vec::new(),
+        resolved: false,
+        kind: ImportKind::Dependency,
+        local_gap: true,
+        cfg_gated: false,
+    }
+}
+
 fn node(path: &str) -> GraphNode {
     GraphNode {
         file_path: path.to_owned(),
@@ -445,6 +461,42 @@ fn removed_with_no_new_consumer_is_silent() {
     );
 
     assert_eq!(measured.conflicts, []);
+}
+
+#[test]
+fn removed_against_a_python_gap_half_consumer_is_proven() {
+    let base_index =
+        index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    let base_report = report(&["lib.py"], vec![]);
+    let ours_index = index(&[]);
+    let ours_report = report(&["lib.py"], vec![]);
+    let theirs_index =
+        index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
+    // The real Python shape: a module edge that lands but names
+    // no symbol, beside an item half that names the symbol but
+    // never resolves. Either edge alone would miss the consumer.
+    let theirs_report = report(
+        &["lib.py", "new.py"],
+        vec![
+            edge("new.py", "lib.py", "lib"),
+            unresolved("new.py", "lib.add"),
+        ],
+    );
+
+    let measured = measure(
+        &base_index,
+        &base_report,
+        &ours_index,
+        &ours_report,
+        &theirs_index,
+        &theirs_report,
+    );
+
+    assert_eq!(measured.conflicts.len(), 1);
+    let conflict = &measured.conflicts[0];
+    assert_eq!(conflict.kind, MergeConflictKind::RemovedVsNewConsumer);
+    assert!(conflict.kind.is_proven());
+    assert_eq!(conflict.consumers, ["new.py"]);
 }
 
 #[test]
