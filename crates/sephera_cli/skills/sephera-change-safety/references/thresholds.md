@@ -7,15 +7,16 @@ a gate stops meaning anything.
 
 ## The edit threshold: 25 dependents
 
-- **Default:** 25 direct users. This is the number in the
+- **Default:** 25 dependents. This is the number in the
   `guard` docs example, and the skill adopts it as the
   default.
-- **What it counts:** for `impact` without `--symbol`, the
-  files that depend on the target file. With `--symbol`,
-  the files that name the symbol. Namespace importers are
-  never counted — they may use the symbol without naming
-  it, and counting them would turn every widely-imported
-  namespace into a stop.
+- **What it counts:** for `impact` without `--symbol`,
+  every file that depends on the target file, directly
+  or through other files — the reachable dependents.
+  With `--symbol`, the files that name the symbol.
+  Namespace importers are never counted — they may use
+  the symbol without naming it, and counting them would
+  turn every widely-imported namespace into a stop.
 - **What reaching it means:** stop and get a human's
   agreement before touching the file. It does not mean
   "edit carefully"; it means the edit is not yours to make

@@ -31,16 +31,20 @@ sephera impact <FILE> --symbol <NAME> --path .
 Read the report in three tiers, and never merge them:
 
 - **Direct users** — files that name the file, or the symbol.
-  This is the count a gate compares.
+  They break first.
 - **Namespace importers** — files that import the target's
   namespace wholesale. They *may* use the symbol without naming
   it. They are reported apart and never counted as users.
 - **Downstream** — files reached through the direct users.
   They break second, not first.
 
-**Stop rule.** If the direct-user count reaches the threshold
+**Stop rule.** If the dependent count reaches the threshold
 (default 25 — see [thresholds.md](references/thresholds.md)),
 stop and get a human's agreement before touching the file.
+The dependent count is direct users plus downstream: the
+number `sephera guard --max-dependents` and `impact
+--fail-on` compare. The `--symbol` check is narrower — it
+counts only files that name the symbol.
 A wide blast radius is not a reason to edit carefully; it is a
 reason not to edit yet. If the harness runs `sephera guard`,
 its verdict is this same check, enforced: `deny` at or over
