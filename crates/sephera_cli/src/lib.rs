@@ -19,6 +19,7 @@ mod progress;
 mod review;
 mod risk;
 mod run;
+mod simulate;
 mod skill;
 mod untested;
 mod watch;

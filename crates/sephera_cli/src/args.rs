@@ -202,6 +202,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera diff --path . --from origin/main\\n  sephera diff --path . --from v1.0.0 --to v2.0.0\\n  sephera diff --path . --from origin/main --format json"
     )]
     Diff(DiffArgs),
+    /// Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree
+    #[command(
+        long_about = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree.\\n\\nA rename is the most common refactor and the one taken on faith: the tool renames the declaration and every import it can find, and the breakage shows up in CI. This measures the rename beforehand. The consumer set is exactly `breaking`'s — a resolved edge to the declaring file naming the symbol, an unresolved item half whose parent statement lands there, a namespace import of the whole file — because a consumer is a consumer whether the symbol broke or is about to move. What `breaking` cannot say, this adds: the destination collision. Renaming onto a name the destination file already declares is a duplicate definition in every language, so it blocks the rename outright; a direct consumer that already declares the new name is a shadowing warning instead, because the severity is language dependent.\\n\\nOnly Rust and Python collect declarations today, so only their symbols can be renamed. The analysis needs one tree, not a git repository: it simulates against the working tree as it stands.",
+        after_long_help = "Examples:\\n  sephera simulate lib.py --symbol add --to sum\\n  sephera simulate lib.py --symbol add --to sum --to-file other.py\\n  sephera simulate lib.py --symbol add --to sum --format json"
+    )]
+    Simulate(SimulateArgs),
     /// Report the declared symbols no test exercises
     #[command(
         long_about = "Report the declared symbols no test exercises, measured statically through the import graph — no test run, no instrumentation.\\n\\nA test file is a root; the files its imports reach are the code the tests can execute; a symbol is exercised when a reached file names it. A symbol a test file names itself is exercised directly, and one named only by a file the tests reach is exercised indirectly: both count as tested, and the report keeps the tiers apart because they mean different things. A namespace import names nothing, so it is never evidence, and only Rust and Python collect declarations, so only their symbols can be reported.\\n\\nTest files are found by the conventions ecosystems agree on: a test, tests, __tests__, spec, or specs directory, or a file named test_*, *_test.*, *.test.*, or *.spec.*. Inline unit tests do not cross an import edge — a Rust #[cfg(test)] module inside lib.rs tests its own file without importing it — so those symbols read as untested unless a separate test file names them; the report's limit, stated plainly, is that it measures coverage through the import graph, the way a new test file would see the code.",
@@ -1268,6 +1274,69 @@ pub enum MergeOutputFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DiffOutputFormat {
     /// Markdown list of changed symbols.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree."]
+    SimulateArgs {
+        /// The file that declares the symbol today
+    #[arg(
+        value_name = "FILE",
+        help = "File that declares the symbol to rename.",
+        long_help = "Path of the file that declares the symbol, relative to the analysis base. A path that matches nothing in the analysis is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
+    )]
+    pub file: String,
+
+        /// The symbol's name today
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The symbol to rename.",
+        long_help = "The symbol's name today, as declared in the file. Required, because a rename without a starting name renames nothing."
+    )]
+    pub symbol: String,
+
+        /// The name it would take
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The name the symbol would take.",
+        long_help = "The name the symbol would take. Renaming onto a name the destination file already declares is a duplicate definition, so the report comes back blocked rather than safe."
+    )]
+    pub to: String,
+
+        /// The file it would live in; the file it already lives in when absent
+    #[arg(
+        long = "to-file",
+        value_name = "FILE",
+        help = "Move the symbol to this file instead of renaming in place.",
+        long_help = "The file the symbol would live in. When absent, the rename happens in place. When present, the file must already be in the tree: a move target that does not exist yet is a file creation, a different feature."
+    )]
+    pub to_file: Option<String>,
+
+        /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: SimulateOutputFormat,
+
+    }
+);
+
+/// Output format for the simulate report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SimulateOutputFormat {
+    /// Markdown report with the verdict first.
     #[value(name = "markdown", help = "Render the report as Markdown.")]
     Markdown,
     /// Structured JSON.
