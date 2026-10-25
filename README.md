@@ -626,6 +626,24 @@ uncovered-by-a-run, but unreachable from every test in the tree.
 sephera untested --path .
 ```
 
+### `merge` — the merge git would complete cleanly but that breaks the build
+
+Git compares lines, so two branches that touch different files merge
+without complaint — even when one side removes a symbol and the other
+side adds a consumer of it. This command compares the fork point
+against both sides and reports each contradiction by symbol: removals
+and kind changes against new consumers, and two sides reshaping the
+same symbol differently, are proven; signature changes against new
+consumers warn, because without call-site shapes the tool cannot prove
+the new call matches the old shape. `--fail-on` counts proven
+conflicts only, and a consumer kept since the fork point is never a
+conflict — it breaks because of the contract change alone, which
+`breaking` already reports.
+
+```bash
+sephera merge --path . --ours HEAD --theirs origin/master
+```
+
 ### `guard` — a seatbelt for coding agents *(new in 2.0)*
 
 Wire it as a `PreToolUse` hook and every agent edit is measured before it
