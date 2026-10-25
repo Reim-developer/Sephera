@@ -12,6 +12,7 @@ mod dead;
 mod gate;
 mod guard;
 mod impact;
+mod merge;
 mod output;
 mod progress;
 mod review;
