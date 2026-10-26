@@ -2065,17 +2065,14 @@ fn build_new_schema_side(
     ignore_patterns: &[String],
     no_gitignore: bool,
 ) -> Result<SchemaSide> {
+    // The schema measurement takes graph reports and schema indexes
+    // only, never a declaration index, so the plain graph build is
+    // the whole input: building declarations here would be work the
+    // caller throws away.
+    let matcher =
+        build_ignore_matcher(base, settings, ignore_patterns, no_gitignore)?;
     Ok((
-        build_graph_with_declarations(
-            base,
-            &build_ignore_matcher(
-                base,
-                settings,
-                ignore_patterns,
-                no_gitignore,
-            )?,
-        )?
-        .0,
+        build_graph(base, &matcher, &[], None, None)?,
         build_schema_side(base, settings, ignore_patterns, no_gitignore)?,
         build_consumer_texts_side(
             base,

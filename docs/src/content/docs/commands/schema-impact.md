@@ -17,11 +17,12 @@ tier, and the tier decides what the report can gate on.
 ## Usage
 
 The setup below is a small repo you can copy to follow along: a
-proto file, its generated Python modules, and two consumers. Tag
-`v1`, then rename `name` to `full_name`, delete `email`, and
-delete the `RED` enum value for `v2`:
+proto file, its generated Python modules, and a consumer. Commit
+and tag `v1`, then rename `name` to `full_name`, delete `email`,
+and delete the `RED` enum value, and commit and tag that as `v2`:
 
 ```bash
+git init -q
 mkdir -p api
 cat > api/user.proto <<'EOF'
 syntax = "proto3";
@@ -57,6 +58,25 @@ def favorite():
     return Color.RED
 EOF
 git add . && git commit -qm v1 && git tag v1
+cat > api/user.proto <<'EOF'
+syntax = "proto3";
+package api;
+message User {
+  string full_name = 1;
+  int32 age = 2;
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  BLUE = 2;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+EOF
+git add . && git commit -qm v2 && git tag v2
 ```
 
 ```bash

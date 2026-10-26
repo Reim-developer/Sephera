@@ -1886,7 +1886,9 @@ fn test_priority_markdown(
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's. Proven consumers come first and
 /// name-match consumers are explicitly labelled weaker evidence;
-/// the empty state says the same "No schema breaks." the CLI prints.
+/// the empty state says the same "No schema breaks." the CLI prints,
+/// and, like the CLI, the added and coverage sections still follow
+/// that line instead of being dropped with the breaks.
 fn schema_impact_markdown(report: &schema::SchemaImpactReport) -> String {
     use std::fmt::Write as _;
 
@@ -1899,55 +1901,54 @@ fn schema_impact_markdown(report: &schema::SchemaImpactReport) -> String {
 
     if report.breaks.is_empty() {
         let _ = writeln!(output, "No schema breaks.");
-        return output;
-    }
-
-    for broken in &report.breaks {
-        let _ = writeln!(
-            output,
-            "## `{}` — {}",
-            broken.element,
-            broken.change.describe()
-        );
-        let _ = writeln!(output, "Schema file: `{}`", broken.schema_file);
-        if let Some(note) = &broken.note {
-            let _ = writeln!(output, "Note: {note}");
-        }
-        if broken.proven.is_empty() {
-            let _ = writeln!(output, "No proven consumers.");
-        } else {
-            let _ = writeln!(output, "Proven consumers:");
-            for consumer in &broken.proven {
-                let _ = writeln!(
-                    output,
-                    "- `{}` — {}",
-                    consumer.file,
-                    consumer.via.describe()
-                );
-            }
-        }
-        if !broken.named.is_empty() {
+    } else {
+        for broken in &report.breaks {
             let _ = writeln!(
                 output,
-                "Name-match consumers (weaker evidence — receiver \
-                 unknown, never gate-grade):"
+                "## `{}` — {}",
+                broken.element,
+                broken.change.describe()
             );
-            for consumer in &broken.named {
+            let _ = writeln!(output, "Schema file: `{}`", broken.schema_file);
+            if let Some(note) = &broken.note {
+                let _ = writeln!(output, "Note: {note}");
+            }
+            if broken.proven.is_empty() {
+                let _ = writeln!(output, "No proven consumers.");
+            } else {
+                let _ = writeln!(output, "Proven consumers:");
+                for consumer in &broken.proven {
+                    let _ = writeln!(
+                        output,
+                        "- `{}` — {}",
+                        consumer.file,
+                        consumer.via.describe()
+                    );
+                }
+            }
+            if !broken.named.is_empty() {
                 let _ = writeln!(
                     output,
-                    "- `{}` — {}",
-                    consumer.file,
-                    consumer.via.describe()
+                    "Name-match consumers (weaker evidence — receiver \
+                 unknown, never gate-grade):"
                 );
+                for consumer in &broken.named {
+                    let _ = writeln!(
+                        output,
+                        "- `{}` — {}",
+                        consumer.file,
+                        consumer.via.describe()
+                    );
+                }
             }
-        }
-        if !broken.downstream.is_empty() {
-            let _ = writeln!(output, "Downstream files:");
-            for file in &broken.downstream {
-                let _ = writeln!(output, "- `{file}`");
+            if !broken.downstream.is_empty() {
+                let _ = writeln!(output, "Downstream files:");
+                for file in &broken.downstream {
+                    let _ = writeln!(output, "- `{file}`");
+                }
             }
+            let _ = writeln!(output);
         }
-        let _ = writeln!(output);
     }
 
     if !report.added.is_empty() {

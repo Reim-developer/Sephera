@@ -2116,6 +2116,48 @@ async fn schema_impact_tool_markdown_reports_the_same_break() {
 }
 
 #[tokio::test]
+async fn schema_impact_tool_markdown_keeps_added_and_coverage_with_no_breaks() {
+    // An add-only change: the empty state must not swallow the
+    // sections that follow it. The CLI prints "No schema breaks."
+    // and then continues to Added and Coverage; the tool must do
+    // the same, or an add-only change reads as a bare empty report.
+    // No generated code in the tree, so the coverage note fires too.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "api/user.proto",
+        b"syntax = \"proto3\";\npackage api;\nmessage User {\n  string name = 1;\n  int32 age = 2;\n}\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v1"]);
+    git(dir, &["tag", "v1"]);
+    write_file(
+        dir,
+        "api/user.proto",
+        b"syntax = \"proto3\";\npackage api;\nmessage User {\n  string name = 1;\n  int32 age = 2;\n  string email = 3;\n}\n",
+    );
+
+    let output = server
+        .schema_impact(param_for(SchemaImpactInput {
+            path: Some(dir.to_string_lossy().into_owned()),
+            from: "v1".to_owned(),
+            to: None,
+            ignore: None,
+            no_gitignore: None,
+            format: Some("markdown".to_owned()),
+        }))
+        .await
+        .expect("schema_impact markdown should succeed");
+    assert!(output.contains("No schema breaks."), "{output}");
+    assert!(output.contains("Added (informational):"), "{output}");
+    assert!(output.contains("api.User.email"), "{output}");
+    assert!(output.contains("Coverage note:"), "{output}");
+}
+
+#[tokio::test]
 async fn schema_impact_tool_errors_on_a_non_repo_tree() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();
