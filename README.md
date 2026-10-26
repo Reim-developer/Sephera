@@ -642,6 +642,24 @@ failure.
 sephera simulate crates/sephera_graph/src/blast_radius.rs --symbol BlastRadius --to BlastRadiusSim --path .
 ```
 
+### `behavior` — the changes that still compile but change behaviour
+
+A compiler catches a broken call. A test suite catches a changed
+result — when it covers the path. This one catches the class
+neither does: a call whose arguments were swapped but still type
+check, and a numeric constant whose value changed while still
+used. It is deliberately narrow — symmetric bodies are skipped,
+string constants are never flagged, and a Rust swap that would
+not type check is a compile error, not a silent change — because
+the general question is undecidable and a detector that guesses
+trains a team to ignore it. There is no `--fail-on`: the
+detector's precision is measured by its corpus, and a gate on an
+unproven detector would punish asking.
+
+```bash
+sephera behavior --path . --from origin/master
+```
+
 ### `untested` — the symbols no test exercises, without running anything
 
 Coverage tools answer this by running the tests and watching what

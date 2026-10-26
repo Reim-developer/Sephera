@@ -411,3 +411,534 @@ fn cross_file_import_counts_as_use_for_a_constant() {
     );
     assert_eq!(measured.changes.len(), 1);
 }
+
+/// A labelled precision scenario: two trees, the declarations
+/// both sides carry, and whether the scenario IS a behaviour
+/// change the detector must flag.
+///
+/// The corpus is the detector's honest answer to "how often is
+/// this right". Positives are changes that really do change
+/// behaviour; negatives are changes that look like behaviour
+/// changes but are not — symmetric bodies, coordinated signature
+/// changes, string constants, unused constants, calls that never
+/// type check. One negative is a KNOWN false positive, counted
+/// honestly rather than hidden: a symmetric body the simple core
+/// check cannot see. Precision is computed from the run, and the
+/// bar is 0.8: below it, the failing detector is cut, not shipped
+/// with a warning.
+struct CorpusScenario {
+    name: &'static str,
+    old_files: Vec<(&'static str, &'static str)>,
+    new_files: Vec<(&'static str, &'static str)>,
+    /// (file, name, kind, parameters) on the old side.
+    old_declarations:
+        Vec<(&'static str, &'static str, DeclarationKind, &'static str)>,
+    /// (file, name, kind, parameters) on the new side.
+    new_declarations:
+        Vec<(&'static str, &'static str, DeclarationKind, &'static str)>,
+    /// (from, to, `import_path`) edges of the NEW report, for the
+    /// constant usage test.
+    new_edges: Vec<(&'static str, &'static str, &'static str)>,
+    /// True when the scenario really changes behaviour.
+    is_change: bool,
+    /// True when the detector is known to flag this negative
+    /// anyway. Counted as a false positive, never hidden.
+    known_false_positive: bool,
+}
+
+fn corpus_index(
+    declarations: &[(
+        &'static str,
+        &'static str,
+        DeclarationKind,
+        &'static str,
+    )],
+) -> DeclarationIndex {
+    let mut index = DeclarationIndex::default();
+    for (file, name, kind, parameters) in declarations {
+        let mut declared = DeclaredNames::default();
+        declared.declare_as(*name, *kind);
+        declared.declare_signature(*name, signature(parameters));
+        index.insert(file, declared);
+    }
+    index
+}
+
+fn corpus_facts(files: &[(&'static str, &'static str)]) -> TreeFacts {
+    let mut merged = TreeFacts::default();
+    for (file, text) in files {
+        let facts = extract_facts(file, text);
+        merged.calls.extend(facts.calls);
+        merged.constants.extend(facts.constants);
+        merged.functions.extend(facts.functions);
+    }
+    merged
+}
+
+#[allow(
+    clippy::too_many_lines,
+    reason = "a corpus table is data, not logic; splitting it would hide the labelled set"
+)]
+fn scenarios() -> Vec<CorpusScenario> {
+    let function = DeclarationKind::Function;
+    vec![
+        // --- Swap positives: asymmetric bodies, same types. ---
+        CorpusScenario {
+            name: "py_divide",
+            old_files: vec![
+                ("lib.py", "def divide(a, b):\n    return a / b\n"),
+                (
+                    "user.py",
+                    "from lib import divide\n\n\nprint(divide(x, y))\n",
+                ),
+            ],
+            new_files: vec![
+                ("lib.py", "def divide(a, b):\n    return a / b\n"),
+                (
+                    "user.py",
+                    "from lib import divide\n\n\nprint(divide(y, x))\n",
+                ),
+            ],
+            old_declarations: vec![("lib.py", "divide", function, "a, b")],
+            new_declarations: vec![("lib.py", "divide", function, "a, b")],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_subtract",
+            old_files: vec![
+                ("lib.py", "def subtract(a, b):\n    return a - b\n"),
+                ("user.py", "print(subtract(x, y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def subtract(a, b):\n    return a - b\n"),
+                ("user.py", "print(subtract(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "subtract", function, "a, b")],
+            new_declarations: vec![("lib.py", "subtract", function, "a, b")],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_power",
+            old_files: vec![
+                ("lib.py", "def power(a, b):\n    return a ** b\n"),
+                ("user.py", "print(power(x, y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def power(a, b):\n    return a ** b\n"),
+                ("user.py", "print(power(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "power", function, "a, b")],
+            new_declarations: vec![("lib.py", "power", function, "a, b")],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_format",
+            old_files: vec![
+                ("lib.py", "def label(a, b):\n    return f\"{a}-{b}\"\n"),
+                ("user.py", "print(label(x, y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def label(a, b):\n    return f\"{a}-{b}\"\n"),
+                ("user.py", "print(label(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "label", function, "a, b")],
+            new_declarations: vec![("lib.py", "label", function, "a, b")],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_subtract",
+            old_files: vec![
+                (
+                    "lib.rs",
+                    "pub fn subtract(a: i64, b: i64) -> i64 { a - b }\n",
+                ),
+                ("user.rs", "fn main() { let _ = subtract(x, y); }\n"),
+            ],
+            new_files: vec![
+                (
+                    "lib.rs",
+                    "pub fn subtract(a: i64, b: i64) -> i64 { a - b }\n",
+                ),
+                ("user.rs", "fn main() { let _ = subtract(y, x); }\n"),
+            ],
+            old_declarations: vec![(
+                "lib.rs",
+                "subtract",
+                function,
+                "a: i64, b: i64",
+            )],
+            new_declarations: vec![(
+                "lib.rs",
+                "subtract",
+                function,
+                "a: i64, b: i64",
+            )],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_divide",
+            old_files: vec![
+                ("lib.rs", "pub fn divide(a: i64, b: i64) -> i64 { a / b }\n"),
+                ("user.rs", "fn main() { let _ = divide(x, y); }\n"),
+            ],
+            new_files: vec![
+                ("lib.rs", "pub fn divide(a: i64, b: i64) -> i64 { a / b }\n"),
+                ("user.rs", "fn main() { let _ = divide(y, x); }\n"),
+            ],
+            old_declarations: vec![(
+                "lib.rs",
+                "divide",
+                function,
+                "a: i64, b: i64",
+            )],
+            new_declarations: vec![(
+                "lib.rs",
+                "divide",
+                function,
+                "a: i64, b: i64",
+            )],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        // --- Swap negatives: the filters refuse these. ---
+        CorpusScenario {
+            name: "py_add_symmetric",
+            old_files: vec![
+                ("lib.py", "def add(a, b):\n    return a + b\n"),
+                ("user.py", "print(add(x, y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def add(a, b):\n    return a + b\n"),
+                ("user.py", "print(add(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "add", function, "a, b")],
+            new_declarations: vec![("lib.py", "add", function, "a, b")],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_mul_symmetric",
+            old_files: vec![
+                ("lib.py", "def mul(a, b):\n    return a * b\n"),
+                ("user.py", "print(mul(x, y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def mul(a, b):\n    return a * b\n"),
+                ("user.py", "print(mul(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "mul", function, "a, b")],
+            new_declarations: vec![("lib.py", "mul", function, "a, b")],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_min_symmetric",
+            old_files: vec![
+                (
+                    "lib.rs",
+                    "pub fn min2(a: i64, b: i64) -> i64 { std::cmp::min(a, b) }\n",
+                ),
+                ("user.rs", "fn main() { let _ = min2(x, y); }\n"),
+            ],
+            new_files: vec![
+                (
+                    "lib.rs",
+                    "pub fn min2(a: i64, b: i64) -> i64 { std::cmp::min(a, b) }\n",
+                ),
+                ("user.rs", "fn main() { let _ = min2(y, x); }\n"),
+            ],
+            old_declarations: vec![(
+                "lib.rs",
+                "min2",
+                function,
+                "a: i64, b: i64",
+            )],
+            new_declarations: vec![(
+                "lib.rs",
+                "min2",
+                function,
+                "a: i64, b: i64",
+            )],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_signature_changed",
+            old_files: vec![
+                ("lib.py", "def f(a, b):\n    return a - b\n"),
+                ("user.py", "print(f(x, y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def f(b, a):\n    return b - a\n"),
+                ("user.py", "print(f(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "f", function, "a, b")],
+            new_declarations: vec![("lib.py", "f", function, "b, a")],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_unresolvable_callee",
+            old_files: vec![(
+                "user.rs",
+                "fn main() { let _ = helper(x, y); }\n",
+            )],
+            new_files: vec![(
+                "user.rs",
+                "fn main() { let _ = helper(y, x); }\n",
+            )],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_unequal_types",
+            old_files: vec![
+                ("lib.rs", "pub fn f(a: i64, b: &str) -> i64 { 0 }\n"),
+                ("user.rs", "fn main() { let _ = f(x, s); }\n"),
+            ],
+            new_files: vec![
+                ("lib.rs", "pub fn f(a: i64, b: &str) -> i64 { 0 }\n"),
+                ("user.rs", "fn main() { let _ = f(s, x); }\n"),
+            ],
+            old_declarations: vec![(
+                "lib.rs",
+                "f",
+                function,
+                "a: i64, b: &str",
+            )],
+            new_declarations: vec![(
+                "lib.rs",
+                "f",
+                function,
+                "a: i64, b: &str",
+            )],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_kwargs_skipped",
+            old_files: vec![
+                ("lib.py", "def f(a, b):\n    return a - b\n"),
+                ("user.py", "print(f(a=x, b=y))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def f(a, b):\n    return a - b\n"),
+                ("user.py", "print(f(b=y, a=x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "f", function, "a, b")],
+            new_declarations: vec![("lib.py", "f", function, "a, b")],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_rotation_not_a_swap",
+            old_files: vec![
+                ("lib.py", "def f(a, b, c):\n    return a - b - c\n"),
+                ("user.py", "print(f(x, y, z))\n"),
+            ],
+            new_files: vec![
+                ("lib.py", "def f(a, b, c):\n    return a - b - c\n"),
+                ("user.py", "print(f(y, z, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "f", function, "a, b, c")],
+            new_declarations: vec![("lib.py", "f", function, "a, b, c")],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_abs_difference_known_fp",
+            old_files: vec![
+                (
+                    "lib.py",
+                    "def gap(a, b):\n    if a > b:\n        return a - b\n    return b - a\n",
+                ),
+                ("user.py", "print(gap(x, y))\n"),
+            ],
+            new_files: vec![
+                (
+                    "lib.py",
+                    "def gap(a, b):\n    if a > b:\n        return a - b\n    return b - a\n",
+                ),
+                ("user.py", "print(gap(y, x))\n"),
+            ],
+            old_declarations: vec![("lib.py", "gap", function, "a, b")],
+            new_declarations: vec![("lib.py", "gap", function, "a, b")],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: true,
+        },
+        // --- Constant positives: numeric, still used. ---
+        CorpusScenario {
+            name: "py_used_numeric_constant",
+            old_files: vec![
+                ("cfg.py", "LIMIT = 100\n"),
+                ("user.py", "from cfg import LIMIT\n\n\nprint(LIMIT)\n"),
+            ],
+            new_files: vec![
+                ("cfg.py", "LIMIT = 200\n"),
+                ("user.py", "from cfg import LIMIT\n\n\nprint(LIMIT)\n"),
+            ],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![("user.py", "cfg.py", "cfg.LIMIT")],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_same_file_numeric_constant",
+            old_files: vec![("cfg.py", "LIMIT = 100\nprint(LIMIT)\n")],
+            new_files: vec![("cfg.py", "LIMIT = 200\nprint(LIMIT)\n")],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_used_numeric_constant",
+            old_files: vec![(
+                "lib.rs",
+                "const MAX: i64 = 10;\npub fn get() -> i64 { MAX }\n",
+            )],
+            new_files: vec![(
+                "lib.rs",
+                "const MAX: i64 = 20;\npub fn get() -> i64 { MAX }\n",
+            )],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![],
+            is_change: true,
+            known_false_positive: false,
+        },
+        // --- Constant negatives. ---
+        CorpusScenario {
+            name: "py_string_constant",
+            old_files: vec![
+                ("cfg.py", "VERSION = \"1.0\"\n"),
+                ("user.py", "from cfg import VERSION\n\n\nprint(VERSION)\n"),
+            ],
+            new_files: vec![
+                ("cfg.py", "VERSION = \"2.0\"\n"),
+                ("user.py", "from cfg import VERSION\n\n\nprint(VERSION)\n"),
+            ],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![("user.py", "cfg.py", "cfg.VERSION")],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "py_unused_numeric_constant",
+            old_files: vec![("cfg.py", "TIMEOUT = 30\n")],
+            new_files: vec![("cfg.py", "TIMEOUT = 60\n")],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+        CorpusScenario {
+            name: "rs_string_constant",
+            old_files: vec![(
+                "lib.rs",
+                "const NAME: &str = \"a\";\npub fn name() -> &'static str { NAME }\n",
+            )],
+            new_files: vec![(
+                "lib.rs",
+                "const NAME: &str = \"b\";\npub fn name() -> &'static str { NAME }\n",
+            )],
+            old_declarations: vec![],
+            new_declarations: vec![],
+            new_edges: vec![],
+            is_change: false,
+            known_false_positive: false,
+        },
+    ]
+}
+
+#[test]
+fn corpus_precision_meets_the_bar() {
+    let all = scenarios();
+    assert_eq!(
+        all.len(),
+        21,
+        "the corpus grew or shrank without updating this guard"
+    );
+    let mut true_positives = 0;
+    let mut false_positives = 0;
+    let mut missed = Vec::new();
+    for scenario in &all {
+        let mut new_report = empty_report();
+        for (from, to, path) in &scenario.new_edges {
+            new_report = report_with_edge(from, to, path, &[]);
+        }
+        let measured = measure_behavior(
+            &corpus_index(&scenario.old_declarations),
+            &corpus_index(&scenario.new_declarations),
+            &new_report,
+            &corpus_facts(&scenario.old_files),
+            &corpus_facts(&scenario.new_files),
+            "old",
+            "new",
+        );
+        let flagged = !measured.changes.is_empty();
+        if scenario.is_change {
+            if flagged {
+                true_positives += 1;
+            } else {
+                missed.push(scenario.name);
+            }
+            assert_eq!(
+                measured.changes.len(),
+                1,
+                "{}: a positive scenario must produce exactly its one change",
+                scenario.name
+            );
+        } else if flagged {
+            false_positives += 1;
+            assert!(
+                scenario.known_false_positive,
+                "{}: flagged a negative the corpus did not declare as a known false positive",
+                scenario.name
+            );
+        }
+        // A negative that stays silent is correct.
+    }
+    assert!(
+        missed.is_empty(),
+        "positives the detector missed: {missed:?}"
+    );
+    let precision = if true_positives + false_positives == 0 {
+        0.0
+    } else {
+        f64::from(true_positives) / f64::from(true_positives + false_positives)
+    };
+    println!(
+        "behavior corpus: {true_positives} true positives, {false_positives} false positives, precision {precision:.3}"
+    );
+    assert!(
+        precision >= 0.8,
+        "behavior precision {precision:.3} is below the 0.8 bar: cut the failing detector, do not ship it"
+    );
+}
