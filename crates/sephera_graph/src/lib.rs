@@ -25,6 +25,7 @@ pub mod review;
 pub mod risk;
 pub mod simulate;
 pub mod symbol_impact;
+pub mod test_priority;
 pub mod types;
 pub mod untested;
 

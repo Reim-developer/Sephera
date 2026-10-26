@@ -1892,3 +1892,121 @@ async fn simulate_tool_reports_consumers_and_a_blocked_move() {
         "{markdown}"
     );
 }
+
+#[tokio::test]
+async fn test_priority_tool_ranks_untested_symbols() {
+    // add has two consumers, keep has one, lonely has none; the
+    // second commit touches lib.py only, so lib.py's churn is 2 and
+    // the scores are 4, 2, and 0 — the same join the CLI reports.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x\n\ndef keep(x):\n    return x\n\ndef lonely(x):\n    return x\n",
+    );
+    write_file(dir, "app.py", b"from lib import add\n\nprint(add(1))\n");
+    write_file(dir, "worker.py", b"from lib import add\n\nprint(add(2))\n");
+    write_file(dir, "other.py", b"from lib import keep\n\nprint(keep(1))\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "base"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x + 1\n\ndef keep(x):\n    return x\n\ndef lonely(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "touch lib only"]);
+
+    let output = server
+        .test_priority(param_for(TestPriorityInput {
+            path: Some(dir.to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            window: None,
+            top: None,
+            format: None,
+        }))
+        .await
+        .expect("test_priority tool should succeed for a temp repo");
+    let parsed: serde_json::Value = serde_json::from_str(&output)
+        .expect("test_priority output must be JSON");
+    let symbols = parsed["symbols"].as_array().expect("symbols");
+    assert_eq!(symbols.len(), 3, "{output}");
+    assert_eq!(parsed["untested_total"], 3);
+    assert_eq!(symbols[0]["symbol"], "add");
+    assert_eq!(symbols[0]["downstream"], 2);
+    assert_eq!(symbols[0]["score"], 4);
+    assert_eq!(symbols[2]["symbol"], "lonely");
+    assert_eq!(symbols[2]["score"], 0);
+}
+
+#[tokio::test]
+async fn regression_test_priority_top_zero_does_not_claim_all_tested() {
+    // CodeRabbit PR #53 finding 3: MCP accepted top: 0, returned an
+    // empty list with a positive total, and the renderer claimed
+    // every symbol was tested. Same fixture as the ranking test:
+    // add has two consumers, keep has one, lonely has none.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x\n\ndef keep(x):\n    return x\n\ndef lonely(x):\n    return x\n",
+    );
+    write_file(dir, "app.py", b"from lib import add\n\nprint(add(1))\n");
+    write_file(dir, "worker.py", b"from lib import add\n\nprint(add(2))\n");
+    write_file(dir, "other.py", b"from lib import keep\n\nprint(keep(1))\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "base"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x + 1\n\ndef keep(x):\n    return x\n\ndef lonely(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "touch lib only"]);
+
+    let output = server
+        .test_priority(param_for(TestPriorityInput {
+            path: Some(dir.to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            window: None,
+            top: Some(0),
+            format: Some("markdown".to_owned()),
+        }))
+        .await
+        .expect("test_priority tool should succeed for a temp repo");
+    assert!(output.contains("Showing 0 of 3"), "{output}");
+    assert!(!output.contains("Every declared symbol"), "{output}");
+}
+
+#[tokio::test]
+async fn test_priority_tool_errors_on_a_non_repo_tree() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "lib.py", b"def add(x):\n    return x\n");
+
+    let result = server
+        .test_priority(param_for(TestPriorityInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            window: None,
+            top: None,
+            format: None,
+        }))
+        .await;
+    assert!(result.is_err(), "a tree with no history is an error");
+}

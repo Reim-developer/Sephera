@@ -140,11 +140,11 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 |--------|-------|
 | Files analyzed | 43 |
 | Internal edges | 248 |
-| External edges | 132 |
+| External edges | 133 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 40 |
 | Local crate edges | 0 |
-| Standard library edges | 82 |
+| Standard library edges | 83 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -689,6 +689,21 @@ uncovered-by-a-run, but unreachable from every test in the tree.
 
 ```bash
 sephera untested --path .
+```
+
+### `test-priority` — which untested symbol to test next
+
+`untested` says which symbols no test exercises. This one ranks
+them by what hurts most: downstream × churn × (1 + coupled
+partners), the same product `risk` uses, with file-level dependents
+replaced by symbol-level downstream — the files importing that
+symbol specifically. The ranking lists the full untested set,
+ranked, never filtered: a symbol with zero downstream scores 0 and
+ranks last, but stays listed, because dropping it would hide work.
+The score is a ranking heuristic, not a probability.
+
+```bash
+sephera test-priority --path .
 ```
 
 ### `merge` — the merge git would complete cleanly but that breaks the build
