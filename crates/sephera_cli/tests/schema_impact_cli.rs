@@ -245,6 +245,32 @@ fn proto2_is_an_error() {
     assert!(stderr(&output).contains("proto2"), "{}", stderr(&output));
 }
 
+/// A scoped run reports the break that lives inside the scope,
+/// scope-relative, while a consumer outside the scope is correctly
+/// absent — the break is not hidden, and the out-of-scope file is
+/// not claimed. This pins the scope rule the adversarial battery
+/// verified by hand: scope restricts both sides, it does not
+/// erase in-scope breaks.
+#[test]
+fn scoped_run_reports_in_scope_break_without_out_of_scope_consumer() {
+    let temp_dir = repo_with_removal();
+    let dir = temp_dir.path();
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .arg("schema-impact")
+        .arg("--path")
+        .arg(dir.join("api"))
+        .arg("--from")
+        .arg("v1")
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{}", stderr(&output));
+    let text = stdout(&output);
+    assert!(text.contains("api.User.name"), "{text}");
+    assert!(text.contains("Schema file: `user.proto`"), "{text}");
+    assert!(text.contains("No proven consumers"), "{text}");
+    assert!(!text.contains("consumer.py"), "{text}");
+}
+
 #[test]
 fn identical_sides_report_no_breaks() {
     let temp_dir = tempdir().unwrap();
