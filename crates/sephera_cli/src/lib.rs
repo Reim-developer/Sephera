@@ -24,6 +24,7 @@ mod run;
 mod sarif;
 mod simulate;
 mod skill;
+mod test_priority;
 mod untested;
 mod watch;
 mod why;

@@ -226,6 +226,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera untested --path .\\n  sephera untested --path . --format json\\n  sephera untested --path . --fail-on 10"
     )]
     Untested(UntestedArgs),
+    /// Rank the untested symbols by what hurts most
+    #[command(
+        long_about = "Rank the declared symbols no test exercises by what hurts most: downstream × churn × (1 + coupled partners).\\n\\nThis is `untested` joined to `risk`, not a new detector. `untested` says which symbols no test exercises; this says which of those to test next, with the same product `risk` uses but file-level dependents replaced by symbol-level downstream — the files that import that symbol specifically. A file ranking tells you where to look; a symbol ranking tells you which test to write next.\\n\\nThe ranking lists the FULL untested set, ranked, never filtered: a symbol with zero downstream scores 0 and ranks last, but stays listed, because dropping it would hide work. Tested symbols never appear, direct and indirect tiers alike. The order is total — score desc, file asc, symbol asc — so the same tree twice gives the same ranking. The score is a ranking heuristic, not a probability; file-level inputs (churn, coupled partners) are shared by every symbol in a file, and only downstream refines within a file.\\n\\nOnly Rust and Python collect declarations, so only their symbols can be ranked. The analysis needs a git history. A tree that is not a git repository is an error, not an empty ranking.",
+        after_long_help = "Examples:\\n  sephera test-priority --path .\\n  sephera test-priority --path . --top 10\\n  sephera test-priority --path . --window 1000 --format json"
+    )]
+    TestPriority(TestPriorityArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -1505,6 +1511,54 @@ pub enum UntestedOutputFormat {
     /// SARIF 2.1.0 for code scanning.
     #[value(name = "sarif", help = "Render the report as SARIF 2.1.0.")]
     Sarif,
+}
+
+tree_command_args!(
+    #[doc = "Rank the untested symbols by what hurts most."]
+    TestPriorityArgs {
+        /// How many commits of history to read
+    #[arg(
+        long,
+        value_name = "COUNT",
+        default_value = "500",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Read this many recent commits.",
+        long_help = "How far back the history window reaches, in commits. Churn and coupling are both counted inside it: a file that stopped changing before the window starts has no churn here, which is the right answer for a ranking about how the tree changes now. It means the same thing it means for `coupling`."
+    )]
+    pub window: u32,
+
+        /// How many symbols the ranking returns
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u32).range(1..),
+        help = "Return at most this many symbols, highest score first.",
+        long_help = "The length of the ranking. Without it the full untested set is listed, ranked; the tail is the zero-downstream symbols, which score 0 and rank last but stay listed because dropping them would hide work."
+    )]
+    pub top: Option<u32>,
+
+        /// Output format for the ranking
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the ranking. Supports markdown and json.",
+        long_help = "Output format for the ranking. Supports markdown and json."
+    )]
+    pub format: TestPriorityOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum TestPriorityOutputFormat {
+    /// Markdown ranking of untested symbols.
+    #[value(name = "markdown", help = "Render the ranking as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the ranking as JSON.")]
+    Json,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]

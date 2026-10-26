@@ -35,7 +35,8 @@ use crate::{
         MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
         RiskArgs, RiskOutputFormat, SettingsArgs, SimulateArgs,
         SimulateOutputFormat, SkillArgs, SourceArgs, SymbolOutputFormat,
-        SymbolsArgs, TestImpactOutputFormat, UntestedArgs,
+        SymbolsArgs, TestImpactOutputFormat, TestPriorityArgs,
+        TestPriorityOutputFormat, UntestedArgs,
         UntestedOutputFormat, WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
     behavior, breaking, change_impact, configure,
@@ -52,7 +53,8 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, sarif, simulate, skill, untested, watch, why,
+    review, risk, sarif, simulate, skill, test_priority, untested, watch,
+    why,
 };
 
 #[must_use]
@@ -147,6 +149,9 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Behavior(arguments) => run_behavior(&arguments).await,
         Commands::Simulate(arguments) => run_simulate(&arguments).await,
         Commands::Untested(arguments) => run_untested(&arguments).await,
+        Commands::TestPriority(arguments) => {
+            run_test_priority(&arguments).await
+        }
         Commands::Guard(arguments) => run_guard(&arguments).await,
         Commands::Skill(arguments) => run_skill(&arguments),
     }?;
@@ -1897,6 +1902,70 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
         }
     });
     Ok(gates)
+}
+
+async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Ranking untested symbols...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    // History first, as `risk` reads it: a tree with no readable
+    // history is an error this command exists to state, and it
+    // should arrive before the graph build spends its time.
+    let commits = recent_commit_files(&source.repo_root, arguments.window)
+        .with_context(|| {
+            format!(
+                "test-priority reads the git history of {}, and none could be read",
+                source.repo_root.display()
+            )
+        })?;
+
+    let (report, index) =
+        build_graph_with_declarations(&source.analysis_path, &ignore)?;
+
+    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
+        &source.repo_root,
+        &source.analysis_path,
+    );
+    let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+    let measured = test_priority::measure_test_priority(
+        &report,
+        &index,
+        &rebased,
+        test_priority::TestPriorityOptions {
+            coupling: coupling::CouplingOptions::default(),
+            limit: arguments
+                .top
+                .map(|top| usize::try_from(top).unwrap_or(usize::MAX)),
+        },
+    );
+
+    let rendered = match arguments.format {
+        TestPriorityOutputFormat::Markdown => {
+            test_priority::render_markdown(&measured)
+        }
+        TestPriorityOutputFormat::Json => test_priority::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    Ok(Vec::new())
 }
 
 /// Build the newer side of a breaking comparison.
