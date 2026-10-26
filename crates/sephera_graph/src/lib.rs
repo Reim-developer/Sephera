@@ -8,6 +8,7 @@
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
 pub mod affected_tests;
+pub mod archaeology;
 pub mod behavior;
 pub mod blast_radius;
 pub mod breaking;
