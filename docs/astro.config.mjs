@@ -35,6 +35,7 @@ export default defineConfig({
 						{ slug: 'commands/diff' },
 						{ slug: 'commands/behavior' },
 						{ slug: 'commands/simulate' },
+						{ slug: 'commands/archaeology' },
 						{ slug: 'commands/untested' },
 						{ slug: 'commands/merge' },
 						{ slug: 'commands/guard' },

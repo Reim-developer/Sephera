@@ -660,6 +660,23 @@ unproven detector would punish asking.
 sephera behavior --path . --from origin/master
 ```
 
+### `archaeology` — where a symbol has been
+
+`git log` follows a file, so a rename that also moves the file
+breaks the thread. This one follows the symbol: every rename
+and move, its former names, and who changed it. Identity is
+proven by consumer continuity, never by name similarity — a
+symbol in one commit is the same symbol as one in an older
+commit when exactly one declared symbol there has the same
+direct consumers. A rename that also changes the consumer set
+in the same commit is not proven and ends the trail, and an
+unconsumed symbol's rename cannot be proven at all, so the
+trail stops as ambiguous rather than guessing.
+
+```bash
+sephera archaeology crates/sephera_graph/src/blast_radius.rs --symbol BlastRadius --path .
+```
+
 ### `untested` — the symbols no test exercises, without running anything
 
 Coverage tools answer this by running the tests and watching what
