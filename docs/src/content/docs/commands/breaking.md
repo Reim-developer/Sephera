@@ -17,7 +17,7 @@ it.
 ## Usage
 
 ```bash
-sephera breaking --path . --from HEAD~1              # what the last commit broke
+sephera breaking --path . --from HEAD~1              # what broke between HEAD~1 and the working tree
 sephera breaking --path . --from HEAD~1 --to HEAD    # the same comparison, both sides pinned
 sephera breaking --path . --from HEAD~1 --format json  # the same breaks, machine-readable
 ```
@@ -197,6 +197,6 @@ result message only, never as results of their own.
 
 ## Haiku
 
-> A name removed today
+> A name gone today
 > who still calls it, unaware
 > joined to its users

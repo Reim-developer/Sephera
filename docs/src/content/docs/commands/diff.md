@@ -13,7 +13,7 @@ but a changelog without additions hides half the release.
 ## Usage
 
 ```bash
-sephera diff --path . --from HEAD~1              # every symbol the last commit added, removed, or reshaped
+sephera diff --path . --from HEAD~1              # every symbol changed between HEAD~1 and the working tree
 sephera diff --path . --from HEAD~1 --to HEAD    # the same comparison, both sides pinned
 sephera diff --path . --from HEAD~1 --format json  # the same changes, machine-readable
 ```
