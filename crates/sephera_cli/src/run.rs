@@ -36,8 +36,8 @@ use crate::{
         RiskArgs, RiskOutputFormat, SettingsArgs, SimulateArgs,
         SimulateOutputFormat, SkillArgs, SourceArgs, SymbolOutputFormat,
         SymbolsArgs, TestImpactOutputFormat, TestPriorityArgs,
-        TestPriorityOutputFormat, UntestedArgs,
-        UntestedOutputFormat, WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
+        TestPriorityOutputFormat, UntestedArgs, UntestedOutputFormat,
+        WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
     behavior, breaking, change_impact, configure,
     context_config::{
@@ -53,8 +53,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, sarif, simulate, skill, test_priority, untested, watch,
-    why,
+    review, risk, sarif, simulate, skill, test_priority, untested, watch, why,
 };
 
 #[must_use]
