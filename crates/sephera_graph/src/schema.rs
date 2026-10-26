@@ -2018,8 +2018,21 @@ struct GenModule {
 /// struct name matching messages in two packages with no directory
 /// signal to choose between) links nothing and notes it, rather than
 /// guessing.
+/// Build the consumer-join catalog: which generated file implements
+/// which schema element, and each element's generated spellings.
+///
+/// The catalog comes from the OLD schema and the generated files
+/// from the NEW tree's texts, deliberately: consumers are old code,
+/// so they name old elements — a field the new side removed is
+/// still named by every consumer that has not migrated yet, and a
+/// catalog built from the new schema would have no entry for it
+/// and would report the removal with no consumers at all. A
+/// generated file added in the new side pairs to no old proto and
+/// is skipped silently: it cannot be a break target, so indexing
+/// it would only add noise.
 fn build_modules(
-    schema: &SchemaIndex,
+    old_schema: &SchemaIndex,
+    new_schema: &SchemaIndex,
     generated: &[GeneratedFile],
     texts: &BTreeMap<String, String>,
     coverage: &mut Vec<String>,
@@ -2029,7 +2042,7 @@ fn build_modules(
     let mut enums: BTreeMap<String, &SchemaEnum> = BTreeMap::new();
     let mut services: BTreeMap<String, BTreeMap<String, SchemaMethod>> =
         BTreeMap::new();
-    for file in schema.files.values() {
+    for file in old_schema.files.values() {
         for (name, message) in &file.messages {
             messages.insert(name.clone(), message);
         }
@@ -2061,8 +2074,15 @@ fn build_modules(
                 let Some(proto_path) = proto_path else {
                     continue;
                 };
-                let Some(schema_file) = schema.files.get(&proto_path)
+                let Some(schema_file) = old_schema.files.get(&proto_path)
                 else {
+                    // A generated file for a proto added on the new
+                    // side has no old elements to join: skip it
+                    // silently rather than crying about a file that
+                    // cannot be a break target.
+                    if new_schema.files.contains_key(&proto_path) {
+                        continue;
+                    }
                     coverage.push(format!(
                         "generated file {} has no matching .proto in the tree; its elements are not indexed",
                         generated_file.path
@@ -2134,7 +2154,7 @@ fn build_modules(
                     // directory. Without one, ambiguity links nothing.
                     if !go_name_unique(&messages, &go_name, name)
                         && !dir_matches_proto(
-                            schema, name, generated_dir,
+                            old_schema, name, generated_dir,
                         )
                     {
                         coverage.push(format!(
@@ -2575,10 +2595,16 @@ fn scan_go(
                     for (message, gen_message) in &module.messages {
                         for field in gen_message.fields.values() {
                             if field.json == literal {
+                                // The join matches JSON keys against the
+                                // field's json_name, so the evidence
+                                // carries the JSON spelling, not the
+                                // proto name: for `user_id` the key
+                                // is `userId`, and storing the proto
+                                // name would never match it.
                                 evidence.json_keys.insert((
                                     import.module_file.clone(),
                                     message.clone(),
-                                    field.proto.clone(),
+                                    field.json.clone(),
                                 ));
                             }
                         }
@@ -3086,10 +3112,13 @@ fn scan_python(
                         for (message, gen_message) in &module.messages {
                             for field in gen_message.fields.values() {
                                 if field.json == content {
+                                    // Same spelling rule as the Go
+                                    // branch above: the join matches
+                                    // on json_name.
                                     evidence.json_keys.insert((
                                         import.module_file.clone(),
                                         message.clone(),
-                                        field.proto.clone(),
+                                        field.json.clone(),
                                     ));
                                 }
                             }
@@ -3155,12 +3184,23 @@ fn scan_python_call(
         return;
     }
     // Constructor kwargs: the function must resolve to exactly a
-    // generated message.
+    // generated message — either as the last segment after a module
+    // prefix (`api.user_pb2.User(...)`) or as a bound name on its
+    // own (`User(...)` after a from-import, where the chain is the
+    // binding itself and the remainder is empty). Without the
+    // second shape, the most common Python constructor form named
+    // nothing.
     if let Some((module_file, rest)) =
         match_chain(&chain, imports, modules)
     {
-        if rest.len() == 1 {
-            let message_name = &rest[0];
+        let message_name: Option<&String> = if rest.len() == 1 {
+            Some(&rest[0])
+        } else if rest.is_empty() && chain.len() == 1 {
+            Some(&chain[0])
+        } else {
+            None
+        };
+        if let Some(message_name) = message_name {
             let qualified = modules.get(&module_file).and_then(|module| {
                 module.messages.keys().find(|qualified| {
                     let short = qualified
@@ -3447,12 +3487,36 @@ pub fn measure_schema_impact(
         }
     }
 
-    let modules_vec =
-        build_modules(new_schema, &generated, &texts, &mut coverage);
+    let modules_vec = build_modules(
+        old_schema,
+        new_schema,
+        &generated,
+        &texts,
+        &mut coverage,
+    );
     let modules: BTreeMap<String, GenModule> = modules_vec
         .iter()
         .map(|module| (module.file.clone(), module.clone()))
         .collect();
+
+    // A break whose element maps to no generated module in the new
+    // tree cannot have joined consumers — the Go regenerated-removal
+    // case, where the struct declaration the mapping keys on is
+    // gone. The report says so per element instead of printing a
+    // bare break that reads as "no consumers". When no generated
+    // code exists at all, the Tier-A-inapplicable note above
+    // already says it, so this only fires when generated files
+    // exist but this element is unmapped.
+    if !generated.is_empty() {
+        for pending_break in &pending {
+            if primary_generated_file(pending_break, &modules).is_none() {
+                coverage.push(format!(
+                    "consumers of {} could not be joined: no generated module in the new tree maps to it",
+                    pending_break.element
+                ));
+            }
+        }
+    }
 
     // Scan every non-generated Go/Python file once.
     let mut evidence_by_file: BTreeMap<String, FileEvidence> =
