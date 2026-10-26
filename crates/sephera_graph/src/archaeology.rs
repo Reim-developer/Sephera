@@ -183,17 +183,21 @@ fn declared_symbols(index: &DeclarationIndex) -> Vec<(String, String)> {
 }
 
 /// Lists the commits touching a file from a ref, newest first.
-pub type HistoryLog =
-    dyn Fn(&str, &str) -> Result<Vec<HistoryCommit>, ArchaeologyError>;
+///
+/// The lifetime is the caller's: providers usually borrow the
+/// repository root and the ignore settings from the command that
+/// called the trace, and a `'static` bound would forbid that.
+pub type HistoryLog<'a> =
+    dyn Fn(&str, &str) -> Result<Vec<HistoryCommit>, ArchaeologyError> + 'a;
 
 /// Builds one commit's tree.
-pub type HistoryBuild =
-    dyn Fn(&HistoryCommit) -> Result<HistorySnapshot, ArchaeologyError>;
+pub type HistoryBuild<'a> =
+    dyn Fn(&HistoryCommit) -> Result<HistorySnapshot, ArchaeologyError> + 'a;
 
 /// The first-parent parent of a commit, when it has one. The
 /// root commit has none, and that is not an error.
-pub type HistoryParent =
-    dyn Fn(&str) -> Result<Option<HistoryCommit>, ArchaeologyError>;
+pub type HistoryParent<'a> =
+    dyn Fn(&str) -> Result<Option<HistoryCommit>, ArchaeologyError> + 'a;
 
 /// What comparing one snapshot with the next older one proves.
 enum OlderOutcome {
@@ -312,8 +316,8 @@ fn next_older(
     tracked_file: &str,
     oldest_examined: &str,
     examined: &BTreeSet<String>,
-    log: &HistoryLog,
-    parent: &HistoryParent,
+    log: &HistoryLog<'_>,
+    parent: &HistoryParent<'_>,
 ) -> Result<Option<HistoryCommit>, ArchaeologyError> {
     for commit in log(from_ref, tracked_file)? {
         if examined.contains(&commit.hash) {
@@ -359,9 +363,9 @@ pub fn trace_symbol(
     start_file: &str,
     start_symbol: &str,
     window: usize,
-    log: &HistoryLog,
-    build: &HistoryBuild,
-    parent: &HistoryParent,
+    log: &HistoryLog<'_>,
+    build: &HistoryBuild<'_>,
+    parent: &HistoryParent<'_>,
 ) -> Result<ArchaeologyReport, ArchaeologyError> {
     let mut steps_newest_first: Vec<ArchaeologyStep> = Vec::new();
     let mut examined: BTreeSet<String> = BTreeSet::new();

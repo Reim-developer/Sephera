@@ -1,6 +1,7 @@
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
 mod affected_tests;
+mod archaeology;
 mod args;
 mod behavior;
 mod breaking;

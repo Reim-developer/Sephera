@@ -1,4 +1,5 @@
 use std::io::Read as _;
+use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -14,21 +15,22 @@ use sephera_graph::{
 };
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-    build_context_report, changed_files, checkout_worktree,
-    load_project_settings, merge_base, recent_commit_files,
-    resolve_changed_files, resolve_source,
+    build_context_report, changed_files, checkout_worktree, commit_meta,
+    first_parent_commit, load_project_settings, log_commits_for_file,
+    merge_base, recent_commit_files, resolve_changed_files, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
-    affected_tests,
+    affected_tests, archaeology,
     args::{
-        AffectedTestsArgs, BehaviorArgs, BehaviorOutputFormat, BreakingArgs,
-        BreakingOutputFormat, Cli, Commands, ContextArgs, CouplingArgs,
-        CouplingOutputFormat, DeadArgs, DeadOutputFormat, DiffArgs,
-        DiffOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs, IgnoreArgs,
-        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
+        AffectedTestsArgs, ArchaeologyArgs, ArchaeologyOutputFormat,
+        BehaviorArgs, BehaviorOutputFormat, BreakingArgs, BreakingOutputFormat,
+        Cli, Commands, ContextArgs, CouplingArgs, CouplingOutputFormat,
+        DeadArgs, DeadOutputFormat, DiffArgs, DiffOutputFormat, GraphArgs,
+        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
+        ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
         MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
         RiskArgs, RiskOutputFormat, SettingsArgs, SimulateArgs,
         SimulateOutputFormat, SkillArgs, SourceArgs, SymbolOutputFormat,
@@ -140,6 +142,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Breaking(arguments) => run_breaking(&arguments).await,
         Commands::Merge(arguments) => run_merge(&arguments).await,
         Commands::Diff(arguments) => run_diff(&arguments).await,
+        Commands::Archaeology(arguments) => run_archaeology(&arguments).await,
         Commands::Behavior(arguments) => run_behavior(&arguments).await,
         Commands::Simulate(arguments) => run_simulate(&arguments).await,
         Commands::Untested(arguments) => run_untested(&arguments).await,
@@ -1394,6 +1397,167 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
 
     // A diff is a report, not a gate: additions are the normal shape
     // of a release, so no count of changes fails the run.
+    Ok(Vec::new())
+}
+
+/// The commit-log provider for archaeology: the commits touching
+/// a file from a ref, newest first, as graph history commits.
+fn archaeology_log(
+    repo_root: &Path,
+    from_ref: &str,
+    file: &str,
+) -> Result<Vec<archaeology::HistoryCommit>, archaeology::ArchaeologyError> {
+    log_commits_for_file(repo_root, from_ref, file)
+        .map(|commits| {
+            commits
+                .into_iter()
+                .map(|meta| archaeology::HistoryCommit {
+                    hash: meta.hash,
+                    author: meta.author,
+                    date: meta.date,
+                    message: meta.message,
+                })
+                .collect()
+        })
+        .map_err(|error| {
+            archaeology::ArchaeologyError::History(error.to_string())
+        })
+}
+
+/// The build provider for archaeology: one commit's tree, built in
+/// a detached worktree that is removed when the build returns.
+fn archaeology_build(
+    repo_root: &Path,
+    settings: &SettingsArgs,
+    ignore_args: &IgnoreArgs,
+    commit: &archaeology::HistoryCommit,
+) -> Result<archaeology::HistorySnapshot, archaeology::ArchaeologyError> {
+    let worktree =
+        checkout_worktree(repo_root, &commit.hash).map_err(|error| {
+            archaeology::ArchaeologyError::Build(error.to_string())
+        })?;
+    let ignore = build_ignore_matcher(
+        worktree.path(),
+        settings,
+        &ignore_args.ignore,
+        ignore_args.no_gitignore,
+    )
+    .map_err(|error| archaeology::ArchaeologyError::Build(error.to_string()))?;
+    let (report, index) =
+        build_graph_with_declarations(worktree.path(), &ignore).map_err(
+            |error| archaeology::ArchaeologyError::Build(error.to_string()),
+        )?;
+    Ok(archaeology::HistorySnapshot {
+        commit: commit.clone(),
+        index,
+        report,
+    })
+}
+
+/// The parent provider for archaeology: a commit's first-parent
+/// parent, as a graph history commit.
+fn archaeology_parent(
+    repo_root: &Path,
+    hash: &str,
+) -> Result<Option<archaeology::HistoryCommit>, archaeology::ArchaeologyError> {
+    first_parent_commit(repo_root, hash)
+        .map(|parent| {
+            parent.map(|meta| archaeology::HistoryCommit {
+                hash: meta.hash,
+                author: meta.author,
+                date: meta.date,
+                message: meta.message,
+            })
+        })
+        .map_err(|error| {
+            archaeology::ArchaeologyError::History(error.to_string())
+        })
+}
+
+async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
+    // One local repository's history, like diff and behavior: a
+    // remote source has no local refs to walk.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "archaeology traces one local repository's history; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Tracing the symbol through history...");
+
+    let repo_root = source.repo_root;
+
+    // The providers trace_symbol walks on, as thin closures over
+    // the named functions below: the commit log, one commit's
+    // built tree, and the first-parent parent.
+    let log = |from_ref: &str, file: &str| {
+        archaeology_log(&repo_root, from_ref, file)
+    };
+    let build = |commit: &archaeology::HistoryCommit| {
+        archaeology_build(
+            &repo_root,
+            &arguments.settings,
+            &arguments.ignore_args,
+            commit,
+        )
+    };
+    let parent = |hash: &str| archaeology_parent(&repo_root, hash);
+
+    let start =
+        commit_meta(&repo_root, &arguments.start_ref).with_context(|| {
+            format!(
+                "archaeology resolves `{}` and git could not do it",
+                arguments.start_ref
+            )
+        })?;
+    let start = archaeology::HistoryCommit {
+        hash: start.hash,
+        author: start.author,
+        date: start.date,
+        message: start.message,
+    };
+    let measured = archaeology::trace_symbol(
+        &start,
+        &arguments.file,
+        &arguments.symbol,
+        arguments.window,
+        &log,
+        &build,
+        &parent,
+    )
+    .map_err(|error| match error {
+        archaeology::ArchaeologyError::SymbolNotFound => anyhow::anyhow!(
+            "`{}` is not declared in `{}` at `{}`",
+            arguments.symbol,
+            arguments.file,
+            arguments.start_ref
+        ),
+        other => anyhow::Error::new(other),
+    })?;
+
+    let rendered = match arguments.format {
+        ArchaeologyOutputFormat::Markdown => {
+            archaeology::render_markdown(&measured)
+        }
+        ArchaeologyOutputFormat::Json => archaeology::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A trail is a report, not a gate.
     Ok(Vec::new())
 }
 

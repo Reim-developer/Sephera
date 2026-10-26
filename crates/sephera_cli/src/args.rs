@@ -202,6 +202,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera diff --path . --from origin/main\\n  sephera diff --path . --from v1.0.0 --to v2.0.0\\n  sephera diff --path . --from origin/main --format json"
     )]
     Diff(DiffArgs),
+    /// Trace one symbol through history: every rename and move, its former names, and who changed it
+    #[command(
+        long_about = "Trace one symbol through history: every rename and move, its former names, and who changed it.\\n\\nIdentity is proven by consumer continuity, never by name similarity: a symbol in one commit is the same symbol as one in an older commit when exactly one declared symbol in the older tree has the same direct consumer set. A rename that also gains or loses a consumer in the same commit is not proven and ends the trail, and an unconsumed symbol's rename cannot be proven at all, so the trail stops as ambiguous rather than guessing. The walk is first-parent only, and one whole-tree build happens per commit that touched the tracked file, so `--window` bounds the cost as well as the depth.\\n\\nThe symbol is queried as it stands at `--at` (HEAD by default). The analysis needs a git repository. This is a report, not a gate: there is no `--fail-on`.",
+        after_long_help = "Examples:\\n  sephera archaeology lib.py --symbol divide --path .\\n  sephera archaeology lib.py --symbol divide --path . --at v2.0.0\\n  sephera archaeology lib.py --symbol divide --path . --format json"
+    )]
+    Archaeology(ArchaeologyArgs),
     /// Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes
     #[command(
         long_about = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes.\\n\\nTwo detectors, both deliberately narrow, because the general question is undecidable and a detector that answers it by guessing trains a team to ignore it. An argument-order swap is a call site whose arguments are the same multiset in a different order, where the callee's signature did not change — in Rust the swap must also type check at the swapped positions, or it is a compile error, not a silent change. A numeric constant change is a module-level constant whose numeric value changed while still used, in its own file or through an import. String constants are never flagged: a version bump and a rewritten query are indistinguishable statically.\\n\\n`--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree. The analysis needs a git repository. A tree that is not one is an error, not an empty report. This is a report, not a gate: there is no `--fail-on`, because the detector's precision is measured by its corpus, and a gate on an unproven detector would punish asking.",
@@ -1280,6 +1286,71 @@ pub enum MergeOutputFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DiffOutputFormat {
     /// Markdown list of changed symbols.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Trace one symbol through history: every rename and move, its former names, and who changed it."]
+    ArchaeologyArgs {
+        /// The file the symbol lives in, spelled as the graph spells it
+    #[arg(
+        value_name = "FILE",
+        help = "The file the symbol lives in, spelled as the graph spells it.",
+        long_help = "The file the symbol lives in, spelled as the graph spells it — relative to the analysis root, with forward slashes. The trail follows the symbol out of this file when it moves, so the file named here is where the story starts, not where it ends."
+    )]
+    pub file: String,
+
+        /// The symbol to trace
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The symbol to trace.",
+        long_help = "The symbol to trace, as declared in the file. It must be declared at the starting ref; a name that is not there is an error, not an empty trail."
+    )]
+    pub symbol: String,
+
+        /// The ref the symbol is queried at; HEAD when absent
+    #[arg(
+        long = "at",
+        value_name = "REF",
+        default_value = "HEAD",
+        help = "The ref the symbol is queried at; HEAD when absent.",
+        long_help = "The ref the symbol is queried at. HEAD by default: the symbol as it stands at the tip of the branch is the query, and the trail walks backwards from there."
+    )]
+    pub start_ref: String,
+
+        /// Maximum commits examined while walking backwards
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "500",
+        help = "Maximum commits examined while walking backwards.",
+        long_help = "Maximum commits examined while walking backwards. One whole-tree build happens per commit that touched the tracked file, so the window bounds the cost as well as the depth; when it runs out, the trail stops with a note rather than a birth."
+    )]
+    pub window: usize,
+
+        /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: ArchaeologyOutputFormat,
+
+    }
+);
+
+/// Output format for the archaeology report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ArchaeologyOutputFormat {
+    /// Markdown report, oldest step first.
     #[value(name = "markdown", help = "Render the report as Markdown.")]
     Markdown,
     /// Structured JSON.

@@ -25,7 +25,8 @@ pub use context::{
     load_project_settings, resolve_changed_files, resolve_context_command,
 };
 pub use git::{
-    DetachedWorktree, changed_files, checkout_worktree, merge_base,
+    CommitMeta, DetachedWorktree, changed_files, checkout_worktree,
+    commit_meta, first_parent_commit, log_commits_for_file, merge_base,
     recent_commit_files,
 };
 pub use interrupt::{
