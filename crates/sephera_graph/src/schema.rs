@@ -470,8 +470,8 @@ fn tokenize(file: &str, text: &str) -> Result<Vec<Token>, SchemaError> {
                     return Err(fail("unexpected `-`"));
                 }
             }
-            ';' | '{' | '}' | '(' | ')' | '[' | ']' | '<' | '>' | '='
-            | '.' | ',' | ':' => {
+            ';' | '{' | '}' | '(' | ')' | '[' | ']' | '<' | '>' | '=' | '.'
+            | ',' | ':' => {
                 // `:` is not a proto construct the parser interprets,
                 // but it appears inside text-format option aggregates
                 // (`repeated = {unique: true, items: {...}}`), which
@@ -483,9 +483,7 @@ fn tokenize(file: &str, text: &str) -> Result<Vec<Token>, SchemaError> {
                 i += 1;
             }
             _ => {
-                return Err(fail(&format!(
-                    "unexpected character `{c}`"
-                )));
+                return Err(fail(&format!("unexpected character `{c}`")));
             }
         }
     }
@@ -502,7 +500,11 @@ struct Cursor<'a> {
 
 impl<'a> Cursor<'a> {
     fn new(file: &'a str, tokens: Vec<Token>) -> Self {
-        Self { file, tokens, pos: 0 }
+        Self {
+            file,
+            tokens,
+            pos: 0,
+        }
     }
 
     fn error(&self, message: &str) -> SchemaError {
@@ -577,7 +579,11 @@ impl<'a> Cursor<'a> {
     /// reporting a block that was never unterminated — which is
     /// exactly what this function did until a real repo with
     /// method bodies proved it.
-    fn skip_balanced(&mut self, open: char, close: char) -> Result<(), SchemaError> {
+    fn skip_balanced(
+        &mut self,
+        open: char,
+        close: char,
+    ) -> Result<(), SchemaError> {
         let mut depth = 1;
         loop {
             match self.next() {
@@ -612,9 +618,9 @@ impl<'a> Cursor<'a> {
                 Some(Token::Punct(';')) if depth == 0 => return Ok(()),
                 Some(_) => {}
                 None => {
-                    return Err(self.error(
-                        "unterminated statement (expected `;`)",
-                    ));
+                    return Err(
+                        self.error("unterminated statement (expected `;`)")
+                    );
                 }
             }
         }
@@ -657,7 +663,10 @@ pub fn derived_json_name(field: &str) -> String {
 /// proto2 (or no syntax, which defaults to proto2), uses a construct
 /// the parser does not support, or is malformed in any way. There is
 /// no partial result: an unparseable file aborts the run.
-pub fn parse_schema_file(file: &str, text: &str) -> Result<SchemaFile, SchemaError> {
+pub fn parse_schema_file(
+    file: &str,
+    text: &str,
+) -> Result<SchemaFile, SchemaError> {
     let tokens = tokenize(file, text)?;
     let mut cursor = Cursor::new(file, tokens);
     let mut schema = SchemaFile::default();
@@ -674,9 +683,9 @@ pub fn parse_schema_file(file: &str, text: &str) -> Result<SchemaFile, SchemaErr
                         saw_syntax = true;
                     }
                     Some(Token::Str(value)) if value == "proto2" => {
-                        return Err(cursor.error(
-                            "proto2 is not supported in v1",
-                        ));
+                        return Err(
+                            cursor.error("proto2 is not supported in v1")
+                        );
                     }
                     Some(Token::Str(_)) => {
                         return Err(cursor.error(
@@ -821,8 +830,9 @@ fn parse_message(
         }
         match cursor.peek_ident() {
             None => {
-                return Err(cursor
-                    .error("unterminated message body (expected `}`)"));
+                return Err(
+                    cursor.error("unterminated message body (expected `}`)")
+                );
             }
             Some("message") => {
                 cursor.next();
@@ -871,9 +881,9 @@ fn parse_message(
                 cursor.skip_to_semicolon()?;
             }
             Some("extensions") | Some("extend") | Some("group") => {
-                return Err(cursor.error(
-                    "proto2-only construct in a proto3 file",
-                ));
+                return Err(
+                    cursor.error("proto2-only construct in a proto3 file")
+                );
             }
             Some(";") => {
                 cursor.next();
@@ -970,13 +980,7 @@ fn parse_field(
         type_name = format!("map<{key}, {value}>");
         let field_name = cursor.expect_ident("a field name")?;
         return finish_field(
-            cursor,
-            message,
-            field_name,
-            type_name,
-            label,
-            oneof,
-            true,
+            cursor, message, field_name, type_name, label, oneof, true,
         );
     }
     type_name = parse_type(cursor)?;
@@ -1012,11 +1016,8 @@ fn finish_field(
 ) -> Result<(), SchemaError> {
     cursor.expect_punct('=')?;
     let number = match cursor.next() {
-        Some(Token::Number(value)) => {
-            u32::try_from(value).map_err(|_| {
-                cursor.error("field number out of range")
-            })?
-        }
+        Some(Token::Number(value)) => u32::try_from(value)
+            .map_err(|_| cursor.error("field number out of range"))?,
         other => {
             return Err(cursor.error(&format!(
                 "expected a field number, found {}",
@@ -1057,8 +1058,7 @@ fn finish_field(
         }
     }
     cursor.expect_punct(';')?;
-    let json_name =
-        json_name.unwrap_or_else(|| derived_json_name(&field_name));
+    let json_name = json_name.unwrap_or_else(|| derived_json_name(&field_name));
     if message.by_number.contains_key(&number) {
         return Err(cursor.error(&format!(
             "duplicate field number {number} in one message"
@@ -1070,15 +1070,18 @@ fn finish_field(
         )));
     }
     message.by_name.insert(field_name.clone(), number);
-    message.by_number.insert(number, SchemaField {
-        name: field_name,
+    message.by_number.insert(
         number,
-        type_name,
-        label,
-        json_name,
-        oneof: oneof.map(str::to_owned),
-        is_map,
-    });
+        SchemaField {
+            name: field_name,
+            number,
+            type_name,
+            label,
+            json_name,
+            oneof: oneof.map(str::to_owned),
+            is_map,
+        },
+    );
     Ok(())
 }
 
@@ -1118,11 +1121,10 @@ fn parse_enum(
                 let value_name = cursor.expect_ident("an enum value name")?;
                 cursor.expect_punct('=')?;
                 let number = match cursor.next() {
-                    Some(Token::Number(value)) => {
-                        i32::try_from(value).map_err(|_| {
+                    Some(Token::Number(value)) => i32::try_from(value)
+                        .map_err(|_| {
                             cursor.error("enum value number out of range")
-                        })?
-                    }
+                        })?,
                     other => {
                         return Err(cursor.error(&format!(
                             "expected an enum value number, found {}",
@@ -1135,8 +1137,7 @@ fn parse_enum(
                 }
                 cursor.expect_punct(';')?;
                 if enumeration.by_number.contains_key(&number)
-                    && enumeration.by_number.get(&number)
-                        != Some(&value_name)
+                    && enumeration.by_number.get(&number) != Some(&value_name)
                 {
                     // Two names sharing a number need `allow_alias`;
                     // without it the file is malformed proto.
@@ -1218,8 +1219,9 @@ fn parse_service(
         }
         match cursor.peek_ident() {
             None => {
-                return Err(cursor
-                    .error("unterminated service body (expected `}`)"));
+                return Err(
+                    cursor.error("unterminated service body (expected `}`)")
+                );
             }
             Some("option") => {
                 cursor.next();
@@ -1233,8 +1235,9 @@ fn parse_service(
                 let input = parse_type(cursor)?;
                 cursor.expect_punct(')')?;
                 if !cursor.eat_ident("returns") {
-                    return Err(cursor
-                        .error("expected `returns` after an rpc input"));
+                    return Err(
+                        cursor.error("expected `returns` after an rpc input")
+                    );
                 }
                 cursor.expect_punct('(')?;
                 cursor.eat_ident("stream");
@@ -1349,9 +1352,10 @@ pub fn collect_consumer_texts(
                     continue;
                 }
                 stack.push(path);
-            } else if path.extension().is_some_and(|ext| {
-                ext == "go" || ext == "py" || ext == "pyi"
-            }) {
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "go" || ext == "py" || ext == "pyi")
+            {
                 let relative = relative.to_string_lossy().replace('\\', "/");
                 let text = std::fs::read_to_string(&path).map_err(|error| {
                     SchemaError {
@@ -1549,9 +1553,7 @@ fn diff_file(
             });
             continue;
         };
-        diff_message(
-            path, message, old_message, new_message, breaks, added,
-        );
+        diff_message(path, message, old_message, new_message, breaks, added);
     }
     for message in new_file.messages.keys() {
         if !old_file.messages.contains_key(message) {
@@ -1672,9 +1674,7 @@ fn diff_message(
     for (number, old_field) in &old_message.by_number {
         if let Some(new_field) = new_message.by_number.get(number) {
             if new_field.name == old_field.name {
-                diff_same_field(
-                    path, message, old_field, new_field, breaks,
-                );
+                diff_same_field(path, message, old_field, new_field, breaks);
                 continue;
             }
             // Same number, different name: a rename only when the
@@ -2110,9 +2110,7 @@ fn build_modules(
                 let proto_path = generated_file
                     .path
                     .strip_suffix("_pb2.py")
-                    .or_else(|| {
-                        generated_file.path.strip_suffix("_pb2.pyi")
-                    })
+                    .or_else(|| generated_file.path.strip_suffix("_pb2.pyi"))
                     .or_else(|| {
                         generated_file.path.strip_suffix("_pb2_grpc.py")
                     })
@@ -2124,8 +2122,7 @@ fn build_modules(
                     .files
                     .get(&proto_path)
                     .or_else(|| suffix_proto(old_schema, &proto_path));
-                let Some(schema_file) = schema_file
-                else {
+                let Some(schema_file) = schema_file else {
                     // A generated file for a proto added on the new
                     // side has no old elements to join: skip it
                     // silently rather than crying about a file that
@@ -2156,19 +2153,21 @@ fn build_modules(
                     gen_message.go_name =
                         go_type_name(&schema_file.package, name);
                     for field in message.by_number.values() {
-                        gen_message.fields.insert(field.name.clone(), GenField {
-                            proto: field.name.clone(),
-                            go: go_field_name(&field.name),
-                            py: field.name.clone(),
-                            json: field.json_name.clone(),
-                        });
+                        gen_message.fields.insert(
+                            field.name.clone(),
+                            GenField {
+                                proto: field.name.clone(),
+                                go: go_field_name(&field.name),
+                                py: field.name.clone(),
+                                json: field.json_name.clone(),
+                            },
+                        );
                     }
                     module.messages.insert(name.clone(), gen_message);
                 }
                 for (name, enumeration) in &schema_file.enums {
                     let mut gen_enum = GenEnum::default();
-                    gen_enum.go_name =
-                        go_type_name(&schema_file.package, name);
+                    gen_enum.go_name = go_type_name(&schema_file.package, name);
                     for value in enumeration.by_number.values() {
                         gen_enum.values.insert(value.clone());
                     }
@@ -2192,11 +2191,10 @@ fn build_modules(
                     go_package: package,
                     ..Default::default()
                 };
-                let generated_dir =
-                    generated_file.path.rsplit_once('/').map_or(
-                        "",
-                        |(dir, _)| dir,
-                    );
+                let generated_dir = generated_file
+                    .path
+                    .rsplit_once('/')
+                    .map_or("", |(dir, _)| dir);
                 for (name, (message, package)) in &messages {
                     let go_name = go_type_name(package, name);
                     if !declared.structs.contains(&go_name) {
@@ -2217,21 +2215,22 @@ fn build_modules(
                     // measure_schema_impact already reports exactly
                     // that.
                     if !go_name_unique(&messages, &go_name)
-                        && !dir_matches_proto(
-                            old_schema, name, generated_dir,
-                        )
+                        && !dir_matches_proto(old_schema, name, generated_dir)
                     {
                         continue;
                     }
                     let mut gen_message = GenMessage::default();
                     gen_message.go_name = go_name.clone();
                     for field in message.by_number.values() {
-                        gen_message.fields.insert(field.name.clone(), GenField {
-                            proto: field.name.clone(),
-                            go: go_field_name(&field.name),
-                            py: field.name.clone(),
-                            json: field.json_name.clone(),
-                        });
+                        gen_message.fields.insert(
+                            field.name.clone(),
+                            GenField {
+                                proto: field.name.clone(),
+                                go: go_field_name(&field.name),
+                                py: field.name.clone(),
+                                json: field.json_name.clone(),
+                            },
+                        );
                     }
                     module.messages.insert(name.clone(), gen_message);
                 }
@@ -2432,8 +2431,7 @@ fn go_declarations(text: &str) -> GoDeclarations {
                     let mut is_interface = false;
                     let mut inner = child.walk();
                     for part in child.children(&mut inner) {
-                        if part.kind() == "type_identifier" && name.is_none()
-                        {
+                        if part.kind() == "type_identifier" && name.is_none() {
                             name = Some(node_slice(text, &part));
                         }
                         if part.kind() == "interface_type" {
@@ -2577,7 +2575,10 @@ fn match_chain(
 }
 
 /// Collect a Go file's imports: (path, alias).
-fn go_imports(root: &tree_sitter::Node<'_>, text: &str) -> Vec<(String, Option<String>)> {
+fn go_imports(
+    root: &tree_sitter::Node<'_>,
+    text: &str,
+) -> Vec<(String, Option<String>)> {
     let mut imports = Vec::new();
     let mut stack = vec![*root];
     while let Some(node) = stack.pop() {
@@ -2635,8 +2636,7 @@ fn resolve_go_imports(
     for (path, alias) in imports {
         let mut module_file: Option<String> = None;
         if let Some(target) = edge_targets.get(path) {
-            let target_dir =
-                target.rsplit_once('/').map_or("", |(dir, _)| dir);
+            let target_dir = target.rsplit_once('/').map_or("", |(dir, _)| dir);
             for module in modules {
                 if module.lang != Some(GeneratedLang::Go) {
                     continue;
@@ -2664,10 +2664,10 @@ fn resolve_go_imports(
                     continue;
                 }
                 let suffix_match = path_segments.len() >= dir_segments.len()
-                    && path_segments[path_segments.len() - dir_segments.len()..]
+                    && path_segments
+                        [path_segments.len() - dir_segments.len()..]
                         == dir_segments[..];
-                let last_match = path_segments.last()
-                    == dir_segments.last();
+                let last_match = path_segments.last() == dir_segments.last();
                 if suffix_match || last_match {
                     candidates.push(module.file.clone());
                 }
@@ -2675,14 +2675,16 @@ fn resolve_go_imports(
             candidates.sort();
             candidates.dedup();
             if candidates.len() == 1 {
-                module_file = Some(candidates.into_iter().next().unwrap_or_default());
+                module_file =
+                    Some(candidates.into_iter().next().unwrap_or_default());
             }
         }
         if let Some(module_file) = module_file {
             let alias = alias.clone().or_else(|| {
-                modules.iter().find(|m| m.file == module_file).and_then(|m| {
-                    m.go_package.clone()
-                })
+                modules
+                    .iter()
+                    .find(|m| m.file == module_file)
+                    .and_then(|m| m.go_package.clone())
             });
             resolved.push(ResolvedImport {
                 module_file,
@@ -2707,9 +2709,7 @@ fn scan_go(
     while let Some(node) = stack.pop() {
         match node.kind() {
             "composite_literal" => {
-                scan_go_literal(
-                    &node, file, text, imports, modules, evidence,
-                );
+                scan_go_literal(&node, file, text, imports, modules, evidence);
             }
             "call_expression" => {
                 scan_go_call(&node, text, imports, modules, evidence);
@@ -2721,8 +2721,7 @@ fn scan_go(
                 let literal =
                     node_slice(text, &node).trim_matches('"').to_owned();
                 for import in imports {
-                    let Some(module) = modules.get(&import.module_file)
-                    else {
+                    let Some(module) = modules.get(&import.module_file) else {
                         continue;
                     };
                     for (message, gen_message) in &module.messages {
@@ -2797,8 +2796,7 @@ fn scan_go_literal(
                 })
                 .map(|(qualified, _)| qualified)
             {
-                message =
-                    Some((import.module_file.clone(), qualified.clone()));
+                message = Some((import.module_file.clone(), qualified.clone()));
             }
         }
     }
@@ -2809,10 +2807,7 @@ fn scan_go_literal(
             if import.alias.as_deref() == Some(alias.as_str()) {
                 if let Some(module) = modules.get(&import.module_file) {
                     if module.messages.contains_key(&name)
-                        || module
-                            .messages
-                            .values()
-                            .any(|gm| gm.go_name == name)
+                        || module.messages.values().any(|gm| gm.go_name == name)
                     {
                         let qualified = module
                             .messages
@@ -2822,10 +2817,8 @@ fn scan_go_literal(
                             })
                             .map(|(qualified, _)| qualified.clone());
                         if let Some(qualified) = qualified {
-                            message = Some((
-                                import.module_file.clone(),
-                                qualified,
-                            ));
+                            message =
+                                Some((import.module_file.clone(), qualified));
                         }
                     }
                 }
@@ -2939,10 +2932,9 @@ fn scan_go_selector(
             // interface, or an enum constant.
             for (message, gm) in &module.messages {
                 if *message == field_text || gm.go_name == field_text {
-                    evidence.message_refs.insert((
-                        import.module_file.clone(),
-                        message.clone(),
-                    ));
+                    evidence
+                        .message_refs
+                        .insert((import.module_file.clone(), message.clone()));
                 }
             }
             for (enumeration, ge) in &module.enums {
@@ -2973,10 +2965,9 @@ fn scan_go_selector(
                 if field_text == format!("{short}Client")
                     || field_text == format!("{short}Server")
                 {
-                    evidence.service_refs.insert((
-                        import.module_file.clone(),
-                        service.clone(),
-                    ));
+                    evidence
+                        .service_refs
+                        .insert((import.module_file.clone(), service.clone()));
                 }
             }
             continue;
@@ -3012,18 +3003,13 @@ fn python_imports(
                 let mut cursor = node.walk();
                 for child in node.children(&mut cursor) {
                     if child.kind() == "dotted_name" {
-                        plain.push((
-                            node_slice(text, &child),
-                            None,
-                        ));
+                        plain.push((node_slice(text, &child), None));
                     } else if child.kind() == "aliased_import" {
                         let mut name = None;
                         let mut alias = None;
                         let mut inner = child.walk();
                         for part in child.children(&mut inner) {
-                            if part.kind() == "dotted_name"
-                                && name.is_none()
-                            {
+                            if part.kind() == "dotted_name" && name.is_none() {
                                 name = Some(node_slice(text, &part));
                             } else if part.kind() == "identifier" {
                                 alias = Some(node_slice(text, &part));
@@ -3105,7 +3091,9 @@ fn resolve_python_imports(
                 .or_insert_with(|| to.clone());
         }
     }
-    let match_module = |dotted: &str, edge_targets: &BTreeMap<String, String>| -> Option<String> {
+    let match_module = |dotted: &str,
+                        edge_targets: &BTreeMap<String, String>|
+     -> Option<String> {
         if let Some(target) = edge_targets.get(dotted) {
             for module in modules {
                 if module.lang == Some(GeneratedLang::Python)
@@ -3177,9 +3165,7 @@ fn scan_python(
                 scan_python_call(&node, text, imports, modules, evidence);
             }
             "attribute" => {
-                scan_python_attribute(
-                    &node, text, imports, modules, evidence,
-                );
+                scan_python_attribute(&node, text, imports, modules, evidence);
             }
             "identifier" => {
                 let name = node_slice(text, &node);
@@ -3187,8 +3173,7 @@ fn scan_python(
                     if !import.bound_names.contains(&name) {
                         continue;
                     }
-                    let Some(module) = modules.get(&import.module_file)
-                    else {
+                    let Some(module) = modules.get(&import.module_file) else {
                         continue;
                     };
                     for message in module.messages.keys() {
@@ -3324,9 +3309,7 @@ fn scan_python_call(
     // binding itself and the remainder is empty). Without the
     // second shape, the most common Python constructor form named
     // nothing.
-    if let Some((module_file, rest)) =
-        match_chain(&chain, imports, modules)
-    {
+    if let Some((module_file, rest)) = match_chain(&chain, imports, modules) {
         let message_name: Option<&String> = if rest.len() == 1 {
             Some(&rest[0])
         } else if rest.is_empty() && chain.len() == 1 {
@@ -3422,10 +3405,9 @@ fn scan_python_attribute(
                 .rsplit_once('.')
                 .map_or(message.as_str(), |(_, last)| last);
             if short == name || *message == *name {
-                evidence.message_refs.insert((
-                    module_file.clone(),
-                    message.clone(),
-                ));
+                evidence
+                    .message_refs
+                    .insert((module_file.clone(), message.clone()));
             }
         }
         for enumeration in module.enums.keys() {
@@ -3433,10 +3415,9 @@ fn scan_python_attribute(
                 .rsplit_once('.')
                 .map_or(enumeration.as_str(), |(_, last)| last);
             if short == name || *enumeration == *name {
-                evidence.enum_refs.insert((
-                    module_file.clone(),
-                    enumeration.clone(),
-                ));
+                evidence
+                    .enum_refs
+                    .insert((module_file.clone(), enumeration.clone()));
             }
         }
         for service in module.services.keys() {
@@ -3444,10 +3425,9 @@ fn scan_python_attribute(
                 .rsplit_once('.')
                 .map_or(service.as_str(), |(_, last)| last);
             if *name == format!("{short}Stub") {
-                evidence.service_refs.insert((
-                    module_file.clone(),
-                    service.clone(),
-                ));
+                evidence
+                    .service_refs
+                    .insert((module_file.clone(), service.clone()));
             }
         }
         // A from-imported root with one segment left: `Color.RED`
@@ -3495,8 +3475,7 @@ fn scan_python_attribute(
     // Enum constant: the remainder ends in Enum + VALUE, optionally
     // rooted at the message the enum nests in.
     if rest.len() >= 2 {
-        let (enum_name, value) =
-            (&rest[rest.len() - 2], &rest[rest.len() - 1]);
+        let (enum_name, value) = (&rest[rest.len() - 2], &rest[rest.len() - 1]);
         for enumeration in module.enums.keys() {
             let short = enumeration
                 .rsplit_once('.')
@@ -3583,15 +3562,12 @@ pub fn measure_schema_impact(
     let (pending, mut added) = diff_indexes(old_schema, new_schema);
     let mut coverage: Vec<String> = Vec::new();
 
-    let texts: BTreeMap<String, String> =
-        new_texts.iter().cloned().collect();
+    let texts: BTreeMap<String, String> = new_texts.iter().cloned().collect();
     let generated = find_generated(new_texts);
     let generated_files: BTreeSet<String> =
         generated.iter().map(|file| file.path.clone()).collect();
 
-    if !old_schema.files.is_empty()
-        || !new_schema.files.is_empty()
-    {
+    if !old_schema.files.is_empty() || !new_schema.files.is_empty() {
         if generated.is_empty() {
             coverage.push(
                 "Tier A is inapplicable: no generated Go or Python code \
@@ -3653,8 +3629,7 @@ pub fn measure_schema_impact(
     }
 
     // Scan every non-generated Go/Python file once.
-    let mut evidence_by_file: BTreeMap<String, FileEvidence> =
-        BTreeMap::new();
+    let mut evidence_by_file: BTreeMap<String, FileEvidence> = BTreeMap::new();
     let mut any_generated_import = false;
     for (path, text) in new_texts {
         if generated_files.contains(path) {
@@ -3724,8 +3699,13 @@ pub fn measure_schema_impact(
     let oracle = ResolutionOracle::from_report(old_report);
     let mut breaks = Vec::new();
     for pending in pending {
-        let (mut proven, mut named) =
-            join_consumers(&pending, &modules, &evidence_by_file, new_report, &oracle);
+        let (mut proven, mut named) = join_consumers(
+            &pending,
+            &modules,
+            &evidence_by_file,
+            new_report,
+            &oracle,
+        );
         sort_consumers(&mut proven);
         sort_consumers(&mut named);
         let seeds: BTreeSet<&str> = proven
@@ -3748,10 +3728,14 @@ pub fn measure_schema_impact(
         });
     }
     breaks.sort_by(|a, b| {
-        a.element.cmp(&b.element).then_with(|| a.schema_file.cmp(&b.schema_file))
+        a.element
+            .cmp(&b.element)
+            .then_with(|| a.schema_file.cmp(&b.schema_file))
     });
     added.sort_by(|a, b| {
-        a.element.cmp(&b.element).then_with(|| a.schema_file.cmp(&b.schema_file))
+        a.element
+            .cmp(&b.element)
+            .then_with(|| a.schema_file.cmp(&b.schema_file))
     });
     coverage.sort();
     coverage.dedup();
@@ -3810,8 +3794,7 @@ fn join_consumers(
             let short = message
                 .rsplit_once('.')
                 .map_or(message.as_str(), |(_, last)| last);
-            let is_service =
-                matches!(pending.target, BreakTarget::Service(_));
+            let is_service = matches!(pending.target, BreakTarget::Service(_));
             for module in modules.values() {
                 let implements = if is_service {
                     module.services.contains_key(message)

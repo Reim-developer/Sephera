@@ -104,8 +104,7 @@ fn field_removed_with_python_consumer_markdown() {
 #[test]
 fn field_removed_json_shape_and_fail_on() {
     let repo = repo_with_removal();
-    let output =
-        run_schema_impact(repo.path(), &["--format", "json"]);
+    let output = run_schema_impact(repo.path(), &["--format", "json"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).unwrap();
@@ -172,7 +171,8 @@ fn named_only_never_fails_the_gate() {
     write_file(dir, "api/user.proto", NEW_PROTO_NAME_REMOVED);
     // The JSON key is name-match evidence only: the break is real
     // but --fail-on must not fire on it.
-    let output = run_schema_impact(dir, &["--format", "json", "--fail-on", "1"]);
+    let output =
+        run_schema_impact(dir, &["--format", "json", "--fail-on", "1"]);
     assert!(output.status.success(), "{}", stderr(&output));
     let parsed: serde_json::Value =
         serde_json::from_slice(&output.stdout).unwrap();
@@ -209,7 +209,11 @@ fn non_repo_is_an_error_not_an_empty_report() {
     let temp_dir = tempdir().unwrap();
     let output = run_schema_impact(temp_dir.path(), &[]);
     assert!(!output.status.success());
-    assert!(stderr(&output).contains("git repository"), "{}", stderr(&output));
+    assert!(
+        stderr(&output).contains("git repository"),
+        "{}",
+        stderr(&output)
+    );
 }
 
 #[test]
@@ -283,5 +287,9 @@ fn identical_sides_report_no_breaks() {
     git(dir, &["tag", "v1"]);
     let output = run_schema_impact(dir, &[]);
     assert!(output.status.success(), "{}", stderr(&output));
-    assert!(stdout(&output).contains("No schema breaks."), "{}", stdout(&output));
+    assert!(
+        stdout(&output).contains("No schema breaks."),
+        "{}",
+        stdout(&output)
+    );
 }

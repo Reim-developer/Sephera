@@ -1689,16 +1689,16 @@ impl SepheraServer {
         } else {
             old_worktree.path().to_path_buf()
         };
-        let old_schema = schema::collect_schema_files(&old_base, &ignore_matcher)
-            .and_then(|files| schema::build_schema_index(&files))
-            .map_err(|error| {
-                map_internal_error("old schema index build failed")(
-                    anyhow::Error::new(error),
-                )
-            })?;
+        let old_schema =
+            schema::collect_schema_files(&old_base, &ignore_matcher)
+                .and_then(|files| schema::build_schema_index(&files))
+                .map_err(|error| {
+                    map_internal_error("old schema index build failed")(
+                        anyhow::Error::new(error),
+                    )
+                })?;
 
-        let (new_report, new_schema, new_texts) = if let Some(to) = &param.to
-        {
+        let (new_report, new_schema, new_texts) = if let Some(to) = &param.to {
             let new_worktree = checkout_worktree(&source.repo_root, to)
                 .map_err(map_internal_error("new ref checkout failed"))?;
             let built = build_graph_with_declarations(
@@ -1706,14 +1706,16 @@ impl SepheraServer {
                 &ignore_matcher,
             )
             .map_err(map_internal_error("new graph build failed"))?;
-            let new_schema =
-                schema::collect_schema_files(new_worktree.path(), &ignore_matcher)
-                    .and_then(|files| schema::build_schema_index(&files))
-                    .map_err(|error| {
-                        map_internal_error("new schema index build failed")(
-                            anyhow::Error::new(error),
-                        )
-                    })?;
+            let new_schema = schema::collect_schema_files(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .and_then(|files| schema::build_schema_index(&files))
+            .map_err(|error| {
+                map_internal_error("new schema index build failed")(
+                    anyhow::Error::new(error),
+                )
+            })?;
             let new_texts = schema::collect_consumer_texts(
                 new_worktree.path(),
                 &ignore_matcher,

@@ -33,12 +33,11 @@ use crate::{
         GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
         ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
         MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
-        RiskArgs, RiskOutputFormat, SchemaImpactArgs,
-        SchemaImpactOutputFormat, SettingsArgs, SimulateArgs,
-        SimulateOutputFormat, SkillArgs, SourceArgs, SymbolOutputFormat,
-        SymbolsArgs, TestImpactOutputFormat, TestPriorityArgs,
-        TestPriorityOutputFormat, UntestedArgs, UntestedOutputFormat,
-        WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
+        RiskArgs, RiskOutputFormat, SchemaImpactArgs, SchemaImpactOutputFormat,
+        SettingsArgs, SimulateArgs, SimulateOutputFormat, SkillArgs,
+        SourceArgs, SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat,
+        TestPriorityArgs, TestPriorityOutputFormat, UntestedArgs,
+        UntestedOutputFormat, WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
     behavior, breaking, change_impact, configure,
     context_config::{
@@ -46,7 +45,7 @@ use crate::{
     },
     coupling, dead, diff,
     gate::{self, Gate},
-    guard, impact, merge, schema_impact,
+    guard, impact, merge,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
         print_symbol_report, print_symbols_by_file, render_context_json,
@@ -54,7 +53,8 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, sarif, simulate, skill, test_priority, untested, watch, why,
+    review, risk, sarif, schema_impact, simulate, skill, test_priority,
+    untested, watch, why,
 };
 
 #[must_use]
@@ -2099,11 +2099,8 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    let old_base = old_side_base(
-        old_worktree.path(),
-        &source,
-        arguments.to.is_none(),
-    );
+    let old_base =
+        old_side_base(old_worktree.path(), &source, arguments.to.is_none());
     let old_schema = build_schema_side(
         &old_base,
         &arguments.settings,
@@ -2112,9 +2109,7 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
     )?;
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
-    let (new_report, new_schema, new_texts) = if let Some(to) =
-        &arguments.to
-    {
+    let (new_report, new_schema, new_texts) = if let Some(to) = &arguments.to {
         let new_worktree = checkout_worktree(&source.repo_root, to)
             .with_context(|| {
                 format!(
@@ -2187,9 +2182,7 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         SchemaImpactOutputFormat::Markdown => {
             schema_impact::render_markdown(&measured)
         }
-        SchemaImpactOutputFormat::Json => {
-            schema_impact::render_json(&measured)
-        }
+        SchemaImpactOutputFormat::Json => schema_impact::render_json(&measured),
     };
 
     if arguments.output_args.output.is_some() {

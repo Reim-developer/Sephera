@@ -39,8 +39,12 @@ pub fn render_markdown(report: &SchemaImpactReport) -> String {
         }
     }
     if !report.added.is_empty() {
-        writeln!(output, "## Added (informational) ({})\n", report.added.len())
-            .expect("writing to a String must succeed");
+        writeln!(
+            output,
+            "## Added (informational) ({})\n",
+            report.added.len()
+        )
+        .expect("writing to a String must succeed");
         for element in &report.added {
             writeln!(
                 output,
