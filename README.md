@@ -139,12 +139,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 43 |
-| Internal edges | 240 |
-| External edges | 126 |
+| Internal edges | 246 |
+| External edges | 131 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 40 |
 | Local crate edges | 0 |
-| Standard library edges | 76 |
+| Standard library edges | 81 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -167,7 +167,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 76 |
+| `std` | stdlib | unknown | 81 |
 | `anyhow` | declared | 1.0.102 | 19 |
 | `tempfile` | declared | 3.27.0 | 10 |
 | `rmcp` | declared | 1.3.0 | 9 |
@@ -180,8 +180,8 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imported by |
 |------|-------------|
+| `crates/sephera_runtime/src/lib.rs` | 44 |
 | `crates/sephera_context/src/lib.rs` | 40 |
-| `crates/sephera_runtime/src/lib.rs` | 38 |
 | `crates/sephera_context/src/types.rs` | 27 |
 | `crates/sephera_symbols/src/lib.rs` | 24 |
 | `crates/sephera_cli/src/output.rs` | 17 |
@@ -195,10 +195,10 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imports |
 |------|---------|
-| `crates/sephera_cli/src/run.rs` | 33 |
+| `crates/sephera_cli/src/run.rs` | 36 |
+| `crates/sephera_mcp/src/server.rs` | 19 |
 | `crates/sephera_context/src/builder.rs` | 18 |
 | `crates/sephera_context/src/lib.rs` | 18 |
-| `crates/sephera_mcp/src/server.rs` | 16 |
 | `crates/sephera_cli/src/output.rs` | 11 |
 | `crates/sephera_mcp/src/render/tests.rs` | 10 |
 | `crates/sephera_runtime/src/lib.rs` | 10 |
