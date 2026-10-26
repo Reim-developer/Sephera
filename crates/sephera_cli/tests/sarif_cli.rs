@@ -227,3 +227,65 @@ fn breaking_sarif_does_not_change_fail_on() {
         String::from_utf8_lossy(&passing.stderr)
     );
 }
+
+/// A plain directory, no git needed: `used` is named by the test
+/// file, `unused` by nothing.
+fn dir_with_untested_symbols() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    write_file(
+        dir,
+        "lib.py",
+        b"def used(x):\n    return x\n\ndef unused(x):\n    return x\n",
+    );
+    write_file(dir, "test_lib.py", b"from lib import used\n");
+    temp_dir
+}
+
+fn run_untested(dir: &Path, extra_args: &[&str]) -> Output {
+    let mut command = Command::new(env!("CARGO_BIN_EXE_sephera"));
+    command
+        .arg("untested")
+        .arg("--path")
+        .arg(dir)
+        .args(extra_args);
+    command.output().unwrap()
+}
+
+#[test]
+fn untested_sarif_reports_each_untested_symbol_at_its_declaring_file() {
+    let dir = dir_with_untested_symbols();
+    let output = run_untested(dir.path(), &["--format", "sarif"]);
+    let json = parse(&output);
+
+    assert_eq!(
+        json["$schema"],
+        "https://json.schemastore.org/sarif-2.1.0.json"
+    );
+    assert_eq!(json["version"], "2.1.0");
+    let driver = &json["runs"][0]["tool"]["driver"];
+    assert_eq!(driver["name"], "sephera");
+    assert_eq!(driver["version"], env!("CARGO_PKG_VERSION"));
+    let rules = driver["rules"].as_array().unwrap();
+    assert_eq!(rules.len(), 1);
+    assert_eq!(rules[0]["id"], "sephera-untested-symbol");
+    assert_eq!(rules[0]["defaultConfiguration"]["level"], "warning");
+
+    let results = json["runs"][0]["results"].as_array().unwrap();
+    assert_eq!(results.len(), 1);
+    assert_eq!(results[0]["ruleId"], "sephera-untested-symbol");
+    assert_eq!(
+        results[0]["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+        "lib.py"
+    );
+    let message = results[0]["message"]["text"].as_str().unwrap();
+    assert!(message.contains("`unused`"));
+    assert!(message.contains("Function"));
+    assert!(!json.to_string().contains("`used`"));
+
+    let properties = &json["runs"][0]["properties"];
+    assert_eq!(properties["tested_direct"], 1);
+    assert_eq!(properties["tested_indirect"], 0);
+    assert_eq!(properties["untested"], 1);
+    assert!(has_no_region(&json));
+}

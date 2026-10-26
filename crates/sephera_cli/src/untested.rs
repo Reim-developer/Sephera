@@ -7,6 +7,8 @@
 
 use std::fmt::Write as _;
 
+use crate::sarif;
+
 // Re-exported so `run.rs` keeps one import site for the whole
 // untested surface.
 pub use sephera_graph::untested::{UntestedReport, measure_untested};
@@ -65,4 +67,127 @@ pub fn render_markdown(report: &UntestedReport) -> String {
 pub fn render_json(report: &UntestedReport) -> String {
     serde_json::to_string_pretty(report)
         .expect("a report built from owned strings serializes")
+}
+
+/// Render the report as SARIF 2.1.0, for upload to code scanning.
+///
+/// One result per untested symbol, at its declaring file, under one
+/// warning rule: an untested symbol is a coverage gap, not a break,
+/// so it must not read as an error next to breaking's error rules.
+/// The counts ride on the run's properties, not on every result,
+/// because they describe the run and would only repeat per symbol.
+#[must_use]
+pub fn render_sarif(report: &UntestedReport) -> String {
+    let rules = vec![sarif::rule(
+        "sephera-untested-symbol",
+        "A declared symbol no test exercises.",
+        "warning",
+    )];
+    let results: Vec<serde_json::Value> = report
+        .untested
+        .iter()
+        .map(|symbol| {
+            let message = format!(
+                "untested symbol `{}` ({:?})",
+                symbol.symbol, symbol.kind
+            );
+            let location = sarif::file_location(&symbol.file);
+            sarif::result("sephera-untested-symbol", &message, &location, None)
+        })
+        .collect();
+    let properties = serde_json::json!({
+        "tested_direct": report.tested_direct,
+        "tested_indirect": report.tested_indirect,
+        "untested": report.untested.len(),
+    });
+    let document = sarif::document(&rules, &results, Some(properties));
+    serde_json::to_string_pretty(&document).expect("the report serializes")
+}
+
+#[cfg(test)]
+mod tests {
+    use sephera_core::declarations::DeclarationKind;
+    use sephera_graph::untested::UntestedSymbol;
+
+    use super::*;
+
+    fn report() -> UntestedReport {
+        UntestedReport {
+            test_files: vec!["test_lib.py".to_owned()],
+            tested_direct: 1,
+            tested_indirect: 2,
+            untested: vec![UntestedSymbol {
+                file: "lib.py".to_owned(),
+                symbol: "unused".to_owned(),
+                kind: DeclarationKind::Function,
+            }],
+        }
+    }
+
+    fn sarif(report: &UntestedReport) -> serde_json::Value {
+        serde_json::from_str(&render_sarif(report)).expect("valid JSON")
+    }
+
+    fn has_no_region(value: &serde_json::Value) -> bool {
+        match value {
+            serde_json::Value::Object(map) => {
+                !map.contains_key("region") && map.values().all(has_no_region)
+            }
+            serde_json::Value::Array(items) => items.iter().all(has_no_region),
+            _ => true,
+        }
+    }
+
+    #[test]
+    fn sarif_declares_one_warning_rule_and_one_result_per_untested_symbol() {
+        let json = sarif(&report());
+        assert_eq!(
+            json["$schema"],
+            "https://json.schemastore.org/sarif-2.1.0.json"
+        );
+        assert_eq!(json["version"], "2.1.0");
+        let driver = &json["runs"][0]["tool"]["driver"];
+        assert_eq!(driver["name"], "sephera");
+        let rules = driver["rules"].as_array().unwrap();
+        assert_eq!(rules.len(), 1);
+        assert_eq!(rules[0]["id"], "sephera-untested-symbol");
+        assert_eq!(rules[0]["defaultConfiguration"]["level"], "warning");
+        let results = json["runs"][0]["results"].as_array().unwrap();
+        assert_eq!(results.len(), 1);
+        assert_eq!(results[0]["ruleId"], "sephera-untested-symbol");
+        assert_eq!(
+            results[0]["locations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"],
+            "lib.py"
+        );
+        let message = results[0]["message"]["text"].as_str().unwrap();
+        assert!(message.contains("`unused`"));
+        assert!(message.contains("Function"));
+        assert!(results[0].get("relatedLocations").is_none());
+        assert!(has_no_region(&json));
+    }
+
+    #[test]
+    fn sarif_properties_carry_the_counts_not_the_results() {
+        let json = sarif(&report());
+        let properties = &json["runs"][0]["properties"];
+        assert_eq!(properties["tested_direct"], 1);
+        assert_eq!(properties["tested_indirect"], 2);
+        assert_eq!(properties["untested"], 1);
+    }
+
+    #[test]
+    fn sarif_with_no_untested_symbols_still_declares_its_rule() {
+        let mut empty = report();
+        empty.untested = vec![];
+        let json = sarif(&empty);
+        assert_eq!(json["runs"][0]["results"].as_array().unwrap().len(), 0);
+        assert_eq!(
+            json["runs"][0]["tool"]["driver"]["rules"]
+                .as_array()
+                .unwrap()
+                .len(),
+            1
+        );
+    }
 }

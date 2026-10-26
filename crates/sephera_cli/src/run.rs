@@ -1742,6 +1742,7 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
     let rendered = match arguments.format {
         UntestedOutputFormat::Markdown => untested::render_markdown(&measured),
         UntestedOutputFormat::Json => untested::render_json(&measured),
+        UntestedOutputFormat::Sarif => untested::render_sarif(&measured),
     };
 
     if arguments.output_args.output.is_some() {
