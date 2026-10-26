@@ -1396,14 +1396,15 @@ enum BreakTarget {
     /// A whole service: consumers are A1 service-symbol namers.
     Service(String),
     /// One field: consumers are A2 field-anchored + A3 name-match.
+    /// Both names are the OLD side's: consumers are old code, so a
+    /// rename's consumers name the old field and the old JSON key,
+    /// never the new ones.
     Field {
         /// The message's qualified name.
         message: String,
         /// The field's name on the old side.
         field: String,
-        /// The field's name on the new side (renames move it).
-        new_field: String,
-        /// The field's `json_name` on the new side.
+        /// The field's `json_name` on the old side.
         json_name: String,
     },
     /// One enum value: consumers are A2 enum-constant namers.
@@ -1658,8 +1659,7 @@ fn diff_message(
                     target: BreakTarget::Field {
                         message: message.to_owned(),
                         field: old_field.name.clone(),
-                        new_field: new_field.name.clone(),
-                        json_name: new_field.json_name.clone(),
+                        json_name: old_field.json_name.clone(),
                     },
                 });
             } else {
@@ -1671,7 +1671,6 @@ fn diff_message(
                     target: BreakTarget::Field {
                         message: message.to_owned(),
                         field: old_field.name.clone(),
-                        new_field: old_field.name.clone(),
                         json_name: old_field.json_name.clone(),
                     },
                 });
@@ -1698,7 +1697,6 @@ fn diff_message(
                 target: BreakTarget::Field {
                     message: message.to_owned(),
                     field: old_field.name.clone(),
-                    new_field: old_field.name.clone(),
                     json_name: old_field.json_name.clone(),
                 },
             });
@@ -1712,7 +1710,6 @@ fn diff_message(
             target: BreakTarget::Field {
                 message: message.to_owned(),
                 field: old_field.name.clone(),
-                new_field: old_field.name.clone(),
                 json_name: old_field.json_name.clone(),
             },
         });
@@ -1743,8 +1740,7 @@ fn diff_same_field(
     let target = || BreakTarget::Field {
         message: message.to_owned(),
         field: old_field.name.clone(),
-        new_field: new_field.name.clone(),
-        json_name: new_field.json_name.clone(),
+        json_name: old_field.json_name.clone(),
     };
     if old_field.type_name != new_field.type_name {
         breaks.push(PendingBreak {
@@ -3280,6 +3276,46 @@ fn scan_python_attribute(
                 ));
             }
         }
+        // A from-imported root with one segment left: `Color.RED`
+        // where Color was from-imported, or `User.name` where User
+        // was. The chain root is the bound name, so the leaf is an
+        // enum value of that enum or a field access on that message
+        // — the same evidence the plain-import chain gives, through
+        // the binding instead of the module path. Without this, the
+        // most common Python enum-value form names nothing.
+        if chain.len() == 2 {
+            let root = &chain[0];
+            for enumeration in module.enums.keys() {
+                let short = enumeration
+                    .rsplit_once('.')
+                    .map_or(enumeration.as_str(), |(_, last)| last);
+                if (short == root || *enumeration == *root)
+                    && module.enums[enumeration].values.contains(name)
+                {
+                    evidence.enum_consts.insert((
+                        module_file.clone(),
+                        enumeration.clone(),
+                        name.clone(),
+                    ));
+                }
+            }
+            for (message, gen_message) in &module.messages {
+                let short = message
+                    .rsplit_once('.')
+                    .map_or(message.as_str(), |(_, last)| last);
+                if short == root || *message == *root {
+                    for field in gen_message.fields.values() {
+                        if field.py == *name {
+                            evidence.field_accesses.insert((
+                                module_file.clone(),
+                                message.clone(),
+                                field.proto.clone(),
+                            ));
+                        }
+                    }
+                }
+            }
+        }
         return;
     }
     // Enum constant: the remainder ends in Enum + VALUE, optionally
@@ -3616,12 +3652,13 @@ fn join_consumers(
         }
         BreakTarget::Field {
             message,
-            new_field,
+            field: old_field,
+            json_name: old_json_name,
             ..
         } => {
             for (file, evidence) in evidence_by_file {
                 for (_, qualified, field) in &evidence.struct_literals {
-                    if qualified == message && field == new_field {
+                    if qualified == message && field == old_field {
                         proven.push(SchemaConsumer {
                             file: file.clone(),
                             via: ConsumerVia::StructLiteral,
@@ -3629,7 +3666,7 @@ fn join_consumers(
                     }
                 }
                 for (_, qualified, field) in &evidence.kwargs {
-                    if qualified == message && field == new_field {
+                    if qualified == message && field == old_field {
                         proven.push(SchemaConsumer {
                             file: file.clone(),
                             via: ConsumerVia::ConstructorKwarg,
@@ -3637,7 +3674,7 @@ fn join_consumers(
                     }
                 }
                 for (_, qualified, field) in &evidence.field_accesses {
-                    if qualified == message && field == new_field {
+                    if qualified == message && field == old_field {
                         named.push(SchemaConsumer {
                             file: file.clone(),
                             via: ConsumerVia::FieldAccess,
@@ -3645,7 +3682,7 @@ fn join_consumers(
                     }
                 }
                 for (_, qualified, field) in &evidence.json_keys {
-                    if qualified == message && field == new_field {
+                    if qualified == message && field == old_json_name {
                         named.push(SchemaConsumer {
                             file: file.clone(),
                             via: ConsumerVia::JsonKey,
