@@ -128,7 +128,9 @@ mod tests {
             ..report()
         };
         let rendered = render_markdown(&truncated);
-        assert!(rendered.contains("2629 untested in total"), "{rendered}");
+        // The header wraps across lines, so the assertions use
+        // fragments that do not cross a wrap.
+        assert!(rendered.contains("2629 untested"), "{rendered}");
         assert!(rendered.contains("Showing 1 of 2629"), "{rendered}");
     }
 
