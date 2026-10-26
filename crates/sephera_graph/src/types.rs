@@ -97,7 +97,7 @@ pub struct GraphNode {
 }
 
 /// Metrics computed from the dependency graph.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct GraphMetrics {
     /// Total number of files analyzed.
     pub total_files: u64,
@@ -183,7 +183,7 @@ pub struct FileMetric {
 }
 
 /// The complete dependency graph report.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize)]
 pub struct GraphReport {
     /// Base path that was analyzed.
     pub base_path: PathBuf,

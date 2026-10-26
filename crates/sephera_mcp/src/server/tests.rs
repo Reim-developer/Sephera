@@ -1501,6 +1501,48 @@ async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
     );
 }
 
+// Regression for the breaking --path <subdir> bug in the MCP
+// tool: without `to`, the old side was built over the whole
+// worktree while the new side was built over the analysis
+// directory, so the consumer scan missed exactly like the CLI's
+// did. Relative imports, so they resolve under both bases.
+#[tokio::test]
+async fn regression_breaking_tool_subdir_without_to_finds_consumers() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/lib.py", b"def add(x, y):\n    return x + y\n");
+    write_file(
+        dir,
+        "pkg/user.py",
+        b"from .lib import add\n\nprint(add(1, 2))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v1 declares add"]);
+    git(dir, &["tag", "v1"]);
+    write_file(dir, "pkg/lib.py", b"def keep(x):\n    return x\n");
+
+    let output = server
+        .breaking(param_for(BreakingInput {
+            path: Some(dir.join("pkg").to_string_lossy().into_owned()),
+            from: "v1".to_owned(),
+            to: None,
+            ignore: None,
+            no_gitignore: None,
+            format: None,
+        }))
+        .await
+        .expect("breaking tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("breaking output must be JSON");
+
+    let broken = &parsed["broken"][0];
+    assert_eq!(broken["symbol"], "add", "{output}");
+    assert_eq!(broken["change"], "removed", "{output}");
+    assert_eq!(broken["direct"][0]["file"], "user.py", "{output}");
+}
+
 /// Two branches off one base: ours removes `add` from lib.py,
 /// theirs adds a new consumer of it. The merge tool reads all
 /// three trees from refs, never from the working tree.

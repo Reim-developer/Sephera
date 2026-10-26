@@ -32,7 +32,8 @@ use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
     ResolvedSource, SourceRequest, build_context_report, changed_files,
     checkout_worktree, commit_meta, first_parent_commit, log_commits_for_file,
-    merge_base, recent_commit_files, resolve_context_command, resolve_source,
+    merge_base, recent_commit_files, repo_toplevel, resolve_context_command,
+    resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -999,9 +1000,12 @@ impl SepheraServer {
 
         let old_worktree = checkout_worktree(&source.repo_root, &param.from)
             .map_err(map_internal_error("old ref checkout failed"))?;
-        let (old_report, old_index) =
-            build_graph_with_declarations(old_worktree.path(), &ignore_matcher)
-                .map_err(map_internal_error("old graph build failed"))?;
+        let (old_report, old_index) = build_old_side(
+            old_worktree.path(),
+            &source,
+            param.to.is_none(),
+            &ignore_matcher,
+        )?;
 
         let (new_report, new_index) = if let Some(to) = &param.to {
             let new_worktree = checkout_worktree(&source.repo_root, to)
@@ -1876,9 +1880,68 @@ fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
     output
 }
 
+/// The repo-relative path of the analysis directory, the twin of
+/// the CLI's helper of the same name: empty at the repo root, the
+/// subdirectory otherwise, empty again when the analysis directory
+/// is not under the repo root at all. Any failure means no prefix
+/// — today's spelling — never an invented path.
+fn analysis_prefix(source: &ResolvedSource) -> std::path::PathBuf {
+    if let Ok(relative) = source.analysis_path.strip_prefix(&source.repo_root)
+        && !relative.as_os_str().is_empty()
+    {
+        return relative.to_path_buf();
+    }
+    let canonical = std::fs::canonicalize(&source.analysis_path)
+        .unwrap_or_else(|_| source.analysis_path.clone());
+    let Some(toplevel) = repo_toplevel(&source.analysis_path) else {
+        return std::path::PathBuf::new();
+    };
+    canonical.strip_prefix(&toplevel).map_or_else(
+        |_| std::path::PathBuf::new(),
+        std::path::Path::to_path_buf,
+    )
+}
+
+/// Build the old side of a comparison from its checkout worktree,
+/// scoped to the analysis directory when `scoped` is set (the
+/// no-`to` shape) and whole-tree otherwise. A scope that did not
+/// exist at the old ref is an empty side, not an error:
+/// everything in it is new, so nothing in it broke.
+fn build_old_side(
+    old_worktree_path: &std::path::Path,
+    source: &ResolvedSource,
+    scoped: bool,
+    ignore_matcher: &IgnoreMatcher,
+) -> Result<
+    (
+        sephera_graph::types::GraphReport,
+        sephera_core::declarations::DeclarationIndex,
+    ),
+    rmcp::ErrorData,
+> {
+    let base = if scoped {
+        old_worktree_path.join(analysis_prefix(source))
+    } else {
+        old_worktree_path.to_path_buf()
+    };
+    if base.is_dir() {
+        build_graph_with_declarations(&base, ignore_matcher)
+            .map_err(map_internal_error("old graph build failed"))
+    } else {
+        Ok((
+            sephera_graph::types::GraphReport {
+                base_path: base,
+                ..Default::default()
+            },
+            sephera_core::declarations::DeclarationIndex::default(),
+        ))
+    }
+}
+
 /// The breaking side of a review: the ref in a detached worktree
-/// against the working tree, each built whole-tree — the same
-/// discipline the `breaking` tool uses, so the two cannot disagree.
+/// against the working tree, the ref side scoped to the analysis
+/// directory like the working-tree side — the same discipline the
+/// `breaking` tool uses, so the two cannot disagree.
 /// The review's own graph build cannot serve as the new side: it
 /// keeps no declarations.
 fn measure_review_breaking(
@@ -1889,8 +1952,7 @@ fn measure_review_breaking(
     let old_worktree = checkout_worktree(&source.repo_root, against)
         .map_err(map_internal_error("old ref checkout failed"))?;
     let (old_report, old_index) =
-        build_graph_with_declarations(old_worktree.path(), ignore_matcher)
-            .map_err(map_internal_error("old graph build failed"))?;
+        build_old_side(old_worktree.path(), source, true, ignore_matcher)?;
     let (new_report, new_index) =
         build_graph_with_declarations(&source.analysis_path, ignore_matcher)
             .map_err(map_internal_error("working tree graph build failed"))?;

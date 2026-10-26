@@ -139,12 +139,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 43 |
-| Internal edges | 247 |
-| External edges | 131 |
+| Internal edges | 248 |
+| External edges | 132 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 40 |
 | Local crate edges | 0 |
-| Standard library edges | 81 |
+| Standard library edges | 82 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
