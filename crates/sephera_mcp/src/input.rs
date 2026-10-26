@@ -534,6 +534,15 @@ pub struct MergeInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `diff` tool.
+///
+/// The comparison is between two refs of one local repository, so
+/// there is no `url` argument: a remote checkout is one ref already
+/// and has nothing to compare against. `from` is required; `to`
+/// defaults to the working tree, the form a branch review takes
+/// before it is pushed.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
 pub struct DiffInput {
     /// Absolute or relative path to the repository root.
     pub path: Option<String>,

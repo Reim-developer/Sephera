@@ -32,7 +32,7 @@ use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
     ResolvedSource, SourceRequest, build_context_report, changed_files,
     checkout_worktree, commit_meta, first_parent_commit, log_commits_for_file,
-    merge_base, recent_commit_files,
+    merge_base, recent_commit_files, resolve_context_command, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -1138,6 +1138,20 @@ impl SepheraServer {
         }
     }
 
+    /// Compare two refs and report every declared symbol that was
+    /// added, removed, or reshaped: the API changelog. The
+    /// measurement is `sephera_graph::diff`'s, shared with the `diff`
+    /// command, so the two cannot disagree. Additions are included
+    /// here and never in `breaking`: a new symbol breaks nothing,
+    /// but a changelog without additions hides half the release.
+    #[tool(
+        name = "diff",
+        description = "Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog. A move reads as a removal plus an addition, because claiming a move would need the suggestion machinery. The comparison rules are the same as `breaking`'s, so the two cannot disagree about a symbol both name: kinds compared outright, call shapes for functions only, a shape on only one side stays silent. Only Rust and Python collect declarations, so only their symbols can be reported. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
     async fn diff(
         &self,
         rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<DiffInput>,
@@ -3235,6 +3249,9 @@ fn merge_markdown(report: &MergeReport) -> String {
     output
 }
 
+/// The symbol-level diff between two refs, as the `diff` tool
+/// renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct DiffReport {
     /// The older ref, as the caller spelled it.
     pub from: String,
@@ -3244,6 +3261,8 @@ pub struct DiffReport {
     pub changes: Vec<DiffSymbolReport>,
 }
 
+/// One changed symbol, as the `diff` tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct DiffSymbolReport {
     /// The file that declares the symbol.
     pub file: String,
@@ -3260,6 +3279,59 @@ pub struct DiffSymbolReport {
     pub old_signature: Option<SignatureReport>,
     /// The call shape the new tree declares, for a signature change.
     pub new_signature: Option<SignatureReport>,
+}
+
+impl DiffReport {
+    fn from_measured(measured: &diff::DiffReport) -> Self {
+        Self {
+            from: measured.from_ref.clone(),
+            to: measured.to_ref.clone(),
+            changes: measured
+                .changes
+                .iter()
+                .map(|change| {
+                    let (change_label, new_kind, old_signature, new_signature) =
+                        match &change.change {
+                            diff::DiffChange::Added => {
+                                ("added".to_owned(), None, None, None)
+                            }
+                            diff::DiffChange::Removed => {
+                                ("removed".to_owned(), None, None, None)
+                            }
+                            diff::DiffChange::KindChanged { to } => (
+                                "kind_changed".to_owned(),
+                                Some(format!("{to:?}").to_lowercase()),
+                                None,
+                                None,
+                            ),
+                            diff::DiffChange::SignatureChanged { from, to } => {
+                                (
+                                    "signature_changed".to_owned(),
+                                    None,
+                                    Some(SignatureReport {
+                                        parameters: from.parameters.clone(),
+                                        returns: from.returns.clone(),
+                                    }),
+                                    Some(SignatureReport {
+                                        parameters: to.parameters.clone(),
+                                        returns: to.returns.clone(),
+                                    }),
+                                )
+                            }
+                        };
+                    DiffSymbolReport {
+                        file: change.file.clone(),
+                        symbol: change.symbol.clone(),
+                        kind: format!("{:?}", change.kind).to_lowercase(),
+                        change: change_label,
+                        new_kind,
+                        old_signature,
+                        new_signature,
+                    }
+                })
+                .collect(),
+        }
+    }
 }
 
 fn diff_markdown(report: &DiffReport) -> String {

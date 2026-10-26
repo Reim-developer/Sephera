@@ -41,7 +41,7 @@ use crate::{
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
-    coupling, dead,
+    coupling, dead, diff,
     gate::{self, Gate},
     guard, impact, merge,
     output::{
