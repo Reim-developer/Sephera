@@ -22,7 +22,12 @@
 //! commit — and this module decides what the snapshots prove.
 //! One whole-tree build happens per commit that touched the
 //! tracked file, so `--window` bounds the cost as well as the
-//! depth.
+//! depth. When a file's log runs out — the case of a symbol that
+//! moved INTO a new file, whose older commits touch no such file
+//! — the walk falls back to the first-parent parent of the oldest
+//! examined commit and compares against that instead. Without the
+//! fallback, every move into a new file would read as a birth at
+//! the move commit, which is exactly the wrong answer.
 
 use std::collections::BTreeSet;
 use std::fmt;
@@ -183,7 +188,12 @@ pub type HistoryLog =
 
 /// Builds one commit's tree.
 pub type HistoryBuild =
-    dyn Fn(&str) -> Result<HistorySnapshot, ArchaeologyError>;
+    dyn Fn(&HistoryCommit) -> Result<HistorySnapshot, ArchaeologyError>;
+
+/// The first-parent parent of a commit, when it has one. The
+/// root commit has none, and that is not an error.
+pub type HistoryParent =
+    dyn Fn(&str) -> Result<Option<HistoryCommit>, ArchaeologyError>;
 
 /// What comparing one snapshot with the next older one proves.
 enum OlderOutcome {
@@ -268,13 +278,65 @@ fn born_step(
     }
 }
 
-/// Trace one symbol from `start_ref` backwards.
+/// A rename or move step at the newer snapshot, from the older
+/// identity to the tracked one.
+fn step_from(
+    newer: &HistorySnapshot,
+    kind: ArchaeologyKind,
+    from_file: &str,
+    from_name: &str,
+    to_file: &str,
+    to_name: &str,
+) -> ArchaeologyStep {
+    ArchaeologyStep {
+        commit: newer.commit.hash.clone(),
+        author: newer.commit.author.clone(),
+        date: newer.commit.date.clone(),
+        message: newer.commit.message.clone(),
+        kind,
+        from_file: Some(from_file.to_owned()),
+        from_name: Some(from_name.to_owned()),
+        to_file: to_file.to_owned(),
+        to_name: to_name.to_owned(),
+    }
+}
+
+/// The next older snapshot to compare against: the newest
+/// unexamined commit touching the tracked file, or — when the
+/// file's log runs out — the first-parent parent of the oldest
+/// examined commit, which is how a move INTO a new file is found
+/// at all. `None` means nothing older exists: the root commit,
+/// or a parent already examined.
+fn next_older(
+    from_ref: &str,
+    tracked_file: &str,
+    oldest_examined: &str,
+    examined: &BTreeSet<String>,
+    log: &HistoryLog,
+    parent: &HistoryParent,
+) -> Result<Option<HistoryCommit>, ArchaeologyError> {
+    for commit in log(from_ref, tracked_file)? {
+        if examined.contains(&commit.hash) {
+            continue;
+        }
+        return Ok(Some(commit));
+    }
+    match parent(oldest_examined)? {
+        Some(parent_commit) if !examined.contains(&parent_commit.hash) => {
+            Ok(Some(parent_commit))
+        }
+        _ => Ok(None),
+    }
+}
+
+/// Trace one symbol from `start` backwards.
 ///
 /// `log` lists the commits touching a file from a ref, newest
-/// first; `build` builds one commit's tree. The first snapshot is
-/// built at `start_ref` itself, because the symbol as it stands
-/// at the starting ref is the query — the newest commit touching
-/// the file may be older than the ref when later commits touched
+/// first; `build` builds one commit's tree; `parent` names the
+/// first-parent parent of a commit. The first snapshot is built
+/// at `start` itself, because the symbol as it stands at the
+/// starting ref is the query — the newest commit touching the
+/// file may be older than the ref when later commits touched
 /// other files. Commits already examined are skipped, which is
 /// what lets the walk re-query the log after a move without
 /// rebuilding the commit it already stands on.
@@ -293,98 +355,46 @@ fn born_step(
 /// when the log provider fails, and `ArchaeologyError::Build`
 /// when a commit's tree cannot be built.
 pub fn trace_symbol(
-    start_ref: &str,
+    start: &HistoryCommit,
     start_file: &str,
     start_symbol: &str,
     window: usize,
     log: &HistoryLog,
     build: &HistoryBuild,
+    parent: &HistoryParent,
 ) -> Result<ArchaeologyReport, ArchaeologyError> {
     let mut steps_newest_first: Vec<ArchaeologyStep> = Vec::new();
     let mut examined: BTreeSet<String> = BTreeSet::new();
     let mut examined_count = 0;
 
     // The newer side of the next comparison, and the identity it
-    // carries. The first build is the starting ref itself.
-    let mut newer = build(start_ref)?;
-    examined.insert(start_ref.to_owned());
+    // carries. The first build is the starting commit itself.
+    let mut newer = build(start)?;
+    examined.insert(start.hash.clone());
     examined_count += 1;
     if newer.index.kind_in(start_file, start_symbol).is_none() {
         return Err(ArchaeologyError::SymbolNotFound);
     }
     let mut tracked_file = start_file.to_owned();
     let mut tracked_name = start_symbol.to_owned();
-    let mut from_ref = start_ref.to_owned();
+    let mut from_ref = start.hash.clone();
+    let mut oldest_examined = start.hash.clone();
 
     let mut origin_found = false;
     let mut note = None;
 
-    'outer: loop {
-        let commits = log(&from_ref, &tracked_file)?;
-        let mut advanced = false;
-        for commit in &commits {
-            if examined.contains(&commit.hash) {
-                continue;
-            }
-            if examined_count >= window {
-                note = Some(format!(
-                    "the trail stops after {window} examined commits without reaching a birth"
-                ));
-                break 'outer;
-            }
-            let older = build(&commit.hash)?;
-            examined.insert(commit.hash.clone());
-            examined_count += 1;
-            advanced = true;
-            match classify_older(&newer, &older, &tracked_file, &tracked_name) {
-                OlderOutcome::Continuous => {
-                    newer = older;
-                }
-                OlderOutcome::Born => {
-                    steps_newest_first.push(born_step(
-                        &newer,
-                        &tracked_file,
-                        &tracked_name,
-                    ));
-                    origin_found = true;
-                    break 'outer;
-                }
-                OlderOutcome::Step {
-                    kind,
-                    from_file,
-                    from_name,
-                } => {
-                    steps_newest_first.push(ArchaeologyStep {
-                        commit: newer.commit.hash.clone(),
-                        author: newer.commit.author.clone(),
-                        date: newer.commit.date.clone(),
-                        message: newer.commit.message.clone(),
-                        kind,
-                        from_file: Some(from_file.clone()),
-                        from_name: Some(from_name.clone()),
-                        to_file: tracked_file.clone(),
-                        to_name: tracked_name.clone(),
-                    });
-                    // The older tree becomes the newer side, under
-                    // the older identity, and the log is re-queried
-                    // for the older file from the older commit.
-                    tracked_file = from_file;
-                    tracked_name = from_name;
-                    from_ref.clone_from(&older.commit.hash);
-                    newer = older;
-                    continue 'outer;
-                }
-                OlderOutcome::Ambiguous { count, hash } => {
-                    note = Some(format!(
-                        "{count} older symbols share the consumer set at {hash}, so the identity cannot be proven"
-                    ));
-                    break 'outer;
-                }
-            }
-        }
-        if !advanced {
-            // No older commit touches the tracked file: the oldest
-            // examined tree is where the symbol was born.
+    loop {
+        let Some(older_commit) = next_older(
+            &from_ref,
+            &tracked_file,
+            &oldest_examined,
+            &examined,
+            log,
+            parent,
+        )?
+        else {
+            // Nothing older exists, so the oldest examined tree
+            // is where the symbol was born.
             steps_newest_first.push(born_step(
                 &newer,
                 &tracked_file,
@@ -392,6 +402,59 @@ pub fn trace_symbol(
             ));
             origin_found = true;
             break;
+        };
+        if examined_count >= window {
+            note = Some(format!(
+                "the trail stops after {window} examined commits without reaching a birth"
+            ));
+            break;
+        }
+        let older = build(&older_commit)?;
+        examined.insert(older_commit.hash.clone());
+        examined_count += 1;
+        match classify_older(&newer, &older, &tracked_file, &tracked_name) {
+            OlderOutcome::Continuous => {
+                from_ref.clone_from(&older.commit.hash);
+                oldest_examined.clone_from(&older.commit.hash);
+                newer = older;
+            }
+            OlderOutcome::Born => {
+                steps_newest_first.push(born_step(
+                    &newer,
+                    &tracked_file,
+                    &tracked_name,
+                ));
+                origin_found = true;
+                break;
+            }
+            OlderOutcome::Step {
+                kind,
+                from_file,
+                from_name,
+            } => {
+                steps_newest_first.push(step_from(
+                    &newer,
+                    kind,
+                    &from_file,
+                    &from_name,
+                    &tracked_file,
+                    &tracked_name,
+                ));
+                // The older tree becomes the newer side, under
+                // the older identity, and the log is re-queried
+                // for the older file from the older commit.
+                tracked_file = from_file;
+                tracked_name = from_name;
+                from_ref.clone_from(&older.commit.hash);
+                oldest_examined.clone_from(&older.commit.hash);
+                newer = older;
+            }
+            OlderOutcome::Ambiguous { count, hash } => {
+                note = Some(format!(
+                    "{count} older symbols share the consumer set at {hash}, so the identity cannot be proven"
+                ));
+                break;
+            }
         }
     }
 
