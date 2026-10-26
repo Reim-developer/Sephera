@@ -8,11 +8,14 @@
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
 pub mod affected_tests;
+pub mod archaeology;
+pub mod behavior;
 pub mod blast_radius;
 pub mod breaking;
 pub mod coupling;
 pub mod dead;
 pub mod dependency_path;
+pub mod diff;
 pub mod manifests;
 pub mod merge;
 pub mod plugins;
@@ -20,6 +23,7 @@ pub mod render;
 pub mod resolver;
 pub mod review;
 pub mod risk;
+pub mod simulate;
 pub mod symbol_impact;
 pub mod types;
 pub mod untested;

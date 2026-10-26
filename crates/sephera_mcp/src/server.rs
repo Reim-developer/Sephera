@@ -20,18 +20,19 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, breaking, coupling, dead, dependency_path, merge,
+    archaeology, behavior, blast_radius, breaking, coupling, dead,
+    dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
-    review, risk, symbol_impact,
+    review, risk, simulate, symbol_impact,
     types::{GraphFormat, GraphQuery},
     untested,
 };
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
     ResolvedSource, SourceRequest, build_context_report, changed_files,
-    checkout_worktree, merge_base, recent_commit_files,
-    resolve_context_command, resolve_source,
+    checkout_worktree, commit_meta, first_parent_commit, log_commits_for_file,
+    merge_base, recent_commit_files, resolve_context_command, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -39,9 +40,10 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
-        DeadInput, GraphInput, ImpactInput, LocInput, MergeInput, ReviewInput,
-        RiskInput, SymbolsInput, UntestedInput, WhyInput,
+        AffectedTestsInput, ArchaeologyInput, BehaviorInput, BreakingInput,
+        ContextInput, CouplingInput, DeadInput, DiffInput, GraphInput,
+        ImpactInput, LocInput, MergeInput, ReviewInput, RiskInput,
+        SimulateInput, SymbolsInput, UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1136,6 +1138,369 @@ impl SepheraServer {
         }
     }
 
+    /// Compare two refs and report every declared symbol that was
+    /// added, removed, or reshaped: the API changelog. The
+    /// measurement is `sephera_graph::diff`'s, shared with the `diff`
+    /// command, so the two cannot disagree. Additions are included
+    /// here and never in `breaking`: a new symbol breaks nothing,
+    /// but a changelog without additions hides half the release.
+    #[tool(
+        name = "diff",
+        description = "Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog. A move reads as a removal plus an addition, because claiming a move would need the suggestion machinery. The comparison rules are the same as `breaking`'s, so the two cannot disagree about a symbol both name: kinds compared outright, call shapes for functions only, a shape on only one side stays silent. Only Rust and Python collect declarations, so only their symbols can be reported. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn diff(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<DiffInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let old_worktree = checkout_worktree(&source.repo_root, &param.from)
+            .map_err(map_internal_error("old ref checkout failed"))?;
+        let (_, old_index) =
+            build_graph_with_declarations(old_worktree.path(), &ignore_matcher)
+                .map_err(map_internal_error("old graph build failed"))?;
+
+        let (_, new_index) = if let Some(to) = &param.to {
+            let new_worktree = checkout_worktree(&source.repo_root, to)
+                .map_err(map_internal_error("new ref checkout failed"))?;
+            let built = build_graph_with_declarations(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("new graph build failed"))?;
+            drop(new_worktree);
+            built
+        } else {
+            build_graph_with_declarations(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("working tree graph build failed"))?
+        };
+        drop(old_worktree);
+
+        let to_label = param.to.as_deref().unwrap_or("working tree");
+        let measured =
+            diff::measure_diff(&old_index, &new_index, &param.from, to_label);
+        let built = DiffReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(diff_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported diff format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Compare two refs and report the changes that still compile
+    /// but change behaviour: swapped call arguments and numeric
+    /// constant changes. The measurement is
+    /// `sephera_graph::behavior`'s, shared with the `behavior`
+    /// command, so the two cannot disagree. This is a report, not
+    /// a gate: there is no fail-on, because the detector's
+    /// precision is measured by its corpus.
+    #[tool(
+        name = "behavior",
+        description = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes. An argument-order swap is a call site whose arguments are the same multiset in a different order, where the callee's signature did not change — in Rust the swap must also type check at the swapped positions. A numeric constant change is a module-level constant whose numeric value changed while still used. String constants are never flagged: a version bump and a rewritten query are indistinguishable statically. Only Rust and Python are scanned. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn behavior(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<BehaviorInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let old_worktree = checkout_worktree(&source.repo_root, &param.from)
+            .map_err(map_internal_error("old ref checkout failed"))?;
+        let (_, old_index) =
+            build_graph_with_declarations(old_worktree.path(), &ignore_matcher)
+                .map_err(map_internal_error("old graph build failed"))?;
+        let old_facts =
+            behavior::collect_facts(old_worktree.path(), &ignore_matcher);
+        drop(old_worktree);
+
+        let (new_report, new_index, new_facts) = if let Some(to) = &param.to {
+            let new_worktree = checkout_worktree(&source.repo_root, to)
+                .map_err(map_internal_error("new ref checkout failed"))?;
+            let built = build_graph_with_declarations(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("new graph build failed"))?;
+            let facts =
+                behavior::collect_facts(new_worktree.path(), &ignore_matcher);
+            drop(new_worktree);
+            (built.0, built.1, facts)
+        } else {
+            let built = build_graph_with_declarations(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("working tree graph build failed"))?;
+            let facts =
+                behavior::collect_facts(&source.analysis_path, &ignore_matcher);
+            (built.0, built.1, facts)
+        };
+
+        let to_label = param.to.as_deref().unwrap_or("working tree");
+        let measured = behavior::measure_behavior(
+            &old_index,
+            &new_index,
+            &new_report,
+            &old_facts,
+            &new_facts,
+            &param.from,
+            to_label,
+        );
+        let built = BehaviorReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(behavior_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported behavior format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Trace one symbol through history: every rename and move,
+    /// its former names, and who changed it. The measurement is
+    /// `sephera_graph::archaeology`'s, shared with the
+    /// `archaeology` command, so the two cannot disagree.
+    /// Identity is proven by consumer continuity, never by name
+    /// similarity, and a trail that stops early says why rather
+    /// than implying its oldest step is the birth. A symbol that
+    /// is not declared at the starting ref is a caller error, not
+    /// an empty trail.
+    #[tool(
+        name = "archaeology",
+        description = "Trace one symbol through history: every rename and move, its former names, and who changed it. Identity is proven by consumer continuity, never by name similarity: a symbol in one commit is the same symbol as one in an older commit when exactly one declared symbol in the older tree has the same direct consumer set. A rename that also gains or loses a consumer in the same commit is not proven and ends the trail, and an unconsumed symbol's rename cannot be proven at all, so the trail stops as ambiguous rather than guessing. First-parent only; one whole-tree build happens per commit that touched the tracked file. Use format=markdown for a compact summary or json for the steps as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn archaeology(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ArchaeologyInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+        let repo_root = source.repo_root;
+
+        let start_ref = param.at.as_deref().unwrap_or("HEAD");
+        let start_meta = commit_meta(&repo_root, start_ref)
+            .map_err(map_internal_error("starting ref resolution failed"))?;
+        let start = archaeology::HistoryCommit {
+            hash: start_meta.hash,
+            author: start_meta.author,
+            date: start_meta.date,
+            message: start_meta.message,
+        };
+
+        let log = |from_ref: &str, file: &str| {
+            log_commits_for_file(&repo_root, from_ref, file)
+                .map(|commits| {
+                    commits
+                        .into_iter()
+                        .map(|meta| archaeology::HistoryCommit {
+                            hash: meta.hash,
+                            author: meta.author,
+                            date: meta.date,
+                            message: meta.message,
+                        })
+                        .collect()
+                })
+                .map_err(|error| {
+                    archaeology::ArchaeologyError::History(error.to_string())
+                })
+        };
+        let build = |commit: &archaeology::HistoryCommit| {
+            let worktree = checkout_worktree(&repo_root, &commit.hash)
+                .map_err(|error| {
+                    archaeology::ArchaeologyError::Build(error.to_string())
+                })?;
+            let (report, index) =
+                build_graph_with_declarations(worktree.path(), &ignore_matcher)
+                    .map_err(|error| {
+                        archaeology::ArchaeologyError::Build(error.to_string())
+                    })?;
+            Ok(archaeology::HistorySnapshot {
+                commit: commit.clone(),
+                index,
+                report,
+            })
+        };
+        let parent = |hash: &str| {
+            first_parent_commit(&repo_root, hash)
+                .map(|parent| {
+                    parent.map(|meta| archaeology::HistoryCommit {
+                        hash: meta.hash,
+                        author: meta.author,
+                        date: meta.date,
+                        message: meta.message,
+                    })
+                })
+                .map_err(|error| {
+                    archaeology::ArchaeologyError::History(error.to_string())
+                })
+        };
+
+        let measured = archaeology::trace_symbol(
+            &start,
+            &param.file,
+            &param.symbol,
+            param.window.unwrap_or(500),
+            &log,
+            &build,
+            &parent,
+        )
+        .map_err(|error| match error {
+            archaeology::ArchaeologyError::SymbolNotFound => {
+                rmcp::ErrorData::invalid_params(
+                    format!(
+                        "`{}` is not declared in `{}` at `{start_ref}`",
+                        param.symbol, param.file
+                    ),
+                    None,
+                )
+            }
+            other => rmcp::ErrorData::internal_error(
+                format!("archaeology failed: {other}"),
+                None,
+            ),
+        })?;
+        let built = ArchaeologyReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(archaeology_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported archaeology format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Dry-run a rename or move: what a real rename would have
+    /// to touch, and what would block it, without editing the
+    /// tree. The measurement is `sephera_graph::simulate`'s,
+    /// shared with the `simulate` command, so the two cannot
+    /// disagree. A name that is not declared, a move target that
+    /// is not in the tree, and a rename to the name the symbol
+    /// already has are caller errors, not empty reports.
+    #[tool(
+        name = "simulate",
+        description = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree. The consumer set is exactly `breaking`'s — a resolved edge to the declaring file naming the symbol, an unresolved item half whose parent statement lands there, a namespace import of the whole file — plus the destination collision, which blocks the rename outright, and shadowing warnings for direct consumers that already declare the new name. Only Rust and Python collect declarations, so only their symbols can be renamed. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn simulate(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SimulateInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let (report, index) = build_graph_with_declarations(
+            &source.analysis_path,
+            &ignore_matcher,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let measured = simulate::measure_simulate(
+            &index,
+            &report,
+            &param.file,
+            &param.symbol,
+            &param.to,
+            param.to_file.as_deref(),
+        )
+        .map_err(|error| {
+            rmcp::ErrorData::invalid_params(error.to_string(), None)
+        })?;
+        let built = SimulateReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(simulate_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported simulate format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
     /// Report the declared symbols no test exercises, measured
     /// statically through the import graph. The measurement is
     /// `sephera_graph::untested`'s, shared with the `untested`
@@ -1989,6 +2354,423 @@ impl BreakingReport {
     }
 }
 
+/// The trail of one symbol through history, as the `archaeology`
+/// tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ArchaeologyReport {
+    /// The file the symbol was queried in.
+    pub file: String,
+    /// The name the symbol was queried by.
+    pub symbol: String,
+    /// The steps, oldest first.
+    pub steps: Vec<ArchaeologyStepReport>,
+    /// True when the trail reached a birth.
+    pub origin_found: bool,
+    /// Why the trail ends without a birth, when it does.
+    pub note: Option<String>,
+}
+
+/// One step of the trail, as the `archaeology` tool renders it.
+///
+/// The shape is flat on purpose: `kind` says which shape the
+/// other fields carry — `born` fills neither `from_*` field, the
+/// other kinds fill both — and the absent fields stay null rather
+/// than disappearing.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ArchaeologyStepReport {
+    /// `born`, `renamed`, `moved`, or `moved_and_renamed`.
+    pub kind: String,
+    /// The commit that introduced the `to` identity.
+    pub commit: String,
+    /// The commit's author.
+    pub author: String,
+    /// The commit's date.
+    pub date: String,
+    /// The commit's subject line.
+    pub message: String,
+    /// The file the symbol lived in before this step, absent for
+    /// a birth.
+    pub from_file: Option<String>,
+    /// The name the symbol had before this step, absent for a
+    /// birth.
+    pub from_name: Option<String>,
+    /// The file the symbol lives in from this step on.
+    pub to_file: String,
+    /// The name the symbol has from this step on.
+    pub to_name: String,
+}
+
+impl ArchaeologyReport {
+    fn from_measured(measured: &archaeology::ArchaeologyReport) -> Self {
+        Self {
+            file: measured.file.clone(),
+            symbol: measured.symbol.clone(),
+            steps: measured
+                .steps
+                .iter()
+                .map(|step| {
+                    let kind = match step.kind {
+                        archaeology::ArchaeologyKind::Born => "born",
+                        archaeology::ArchaeologyKind::Renamed => "renamed",
+                        archaeology::ArchaeologyKind::Moved => "moved",
+                        archaeology::ArchaeologyKind::MovedAndRenamed => {
+                            "moved_and_renamed"
+                        }
+                    };
+                    ArchaeologyStepReport {
+                        kind: kind.to_owned(),
+                        commit: step.commit.clone(),
+                        author: step.author.clone(),
+                        date: step.date.clone(),
+                        message: step.message.clone(),
+                        from_file: step.from_file.clone(),
+                        from_name: step.from_name.clone(),
+                        to_file: step.to_file.clone(),
+                        to_name: step.to_name.clone(),
+                    }
+                })
+                .collect(),
+            origin_found: measured.origin_found,
+            note: measured.note.clone(),
+        }
+    }
+}
+
+/// Render an archaeology report as Markdown for an agent's
+/// context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn archaeology_markdown(report: &ArchaeologyReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# History of `{}` in `{}`\n",
+        report.symbol, report.file
+    );
+    if report.steps.is_empty() {
+        let _ = writeln!(output, "No step of the trail could be proven.");
+    }
+    for step in &report.steps {
+        let detail = match step.kind.as_str() {
+            "born" => {
+                format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
+            }
+            "renamed" => {
+                format!(
+                    "Renamed `{}` → `{}` in `{}`.",
+                    step.from_name.as_deref().unwrap_or("?"),
+                    step.to_name,
+                    step.to_file
+                )
+            }
+            "moved" => {
+                format!(
+                    "Moved `{}` from `{}` to `{}`.",
+                    step.to_name,
+                    step.from_file.as_deref().unwrap_or("?"),
+                    step.to_file
+                )
+            }
+            _ => {
+                format!(
+                    "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
+                    step.from_name.as_deref().unwrap_or("?"),
+                    step.from_file.as_deref().unwrap_or("?"),
+                    step.to_name,
+                    step.to_file
+                )
+            }
+        };
+        let _ = writeln!(
+            output,
+            "- {detail} — {} by {} ({}): {}",
+            step.commit, step.author, step.date, step.message
+        );
+    }
+    if report.origin_found {
+        let _ = writeln!(output, "\nThe trail reaches the symbol's birth.");
+    } else if let Some(note) = &report.note {
+        let _ = writeln!(output, "\nNote: {note}");
+    }
+    output
+}
+
+/// The silent behaviour changes between two refs, as the
+/// `behavior` tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BehaviorReport {
+    /// The older ref, as the caller spelled it.
+    pub from: String,
+    /// The newer ref, as the caller spelled it, or "working tree".
+    pub to: String,
+    /// The changes, file then callee or name.
+    pub changes: Vec<BehaviorChangeReport>,
+}
+
+/// One silent behaviour change, as the `behavior` tool renders
+/// it.
+///
+/// The shape is flat on purpose: an agent reading the JSON should
+/// not have to unwrap a tagged enum. `kind` says which shape the
+/// other fields carry — `arg_order_swap` fills `callee`,
+/// `old_args`, and `new_args`; `constant_changed` fills `name`,
+/// `old_value`, and `new_value` — and the absent fields stay null
+/// rather than disappearing.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BehaviorChangeReport {
+    /// `arg_order_swap` or `constant_changed`.
+    pub kind: String,
+    /// The file containing the change.
+    pub file: String,
+    /// The called name, for an argument swap.
+    pub callee: Option<String>,
+    /// Arguments as the older tree wrote them, for a swap.
+    pub old_args: Option<Vec<String>>,
+    /// Arguments as the newer tree writes them, for a swap.
+    pub new_args: Option<Vec<String>>,
+    /// The constant's name, for a constant change.
+    pub name: Option<String>,
+    /// The older value text, for a constant change.
+    pub old_value: Option<String>,
+    /// The newer value text, for a constant change.
+    pub new_value: Option<String>,
+}
+
+impl BehaviorReport {
+    fn from_measured(measured: &behavior::BehaviorReport) -> Self {
+        Self {
+            from: measured.from_ref.clone(),
+            to: measured.to_ref.clone(),
+            changes: measured
+                .changes
+                .iter()
+                .map(|change| match change {
+                    behavior::BehaviorChange::ArgOrderSwap {
+                        file,
+                        callee,
+                        old_args,
+                        new_args,
+                    } => BehaviorChangeReport {
+                        kind: "arg_order_swap".to_owned(),
+                        file: file.clone(),
+                        callee: Some(callee.clone()),
+                        old_args: Some(old_args.clone()),
+                        new_args: Some(new_args.clone()),
+                        name: None,
+                        old_value: None,
+                        new_value: None,
+                    },
+                    behavior::BehaviorChange::ConstantChanged {
+                        file,
+                        name,
+                        old_value,
+                        new_value,
+                    } => BehaviorChangeReport {
+                        kind: "constant_changed".to_owned(),
+                        file: file.clone(),
+                        callee: None,
+                        old_args: None,
+                        new_args: None,
+                        name: Some(name.clone()),
+                        old_value: Some(old_value.clone()),
+                        new_value: Some(new_value.clone()),
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a behavior report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn behavior_markdown(report: &BehaviorReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Silent behaviour changes: `{}` → `{}`\n",
+        report.from, report.to
+    );
+    let _ = writeln!(output, "{} change(s) found.", report.changes.len());
+    if report.changes.is_empty() {
+        let _ = writeln!(output, "\nNo silent behaviour change was found.");
+        return output;
+    }
+    for change in &report.changes {
+        let line = match change.kind.as_str() {
+            "arg_order_swap" => {
+                let old = change.old_args.as_deref().unwrap_or(&[]).join(", ");
+                let new = change.new_args.as_deref().unwrap_or(&[]).join(", ");
+                format!(
+                    "Swapped arguments at a call to `{}` in `{}`: ({}) → ({}).",
+                    change.callee.as_deref().unwrap_or("?"),
+                    change.file,
+                    old,
+                    new
+                )
+            }
+            _ => {
+                format!(
+                    "Changed `{}` in `{}`: {} → {}.",
+                    change.name.as_deref().unwrap_or("?"),
+                    change.file,
+                    change.old_value.as_deref().unwrap_or("?"),
+                    change.new_value.as_deref().unwrap_or("?"),
+                )
+            }
+        };
+        let _ = writeln!(output, "\n- {line}");
+    }
+    output
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SimulateReport {
+    /// The file that declares the symbol today.
+    pub file: String,
+    /// The symbol's name today.
+    pub symbol: String,
+    /// The name it would take.
+    pub new_name: String,
+    /// The file it would live in: the move target, or the file it
+    /// already lives in for a pure rename.
+    pub new_file: String,
+    /// True when a destination collision blocks the rename.
+    pub blocked: bool,
+    /// Files that name the symbol and so must update their import.
+    pub direct: Vec<SimulatedConsumerReport>,
+    /// Files importing the file's namespace wholesale.
+    pub namespace_users: Vec<String>,
+    /// Files downstream of a direct or namespace user.
+    pub downstream: Vec<String>,
+    /// Name collisions at the destination and in direct consumers.
+    pub collisions: Vec<SimulatedCollisionReport>,
+}
+
+/// One file a rename would have to touch, as the `simulate` tool
+/// renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SimulatedConsumerReport {
+    /// The file that names the symbol from its current file.
+    pub file: String,
+    /// Import paths evidencing the use.
+    pub imports: Vec<String>,
+}
+
+/// One name collision, as the `simulate` tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct SimulatedCollisionReport {
+    /// The file where the new name already exists.
+    pub file: String,
+    /// `destination` blocks the rename; `shadowing` only warns.
+    pub kind: String,
+}
+
+impl SimulateReport {
+    fn from_measured(measured: &simulate::SimulateReport) -> Self {
+        Self {
+            file: measured.file.clone(),
+            symbol: measured.symbol.clone(),
+            new_name: measured.new_name.clone(),
+            new_file: measured.new_file.clone(),
+            blocked: measured.blocked,
+            direct: measured
+                .direct
+                .iter()
+                .map(|user| SimulatedConsumerReport {
+                    file: user.file.clone(),
+                    imports: user.imports.clone(),
+                })
+                .collect(),
+            namespace_users: measured.namespace_users.clone(),
+            downstream: measured.downstream.clone(),
+            collisions: measured
+                .collisions
+                .iter()
+                .map(|collision| SimulatedCollisionReport {
+                    file: collision.file.clone(),
+                    kind: match collision.kind {
+                        simulate::CollisionKind::Destination => {
+                            "destination".to_owned()
+                        }
+                        simulate::CollisionKind::Shadowing => {
+                            "shadowing".to_owned()
+                        }
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a simulate report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn simulate_markdown(report: &SimulateReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
+        report.symbol, report.file, report.new_name, report.new_file
+    );
+    let destination = report
+        .collisions
+        .iter()
+        .find(|collision| collision.kind == "destination");
+    if let Some(collision) = destination {
+        let _ = writeln!(
+            output,
+            "Blocked: `{}` already declares `{}`.",
+            collision.file, report.new_name
+        );
+    } else if report.direct.is_empty() {
+        let _ = writeln!(
+            output,
+            "Safe to rename: no file names this symbol, so the rename touches only its declaration."
+        );
+    } else {
+        let _ = writeln!(
+            output,
+            "Safe to rename: {} file(s) must update their import.",
+            report.direct.len()
+        );
+    }
+    for user in &report.direct {
+        let _ = writeln!(
+            output,
+            "\n- `{}` ({}).",
+            user.file,
+            user.imports.join(", ")
+        );
+    }
+    for file in &report.namespace_users {
+        let _ = writeln!(output, "\n- `{file}` (namespace).");
+    }
+    for file in &report.downstream {
+        let _ = writeln!(output, "\n- `{file}` (downstream).");
+    }
+    for collision in &report.collisions {
+        if collision.kind == "shadowing" {
+            let _ = writeln!(
+                output,
+                "\n- `{}` already declares `{}`: the renamed import would rebind a name the file owns.",
+                collision.file, report.new_name
+            );
+        }
+    }
+    output
+}
 /// Render a breaking report as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools'
@@ -2463,6 +3245,151 @@ fn merge_markdown(report: &MergeReport) -> String {
                 let _ = writeln!(output, "- `{file}`");
             }
         }
+    }
+    output
+}
+
+/// The symbol-level diff between two refs, as the `diff` tool
+/// renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DiffReport {
+    /// The older ref, as the caller spelled it.
+    pub from: String,
+    /// The newer ref, as the caller spelled it, or "working tree".
+    pub to: String,
+    /// The changed symbols, file then symbol.
+    pub changes: Vec<DiffSymbolReport>,
+}
+
+/// One changed symbol, as the `diff` tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct DiffSymbolReport {
+    /// The file that declares the symbol.
+    pub file: String,
+    /// The symbol's name.
+    pub symbol: String,
+    /// The kind on the side where the symbol exists: the old kind
+    /// for removals and changes, the new kind for additions.
+    pub kind: String,
+    /// `added`, `removed`, `kind_changed`, or `signature_changed`.
+    pub change: String,
+    /// The kind the new tree declares it as, for a kind change.
+    pub new_kind: Option<String>,
+    /// The call shape the old tree declared, for a signature change.
+    pub old_signature: Option<SignatureReport>,
+    /// The call shape the new tree declares, for a signature change.
+    pub new_signature: Option<SignatureReport>,
+}
+
+impl DiffReport {
+    fn from_measured(measured: &diff::DiffReport) -> Self {
+        Self {
+            from: measured.from_ref.clone(),
+            to: measured.to_ref.clone(),
+            changes: measured
+                .changes
+                .iter()
+                .map(|change| {
+                    let (change_label, new_kind, old_signature, new_signature) =
+                        match &change.change {
+                            diff::DiffChange::Added => {
+                                ("added".to_owned(), None, None, None)
+                            }
+                            diff::DiffChange::Removed => {
+                                ("removed".to_owned(), None, None, None)
+                            }
+                            diff::DiffChange::KindChanged { to } => (
+                                "kind_changed".to_owned(),
+                                Some(format!("{to:?}").to_lowercase()),
+                                None,
+                                None,
+                            ),
+                            diff::DiffChange::SignatureChanged { from, to } => {
+                                (
+                                    "signature_changed".to_owned(),
+                                    None,
+                                    Some(SignatureReport {
+                                        parameters: from.parameters.clone(),
+                                        returns: from.returns.clone(),
+                                    }),
+                                    Some(SignatureReport {
+                                        parameters: to.parameters.clone(),
+                                        returns: to.returns.clone(),
+                                    }),
+                                )
+                            }
+                        };
+                    DiffSymbolReport {
+                        file: change.file.clone(),
+                        symbol: change.symbol.clone(),
+                        kind: format!("{:?}", change.kind).to_lowercase(),
+                        change: change_label,
+                        new_kind,
+                        old_signature,
+                        new_signature,
+                    }
+                })
+                .collect(),
+        }
+    }
+}
+
+fn diff_markdown(report: &DiffReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Symbol diff: `{}` → `{}`\n",
+        report.from, report.to
+    );
+    let _ = writeln!(output, "{} symbol(s) changed.", report.changes.len());
+    if report.changes.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nNo declared symbol was added, removed, or reshaped."
+        );
+        return output;
+    }
+    for change in &report.changes {
+        let line = match change.change.as_str() {
+            "added" => {
+                format!(
+                    "Added `{}` in `{}` ({}).",
+                    change.symbol, change.file, change.kind
+                )
+            }
+            "removed" => {
+                format!(
+                    "Removed `{}` from `{}` ({}).",
+                    change.symbol, change.file, change.kind
+                )
+            }
+            "kind_changed" => {
+                format!(
+                    "Changed `{}` in `{}` from {} to {}.",
+                    change.symbol,
+                    change.file,
+                    change.kind,
+                    change.new_kind.as_deref().unwrap_or("?"),
+                )
+            }
+            _ => {
+                let from = change
+                    .old_signature
+                    .as_ref()
+                    .map_or_else(String::new, SignatureReport::render);
+                let to = change
+                    .new_signature
+                    .as_ref()
+                    .map_or_else(String::new, SignatureReport::render);
+                format!(
+                    "Changed signature of `{}` in `{}`: {from} → {to}.",
+                    change.symbol, change.file
+                )
+            }
+        };
+        let _ = writeln!(output, "\n- {line}");
     }
     output
 }

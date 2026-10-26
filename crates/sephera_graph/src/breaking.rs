@@ -299,8 +299,11 @@ fn import_binds_symbol(import_path: &str, symbol: &str) -> bool {
 /// Where one statement used to land, by `(from file, import path)`.
 ///
 /// Built from the old report's resolved edges. Consulted only for
-/// statements the new tree cannot resolve at all.
-struct ResolutionOracle<'report> {
+/// statements the new tree cannot resolve at all. Shared with
+/// `simulate`, which runs the same consumer scan over a single tree:
+/// there the oracle is built from that tree, and it fires only when
+/// a statement's parent edge is resolved under the same path.
+pub(crate) struct ResolutionOracle<'report> {
     landed: BTreeMap<(&'report str, &'report str), &'report str>,
     /// Where one import path used to land, wherever it was written
     /// from. A path that landed on two different files is ambiguous
@@ -310,7 +313,7 @@ struct ResolutionOracle<'report> {
 }
 
 impl<'report> ResolutionOracle<'report> {
-    fn from_report(report: &'report GraphReport) -> Self {
+    pub(crate) fn from_report(report: &'report GraphReport) -> Self {
         let mut landed = BTreeMap::new();
         let mut by_path: BTreeMap<&str, BTreeSet<&str>> = BTreeMap::new();
         for edge in &report.edges {
@@ -351,7 +354,15 @@ impl<'report> ResolutionOracle<'report> {
 
 /// The files in the new tree that name `symbol` from `target`, and
 /// the files importing its namespace wholesale.
-fn consumers(
+///
+/// Shared with `simulate`, which asks the same question about a
+/// symbol that still exists: who would a rename have to touch.
+/// The evidence rules are identical — a resolved edge to the target
+/// naming the symbol, an unresolved item half whose parent statement
+/// lands on the target, a full path the oracle says landed there —
+/// because a consumer is a consumer whether the symbol broke or is
+/// about to move.
+pub(crate) fn consumers(
     report: &GraphReport,
     oracle: &ResolutionOracle<'_>,
     target: &str,
@@ -462,7 +473,11 @@ fn path_names_symbol(import_path: &str, symbol: &str) -> bool {
 /// Files downstream of the seed files, following resolved edges
 /// backwards — the same walk symbol impact makes, unbounded: a
 /// reviewer asking what a break reaches wants the whole exposure.
-fn downstream_of(
+///
+/// Shared with `simulate`: the files past a rename's direct
+/// consumers are untouched by it, but they are the rest of the
+/// exposure a reviewer wants to see, so the report names them apart.
+pub(crate) fn downstream_of(
     report: &GraphReport,
     target: &str,
     seeds: &BTreeSet<&str>,

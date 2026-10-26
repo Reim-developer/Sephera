@@ -1,4 +1,5 @@
 use std::io::Read as _;
+use std::path::Path;
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -14,30 +15,33 @@ use sephera_graph::{
 };
 use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
-    build_context_report, changed_files, checkout_worktree,
-    load_project_settings, merge_base, recent_commit_files,
-    resolve_changed_files, resolve_source,
+    build_context_report, changed_files, checkout_worktree, commit_meta,
+    first_parent_commit, load_project_settings, log_commits_for_file,
+    merge_base, recent_commit_files, resolve_changed_files, resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 
 use crate::{
-    affected_tests,
+    affected_tests, archaeology,
     args::{
-        AffectedTestsArgs, BreakingArgs, BreakingOutputFormat, Cli, Commands,
-        ContextArgs, CouplingArgs, CouplingOutputFormat, DeadArgs,
-        DeadOutputFormat, GraphArgs, GraphOutputFormat, GuardArgs, IgnoreArgs,
-        ImpactArgs, ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
+        AffectedTestsArgs, ArchaeologyArgs, ArchaeologyOutputFormat,
+        BehaviorArgs, BehaviorOutputFormat, BreakingArgs, BreakingOutputFormat,
+        Cli, Commands, ContextArgs, CouplingArgs, CouplingOutputFormat,
+        DeadArgs, DeadOutputFormat, DiffArgs, DiffOutputFormat, GraphArgs,
+        GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
+        ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
         MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
-        RiskArgs, RiskOutputFormat, SettingsArgs, SkillArgs, SourceArgs,
-        SymbolOutputFormat, SymbolsArgs, TestImpactOutputFormat, UntestedArgs,
+        RiskArgs, RiskOutputFormat, SettingsArgs, SimulateArgs,
+        SimulateOutputFormat, SkillArgs, SourceArgs, SymbolOutputFormat,
+        SymbolsArgs, TestImpactOutputFormat, UntestedArgs,
         UntestedOutputFormat, WatchArgs, WatchTarget, WhyArgs, WhyOutputFormat,
     },
-    breaking, change_impact, configure,
+    behavior, breaking, change_impact, configure,
     context_config::{
         ResolvedContextCommand, ResolvedContextOptions, resolve_context_options,
     },
-    coupling, dead,
+    coupling, dead, diff,
     gate::{self, Gate},
     guard, impact, merge,
     output::{
@@ -47,7 +51,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, skill, untested, watch, why,
+    review, risk, simulate, skill, untested, watch, why,
 };
 
 #[must_use]
@@ -137,6 +141,10 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Dead(arguments) => run_dead(&arguments).await,
         Commands::Breaking(arguments) => run_breaking(&arguments).await,
         Commands::Merge(arguments) => run_merge(&arguments).await,
+        Commands::Diff(arguments) => run_diff(&arguments).await,
+        Commands::Archaeology(arguments) => run_archaeology(&arguments).await,
+        Commands::Behavior(arguments) => run_behavior(&arguments).await,
+        Commands::Simulate(arguments) => run_simulate(&arguments).await,
         Commands::Untested(arguments) => run_untested(&arguments).await,
         Commands::Guard(arguments) => run_guard(&arguments).await,
         Commands::Skill(arguments) => run_skill(&arguments),
@@ -1296,6 +1304,416 @@ async fn run_merge(arguments: &MergeArgs) -> Result<Vec<Gate>> {
         }
     });
     Ok(gates)
+}
+
+async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
+    // A remote source has no two local refs to compare — its checkout
+    // is one ref already — so diff refuses it plainly rather than
+    // comparing a clone against a worktree of itself.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "diff compares two refs of a local repository; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Comparing the two refs...");
+
+    // The older side always lives in a worktree: its tree must not
+    // move while the newer side is built. The newer side is the
+    // working tree when --to is absent, and a second worktree
+    // otherwise, so the working tree is never disturbed either way.
+    let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
+        .with_context(|| {
+            format!(
+                "diff checks `{}` out of {} and git could not do it",
+                arguments.from,
+                source.repo_root.display()
+            )
+        })?;
+    let old_ignore = build_ignore_matcher(
+        old_worktree.path(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) =
+        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
+    drop(old_worktree);
+
+    let to_label = arguments.to.as_deref().unwrap_or("working tree");
+    let (_, new_index) = if let Some(to) = &arguments.to {
+        let new_worktree = checkout_worktree(&source.repo_root, to)
+            .with_context(|| {
+                format!(
+                    "diff checks `{to}` out of {} and git could not do it",
+                    source.repo_root.display()
+                )
+            })?;
+        let new_ignore = build_ignore_matcher(
+            new_worktree.path(),
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the newer side...");
+        let built =
+            build_graph_with_declarations(new_worktree.path(), &new_ignore)?;
+        drop(new_worktree);
+        built
+    } else {
+        let new_ignore = build_ignore_matcher(
+            &source.analysis_path,
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the working tree...");
+        build_graph_with_declarations(&source.analysis_path, &new_ignore)?
+    };
+
+    let measured =
+        diff::measure_diff(&old_index, &new_index, &arguments.from, to_label);
+
+    let rendered = match arguments.format {
+        DiffOutputFormat::Markdown => diff::render_markdown(&measured),
+        DiffOutputFormat::Json => diff::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A diff is a report, not a gate: additions are the normal shape
+    // of a release, so no count of changes fails the run.
+    Ok(Vec::new())
+}
+
+/// The commit-log provider for archaeology: the commits touching
+/// a file from a ref, newest first, as graph history commits.
+fn archaeology_log(
+    repo_root: &Path,
+    from_ref: &str,
+    file: &str,
+) -> Result<Vec<archaeology::HistoryCommit>, archaeology::ArchaeologyError> {
+    log_commits_for_file(repo_root, from_ref, file)
+        .map(|commits| {
+            commits
+                .into_iter()
+                .map(|meta| archaeology::HistoryCommit {
+                    hash: meta.hash,
+                    author: meta.author,
+                    date: meta.date,
+                    message: meta.message,
+                })
+                .collect()
+        })
+        .map_err(|error| {
+            archaeology::ArchaeologyError::History(error.to_string())
+        })
+}
+
+/// The build provider for archaeology: one commit's tree, built in
+/// a detached worktree that is removed when the build returns.
+fn archaeology_build(
+    repo_root: &Path,
+    settings: &SettingsArgs,
+    ignore_args: &IgnoreArgs,
+    commit: &archaeology::HistoryCommit,
+) -> Result<archaeology::HistorySnapshot, archaeology::ArchaeologyError> {
+    let worktree =
+        checkout_worktree(repo_root, &commit.hash).map_err(|error| {
+            archaeology::ArchaeologyError::Build(error.to_string())
+        })?;
+    let ignore = build_ignore_matcher(
+        worktree.path(),
+        settings,
+        &ignore_args.ignore,
+        ignore_args.no_gitignore,
+    )
+    .map_err(|error| archaeology::ArchaeologyError::Build(error.to_string()))?;
+    let (report, index) =
+        build_graph_with_declarations(worktree.path(), &ignore).map_err(
+            |error| archaeology::ArchaeologyError::Build(error.to_string()),
+        )?;
+    Ok(archaeology::HistorySnapshot {
+        commit: commit.clone(),
+        index,
+        report,
+    })
+}
+
+/// The parent provider for archaeology: a commit's first-parent
+/// parent, as a graph history commit.
+fn archaeology_parent(
+    repo_root: &Path,
+    hash: &str,
+) -> Result<Option<archaeology::HistoryCommit>, archaeology::ArchaeologyError> {
+    first_parent_commit(repo_root, hash)
+        .map(|parent| {
+            parent.map(|meta| archaeology::HistoryCommit {
+                hash: meta.hash,
+                author: meta.author,
+                date: meta.date,
+                message: meta.message,
+            })
+        })
+        .map_err(|error| {
+            archaeology::ArchaeologyError::History(error.to_string())
+        })
+}
+
+async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
+    // One local repository's history, like diff and behavior: a
+    // remote source has no local refs to walk.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "archaeology traces one local repository's history; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Tracing the symbol through history...");
+
+    let repo_root = source.repo_root;
+
+    // The providers trace_symbol walks on, as thin closures over
+    // the named functions below: the commit log, one commit's
+    // built tree, and the first-parent parent.
+    let log = |from_ref: &str, file: &str| {
+        archaeology_log(&repo_root, from_ref, file)
+    };
+    let build = |commit: &archaeology::HistoryCommit| {
+        archaeology_build(
+            &repo_root,
+            &arguments.settings,
+            &arguments.ignore_args,
+            commit,
+        )
+    };
+    let parent = |hash: &str| archaeology_parent(&repo_root, hash);
+
+    let start =
+        commit_meta(&repo_root, &arguments.start_ref).with_context(|| {
+            format!(
+                "archaeology resolves `{}` and git could not do it",
+                arguments.start_ref
+            )
+        })?;
+    let start = archaeology::HistoryCommit {
+        hash: start.hash,
+        author: start.author,
+        date: start.date,
+        message: start.message,
+    };
+    let measured = archaeology::trace_symbol(
+        &start,
+        &arguments.file,
+        &arguments.symbol,
+        arguments.window,
+        &log,
+        &build,
+        &parent,
+    )
+    .map_err(|error| match error {
+        archaeology::ArchaeologyError::SymbolNotFound => anyhow::anyhow!(
+            "`{}` is not declared in `{}` at `{}`",
+            arguments.symbol,
+            arguments.file,
+            arguments.start_ref
+        ),
+        other => anyhow::Error::new(other),
+    })?;
+
+    let rendered = match arguments.format {
+        ArchaeologyOutputFormat::Markdown => {
+            archaeology::render_markdown(&measured)
+        }
+        ArchaeologyOutputFormat::Json => archaeology::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A trail is a report, not a gate.
+    Ok(Vec::new())
+}
+
+async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
+    // Two refs of a local repository, like diff: a remote source
+    // has no two local refs to compare.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "behavior compares two refs of a local repository; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Comparing the two refs...");
+
+    let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
+        .with_context(|| {
+            format!(
+                "behavior checks `{}` out of {} and git could not do it",
+                arguments.from,
+                source.repo_root.display()
+            )
+        })?;
+    let old_ignore = build_ignore_matcher(
+        old_worktree.path(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) =
+        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
+    let old_facts = behavior::collect_facts(old_worktree.path(), &old_ignore);
+    drop(old_worktree);
+
+    let to_label = arguments.to.as_deref().unwrap_or("working tree");
+    let (new_report, new_index, new_facts) = if let Some(to) = &arguments.to {
+        let new_worktree = checkout_worktree(&source.repo_root, to)
+            .with_context(|| {
+                format!(
+                    "behavior checks `{to}` out of {} and git could not do it",
+                    source.repo_root.display()
+                )
+            })?;
+        let new_ignore = build_ignore_matcher(
+            new_worktree.path(),
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the newer side...");
+        let built =
+            build_graph_with_declarations(new_worktree.path(), &new_ignore)?;
+        let facts = behavior::collect_facts(new_worktree.path(), &new_ignore);
+        drop(new_worktree);
+        (built.0, built.1, facts)
+    } else {
+        let new_ignore = build_ignore_matcher(
+            &source.analysis_path,
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        progress.set_message("Extracting the working tree...");
+        let built =
+            build_graph_with_declarations(&source.analysis_path, &new_ignore)?;
+        let facts = behavior::collect_facts(&source.analysis_path, &new_ignore);
+        (built.0, built.1, facts)
+    };
+
+    let measured = behavior::measure_behavior(
+        &old_index,
+        &new_index,
+        &new_report,
+        &old_facts,
+        &new_facts,
+        &arguments.from,
+        to_label,
+    );
+
+    let rendered = match arguments.format {
+        BehaviorOutputFormat::Markdown => behavior::render_markdown(&measured),
+        BehaviorOutputFormat::Json => behavior::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A behaviour scan is a report, not a gate: its precision is
+    // measured by its corpus, and a gate on an unproven detector
+    // would punish asking.
+    Ok(Vec::new())
+}
+
+async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
+    // One tree, not two refs, and no git requirement: the rename is
+    // simulated against the tree as it stands, so a remote source
+    // is as good a tree as a local one.
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: arguments.source.url.clone(),
+            git_ref: arguments.source.git_ref.clone(),
+        },
+        false,
+    )
+    .await?;
+    let progress = CliProgress::start("Simulating the rename...");
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    progress.set_message("Extracting the tree...");
+    let (report, index) =
+        build_graph_with_declarations(&source.analysis_path, &ignore)?;
+
+    // A simulated rename that names nothing is a typo, not a
+    // report: the measurement errors, and the error names the file
+    // and symbol the caller spelled.
+    let measured = simulate::measure_simulate(
+        &index,
+        &report,
+        &arguments.file,
+        &arguments.symbol,
+        &arguments.to,
+        arguments.to_file.as_deref(),
+    )?;
+
+    let rendered = match arguments.format {
+        SimulateOutputFormat::Markdown => simulate::render_markdown(&measured),
+        SimulateOutputFormat::Json => simulate::render_json(&measured),
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // A simulation is a report, not a gate: even a blocked rename
+    // is an answer, and failing the run on it would punish asking.
+    Ok(Vec::new())
 }
 
 async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {

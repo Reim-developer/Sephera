@@ -196,6 +196,30 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera merge --path . --ours feature-a --theirs feature-b\\n  sephera merge --path . --ours HEAD --theirs origin/main --base v1.0.0\\n  sephera merge --path . --ours a --theirs b --fail-on 1\\n  sephera merge --path . --ours a --theirs b --format json"
     )]
     Merge(MergeArgs),
+    /// Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog
+    #[command(
+        long_about = "Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog.\\n\\n`breaking` answers what breaks consumers; this answers what changed in the API surface at all, including additions, which break nothing and so never appear in a breaking report. A changelog without additions hides half the release. A symbol that moved files reads as what it is at the index level, a removal plus an addition: claiming a move would need the suggestion machinery, and a diff that guesses identity is a diff that lies.\\n\\n`--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree, which is the form a branch review takes before it is pushed. The comparison rules are the same as `breaking`'s, so the two commands never disagree about a symbol both name: kinds compared outright, call shapes for functions only, a shape on only one side stays silent. Only Rust and Python collect declarations today, so only their symbols can be reported.\\n\\nThe analysis needs a git repository. A tree that is not one is an error, not an empty report.",
+        after_long_help = "Examples:\\n  sephera diff --path . --from origin/main\\n  sephera diff --path . --from v1.0.0 --to v2.0.0\\n  sephera diff --path . --from origin/main --format json"
+    )]
+    Diff(DiffArgs),
+    /// Trace one symbol through history: every rename and move, its former names, and who changed it
+    #[command(
+        long_about = "Trace one symbol through history: every rename and move, its former names, and who changed it.\\n\\nIdentity is proven by consumer continuity, never by name similarity: a symbol in one commit is the same symbol as one in an older commit when exactly one declared symbol in the older tree has the same direct consumer set. A rename that also gains or loses a consumer in the same commit is not proven and ends the trail, and an unconsumed symbol's rename cannot be proven at all, so the trail stops as ambiguous rather than guessing. The walk is first-parent only, and one whole-tree build happens per commit that touched the tracked file, so `--window` bounds the cost as well as the depth.\\n\\nThe symbol is queried as it stands at `--at` (HEAD by default). The analysis needs a git repository. This is a report, not a gate: there is no `--fail-on`.",
+        after_long_help = "Examples:\\n  sephera archaeology lib.py --symbol divide --path .\\n  sephera archaeology lib.py --symbol divide --path . --at v2.0.0\\n  sephera archaeology lib.py --symbol divide --path . --format json"
+    )]
+    Archaeology(ArchaeologyArgs),
+    /// Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes
+    #[command(
+        long_about = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes.\\n\\nTwo detectors, both deliberately narrow, because the general question is undecidable and a detector that answers it by guessing trains a team to ignore it. An argument-order swap is a call site whose arguments are the same multiset in a different order, where the callee's signature did not change — in Rust the swap must also type check at the swapped positions, or it is a compile error, not a silent change. A numeric constant change is a module-level constant whose numeric value changed while still used, in its own file or through an import. String constants are never flagged: a version bump and a rewritten query are indistinguishable statically.\\n\\n`--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree. The analysis needs a git repository. A tree that is not one is an error, not an empty report. This is a report, not a gate: there is no `--fail-on`, because the detector's precision is measured by its corpus, and a gate on an unproven detector would punish asking.",
+        after_long_help = "Examples:\\n  sephera behavior --path . --from origin/main\\n  sephera behavior --path . --from v1.0.0 --to v2.0.0\\n  sephera behavior --path . --from origin/main --format json"
+    )]
+    Behavior(BehaviorArgs),
+    /// Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree
+    #[command(
+        long_about = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree.\\n\\nA rename is the most common refactor and the one taken on faith: the tool renames the declaration and every import it can find, and the breakage shows up in CI. This measures the rename beforehand. The consumer set is exactly `breaking`'s — a resolved edge to the declaring file naming the symbol, an unresolved item half whose parent statement lands there, a namespace import of the whole file — because a consumer is a consumer whether the symbol broke or is about to move. What `breaking` cannot say, this adds: the destination collision. Renaming onto a name the destination file already declares is a duplicate definition in every language, so it blocks the rename outright; a direct consumer that already declares the new name is a shadowing warning instead, because the severity is language dependent.\\n\\nOnly Rust and Python collect declarations today, so only their symbols can be renamed. The analysis needs one tree, not a git repository: it simulates against the working tree as it stands.",
+        after_long_help = "Examples:\\n  sephera simulate lib.py --symbol add --to sum\\n  sephera simulate lib.py --symbol add --to sum --to-file other.py\\n  sephera simulate lib.py --symbol add --to sum --format json"
+    )]
+    Simulate(SimulateArgs),
     /// Report the declared symbols no test exercises
     #[command(
         long_about = "Report the declared symbols no test exercises, measured statically through the import graph — no test run, no instrumentation.\\n\\nA test file is a root; the files its imports reach are the code the tests can execute; a symbol is exercised when a reached file names it. A symbol a test file names itself is exercised directly, and one named only by a file the tests reach is exercised indirectly: both count as tested, and the report keeps the tiers apart because they mean different things. A namespace import names nothing, so it is never evidence, and only Rust and Python collect declarations, so only their symbols can be reported.\\n\\nTest files are found by the conventions ecosystems agree on: a test, tests, __tests__, spec, or specs directory, or a file named test_*, *_test.*, *.test.*, or *.spec.*. Inline unit tests do not cross an import edge — a Rust #[cfg(test)] module inside lib.rs tests its own file without importing it — so those symbols read as untested unless a separate test file names them; the report's limit, stated plainly, is that it measures coverage through the import graph, the way a new test file would see the code.",
@@ -1214,9 +1238,228 @@ tree_command_args!(
     }
 );
 
+tree_command_args!(
+    #[doc = "Compare two refs and report every declared symbol that was added, removed, or reshaped: the API changelog."]
+    DiffArgs {
+        /// The older reference: the side symbols are compared from
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The older reference to compare from.",
+        long_help = "The older reference: a branch, tag, or commit the symbols are compared from. Required, because a comparison without a starting point compares against nothing. `origin/main` is the usual spelling for a branch review."
+    )]
+    pub from: String,
+
+    /// The newer reference; when absent, the working tree
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The newer reference to compare to; the working tree when absent.",
+        long_help = "The newer reference to compare to. When absent, the newer side is the working tree itself — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. When present, both sides are checked out into temporary worktrees, so the working tree is left untouched."
+    )]
+    pub to: Option<String>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: DiffOutputFormat,
+
+    }
+);
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum MergeOutputFormat {
     /// Markdown list of predicted conflicts.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum DiffOutputFormat {
+    /// Markdown list of changed symbols.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Trace one symbol through history: every rename and move, its former names, and who changed it."]
+    ArchaeologyArgs {
+        /// The file the symbol lives in, spelled as the graph spells it
+    #[arg(
+        value_name = "FILE",
+        help = "The file the symbol lives in, spelled as the graph spells it.",
+        long_help = "The file the symbol lives in, spelled as the graph spells it — relative to the analysis root, with forward slashes. The trail follows the symbol out of this file when it moves, so the file named here is where the story starts, not where it ends."
+    )]
+    pub file: String,
+
+        /// The symbol to trace
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The symbol to trace.",
+        long_help = "The symbol to trace, as declared in the file. It must be declared at the starting ref; a name that is not there is an error, not an empty trail."
+    )]
+    pub symbol: String,
+
+        /// The ref the symbol is queried at; HEAD when absent
+    #[arg(
+        long = "at",
+        value_name = "REF",
+        default_value = "HEAD",
+        help = "The ref the symbol is queried at; HEAD when absent.",
+        long_help = "The ref the symbol is queried at. HEAD by default: the symbol as it stands at the tip of the branch is the query, and the trail walks backwards from there."
+    )]
+    pub start_ref: String,
+
+        /// Maximum commits examined while walking backwards
+    #[arg(
+        long,
+        value_name = "N",
+        default_value = "500",
+        help = "Maximum commits examined while walking backwards.",
+        long_help = "Maximum commits examined while walking backwards. One whole-tree build happens per commit that touched the tracked file, so the window bounds the cost as well as the depth; when it runs out, the trail stops with a note rather than a birth."
+    )]
+    pub window: usize,
+
+        /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: ArchaeologyOutputFormat,
+
+    }
+);
+
+/// Output format for the archaeology report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum ArchaeologyOutputFormat {
+    /// Markdown report, oldest step first.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes."]
+    BehaviorArgs {
+        /// The older reference: the side symbols are compared from
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The older reference to compare from.",
+        long_help = "The older reference: a branch, tag, or commit the symbols are compared from. Required, because a comparison without a starting point compares against nothing. `origin/main` is the usual spelling for a branch review."
+    )]
+    pub from: String,
+
+        /// The newer reference; when absent, the working tree
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The newer reference to compare to; the working tree when absent.",
+        long_help = "The newer reference to compare to. When absent, the newer side is the working tree itself — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. When present, both sides are checked out into temporary worktrees, so the working tree is left untouched."
+    )]
+    pub to: Option<String>,
+
+        /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: BehaviorOutputFormat,
+
+    }
+);
+
+/// Output format for the behavior report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BehaviorOutputFormat {
+    /// Markdown report with the count first.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree."]
+    SimulateArgs {
+        /// The file that declares the symbol today
+    #[arg(
+        value_name = "FILE",
+        help = "File that declares the symbol to rename.",
+        long_help = "Path of the file that declares the symbol, relative to the analysis base. A path that matches nothing in the analysis is an error rather than an empty report, because an empty report and a typo are indistinguishable once it is on a screen."
+    )]
+    pub file: String,
+
+        /// The symbol's name today
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The symbol to rename.",
+        long_help = "The symbol's name today, as declared in the file. Required, because a rename without a starting name renames nothing."
+    )]
+    pub symbol: String,
+
+        /// The name it would take
+    #[arg(
+        long,
+        value_name = "NAME",
+        help = "The name the symbol would take.",
+        long_help = "The name the symbol would take. Renaming onto a name the destination file already declares is a duplicate definition, so the report comes back blocked rather than safe."
+    )]
+    pub to: String,
+
+        /// The file it would live in; the file it already lives in when absent
+    #[arg(
+        long = "to-file",
+        value_name = "FILE",
+        help = "Move the symbol to this file instead of renaming in place.",
+        long_help = "The file the symbol would live in. When absent, the rename happens in place. When present, the file must already be in the tree: a move target that does not exist yet is a file creation, a different feature."
+    )]
+    pub to_file: Option<String>,
+
+        /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: SimulateOutputFormat,
+
+    }
+);
+
+/// Output format for the simulate report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SimulateOutputFormat {
+    /// Markdown report with the verdict first.
     #[value(name = "markdown", help = "Render the report as Markdown.")]
     Markdown,
     /// Structured JSON.

@@ -139,12 +139,12 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 43 |
-| Internal edges | 240 |
-| External edges | 126 |
+| Internal edges | 246 |
+| External edges | 131 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 40 |
 | Local crate edges | 0 |
-| Standard library edges | 76 |
+| Standard library edges | 81 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -167,7 +167,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 76 |
+| `std` | stdlib | unknown | 81 |
 | `anyhow` | declared | 1.0.102 | 19 |
 | `tempfile` | declared | 3.27.0 | 10 |
 | `rmcp` | declared | 1.3.0 | 9 |
@@ -180,8 +180,8 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imported by |
 |------|-------------|
+| `crates/sephera_runtime/src/lib.rs` | 44 |
 | `crates/sephera_context/src/lib.rs` | 40 |
-| `crates/sephera_runtime/src/lib.rs` | 38 |
 | `crates/sephera_context/src/types.rs` | 27 |
 | `crates/sephera_symbols/src/lib.rs` | 24 |
 | `crates/sephera_cli/src/output.rs` | 17 |
@@ -195,10 +195,10 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imports |
 |------|---------|
-| `crates/sephera_cli/src/run.rs` | 33 |
+| `crates/sephera_cli/src/run.rs` | 36 |
+| `crates/sephera_mcp/src/server.rs` | 19 |
 | `crates/sephera_context/src/builder.rs` | 18 |
 | `crates/sephera_context/src/lib.rs` | 18 |
-| `crates/sephera_mcp/src/server.rs` | 16 |
 | `crates/sephera_cli/src/output.rs` | 11 |
 | `crates/sephera_mcp/src/render/tests.rs` | 10 |
 | `crates/sephera_runtime/src/lib.rs` | 10 |
@@ -610,6 +610,71 @@ the call shape a changed signature now takes.
 
 ```bash
 sephera breaking --path . --from origin/master
+```
+
+### `diff` — the whole API changelog, additions included
+
+`breaking` only names what breaks consumers. This one names
+everything that changed in the API surface between two refs:
+added, removed, kind-changed, and signature-changed. A new symbol
+breaks nothing, so it never appears in a breaking report — but a
+changelog without additions hides half the release. A symbol that
+moved files reads as a removal plus an addition, because a diff
+that guesses identity is a diff that lies.
+
+```bash
+sephera diff --path . --from origin/master
+```
+
+### `simulate` — dry-run a rename before doing it
+
+A rename is the most common refactor and the one taken on faith:
+the tool renames the declaration and every import it can find,
+and the breakage shows up in CI. This one measures the rename
+beforehand — which files must update their import, and whether
+the new name already exists where it would land (a duplicate
+definition blocks the rename outright; a consumer that already
+owns the name warns instead). Nothing is edited, and even a
+blocked rename exits 0: a blocked rename is an answer, not a
+failure.
+
+```bash
+sephera simulate crates/sephera_graph/src/blast_radius.rs --symbol BlastRadius --to BlastRadiusSim --path .
+```
+
+### `behavior` — the changes that still compile but change behaviour
+
+A compiler catches a broken call. A test suite catches a changed
+result — when it covers the path. This one catches the class
+neither does: a call whose arguments were swapped but still type
+check, and a numeric constant whose value changed while still
+used. It is deliberately narrow — symmetric bodies are skipped,
+string constants are never flagged, and a Rust swap that would
+not type check is a compile error, not a silent change — because
+the general question is undecidable and a detector that guesses
+trains a team to ignore it. There is no `--fail-on`: the
+detector's precision is measured by its corpus, and a gate on an
+unproven detector would punish asking.
+
+```bash
+sephera behavior --path . --from origin/master
+```
+
+### `archaeology` — where a symbol has been
+
+`git log` follows a file, so a rename that also moves the file
+breaks the thread. This one follows the symbol: every rename
+and move, its former names, and who changed it. Identity is
+proven by consumer continuity, never by name similarity — a
+symbol in one commit is the same symbol as one in an older
+commit when exactly one declared symbol there has the same
+direct consumers. A rename that also changes the consumer set
+in the same commit is not proven and ends the trail, and an
+unconsumed symbol's rename cannot be proven at all, so the
+trail stops as ambiguous rather than guessing.
+
+```bash
+sephera archaeology crates/sephera_graph/src/blast_radius.rs --symbol BlastRadius --path .
 ```
 
 ### `untested` — the symbols no test exercises, without running anything

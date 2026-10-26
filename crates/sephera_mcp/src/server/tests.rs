@@ -1576,3 +1576,277 @@ async fn merge_tool_reports_a_removal_against_a_new_consumer() {
     );
     assert!(markdown.contains("new.py"), "{markdown}");
 }
+
+fn repo_with_diff() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "a.py",
+        b"def keep(x):\n    return x\n\n\ndef gone(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v1 declares keep and gone"]);
+    write_file(
+        dir,
+        "a.py",
+        b"def keep(x):\n    return x\n\n\ndef fresh(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "v2 drops gone, adds fresh"]);
+    temp_dir
+}
+
+fn diff_input(dir: &Path, format: Option<String>) -> DiffInput {
+    DiffInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        from: "HEAD~1".to_owned(),
+        to: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn diff_tool_reports_added_and_removed_in_json_and_markdown() {
+    let repo = repo_with_diff();
+    let server = SepheraServer::new();
+
+    let output = server
+        .diff(param_for(diff_input(repo.path(), None)))
+        .await
+        .expect("diff tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("diff output must be JSON");
+
+    let changes = parsed["changes"].as_array().expect("changes is an array");
+    assert_eq!(changes.len(), 2, "{output}");
+    let kinds: Vec<(&str, &str)> = changes
+        .iter()
+        .map(|change| {
+            (
+                change["symbol"].as_str().unwrap(),
+                change["change"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert!(kinds.contains(&("fresh", "added")), "{kinds:?}");
+    assert!(kinds.contains(&("gone", "removed")), "{kinds:?}");
+
+    let markdown = server
+        .diff(param_for(diff_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("diff tool should succeed for a temp repo");
+    assert!(markdown.contains("Added `fresh`"), "{markdown}");
+    assert!(markdown.contains("Removed `gone`"), "{markdown}");
+}
+
+fn behavior_input(dir: &Path, format: Option<String>) -> BehaviorInput {
+    BehaviorInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        from: "HEAD".to_owned(),
+        to: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+/// A repository whose committed tree divides; the working tree
+/// swaps the division's arguments.
+fn repo_with_a_swap() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "lib.py", b"def divide(a, b):\n    return a / b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import divide\n\n\nprint(divide(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "seed"]);
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import divide\n\n\nprint(divide(y, x))\n",
+    );
+    temp_dir
+}
+
+#[tokio::test]
+async fn behavior_tool_flags_a_swap_in_json_and_markdown() {
+    let repo = repo_with_a_swap();
+    let server = SepheraServer::new();
+
+    let output = server
+        .behavior(param_for(behavior_input(repo.path(), None)))
+        .await
+        .expect("behavior tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("behavior output must be JSON");
+    let changes = parsed["changes"].as_array().expect("changes is an array");
+    assert_eq!(changes.len(), 1, "{output}");
+    assert_eq!(changes[0]["kind"], "arg_order_swap", "{output}");
+    assert_eq!(changes[0]["callee"], "divide", "{output}");
+
+    let markdown = server
+        .behavior(param_for(behavior_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("behavior tool should succeed for a temp repo");
+    assert!(
+        markdown.contains("Swapped arguments at a call to `divide`"),
+        "{markdown}"
+    );
+}
+
+fn archaeology_input(dir: &Path, format: Option<String>) -> ArchaeologyInput {
+    ArchaeologyInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        file: "new.py".to_owned(),
+        symbol: "new_name".to_owned(),
+        at: None,
+        window: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+/// A repository where `old_name` is born, renamed to `new_name`,
+/// then moved to a new file — the same consumer throughout, so
+/// each step is proven by consumer continuity.
+fn repo_with_rename_and_move() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "lib.py", b"def old_name(a, b):\n    return a - b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import old_name\n\n\nprint(old_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "born"]);
+    write_file(dir, "lib.py", b"def new_name(a, b):\n    return a - b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import new_name\n\n\nprint(new_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "renamed"]);
+    std::fs::remove_file(dir.join("lib.py")).unwrap();
+    write_file(dir, "new.py", b"def new_name(a, b):\n    return a - b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from new import new_name\n\n\nprint(new_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "moved"]);
+    temp_dir
+}
+
+#[tokio::test]
+async fn archaeology_tool_traces_birth_rename_and_move() {
+    let repo = repo_with_rename_and_move();
+    let server = SepheraServer::new();
+
+    let output = server
+        .archaeology(param_for(archaeology_input(repo.path(), None)))
+        .await
+        .expect("archaeology tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("archaeology output must be JSON");
+    let steps = parsed["steps"].as_array().expect("steps is an array");
+    assert_eq!(steps.len(), 3, "{output}");
+    assert_eq!(steps[0]["kind"], "born", "{output}");
+    assert_eq!(steps[1]["kind"], "renamed", "{output}");
+    assert_eq!(steps[2]["kind"], "moved", "{output}");
+    assert_eq!(parsed["origin_found"], true, "{output}");
+
+    let markdown = server
+        .archaeology(param_for(archaeology_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("archaeology tool should succeed for a temp repo");
+    assert!(
+        markdown.contains("Moved `new_name` from `lib.py` to `new.py`."),
+        "{markdown}"
+    );
+}
+
+/// A plain tree, no git repository: `lib.py` declares `add`,
+/// `user.py` imports it, `other.py` already declares `sum`.
+fn tree_with_consumer() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    write_file(dir, "lib.py", b"def add(x, y):\n    return x + y\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import add\n\n\nprint(add(1, 2))\n",
+    );
+    write_file(dir, "other.py", b"def sum(x, y):\n    return x + y\n");
+    temp_dir
+}
+
+fn simulate_input(
+    dir: &Path,
+    to: &str,
+    to_file: Option<&str>,
+    format: Option<String>,
+) -> SimulateInput {
+    SimulateInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        url: None,
+        git_ref: None,
+        file: "lib.py".to_owned(),
+        symbol: "add".to_owned(),
+        to: to.to_owned(),
+        to_file: to_file.map(str::to_owned),
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+#[tokio::test]
+async fn simulate_tool_reports_consumers_and_a_blocked_move() {
+    let tree = tree_with_consumer();
+    let server = SepheraServer::new();
+
+    let output = server
+        .simulate(param_for(simulate_input(tree.path(), "total", None, None)))
+        .await
+        .expect("simulate tool should succeed for a plain tree");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("simulate output must be JSON");
+    assert_eq!(parsed["blocked"], false, "{output}");
+    assert_eq!(parsed["direct"][0]["file"], "user.py", "{output}");
+
+    let markdown = server
+        .simulate(param_for(simulate_input(
+            tree.path(),
+            "sum",
+            Some("other.py"),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("simulate tool should succeed for a plain tree");
+    assert!(
+        markdown.contains("Blocked: `other.py` already declares `sum`."),
+        "{markdown}"
+    );
+}

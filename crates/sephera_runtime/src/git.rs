@@ -233,6 +233,135 @@ pub fn changed_files(
     Ok(files.into_iter().collect())
 }
 
+/// One commit's identity for history walks: its hash, author,
+/// short date, and subject line.
+pub struct CommitMeta {
+    /// Full hash.
+    pub hash: String,
+    /// Author name.
+    pub author: String,
+    /// Short date, as git spells it.
+    pub date: String,
+    /// Subject line.
+    pub message: String,
+}
+
+/// Parse one `git log --format` line: hash, author, date, subject,
+/// separated by unit-separator bytes. A malformed line is an
+/// error, not a skipped commit: a silently wrong trail is worse
+/// than a failed one.
+fn parse_commit_meta(line: &str) -> Result<CommitMeta> {
+    let fields: Vec<&str> = line.split('\u{1f}').collect();
+    if fields.len() != 4 {
+        bail!(
+            "git log returned a line that is not hash, author, date, subject"
+        );
+    }
+    Ok(CommitMeta {
+        hash: fields[0].to_owned(),
+        author: fields[1].to_owned(),
+        date: fields[2].to_owned(),
+        message: fields[3].to_owned(),
+    })
+}
+
+/// The commits touching a file from a ref, newest first.
+///
+/// First-parent only: a merge's second parents are not followed,
+/// so a rename that landed through a merge is attributed to the
+/// merge commit itself, where the new identity first appears on
+/// the branch. The file is spelled from the repository root, as
+/// the graph spells it.
+///
+/// # Errors
+///
+/// Returns an error when git cannot read the history, most often
+/// because `repo_root` is not inside a git repository at all or
+/// the ref does not exist.
+pub fn log_commits_for_file(
+    repo_root: &Path,
+    from_ref: &str,
+    file: &str,
+) -> Result<Vec<CommitMeta>> {
+    let output = git_stdout_string(
+        repo_root,
+        [
+            "log",
+            "--first-parent",
+            "--format=%H%x1f%an%x1f%ad%x1f%s",
+            "--date=short",
+            from_ref,
+            "--",
+            file,
+        ],
+        "read the commits touching a file",
+    )?;
+    output
+        .lines()
+        .filter(|line| !line.trim().is_empty())
+        .map(parse_commit_meta)
+        .collect()
+}
+
+/// One commit's metadata, by hash or ref.
+///
+/// # Errors
+///
+/// Returns an error when git cannot resolve the commit.
+pub fn commit_meta(repo_root: &Path, commit: &str) -> Result<CommitMeta> {
+    let output = git_stdout_string(
+        repo_root,
+        [
+            "log",
+            "-1",
+            "--format=%H%x1f%an%x1f%ad%x1f%s",
+            "--date=short",
+            commit,
+        ],
+        "read one commit's metadata",
+    )?;
+    parse_commit_meta(output.lines().next().unwrap_or(""))
+}
+
+/// A commit's first-parent parent, or `None` at the root.
+///
+/// A rev-parse failure at a commit that exists means the commit
+/// has no parent; a failure at a commit that does not exist is
+/// reported, so a corrupt history cannot read as a root.
+///
+/// # Errors
+///
+/// Returns an error when git cannot run at all, or when the
+/// commit itself does not resolve.
+pub fn first_parent_commit(
+    repo_root: &Path,
+    commit: &str,
+) -> Result<Option<CommitMeta>> {
+    let parent = Command::new("git")
+        .current_dir(repo_root)
+        .args(["rev-parse", "--verify", &format!("{commit}^1")])
+        .output()
+        .with_context(|| {
+            format!("failed to invoke git while looking for {commit}'s parent")
+        })?;
+    if parent.status.success() {
+        let hash = String::from_utf8_lossy(&parent.stdout).trim().to_owned();
+        return Ok(Some(commit_meta(repo_root, &hash)?));
+    }
+    let exists = Command::new("git")
+        .current_dir(repo_root)
+        .args(["cat-file", "-e", commit])
+        .output()
+        .with_context(|| {
+            format!("failed to invoke git while checking {commit} exists")
+        })?;
+    if exists.status.success() {
+        Ok(None)
+    } else {
+        bail!("git cannot resolve {commit} while looking for its parent");
+    }
+}
+
 /// Split `git log --name-only` output into one file list per commit.
 ///
 /// Records begin with a unit-separator byte and the commit hash, so

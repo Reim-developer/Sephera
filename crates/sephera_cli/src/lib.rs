@@ -1,7 +1,9 @@
 #![deny(clippy::pedantic, clippy::all, clippy::nursery, clippy::perf)]
 
 mod affected_tests;
+mod archaeology;
 mod args;
+mod behavior;
 mod breaking;
 mod budget;
 mod change_impact;
@@ -9,6 +11,7 @@ pub(crate) mod configure;
 pub(crate) mod context_config;
 mod coupling;
 mod dead;
+mod diff;
 mod gate;
 mod guard;
 mod impact;
@@ -18,6 +21,7 @@ mod progress;
 mod review;
 mod risk;
 mod run;
+mod simulate;
 mod skill;
 mod untested;
 mod watch;
