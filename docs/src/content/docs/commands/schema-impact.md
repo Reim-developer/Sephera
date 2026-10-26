@@ -262,10 +262,25 @@ declares, so a Go message removed and regenerated — the
 struct declaration gone with it — has no module to join
 through, and its break is listed with that note. Python
 modules map by path (`api/user.proto` to `api/user_pb2.py`),
-so a Python removal joins even after regeneration. A
-`json_name`-only change is not a break in v1: the wire name
-moved but the source contract did not, and v1 has no kind for
-it.
+so a Python removal joins even after regeneration. Both
+mappings handle the standard protoc layout, where generated
+code lives under its own root: a Python file under
+`python/` maps to the proto under `proto/` with the same
+path relative to each root, and a Go file under `go/` is
+disambiguated from a same-named struct in another package
+by the trailing path segments the two directories share.
+A `json_name`-only change is not a break in v1: the wire
+name moved but the source contract did not, and v1 has no
+kind for it.
+
+A second limit follows from the proto3-only rule: one
+proto2 file anywhere fails a whole-tree run, because the
+strict parser errors rather than silently skipping a file
+whose elements it cannot diff. Repos that vendor a proto2
+file — the usual case is a protovalidate predefined-rules
+file — can scope the run to a proto3-only subtree with
+`--path` in the no-`--to` form, or exclude the file with
+`--ignore`.
 
 ## Why this is not buf breaking
 
