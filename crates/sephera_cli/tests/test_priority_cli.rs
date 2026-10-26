@@ -178,3 +178,29 @@ fn non_repo_tree_is_an_error() {
         "stderr should name the missing history: {stderr}"
     );
 }
+
+#[test]
+fn regression_test_priority_help_has_real_line_breaks() {
+    // CodeRabbit PR #53 finding 1: the new help strings used \\n,
+    // so clap printed literal \n text instead of line breaks.
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args(["test-priority", "--help"])
+        .output()
+        .unwrap();
+    assert!(output.status.success(), "{output:?}");
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        !stdout.contains("\\n"),
+        "help still contains literal backslash-n text:\n{stdout}"
+    );
+    let mut lines = stdout.lines();
+    let examples = lines
+        .find(|line| line.starts_with("Examples:"))
+        .expect("Examples block");
+    assert_eq!(examples, "Examples:");
+    assert_eq!(
+        lines.next(),
+        Some("  sephera test-priority --path ."),
+        "Examples block lost its line break:\n{stdout}"
+    );
+}

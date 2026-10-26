@@ -30,7 +30,12 @@ pub fn render_markdown(report: &TestPriorityReport) -> String {
         .expect("writing to a String must succeed");
     writeln!(
         output,
-        "History: {} commits scanned, {} counted. Score is downstream \\\n         × churn × (1 + coupled partners); the ranking is a heuristic, \\\n         not a probability. {} symbol(s) exercised directly by a test, {} \\\n         exercised indirectly through code the tests reach, {} untested \\\n         in total and ranked below — zero-downstream symbols score 0 and \\\n         rank last, but stay listed.",
+        "History: {} commits scanned, {} counted. Score is downstream \
+         × churn × (1 + coupled partners); the ranking is a heuristic, \
+         not a probability. {} symbol(s) exercised directly by a test, {} \
+         exercised indirectly through code the tests reach, {} untested \
+         in total and ranked below — zero-downstream symbols score 0 and \
+         rank last, but stay listed.",
         report.commits_scanned,
         report.commits_counted,
         report.tested_direct,
@@ -39,7 +44,7 @@ pub fn render_markdown(report: &TestPriorityReport) -> String {
     )
     .expect("writing to a String must succeed");
 
-    if report.symbols.is_empty() {
+    if report.untested_total == 0 {
         writeln!(
             output,
             "\nEvery declared symbol is named by a file the tests reach."
@@ -128,10 +133,39 @@ mod tests {
             ..report()
         };
         let rendered = render_markdown(&truncated);
-        // The header wraps across lines, so the assertions use
-        // fragments that do not cross a wrap.
+        // The header is a single line; these fragments hold on it.
         assert!(rendered.contains("2629 untested"), "{rendered}");
         assert!(rendered.contains("Showing 1 of 2629"), "{rendered}");
+    }
+
+    #[test]
+    fn regression_cli_header_is_a_single_line() {
+        // CodeRabbit PR #53 finding 2: the header used \\\n, which
+        // renders as literal backslashes plus newlines; the MCP
+        // header is a single line.
+        let rendered = render_markdown(&report());
+        let history = rendered
+            .lines()
+            .find(|line| line.starts_with("History:"))
+            .expect("header line");
+        assert!(!history.contains('\\'), "{rendered}");
+        assert!(history.ends_with("stay listed."), "{rendered}");
+    }
+
+    #[test]
+    fn regression_cli_truncated_to_zero_does_not_claim_all_tested() {
+        // Same lie shape as CodeRabbit PR #53 finding 3 (MCP side):
+        // an empty list with a positive total must not claim every
+        // symbol is tested. The CLI parser rejects top < 1 today, so
+        // this pins the renderer's condition, not a reachable CLI run.
+        let truncated = TestPriorityReport {
+            symbols: Vec::new(),
+            untested_total: 5,
+            ..report()
+        };
+        let rendered = render_markdown(&truncated);
+        assert!(rendered.contains("Showing 0 of 5"), "{rendered}");
+        assert!(!rendered.contains("Every declared symbol"), "{rendered}");
     }
 
     #[test]

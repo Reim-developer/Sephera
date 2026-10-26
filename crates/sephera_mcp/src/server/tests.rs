@@ -1946,6 +1946,51 @@ async fn test_priority_tool_ranks_untested_symbols() {
 }
 
 #[tokio::test]
+async fn regression_test_priority_top_zero_does_not_claim_all_tested() {
+    // CodeRabbit PR #53 finding 3: MCP accepted top: 0, returned an
+    // empty list with a positive total, and the renderer claimed
+    // every symbol was tested. Same fixture as the ranking test:
+    // add has two consumers, keep has one, lonely has none.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x\n\ndef keep(x):\n    return x\n\ndef lonely(x):\n    return x\n",
+    );
+    write_file(dir, "app.py", b"from lib import add\n\nprint(add(1))\n");
+    write_file(dir, "worker.py", b"from lib import add\n\nprint(add(2))\n");
+    write_file(dir, "other.py", b"from lib import keep\n\nprint(keep(1))\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "base"]);
+    write_file(
+        dir,
+        "lib.py",
+        b"def add(x):\n    return x + 1\n\ndef keep(x):\n    return x\n\ndef lonely(x):\n    return x\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "touch lib only"]);
+
+    let output = server
+        .test_priority(param_for(TestPriorityInput {
+            path: Some(dir.to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            window: None,
+            top: Some(0),
+            format: Some("markdown".to_owned()),
+        }))
+        .await
+        .expect("test_priority tool should succeed for a temp repo");
+    assert!(output.contains("Showing 0 of 3"), "{output}");
+    assert!(!output.contains("Every declared symbol"), "{output}");
+}
+
+#[tokio::test]
 async fn test_priority_tool_errors_on_a_non_repo_tree() {
     let server = SepheraServer::new();
     let temp_dir = tempdir().unwrap();

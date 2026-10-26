@@ -1695,7 +1695,7 @@ fn test_priority_markdown(
         report.untested_total
     );
 
-    if report.symbols.is_empty() {
+    if report.untested_total == 0 {
         let _ = writeln!(
             output,
             "\nEvery declared symbol is named by a file the tests reach."
