@@ -472,6 +472,48 @@ message GetUserRequest {
 }
 "#;
 
+/// A top-level extend block declaring custom options — the
+/// shape every real repo with custom options uses — beside a
+/// message. Extend blocks introduce no tracked element, so v1
+/// skips them; rejecting them failed whole runs on valid
+/// proto3 (metal-stack/api's common.proto).
+const OLD_EXTEND: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+}
+extend google.protobuf.MethodOptions {
+  string tenant_role = 51000;
+  repeated string project_roles = 51001;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+"#;
+
+/// The extend proto with `name` removed; the extend block is
+/// unchanged, so the diff must report only the field.
+const NEW_EXTEND_REMOVED: &str = r#"syntax = "proto3";
+package api;
+message User {
+  int32 age = 2;
+}
+extend google.protobuf.MethodOptions {
+  string tenant_role = 51000;
+  repeated string project_roles = 51001;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+"#;
+
 const PY_TAGS_KWARGS: &str = r#"from api.user_pb2 import User
 
 
@@ -2775,6 +2817,29 @@ fn cases() -> Vec<Case> {
                     note: None,
                 },
             ],
+            expected_added: vec![],
+            expected_notes: vec![],
+        },
+        // 61. Field removed from a file with a top-level extend
+        // block. Regression: the top-level dispatcher rejected
+        // `extend` outright, failing whole runs on valid proto3
+        // — found on metal-stack/api's common.proto. The extend
+        // block itself must contribute no break on either side.
+        Case {
+            name: "top_level_extend_block_skipped",
+            old_protos: vec![(user, OLD_EXTEND)],
+            new_protos: vec![(user, NEW_EXTEND_REMOVED)],
+            texts: vec![(py_gen, PY_GEN), (py_consumer, PY_FROM_KWARGS)],
+            old_edges: py_from_edges(py_consumer, py_gen, "api.user_pb2"),
+            new_edges: py_from_edges(py_consumer, py_gen, "api.user_pb2"),
+            expected: vec![ExpBreak {
+                element: "api.User.name",
+                change: SchemaChange::Removed,
+                proven: vec![("consumer.py", "constructor keyword")],
+                named: vec![],
+                downstream: vec![],
+                note: None,
+            }],
             expected_added: vec![],
             expected_notes: vec![],
         },
