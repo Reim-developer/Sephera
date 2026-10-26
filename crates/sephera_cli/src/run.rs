@@ -17,7 +17,8 @@ use sephera_runtime::{
     INTERRUPTED_EXIT_CODE, Interrupted, ResolvedSource, SourceRequest,
     build_context_report, changed_files, checkout_worktree, commit_meta,
     first_parent_commit, load_project_settings, log_commits_for_file,
-    merge_base, recent_commit_files, resolve_changed_files, resolve_source,
+    merge_base, recent_commit_files, repo_toplevel, resolve_changed_files,
+    resolve_source,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -51,7 +52,7 @@ use crate::{
         render_loc_markdown, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
-    review, risk, simulate, skill, untested, watch, why,
+    review, risk, sarif, simulate, skill, untested, watch, why,
 };
 
 #[must_use]
@@ -1095,6 +1096,35 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
     Ok(Vec::new())
 }
 
+/// The repo-relative prefix SARIF URIs need for one analysis directory.
+///
+/// GitHub resolves SARIF URIs from the repository root, while a
+/// report's file paths are relative to the analysis directory, so a
+/// run over a subdirectory must carry that subdirectory as a prefix
+/// and a root run must carry none.
+///
+/// The two fields of `ResolvedSource` do not answer this on their
+/// own: for a local path, `resolve_source` sets `repo_root` equal to
+/// `analysis_path`, so stripping one from the other is empty even
+/// inside a repository. The strip below therefore only covers the
+/// remote-checkout case, where the two genuinely differ; for local
+/// paths the work-tree root comes from git, with the analysis
+/// directory canonicalised first so a relative `--path` or a path
+/// through a symlink still strips cleanly. Any failure at all means
+/// no prefix — today's spelling — never an invented path.
+fn sarif_repo_prefix(source: &ResolvedSource) -> String {
+    let stripped = sarif::path_prefix(&source.analysis_path, &source.repo_root);
+    if !stripped.is_empty() {
+        return stripped;
+    }
+    let canonical = std::fs::canonicalize(&source.analysis_path)
+        .unwrap_or_else(|_| source.analysis_path.clone());
+    let Some(toplevel) = repo_toplevel(&source.analysis_path) else {
+        return String::new();
+    };
+    sarif::path_prefix(&canonical, &toplevel)
+}
+
 async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
     // A remote source has no two local refs to compare — its checkout
     // is one ref already — so breaking refuses it plainly rather than
@@ -1152,9 +1182,26 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
         to_label,
     );
 
+    // The SARIF prefix, per side: the old side is always a whole
+    // worktree checkout, so declaring paths are already
+    // repo-root-relative and related locations take no prefix. The
+    // new side is analysis_path-based only when --to is absent; with
+    // --to it is a second whole-worktree checkout, so its consumer
+    // paths are root-relative too and the prefix is empty. Passing
+    // the analysis prefix unconditionally would double-prefix the
+    // subdir + --to runs that actually produce results.
+    let consumer_prefix = if arguments.to.is_some() {
+        String::new()
+    } else {
+        sarif_repo_prefix(&source)
+    };
+
     let rendered = match arguments.format {
         BreakingOutputFormat::Markdown => breaking::render_markdown(&measured),
         BreakingOutputFormat::Json => breaking::render_json(&measured),
+        BreakingOutputFormat::Sarif => {
+            breaking::render_sarif(&measured, &consumer_prefix)
+        }
     };
 
     if arguments.output_args.output.is_some() {
@@ -1738,9 +1785,17 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
         build_graph_with_declarations(&source.analysis_path, &ignore)?;
     let measured = untested::measure_untested(&report, &index);
 
+    // The whole report comes from one tree rooted at the analysis
+    // directory, so every location takes the same repo-relative
+    // prefix — empty for root runs, the subdirectory otherwise.
+    let prefix = sarif_repo_prefix(&source);
+
     let rendered = match arguments.format {
         UntestedOutputFormat::Markdown => untested::render_markdown(&measured),
         UntestedOutputFormat::Json => untested::render_json(&measured),
+        UntestedOutputFormat::Sarif => {
+            untested::render_sarif(&measured, &prefix)
+        }
     };
 
     if arguments.output_args.output.is_some() {

@@ -139,7 +139,7 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | Metric | Value |
 |--------|-------|
 | Files analyzed | 43 |
-| Internal edges | 246 |
+| Internal edges | 247 |
 | External edges | 131 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 40 |

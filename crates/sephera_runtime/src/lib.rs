@@ -27,7 +27,7 @@ pub use context::{
 pub use git::{
     CommitMeta, DetachedWorktree, changed_files, checkout_worktree,
     commit_meta, first_parent_commit, log_commits_for_file, merge_base,
-    recent_commit_files,
+    recent_commit_files, repo_toplevel,
 };
 pub use interrupt::{
     CleanupGuard, INTERRUPTED_EXIT_CODE, Interrupt, interrupt,
