@@ -14,6 +14,11 @@ A quoted path that no longer resolves. The split moved most of
 that no script runs. A path in a code block is prose that looks like a command, so
 it does not fail any build and is only wrong when a reader types it.
 
+A quoted action version that has since been deprecated. The SARIF pages quoted
+`upload-sarif@v3`, which GitHub deprecates in favour of v4; no build runs the
+example, so a docs edit reintroducing v3 would otherwise ship silently. The
+version check runs with the fence check, needing no binary.
+
 Run from CI. The fence check needs nothing but the files, and the path check needs
 the built binary -- so the path half is skipped with a report when the binary is
 absent, rather than passing silently.
@@ -72,16 +77,37 @@ def quoted_paths(path: pathlib.Path) -> set[str]:
     return found
 
 
+# Action versions the docs must not quote, with the version to use instead.
+DEPRECATED_ACTIONS = {
+    "upload-sarif@v3": "upload-sarif@v4",
+}
+
+
+def deprecated_actions(path: pathlib.Path) -> list[str]:
+    """Deprecated action versions quoted on one page."""
+
+    issues = []
+    for number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), 1):
+        for old, new in DEPRECATED_ACTIONS.items():
+            if old in line:
+                issues.append(
+                    f"line {number}: quotes {old}, deprecated in favour of {new}"
+                )
+    return issues
+
+
 def main() -> int:
     problems: list[str] = []
 
     for page in sorted(DOCS.rglob("*.md")):
         for issue in fence_problems(page):
             problems.append(f"{page.name}: {issue}")
+        for issue in deprecated_actions(page):
+            problems.append(f"{page.name}: {issue}")
 
     if not CLI.is_file():
         print(
-            f"fences checked; path check skipped, {CLI.name} is not built"
+            f"fences and action versions checked; path check skipped, {CLI.name} is not built"
         )
         return 1 if problems else 0
 
@@ -104,7 +130,8 @@ def main() -> int:
         return 1
 
     print(
-        "docs check: every fence balanced and every quoted workspace path exists."
+        "docs check: every fence balanced, every quoted workspace path exists, "
+        "and no deprecated action version is quoted."
     )
     return 0
 

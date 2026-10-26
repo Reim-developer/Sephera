@@ -156,7 +156,7 @@ sephera breaking --path . --from origin/main --to HEAD --format sarif --output r
 - name: Run Sephera breaking
   run: sephera breaking --path . --from origin/main --to HEAD --format sarif --output results.sarif
 - name: Upload SARIF
-  uses: github/codeql-action/upload-sarif@v3
+  uses: github/codeql-action/upload-sarif@v4
   with:
     sarif_file: results.sarif
 ```
