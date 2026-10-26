@@ -131,3 +131,37 @@ fn a_change_that_breaks_nothing_says_so_in_one_line() {
         "{stdout}"
     );
 }
+
+// Regression for the same --path <subdir> bug in review's breaking
+// section: it composes measure_breaking from a whole-worktree ref
+// side against the analysis directory, so a subdir review's
+// breaking section missed every consumer exactly like breaking
+// did. The ref side is now scoped to --path too.
+#[test]
+fn regression_review_subdir_breaking_section_finds_consumers() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/lib.py", b"def add(x, y):\n    return x + y\n");
+    // Relative import, so it resolves under both the whole-tree
+    // and the subdir basis (see breaking_cli.rs for why that
+    // matters to this test).
+    write_file(
+        dir,
+        "pkg/consumer.py",
+        b"from .lib import add\n\nprint(add(1, 2))\n",
+    );
+    commit_all(dir, "v1 declares add");
+    write_file(dir, "pkg/lib.py", b"def keep(x):\n    return x\n");
+
+    let output = run_review(&dir.join("pkg"), &["--format", "json"]);
+    assert!(output.status.success(), "{output:?}");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid json");
+
+    assert_eq!(parsed["breaking"]["broken"][0]["symbol"], "add");
+    assert_eq!(
+        parsed["breaking"]["broken"][0]["direct"][0]["file"],
+        "consumer.py"
+    );
+}

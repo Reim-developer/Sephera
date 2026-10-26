@@ -1,5 +1,5 @@
 use std::io::Read as _;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 use anyhow::{Context, Result};
@@ -943,9 +943,10 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
     // working tree, computed exactly the way `breaking` computes it
     // when --to is absent. The ref side lives in a detached
     // worktree so the working tree is never disturbed, and the new
-    // side is a whole-tree build — the focus-filtered report above
-    // cannot serve as it, because breaking assumes whole-tree
-    // edges. Two extra builds is the stated cost of the answer.
+    // side is a fresh build over the analysis directory — the
+    // focus-filtered report above cannot serve as it, because
+    // breaking assumes both sides share one basis. Two extra
+    // builds is the stated cost of the answer.
     progress.set_message("Checking for broken symbols...");
     let breaking =
         measure_review_breaking(&source, arguments, against_label, &ignore)?;
@@ -1098,10 +1099,11 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
 
 /// The repo-relative prefix SARIF URIs need for one analysis directory.
 ///
-/// GitHub resolves SARIF URIs from the repository root, while a
-/// report's file paths are relative to the analysis directory, so a
-/// run over a subdirectory must carry that subdirectory as a prefix
-/// and a root run must carry none.
+/// The repo-relative path of the analysis directory: empty when
+/// the analysis directory IS the repo root, the subdirectory
+/// otherwise, and empty again when the analysis directory is not
+/// under the repo root at all, which keeps the old
+/// analysis-relative spelling rather than inventing a path.
 ///
 /// The two fields of `ResolvedSource` do not answer this on their
 /// own: for a local path, `resolve_source` sets `repo_root` equal to
@@ -1110,8 +1112,32 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
 /// remote-checkout case, where the two genuinely differ; for local
 /// paths the work-tree root comes from git, with the analysis
 /// directory canonicalised first so a relative `--path` or a path
-/// through a symlink still strips cleanly. Any failure at all means
-/// no prefix — today's spelling — never an invented path.
+/// through a symlink still strips cleanly.
+///
+/// GitHub resolves SARIF URIs from the repository root, while a
+/// report's file paths are relative to the analysis directory, so
+/// a run over a subdirectory must carry this prefix and a root run
+/// must carry none. The same prefix also scopes a comparison's old
+/// side to `--path` (see `build_old_side`): both uses need the
+/// directory the analysis sits under, not a rendering detail.
+#[must_use]
+fn analysis_prefix(source: &ResolvedSource) -> PathBuf {
+    let relative =
+        sarif::relative_path(&source.analysis_path, &source.repo_root);
+    if !relative.as_os_str().is_empty() {
+        return relative;
+    }
+    let canonical = std::fs::canonicalize(&source.analysis_path)
+        .unwrap_or_else(|_| source.analysis_path.clone());
+    let Some(toplevel) = repo_toplevel(&source.analysis_path) else {
+        return PathBuf::new();
+    };
+    sarif::relative_path(&canonical, &toplevel)
+}
+
+/// SARIF's spelling of `analysis_prefix`: `/`-separated, for the
+/// URI joins in `sarif::prefixed_path`.
+#[must_use]
 fn sarif_repo_prefix(source: &ResolvedSource) -> String {
     let stripped = sarif::path_prefix(&source.analysis_path, &source.repo_root);
     if !stripped.is_empty() {
@@ -1123,6 +1149,59 @@ fn sarif_repo_prefix(source: &ResolvedSource) -> String {
         return String::new();
     };
     sarif::path_prefix(&canonical, &toplevel)
+}
+
+/// The base the old side of a comparison is built from.
+///
+/// When `scoped` is set, the build is restricted to the analysis
+/// directory inside the checkout, so its file paths share the new
+/// side's basis — the comparison `--path` scopes. Unscoped, the
+/// whole checkout is built, which is the `--to` shape. An empty
+/// prefix leaves the checkout untouched either way, so root runs
+/// behave exactly as before.
+#[must_use]
+fn old_side_base(
+    old_worktree_path: &Path,
+    source: &ResolvedSource,
+    scoped: bool,
+) -> PathBuf {
+    if scoped {
+        old_worktree_path.join(analysis_prefix(source))
+    } else {
+        old_worktree_path.to_path_buf()
+    }
+}
+
+/// Build the old side of a comparison from its checkout worktree,
+/// with its own side's ignore matcher built from the build base —
+/// the breaking command's per-side rule.
+///
+/// A scope that did not exist at the old ref is an empty side, not
+/// an error: everything in it is new, so nothing in it broke. The
+/// caller never sees a fabricated directory for it; the empty
+/// report carries the scope as its base path and no nodes at all.
+fn build_old_side(
+    old_worktree_path: &Path,
+    source: &ResolvedSource,
+    scoped: bool,
+    settings: &SettingsArgs,
+    ignore_patterns: &[String],
+    no_gitignore: bool,
+) -> Result<(GraphReport, DeclarationIndex)> {
+    let base = old_side_base(old_worktree_path, source, scoped);
+    let ignore =
+        build_ignore_matcher(&base, settings, ignore_patterns, no_gitignore)?;
+    if base.is_dir() {
+        build_graph_with_declarations(&base, &ignore)
+    } else {
+        Ok((
+            GraphReport {
+                base_path: base,
+                ..Default::default()
+            },
+            DeclarationIndex::default(),
+        ))
+    }
 }
 
 async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
@@ -1150,6 +1229,8 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
     // move while the newer side is built. The newer side is the
     // working tree when --to is absent, and a second worktree
     // otherwise, so the working tree is never disturbed either way.
+    // Without --to the old side is scoped to --path, like the new
+    // side; with --to both sides are whole-tree checkouts.
     let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
         .with_context(|| {
             format!(
@@ -1158,15 +1239,15 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
                 source.repo_root.display()
             )
         })?;
-    let old_ignore = build_ignore_matcher(
+    progress.set_message("Extracting the older side...");
+    let (old_report, old_index) = build_old_side(
         old_worktree.path(),
+        &source,
+        arguments.to.is_none(),
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    progress.set_message("Extracting the older side...");
-    let (old_report, old_index) =
-        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
     let (new_report, new_index) =
@@ -1182,14 +1263,15 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
         to_label,
     );
 
-    // The SARIF prefix, per side: the old side is always a whole
-    // worktree checkout, so declaring paths are already
-    // repo-root-relative and related locations take no prefix. The
-    // new side is analysis_path-based only when --to is absent; with
-    // --to it is a second whole-worktree checkout, so its consumer
-    // paths are root-relative too and the prefix is empty. Passing
-    // the analysis prefix unconditionally would double-prefix the
-    // subdir + --to runs that actually produce results.
+    // The SARIF prefix, per side: both sides share one basis, so
+    // both locations take the same prefix — the analysis prefix
+    // when --to is absent (the old side is scoped, like the new
+    // side), empty with --to (both sides are whole-tree checkouts,
+    // so all paths are root-relative already). Passing the prefix
+    // unconditionally would double-prefix the subdir + --to runs.
+    // The two prefixes are passed separately because the locations
+    // come from different sides: a future change to one side's
+    // basis must not silently corrupt the other's URIs.
     let consumer_prefix = if arguments.to.is_some() {
         String::new()
     } else {
@@ -1199,9 +1281,11 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
     let rendered = match arguments.format {
         BreakingOutputFormat::Markdown => breaking::render_markdown(&measured),
         BreakingOutputFormat::Json => breaking::render_json(&measured),
-        BreakingOutputFormat::Sarif => {
-            breaking::render_sarif(&measured, &consumer_prefix)
-        }
+        BreakingOutputFormat::Sarif => breaking::render_sarif(
+            &measured,
+            &consumer_prefix,
+            &consumer_prefix,
+        ),
     };
 
     if arguments.output_args.output.is_some() {
@@ -1822,9 +1906,11 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
 /// report and index are plain data, so the worktree can drop before
 /// the measurement runs.
 /// The breaking side of a review: the ref in a detached worktree
-/// against the working tree, each built whole-tree with its own
-/// side's ignore matcher — the breaking command's per-side rule,
-/// not one matcher shared across sides.
+/// against the working tree, the ref side scoped to the analysis
+/// directory like the working-tree side, with its own side's
+/// ignore matcher — the breaking command's per-side rule, not one
+/// matcher shared across sides. A review has no `--to`, so its
+/// breaking section is always the scoped shape.
 fn measure_review_breaking(
     source: &ResolvedSource,
     arguments: &ReviewArgs,
@@ -1838,14 +1924,14 @@ fn measure_review_breaking(
                 source.repo_root.display()
             )
         })?;
-    let old_ignore = build_ignore_matcher(
+    let (old_report, old_index) = build_old_side(
         old_worktree.path(),
+        source,
+        true,
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    let (old_report, old_index) =
-        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
     let (new_report, new_index) =
         build_graph_with_declarations(&source.analysis_path, ignore)?;
     drop(old_worktree);

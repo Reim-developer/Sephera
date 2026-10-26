@@ -11,7 +11,7 @@
 //! a fabricated location. A `region` never appears in anything this
 //! module builds.
 
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use serde_json::{Value, json};
 
@@ -95,6 +95,18 @@ fn encode_uri(path: &str) -> String {
     out
 }
 
+/// The repo-relative path of an analysis directory, as a path:
+/// empty when the analysis directory IS the repo root or is not
+/// under the repo root at all, the subdirectory otherwise. Exact
+/// components, never lossy: callers that join this onto a checkout
+/// path must not gain replacement characters in a non-UTF-8 name.
+#[must_use]
+pub fn relative_path(analysis_path: &Path, repo_root: &Path) -> PathBuf {
+    analysis_path
+        .strip_prefix(repo_root)
+        .map_or_else(|_| PathBuf::new(), Path::to_path_buf)
+}
+
 /// The repo-relative prefix an analysis directory sits under.
 ///
 /// GitHub resolves SARIF URIs from the repository root, while a
@@ -106,18 +118,11 @@ fn encode_uri(path: &str) -> String {
 /// analysis-relative spelling rather than inventing a path.
 #[must_use]
 pub fn path_prefix(analysis_path: &Path, repo_root: &Path) -> String {
-    analysis_path
-        .strip_prefix(repo_root)
-        .map(|relative| {
-            relative
-                .components()
-                .map(|component| {
-                    component.as_os_str().to_string_lossy().into_owned()
-                })
-                .collect::<Vec<_>>()
-                .join("/")
-        })
-        .unwrap_or_default()
+    relative_path(analysis_path, repo_root)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Join a repo-relative prefix onto an analysis-relative path.

@@ -11,6 +11,7 @@ use std::fmt::Write as _;
 // breaking surface.
 use sephera_graph::breaking::BreakChange as Change;
 use sephera_graph::breaking::BreakSuggestion as Suggestion;
+use sephera_graph::breaking::BrokenSymbol;
 pub use sephera_graph::breaking::{BreakingReport, measure_breaking};
 
 use crate::sarif;
@@ -213,6 +214,47 @@ pub fn json_value(report: &BreakingReport) -> serde_json::Value {
     })
 }
 
+/// The result message for one broken symbol: the change, the
+/// declaring file, the suggestion when the new tree states one,
+/// and the namespace/downstream counts, which ride in prose
+/// because neither becomes a result of its own.
+#[must_use]
+fn result_message(broken: &BrokenSymbol, change: &str) -> String {
+    let mut message = format!(
+        "{change} `{}` (declared in `{}`)",
+        broken.symbol, broken.file
+    );
+    match &broken.suggestion {
+        Some(Suggestion::Moved { file, kind }) => {
+            write!(message, " Suggestion: moved to `{file}` ({kind:?}).")
+                .expect("writing to a String must succeed");
+        }
+        Some(Suggestion::NewCallShape { signature }) => {
+            write!(
+                message,
+                " Suggestion: call `{}{}`.",
+                broken.symbol,
+                signature.render()
+            )
+            .expect("writing to a String must succeed");
+        }
+        None => {}
+    }
+    let mut counts = Vec::new();
+    if !broken.namespace_users.is_empty() {
+        counts
+            .push(format!("{} namespace users", broken.namespace_users.len()));
+    }
+    if !broken.downstream.is_empty() {
+        counts.push(format!("{} downstream", broken.downstream.len()));
+    }
+    if !counts.is_empty() {
+        write!(message, " (+ {})", counts.join(", "))
+            .expect("writing to a String must succeed");
+    }
+    message
+}
+
 /// Render the report as SARIF 2.1.0 for GitHub code scanning.
 ///
 /// One rule per change kind, all at `error`: a proven break with a
@@ -234,13 +276,24 @@ pub fn json_value(report: &BreakingReport) -> serde_json::Value {
 /// `consumer_prefix` is the repo-relative prefix of the NEW side's
 /// analysis directory (empty when the new side is the repo root):
 /// consumer files come from the new tree, so their paths need it.
-/// The declaring file needs none — the old side is always a whole
-/// worktree checkout, so declaring paths are already
-/// repo-root-relative. Passing the analysis prefix to the related
-/// location too would double-prefix exactly the subdir + `--to` runs
-/// that produce results, so the two locations deliberately differ.
+/// `declaring_prefix` is the same prefix for the OLD side's
+/// declaring file, because both sides share one basis: without
+/// `--to` the old side is scoped to `--path`, like the new side,
+/// so its declaring paths are subdir-relative and need the prefix
+/// too; with `--to` both sides are whole-tree checkouts, so both
+/// prefixes are empty and every path is root-relative already.
+/// Passing the analysis prefix unconditionally would
+/// double-prefix exactly the subdir + `--to` runs, so the two
+/// prefixes are passed separately even though the call site
+/// passes the same value for both today: the locations come from
+/// different sides, and a future change to one side's basis must
+/// not silently corrupt the other's URIs.
 #[must_use]
-pub fn render_sarif(report: &BreakingReport, consumer_prefix: &str) -> String {
+pub fn render_sarif(
+    report: &BreakingReport,
+    consumer_prefix: &str,
+    declaring_prefix: &str,
+) -> String {
     let rules = vec![
         sarif::rule(
             "sephera-breaking-removed",
@@ -280,51 +333,24 @@ pub fn render_sarif(report: &BreakingReport, consumer_prefix: &str) -> String {
                 ),
             ),
         };
-        let mut message = format!(
-            "{change} `{}` (declared in `{}`)",
-            broken.symbol, broken.file
-        );
-        match &broken.suggestion {
-            Some(Suggestion::Moved { file, kind }) => {
-                write!(message, " Suggestion: moved to `{file}` ({kind:?}).")
-                    .expect("writing to a String must succeed");
-            }
-            Some(Suggestion::NewCallShape { signature }) => {
-                write!(
-                    message,
-                    " Suggestion: call `{}{}`.",
-                    broken.symbol,
-                    signature.render()
-                )
-                .expect("writing to a String must succeed");
-            }
-            None => {}
-        }
-        let mut counts = Vec::new();
-        if !broken.namespace_users.is_empty() {
-            counts.push(format!(
-                "{} namespace users",
-                broken.namespace_users.len()
-            ));
-        }
-        if !broken.downstream.is_empty() {
-            counts.push(format!("{} downstream", broken.downstream.len()));
-        }
-        if !counts.is_empty() {
-            write!(message, " (+ {})", counts.join(", "))
-                .expect("writing to a String must succeed");
-        }
+        let message = result_message(broken, &change);
         for user in &broken.direct {
             let consumer = sarif::prefixed_path(consumer_prefix, &user.file);
+            // The fingerprint identifies the finding across runs,
+            // so the declaring file enters it in its repo-relative
+            // spelling: the same break reported from a scoped run
+            // and from a whole-tree run must match, not fork.
+            let declaring =
+                sarif::prefixed_path(declaring_prefix, &broken.file);
             let location = sarif::file_location(&consumer);
             results.push(sarif::result(
                 rule_id,
                 &message,
                 &location,
-                Some((&broken.file, "declared here in the older tree")),
+                Some((&declaring, "declared here in the older tree")),
                 &sarif::fingerprint(&[
                     rule_id,
-                    broken.file.as_str(),
+                    declaring.as_str(),
                     broken.symbol.as_str(),
                     consumer.as_str(),
                 ]),
@@ -457,15 +483,20 @@ mod tests {
     }
 
     fn sarif(report: &super::BreakingReport) -> serde_json::Value {
-        sarif_prefixed(report, "")
+        sarif_prefixed(report, "", "")
     }
 
     fn sarif_prefixed(
         report: &super::BreakingReport,
         consumer_prefix: &str,
+        declaring_prefix: &str,
     ) -> serde_json::Value {
-        serde_json::from_str(&super::render_sarif(report, consumer_prefix))
-            .expect("valid JSON")
+        serde_json::from_str(&super::render_sarif(
+            report,
+            consumer_prefix,
+            declaring_prefix,
+        ))
+        .expect("valid JSON")
     }
 
     fn user(file: &str) -> sephera_graph::symbol_impact::SymbolUser {
@@ -578,14 +609,15 @@ mod tests {
         }
     }
 
-    // Regression for CodeRabbit PR #51 finding 1: the declaring file is already repo-root-relative and must never take the consumer prefix.
+    // Regression for the scoped old side: without --to, the old
+    // side is restricted to --path, so the declaring file is
+    // subdir-relative like the consumer and needs the same prefix.
+    // The PR #51 rule it replaces — "the declaring file never
+    // takes a prefix" — belonged to the whole-tree old side this
+    // fix removes; keeping it would point every scoped run's
+    // related location at a file that does not exist there.
     #[test]
-    fn regression_sarif_prefixes_consumers_but_never_the_declaring_file() {
-        // The declaring file comes from the old side, which is always
-        // a whole-worktree checkout, so it is already repo-root
-        // relative; only the new-side consumer takes the prefix.
-        // Prefixing the related location too would double-prefix
-        // exactly the subdir + `--to` runs that produce results.
+    fn regression_sarif_scoped_run_prefixes_declaring_files_too() {
         let json = sarif_prefixed(
             &broken_consumed(
                 BreakChange::Removed,
@@ -594,6 +626,7 @@ mod tests {
                 vec![],
                 vec![],
             ),
+            "pkg",
             "pkg",
         );
         let result = &json["runs"][0]["results"][0];
@@ -604,12 +637,43 @@ mod tests {
         assert_eq!(
             result["relatedLocations"][0]["physicalLocation"]["artifactLocation"]
                 ["uri"],
-            "lib.py"
+            "pkg/lib.py"
         );
         assert!(
             result["partialFingerprints"]["primaryLocationLineHash"]
                 .as_str()
                 .is_some_and(|value| !value.is_empty())
+        );
+    }
+
+    // The --to shape, unchanged by the scoping fix: both sides are
+    // whole-tree checkouts, both prefixes are empty, and no path
+    // is prefixed twice or at all. The fixture's declaring file is
+    // root-relative already, so empty prefixes leave it untouched;
+    // the realistic root-relative spelling end to end is pinned by
+    // the CLI --to SARIF test, which passes unchanged.
+    #[test]
+    fn regression_sarif_whole_tree_run_prefixes_neither_location() {
+        let json = sarif_prefixed(
+            &broken_consumed(
+                BreakChange::Removed,
+                None,
+                vec![user("pkg/user.py")],
+                vec![],
+                vec![],
+            ),
+            "",
+            "",
+        );
+        let result = &json["runs"][0]["results"][0];
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "pkg/user.py"
+        );
+        assert_eq!(
+            result["relatedLocations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"],
+            "lib.py"
         );
     }
 
