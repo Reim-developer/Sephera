@@ -29,6 +29,17 @@ branch review takes before it is pushed. When `--to` is present,
 both sides are checked out into temporary worktrees, so the working
 tree is left untouched either way.
 
+## The scope of a comparison
+
+`--path` scopes the comparison, not just the newer side. When
+`--to` is absent, both sides are restricted to `--path`: the
+report's paths are relative to it, consumers outside it are out of
+scope, and a directory that did not exist at `--from` contributes
+no old symbols, so nothing in it is reported broken. When `--to`
+is present, both sides are whole-tree checkouts and every path is
+repo-root-relative. `review`'s breaking section follows the same
+rule — it has no `--to`, so it is always the scoped shape.
+
 ## What counts as broken
 
 Two changes, and only two:
