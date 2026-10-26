@@ -232,6 +232,12 @@ pub enum Commands {
         after_long_help = "Examples:\n  sephera test-priority --path .\n  sephera test-priority --path . --top 10\n  sephera test-priority --path . --window 1000 --format json"
     )]
     TestPriority(TestPriorityArgs),
+    /// Compare two refs and report which schema elements changed, joined to the in-repo code that consumes exactly those elements
+    #[command(
+        long_about = "Compare two refs and report which schema elements changed, joined to the in-repo code that consumes exactly those elements.\n\nSchema-change detection alone answers the wrong question: it says a field was renamed, not which files still name the old field. This command makes the join through the generated-code boundary. A .proto file changes between two refs; the generated Go or Python code in the tree maps each schema element to a generated symbol; the files importing that generated code and naming the symbol are the consumers. Every consumer carries its evidence tier: proven message-level (the file imports the generated module and names the message), proven field-level (a struct literal, a constructor keyword, or an enum constant names the field in a position tied to the generated type), or flagged name-match (the file imports the module and names the field, receiver unknown). Only proven consumers fail --fail-on; a break nobody uses does not fail the run, and a name-match never fails it.\n\nA field renamed with the same number and type is provably the same field: the number is the identity, which is what lets this command prove a rename that breaking can only read as removal plus addition. A message renamed with no number reads as removal plus addition, exactly like breaking's move rule. Proto3 only: a proto2 file is an error naming the file, never a partial report. Generated code must be in the tree for the proven tiers; a repo that generates at build time gets a coverage note, never a \"0 consumers\" claim.\n\nThe analysis needs a git repository. A tree that is not one is an error, not an empty report.",
+        after_long_help = "Examples:\n  sephera schema-impact --path . --from origin/main\n  sephera schema-impact --path . --from v1.0.0 --to v2.0.0\n  sephera schema-impact --path . --from origin/main --format json\n  sephera schema-impact --path . --from origin/main --fail-on 1"
+    )]
+    SchemaImpact(SchemaImpactArgs),
     /// Judge one agent edit before it happens, from a hook payload on stdin
     #[command(
         long_about = "Judge one agent edit before it happens.\n\nReads a coding-agent hook payload (Claude Code's PreToolUse shape) on stdin, finds the file being edited, and reports its blast radius and affected tests on stderr. Stdout carries the harness's decision JSON: `allow`, or `deny` when `--max-dependents` is set and the file's blast radius reaches it. A blocked edit also exits 2, so harnesses that honour only exit codes stop the edit too. A payload with no edited file is allowed, with the reason on stderr.\n\nWire it as a PreToolUse hook for the edit tools, passing the project path and the widest radius an agent may touch without asking:\n\n  sephera guard --path . --max-dependents 25",
@@ -1558,6 +1564,61 @@ pub enum TestPriorityOutputFormat {
     Markdown,
     /// Structured JSON.
     #[value(name = "json", help = "Render the ranking as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Compare two refs and report which schema elements changed, joined to the in-repo code that consumes exactly those elements."]
+    SchemaImpactArgs {
+        /// The older reference: the side schema elements are compared from
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The older reference to compare from.",
+        long_help = "The older reference: a branch, tag, or commit the schema elements are compared from. Required, because a comparison without a starting point compares against nothing."
+    )]
+    pub from: String,
+
+    /// The newer reference; when absent, the working tree
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The newer reference to compare to; the working tree when absent.",
+        long_help = "The newer reference to compare to. When absent, the newer side is the working tree itself — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. When present, both sides are checked out into temporary worktrees, so the working tree is left untouched."
+    )]
+    pub to: Option<String>,
+
+    /// Fail with exit code 2 when this many breaks have proven consumers
+    #[arg(
+        long,
+        value_name = "COUNT",
+        value_parser = clap::value_parser!(u64).range(1..),
+        help = "Fail with exit code 2 at this many breaks with proven consumers.",
+        long_help = "Exit with code 2 when at least this many schema breaks still have proven consumers in the newer tree. Only proven tiers count: a break nobody uses does not fail the run, and a break with only name-match consumers never fails it — a gate that fired on weaker evidence would train a pipeline to ignore the gate. The report is still printed; only the exit code changes."
+    )]
+    pub fail_on: Option<u64>,
+
+    /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: SchemaImpactOutputFormat,
+
+    }
+);
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum SchemaImpactOutputFormat {
+    /// Markdown list of schema breaks with their consumers.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
     Json,
 }
 

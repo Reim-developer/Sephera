@@ -33,7 +33,8 @@ use crate::{
         GraphOutputFormat, GuardArgs, IgnoreArgs, ImpactArgs,
         ImpactOutputFormat, LocArgs, LocOutputFormat, MergeArgs,
         MergeOutputFormat, OutputArgs, ReviewArgs, ReviewOutputFormat,
-        RiskArgs, RiskOutputFormat, SettingsArgs, SimulateArgs,
+        RiskArgs, RiskOutputFormat, SchemaImpactArgs,
+        SchemaImpactOutputFormat, SettingsArgs, SimulateArgs,
         SimulateOutputFormat, SkillArgs, SourceArgs, SymbolOutputFormat,
         SymbolsArgs, TestImpactOutputFormat, TestPriorityArgs,
         TestPriorityOutputFormat, UntestedArgs, UntestedOutputFormat,
@@ -45,7 +46,7 @@ use crate::{
     },
     coupling, dead, diff,
     gate::{self, Gate},
-    guard, impact, merge,
+    guard, impact, merge, schema_impact,
     output::{
         emit_rendered_output, print_available_profiles, print_report,
         print_symbol_report, print_symbols_by_file, render_context_json,
@@ -150,6 +151,9 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
         Commands::Untested(arguments) => run_untested(&arguments).await,
         Commands::TestPriority(arguments) => {
             run_test_priority(&arguments).await
+        }
+        Commands::SchemaImpact(arguments) => {
+            run_schema_impact(&arguments).await
         }
         Commands::Guard(arguments) => run_guard(&arguments).await,
         Commands::Skill(arguments) => run_skill(&arguments),
@@ -2011,6 +2015,212 @@ fn measure_review_breaking(
         against_label,
         "working tree",
     ))
+}
+
+/// Build one side's schema index from a base directory, with the
+/// side's own ignore matcher: the schema walk respects the same
+/// ignore rules as the code graph, so a proto file the graph ignores
+/// is not a schema file either.
+fn build_schema_side(
+    base: &std::path::Path,
+    settings: &SettingsArgs,
+    ignore_patterns: &[String],
+    no_gitignore: bool,
+) -> Result<sephera_graph::schema::SchemaIndex> {
+    let ignore =
+        build_ignore_matcher(base, settings, ignore_patterns, no_gitignore)?;
+    let files = sephera_graph::schema::collect_schema_files(base, &ignore)
+        .map_err(anyhow::Error::new)?;
+    sephera_graph::schema::build_schema_index(&files)
+        .map_err(anyhow::Error::new)
+}
+
+/// Build one side's consumer texts (Go/Python files) from a base
+/// directory, with the side's own ignore matcher.
+fn build_consumer_texts_side(
+    base: &std::path::Path,
+    settings: &SettingsArgs,
+    ignore_patterns: &[String],
+    no_gitignore: bool,
+) -> Result<Vec<(String, String)>> {
+    let ignore =
+        build_ignore_matcher(base, settings, ignore_patterns, no_gitignore)?;
+    sephera_graph::schema::collect_consumer_texts(base, &ignore)
+        .map_err(anyhow::Error::new)
+}
+
+async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
+    // A remote source has no two local refs to compare — its checkout
+    // is one ref already — so schema-impact refuses it plainly,
+    // exactly as breaking does.
+    if arguments.source.url.is_some() {
+        anyhow::bail!(
+            "schema-impact compares two refs of a local repository; \
+             --url is not supported for it"
+        );
+    }
+    let source = resolve_source(
+        &SourceRequest {
+            path: arguments.source.path.clone(),
+            url: None,
+            git_ref: None,
+        },
+        false,
+    )
+    .await?;
+    // A tree that is not a git repository has no refs to compare:
+    // an error, never an empty report.
+    if repo_toplevel(&source.analysis_path).is_none() {
+        anyhow::bail!(
+            "schema-impact needs a git repository; {} is not inside one",
+            source.analysis_path.display()
+        );
+    }
+    let progress = CliProgress::start("Comparing the two schemas...");
+
+    // The older side always lives in a worktree, scoped to --path
+    // when --to is absent (like breaking's old side) and whole-tree
+    // otherwise. The schema index is built from the same scoped base
+    // as the old graph, so both sides share one path basis.
+    let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
+        .with_context(|| {
+            format!(
+                "schema-impact checks `{}` out of {} and git could not do it",
+                arguments.from,
+                source.repo_root.display()
+            )
+        })?;
+    progress.set_message("Extracting the older side...");
+    let (old_report, _old_index) = build_old_side(
+        old_worktree.path(),
+        &source,
+        arguments.to.is_none(),
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    let old_base = old_side_base(
+        old_worktree.path(),
+        &source,
+        arguments.to.is_none(),
+    );
+    let old_schema = build_schema_side(
+        &old_base,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
+    let to_label = arguments.to.as_deref().unwrap_or("working tree");
+    let (new_report, new_schema, new_texts) = if let Some(to) =
+        &arguments.to
+    {
+        let new_worktree = checkout_worktree(&source.repo_root, to)
+            .with_context(|| {
+                format!(
+                    "schema-impact checks `{to}` out of {} and git could not do it",
+                    source.repo_root.display()
+                )
+            })?;
+        progress.set_message("Extracting the newer side...");
+        let built = build_graph_with_declarations(
+            new_worktree.path(),
+            &build_ignore_matcher(
+                new_worktree.path(),
+                &arguments.settings,
+                &arguments.ignore_args.ignore,
+                arguments.ignore_args.no_gitignore,
+            )?,
+        )?;
+        let schema = build_schema_side(
+            new_worktree.path(),
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        let texts = build_consumer_texts_side(
+            new_worktree.path(),
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        drop(new_worktree);
+        (built.0, schema, texts)
+    } else {
+        progress.set_message("Extracting the working tree...");
+        let built = build_graph_with_declarations(
+            &source.analysis_path,
+            &build_ignore_matcher(
+                &source.analysis_path,
+                &arguments.settings,
+                &arguments.ignore_args.ignore,
+                arguments.ignore_args.no_gitignore,
+            )?,
+        )?;
+        let schema = build_schema_side(
+            &source.analysis_path,
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        let texts = build_consumer_texts_side(
+            &source.analysis_path,
+            &arguments.settings,
+            &arguments.ignore_args.ignore,
+            arguments.ignore_args.no_gitignore,
+        )?;
+        (built.0, schema, texts)
+    };
+    drop(old_worktree);
+
+    let measured = schema_impact::measure_schema_impact(
+        &old_schema,
+        &new_schema,
+        &old_report,
+        &new_report,
+        &new_texts,
+        &arguments.from,
+        to_label,
+    );
+
+    let rendered = match arguments.format {
+        SchemaImpactOutputFormat::Markdown => {
+            schema_impact::render_markdown(&measured)
+        }
+        SchemaImpactOutputFormat::Json => {
+            schema_impact::render_json(&measured)
+        }
+    };
+
+    if arguments.output_args.output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+
+    // Only proven consumers fail the gate: a break nobody uses does
+    // not fail the run, and a break with only name-match consumers
+    // never fails it.
+    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
+        let with_proven = u64::try_from(
+            measured
+                .breaks
+                .iter()
+                .filter(|broken| !broken.proven.is_empty())
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        if with_proven >= limit {
+            vec![Gate::new(
+                "schema breaks with proven consumers",
+                with_proven,
+                limit,
+            )]
+        } else {
+            Vec::new()
+        }
+    });
+    Ok(gates)
 }
 
 fn build_new_side(

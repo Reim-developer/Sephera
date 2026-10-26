@@ -22,6 +22,7 @@ mod review;
 mod risk;
 mod run;
 mod sarif;
+mod schema_impact;
 mod simulate;
 mod skill;
 mod test_priority;
