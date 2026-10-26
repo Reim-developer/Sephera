@@ -706,6 +706,24 @@ The score is a ranking heuristic, not a probability.
 sephera test-priority --path .
 ```
 
+### `schema-impact` — what a schema change breaks, named by consuming file
+
+`breaking` answers for code: which symbols broke, joined to
+their consumers. This one answers for schemas: a `.proto` file
+changes between two refs, and the report joins each changed
+element — a renamed field, a removed enum value, a reshaped
+rpc method — to the in-repo Go and Python files that consume
+exactly that element, through the generated-code boundary.
+Field numbers are the identity anchor, so a rename with the
+same number and type is proven, not guessed; consumers carry
+evidence tiers, and only proven consumers fail `--fail-on`.
+A name-match in an importing file is flagged weaker evidence
+and never gates.
+
+```bash
+sephera schema-impact --path . --from origin/master
+```
+
 ### `merge` — the merge git would complete cleanly but that breaks the build
 
 Git compares lines, so two branches that touch different files merge
