@@ -395,6 +395,64 @@ service UserService {
 }
 "#;
 
+/// Like `OLD_PROTO`, but `User` gains a field whose option is a
+/// text-format aggregate with colons and nested braces — the shape
+/// metal-stack/api's image.proto uses for buf.validate rules.
+/// The tokenizer rejected `:` outright, so the whole run died
+/// before any parsing began.
+const OLD_AGGREGATE_OPTS: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+  string email = 3;
+  string user_id = 4;
+  string nickname = 5 [json_name = "nick"];
+  repeated string tags = 6 [(buf.validate.field).repeated = {unique: true, items: {enum: {defined_only: true}}}];
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  BLUE = 2;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+"#;
+
+/// The aggregate-option proto with `tags` removed.
+const NEW_AGGREGATE_REMOVED: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+  string email = 3;
+  string user_id = 4;
+  string nickname = 5 [json_name = "nick"];
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  BLUE = 2;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+"#;
+
+const PY_TAGS_KWARGS: &str = r#"from api.user_pb2 import User
+
+
+def make():
+    return User(tags=["a"])
+"#;
+
 const NEW_REMOVE_NAME: &str = r#"syntax = "proto3";
 package api;
 message User {
@@ -2630,6 +2688,30 @@ fn cases() -> Vec<Case> {
                 element: "api.Color.RED",
                 change: SchemaChange::Removed,
                 proven: vec![("consumer.py", "enum constant")],
+                named: vec![],
+                downstream: vec![],
+                note: None,
+            }],
+            expected_added: vec![],
+            expected_notes: vec![],
+        },
+        // 59. Field removed where the field carries a text-format
+        // option aggregate with colons and nested braces.
+        // Regression: the tokenizer had no `:` punct, so a real
+        // repo's buf.validate aggregate failed the whole run at
+        // tokenize time. The consumer proves the join still works
+        // through the aggregate field, not just that it parses.
+        Case {
+            name: "field_option_aggregate_colons",
+            old_protos: vec![(user, OLD_AGGREGATE_OPTS)],
+            new_protos: vec![(user, NEW_AGGREGATE_REMOVED)],
+            texts: vec![(py_gen, PY_GEN), (py_consumer, PY_TAGS_KWARGS)],
+            old_edges: py_from_edges(py_consumer, py_gen, "api.user_pb2"),
+            new_edges: py_from_edges(py_consumer, py_gen, "api.user_pb2"),
+            expected: vec![ExpBreak {
+                element: "api.User.tags",
+                change: SchemaChange::Removed,
+                proven: vec![("consumer.py", "constructor keyword")],
                 named: vec![],
                 downstream: vec![],
                 note: None,
