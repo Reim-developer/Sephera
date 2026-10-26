@@ -23,6 +23,7 @@ pub mod render;
 pub mod resolver;
 pub mod review;
 pub mod risk;
+pub mod schema;
 pub mod simulate;
 pub mod symbol_impact;
 pub mod test_priority;
@@ -35,4 +36,9 @@ pub use coupling::{CoupledPair, CouplingOptions, CouplingReport};
 pub use dependency_path::DependencyPath;
 pub use render::render_graph;
 pub use resolver::{build_graph, build_graph_with_declarations};
+pub use schema::{
+    SchemaBreak, SchemaChange, SchemaConsumer, SchemaElement,
+    SchemaImpactReport, build_schema_index, collect_consumer_texts,
+    collect_schema_files, measure_schema_impact, parse_schema_file,
+};
 pub use symbol_impact::{SymbolImpact, SymbolUser};
