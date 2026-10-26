@@ -796,6 +796,15 @@ fn parse_message(
         format!("{prefix}.{name}")
     };
     loop {
+        // A body whose next token is the closer is empty, not
+        // unterminated: `peek_ident` sees no identifier in `}`,
+        // so without this check an empty body fell into the
+        // `None` arm and errored. Real repos have empty messages
+        // (`message TaskServiceDeleteResponse {}`), empty services,
+        // and empty enums; all three loops below share this shape.
+        if cursor.eat_punct('}') {
+            break;
+        }
         match cursor.peek_ident() {
             None => {
                 return Err(cursor
@@ -816,6 +825,10 @@ fn parse_message(
                 let oneof = cursor.expect_ident("a oneof name")?;
                 cursor.expect_punct('{')?;
                 loop {
+                    // Same empty-body shape as the message loop.
+                    if cursor.eat_punct('}') {
+                        break;
+                    }
                     match cursor.peek_ident() {
                         None => {
                             return Err(cursor.error(
@@ -832,9 +845,6 @@ fn parse_message(
                         Some(_) => {
                             parse_field(cursor, &mut message, Some(&oneof))?;
                         }
-                    }
-                    if cursor.eat_punct('}') {
-                        break;
                     }
                 }
             }
@@ -857,9 +867,6 @@ fn parse_message(
             Some(_) => {
                 parse_field(cursor, &mut message, None)?;
             }
-        }
-        if cursor.eat_punct('}') {
-            break;
         }
     }
     schema.messages.insert(full, message);
@@ -1072,6 +1079,10 @@ fn parse_enum(
     cursor.expect_punct('{')?;
     let mut enumeration = SchemaEnum::default();
     loop {
+        // Same empty-body shape as the message loop.
+        if cursor.eat_punct('}') {
+            break;
+        }
         match cursor.peek_ident() {
             None => {
                 return Err(
@@ -1122,9 +1133,6 @@ fn parse_enum(
                 enumeration.by_name.insert(value_name.clone(), number);
                 enumeration.by_number.insert(number, value_name);
             }
-        }
-        if cursor.eat_punct('}') {
-            break;
         }
     }
     schema.enums.insert(full, enumeration);
@@ -1190,6 +1198,10 @@ fn parse_service(
     cursor.expect_punct('{')?;
     let mut methods = BTreeMap::new();
     loop {
+        // Same empty-body shape as the message loop.
+        if cursor.eat_punct('}') {
+            break;
+        }
         match cursor.peek_ident() {
             None => {
                 return Err(cursor
@@ -1229,9 +1241,6 @@ fn parse_service(
                     "unsupported service construct `{other}`"
                 )));
             }
-        }
-        if cursor.eat_punct('}') {
-            break;
         }
     }
     schema.services.insert(full, methods);
