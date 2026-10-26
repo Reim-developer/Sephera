@@ -2566,7 +2566,12 @@ fn cases() -> Vec<Case> {
                 note: Some("field number 1 is reserved in the new side"),
             }],
             expected_added: vec![],
-            expected_notes: vec!["no mapping applied"],
+            // The ambiguity is now reported per element, not per
+            // declined (file, message) pair: the per-file note
+            // fired for every cross-package decline even when
+            // another file mapped the message, burying real
+            // reports on multi-package repos.
+            expected_notes: vec!["could not be joined"],
         },
         // 49. Generated file by suffix alone: a `.pyi` stub with
         // the marker maps like a `.py` module.

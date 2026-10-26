@@ -2205,16 +2205,22 @@ fn build_modules(
                     // A struct name shared by two packages links only
                     // with a directory signal: the generated file's
                     // directory sharing a suffix with the proto file's
-                    // directory. Without one, ambiguity links nothing.
+                    // directory. Without one, ambiguity links nothing
+                    // — silently. An earlier version pushed a note
+                    // per declined (file, message) pair, but that
+                    // note fires for every cross-package decline
+                    // even when another file maps the message, so
+                    // on a real repo it buried the report under
+                    // dozens of lines about mappings that were
+                    // never lost. The loss that matters is per
+                    // break, and the per-element unjoined note in
+                    // measure_schema_impact already reports exactly
+                    // that.
                     if !go_name_unique(&messages, &go_name)
                         && !dir_matches_proto(
                             old_schema, name, generated_dir,
                         )
                     {
-                        coverage.push(format!(
-                            "generated file {} declares struct {go_name} matching multiple schema messages; no mapping applied",
-                            generated_file.path
-                        ));
                         continue;
                     }
                     let mut gen_message = GenMessage::default();
