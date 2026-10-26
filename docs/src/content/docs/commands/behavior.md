@@ -17,9 +17,9 @@ Only Rust and Python files are scanned. A file that does not parse yields no fac
 ## Usage
 
 ```bash
-sephera behavior --path . --from origin/main
-sephera behavior --path . --from v1.0.0 --to v2.0.0
-sephera behavior --path . --from origin/main --format json
+sephera behavior --path . --from HEAD~1
+sephera behavior --path . --from HEAD~1 --to HEAD
+sephera behavior --path . --from HEAD~1 --format json
 ```
 
 `--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. The analysis needs a git repository; a tree that is not one is an error, not an empty report.
@@ -33,3 +33,9 @@ This is a report, not a gate: there is no `--fail-on`. The detector's precision 
 ## The precision bar
 
 The detector ships with a constructed corpus of labelled scenarios — positives it must catch, negatives it must not flag — and the corpus asserts a measured precision. If a detector's precision falls below 0.8, the detector is cut, not shipped with a warning. The corpus is the honest answer to "how often is this right", and the number is printed by the test run, not asserted by the documentation.
+
+## Haiku
+
+> Compiles, yet it breaks
+> swapped arguments, changed constants
+> silence is the bug

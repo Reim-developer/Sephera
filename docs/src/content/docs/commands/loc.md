@@ -16,6 +16,16 @@ The default output is a terminal table with per-language rows, totals, and elaps
 
 Use `--path` for local analysis or `--url` to clone and analyze a remote repository directly.
 
+## Usage
+
+```bash
+sephera loc --path .                                    # count every language in this tree
+sephera loc --path crates/sephera_core --format markdown  # one crate, as a pastable report
+sephera loc --path . --format json                      # the same counts, machine-readable
+```
+
+Run from inside the repository you want to measure.
+
 ## Output formats
 
 `--format` selects the rendering, and `--output` writes it to a file instead of
@@ -170,3 +180,9 @@ In practice, that means:
 - stable behavior across all supported language lookups
 
 For the current language metadata source of truth, see `config/languages.yml`.
+
+## Haiku
+
+> Count the lines of code
+> comments and the blanks between
+> the tale in numbers

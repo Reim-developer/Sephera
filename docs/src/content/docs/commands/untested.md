@@ -13,6 +13,16 @@ reached file names it. What no reached file names is untested —
 not uncovered-by-a-run, but unreachable from every test in the
 tree, which is the stronger and the cheaper claim.
 
+## Usage
+
+```bash
+sephera untested --path .                    # every declared symbol no test reaches
+sephera untested --path crates/sephera_core  # the same question, one crate
+sephera untested --path . --format json      # the same list, machine-readable
+```
+
+Run from inside the repository you want to measure.
+
 ## Basic usage
 
 ```bash
@@ -94,3 +104,9 @@ at the file that declares the untested symbol. GitHub accepts
 file-level results. The direct, indirect, and untested counts
 ride on the run's properties rather than repeating on every
 result.
+
+## Haiku
+
+> No test reaches here
+> symbols the suite never names
+> gaps awaiting tests

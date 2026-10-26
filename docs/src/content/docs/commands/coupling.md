@@ -15,6 +15,16 @@ analysis can see, because by construction there is no statement to read. It is
 also exactly the coupling that breaks a change whose author knew about only
 one of the two files.
 
+## Usage
+
+```bash
+sephera coupling --path .                                   # every hidden pair in this tree
+sephera coupling --path . --commits 1000 --min-co-changes 5  # a longer window, a higher bar
+sephera coupling --path . --format json                     # the same pairs, machine-readable
+```
+
+Run from inside the repository whose history you want to read.
+
 ## Basic usage
 
 ```bash
@@ -97,3 +107,9 @@ them is true there.
 `impact` reports the coupling the graph *does* know about, for one file.
 `coupling` is its complement, for the whole tree: the pairs the graph does not
 join, ranked by how often history joins them instead.
+
+## Haiku
+
+> Files that move as one
+> though no import joins the two
+> history tells all

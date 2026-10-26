@@ -10,6 +10,15 @@ one question about a file. A review asks all four about the files
 a change actually touches, in one report, at the moment the answers
 can still change the change: before it lands.
 
+## Usage
+
+```bash
+sephera review --path .               # review the working tree against HEAD
+sephera review --path . --format json  # the same review, machine-readable
+```
+
+Run from inside the repository with the change you want reviewed.
+
 ## Basic usage
 
 ```bash
@@ -129,3 +138,9 @@ and the same history before comparing their numbers.
 commands that run them, [`breaking`](/commands/breaking/) for the
 symbols two refs disagree on, and [`coupling`](/commands/coupling/)
 for every hidden pair in the tree.
+
+## Haiku
+
+> Before the change lands
+> radius, tests, breaks combined
+> all in one report

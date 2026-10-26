@@ -24,6 +24,16 @@ Analyze a remote repository directly:
 sephera symbols --url https://github.com/Reim-developer/Sephera
 ```
 
+## Usage
+
+```bash
+sephera symbols --path .                    # per-language declaration counts
+sephera symbols --path . --by-file         # which files carry the declarations
+sephera symbols --path . --format markdown  # the summary, pastable into a review
+```
+
+Run from inside the repository you want to measure.
+
 ## Counts come from parse trees
 
 Every count is read from a Tree-sitter parse tree, not matched from text. That
@@ -165,3 +175,9 @@ the full description.
   command that answers what breaks if you change one
 - [`context`](/commands/context/) builds a pack around a change, using the
   dependency graph to decide what is near it
+
+## Haiku
+
+> Names the tree declares
+> functions, types, enums, constants
+> counted from the parse

@@ -10,6 +10,15 @@ faith: the tool renames the declaration and every import it can
 find, and the breakage shows up in CI. This measures the rename
 beforehand.
 
+## Usage
+
+```bash
+sephera simulate crates/sephera_graph/src/symbol_impact.rs --symbol SymbolImpact --to SymbolImpactRenamed --path .              # dry-run a rename
+sephera simulate crates/sephera_graph/src/symbol_impact.rs --symbol SymbolImpact --to SymbolImpactRenamed --path . --format json  # the same verdict as JSON
+```
+
+Nothing is edited: the report says what a real rename would have to touch, and what would block it.
+
 ## Basic usage
 
 ```bash
@@ -63,3 +72,9 @@ blocked rename is an answer, and failing the run on it would
 punish asking. Only Rust and Python collect declarations today, so
 only their symbols can be renamed. The analysis needs one tree,
 not a git repository: it simulates against the tree as it stands.
+
+## Haiku
+
+> Rename without fear
+> first count what the move would touch
+> dry run, tree intact

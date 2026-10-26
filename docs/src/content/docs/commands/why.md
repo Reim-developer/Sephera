@@ -12,6 +12,15 @@ question as a command: the shortest chain of imports connecting two files.
 This is Bazel's `somepath` question asked of a source tree instead of a build
 graph.
 
+## Usage
+
+```bash
+sephera why crates/sephera_cli/src/run.rs crates/sephera_core/src/declarations.rs              # the shortest chain
+sephera why crates/sephera_cli/src/run.rs crates/sephera_core/src/declarations.rs --format json  # the same chain as JSON
+```
+
+The first file is the dependent, the second the dependency it ends up needing.
+
 ## Basic usage
 
 ```bash
@@ -80,3 +89,9 @@ need one parser for "coupled" and another for "not".
 reaches, rather than the route to one file in the set.
 [`affected-tests`](/commands/affected-tests/) answers the same change from
 the tests' side — which of them would notice.
+
+## Haiku
+
+> Two files, one short chain
+> the shortest path between them
+> every link named true

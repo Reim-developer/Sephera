@@ -18,6 +18,15 @@ sephera affected-tests crates/sephera_graph/src/blast_radius.rs
 
 2 test files would notice a change here.
 
+## Usage
+
+```bash
+sephera affected-tests crates/sephera_graph/src/blast_radius.rs              # which tests answer for this file
+sephera affected-tests crates/sephera_graph/src/blast_radius.rs --format json  # the same plan, machine-readable
+```
+
+Paths are relative to the repository root.
+
 ## Test files
 
 - `crates/sephera_graph/src/blast_radius/tests.rs` imports `super::BlastRadius`, `super::GraphQuery`, `super::dependent_count`, `super::match_path`, `super::measure`, `super::measure_all`, `super::measure_scoped`
@@ -134,3 +143,9 @@ whole change rather than to any one file in it:
 [`guard`](/commands/guard/) runs both measurements before an agent's edit and
 can refuse the edit outright. The same analysis is an MCP tool,
 `affected_tests`, so an agent can ask without a shell.
+
+## Haiku
+
+> Change one file, then learn
+> which tests would notice the change
+> run only those tests

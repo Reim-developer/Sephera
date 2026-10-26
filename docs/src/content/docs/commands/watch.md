@@ -18,6 +18,16 @@ sephera watch --target graph --path .
 
 Press **Ctrl+C** to stop.
 
+## Usage
+
+```bash
+sephera watch --target loc --once --path .                                                      # run once and exit
+sephera watch --target depends-on --on crates/sephera_core/src/plugins.rs --once --path .         # one live query, run once
+sephera watch --target graph --path .                                                           # keep watching until Ctrl+C
+```
+
+The first two forms exit on their own and are the ones to paste into a script. The last form keeps re-running after every edit until it is interrupted.
+
 ## Choosing what to re-run
 
 `--target` is required unless `--once` is passed:
@@ -118,3 +128,9 @@ one file worth tracing. Flags still win, so a session can override it. See
 - [`graph`](/commands/graph/) is what `--target graph` and `--target depends-on`
   re-run
 - [`symbols`](/commands/symbols/) is what `--target symbols` re-runs
+
+## Haiku
+
+> Save, and see it live
+> every save rebuilds the view
+> never stale again

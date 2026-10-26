@@ -18,9 +18,9 @@ The walk is first-parent only, so a rename that landed through a merge is attrib
 ## Usage
 
 ```bash
-sephera archaeology lib.py --symbol divide --path .
-sephera archaeology lib.py --symbol divide --path . --at v2.0.0
-sephera archaeology lib.py --symbol divide --path . --format json
+sephera archaeology crates/sephera_graph/src/breaking.rs --symbol measure_breaking --path .
+sephera archaeology crates/sephera_graph/src/breaking.rs --symbol measure_breaking --path . --format json
+sephera archaeology crates/sephera_graph/src/breaking.rs --symbol measure_breaking --path . --at HEAD~1
 ```
 
 The symbol is queried as it stands at `--at` (HEAD by default). `--window` bounds the walk — one whole-tree build happens per commit that touched the tracked file, so the window bounds the cost as well as the depth; the default is 500. The analysis needs a git repository; a tree that is not one is an error, and a symbol that is not declared at the starting ref is an error, not an empty trail.
@@ -30,3 +30,9 @@ The symbol is queried as it stands at `--at` (HEAD by default). `--window` bound
 Markdown reads oldest first, because a trail is a biography: born as one name, renamed, moved. Each step names the commit, author, date, and subject line, and a trail that reaches the birth says so. JSON tags each step `born`, `renamed`, `moved`, or `moved_and_renamed`, with the `from_*` fields null for a birth.
 
 This is a report, not a gate: there is no `--fail-on`.
+
+## Haiku
+
+> Follow one name back
+> through each rename and each move
+> down to its first birth

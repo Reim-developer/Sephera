@@ -11,6 +11,16 @@ It supports Cycle Detection, Metric Overviews (identifying highly coupled nodes)
 sephera graph [OPTIONS]
 ```
 
+## Usage
+
+```bash
+sephera graph --path .                                                              # the full dependency report
+sephera graph --path . --what-depends-on crates/sephera_core/src/plugins.rs --format markdown  # who imports one file
+sephera graph --path . --format dot                                                 # the same graph for Graphviz
+```
+
+Run from inside the repository you want to map.
+
 ## Basic Usage
 
 <img src="/demo/graph.gif" alt="Terminal demo of sephera graph resolving a reverse dependency query and reporting how many files import the target." width="900" />
@@ -327,3 +337,9 @@ Sephera's graph engine currently extracts import statements from:
 ## Circular Dependencies
 
 If Sephera detects circular dependencies (where File A imports File B, which loops back to A), they will be explicitly flagged in the `markdown`, `json`, and `xml` metric reports to help you refactor tightly coupled sub-systems.
+
+## Haiku
+
+> Every import drawn
+> edges join the files you wrote
+> the full web revealed

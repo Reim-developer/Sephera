@@ -14,6 +14,15 @@ declarations and consumers across three trees — base, ours, theirs —
 and reports each contradiction by symbol, with the evidence on both
 sides and the fix when the changing side states one.
 
+## Usage
+
+```bash
+sephera merge --path . --ours HEAD --theirs HEAD~1              # what merging these two sides would break
+sephera merge --path . --ours HEAD --theirs HEAD~1 --format json  # the same prediction, machine-readable
+```
+
+Replace `HEAD` and `HEAD~1` with your two branches: `--ours` and `--theirs` name the sides, and `--base` names their fork point when git's own merge base is not the one you mean.
+
 ## Basic usage
 
 ```bash
@@ -80,3 +89,9 @@ re-declared under the new name on the other is a move the report
 states, not a conflict it hides — but a rename the new tree
 expresses through a boundary the graph does not model is a break
 neither this command nor `breaking` can see.
+
+## Haiku
+
+> Two branches, one merge
+> clashes that git cannot see
+> caught before landing
