@@ -1646,6 +1646,68 @@ async fn diff_tool_reports_added_and_removed_in_json_and_markdown() {
     assert!(markdown.contains("Removed `gone`"), "{markdown}");
 }
 
+fn behavior_input(dir: &Path, format: Option<String>) -> BehaviorInput {
+    BehaviorInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        from: "HEAD".to_owned(),
+        to: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+/// A repository whose committed tree divides; the working tree
+/// swaps the division's arguments.
+fn repo_with_a_swap() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "lib.py", b"def divide(a, b):\n    return a / b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import divide\n\n\nprint(divide(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "seed"]);
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import divide\n\n\nprint(divide(y, x))\n",
+    );
+    temp_dir
+}
+
+#[tokio::test]
+async fn behavior_tool_flags_a_swap_in_json_and_markdown() {
+    let repo = repo_with_a_swap();
+    let server = SepheraServer::new();
+
+    let output = server
+        .behavior(param_for(behavior_input(repo.path(), None)))
+        .await
+        .expect("behavior tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("behavior output must be JSON");
+    let changes = parsed["changes"].as_array().expect("changes is an array");
+    assert_eq!(changes.len(), 1, "{output}");
+    assert_eq!(changes[0]["kind"], "arg_order_swap", "{output}");
+    assert_eq!(changes[0]["callee"], "divide", "{output}");
+
+    let markdown = server
+        .behavior(param_for(behavior_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("behavior tool should succeed for a temp repo");
+    assert!(
+        markdown.contains("Swapped arguments at a call to `divide`"),
+        "{markdown}"
+    );
+}
+
 /// A plain tree, no git repository: `lib.py` declares `add`,
 /// `user.py` imports it, `other.py` already declares `sum`.
 fn tree_with_consumer() -> tempfile::TempDir {

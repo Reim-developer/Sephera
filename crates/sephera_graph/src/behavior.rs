@@ -32,8 +32,10 @@
 //! 0.8, the detector that missed is cut.
 
 use std::collections::BTreeMap;
+use std::path::Path;
 
 use sephera_core::declarations::{DeclarationIndex, Signature};
+use sephera_scan::IgnoreMatcher;
 
 use crate::types::GraphReport;
 
@@ -534,6 +536,70 @@ fn imported_elsewhere(report: &GraphReport, file: &str, name: &str) -> bool {
                     .next()
                     .is_some_and(|last| last == name))
     })
+}
+
+/// Collect every Rust and Python file under `base`, as
+/// (relative path, text) pairs.
+///
+/// Files the ignore matcher excludes are skipped, as is anything
+/// no text scan should enter. Relative paths use the graph's
+/// spelling, so the facts line up with the declaration index and
+/// the report edges.
+#[must_use]
+pub fn collect_texts(
+    base: &Path,
+    ignore: &IgnoreMatcher,
+) -> Vec<(String, String)> {
+    let mut texts = Vec::new();
+    let mut stack = vec![base.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        let Ok(entries) = std::fs::read_dir(&dir) else {
+            continue;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            let Ok(relative) = path.strip_prefix(base) else {
+                continue;
+            };
+            if ignore.is_ignored(relative) {
+                continue;
+            }
+            if path.is_dir() {
+                if path
+                    .file_name()
+                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
+                {
+                    continue;
+                }
+                stack.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|ext| ext == "rs" || ext == "py")
+            {
+                if let Ok(text) = std::fs::read_to_string(&path) {
+                    texts.push((
+                        relative.to_string_lossy().replace('\\', "/"),
+                        text,
+                    ));
+                }
+            }
+        }
+    }
+    texts.sort_by(|a, b| a.0.cmp(&b.0));
+    texts
+}
+
+/// Merge one side's files into a single set of facts.
+#[must_use]
+pub fn collect_facts(base: &Path, ignore: &IgnoreMatcher) -> TreeFacts {
+    let mut merged = TreeFacts::default();
+    for (file, text) in collect_texts(base, ignore) {
+        let facts = extract_facts(&file, &text);
+        merged.calls.extend(facts.calls);
+        merged.constants.extend(facts.constants);
+        merged.functions.extend(facts.functions);
+    }
+    merged
 }
 
 /// Compare two trees' facts and report the silent changes.

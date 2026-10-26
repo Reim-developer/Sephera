@@ -1,85 +1,17 @@
-//! Rendering for `sephera behavior`, and the tree walk that
-//! feeds its extractor.
+//! Rendering for `sephera behavior`.
 //!
 //! The measurement lives in `sephera_graph::behavior`, because it
 //! is analysis rather than presentation and the MCP server answers
 //! the same question. This module is how a behaviour report reads
-//! on a terminal and in JSON, and how the two trees' texts reach
-//! the extractor: one walk per side, filtered by the same ignore
-//! matcher the graph build uses, so the scan sees exactly the
-//! files the graph sees.
+//! on a terminal and in JSON.
 
 use std::fmt::Write as _;
-use std::path::Path;
 
 // Re-exported so `run.rs` keeps one import site for the whole
 // behavior surface.
 pub use sephera_graph::behavior::{
-    BehaviorChange, BehaviorReport, TreeFacts, extract_facts, measure_behavior,
+    BehaviorChange, BehaviorReport, collect_facts, measure_behavior,
 };
-use sephera_scan::IgnoreMatcher;
-
-/// Collect every Rust and Python file under `base`, as
-/// (relative path, text) pairs, skipping what the ignore matcher
-/// excludes and what no text scan should enter. Relative paths
-/// use the graph's spelling, so the facts line up with the
-/// declaration index and the report edges.
-#[must_use]
-pub fn collect_texts(
-    base: &Path,
-    ignore: &IgnoreMatcher,
-) -> Vec<(String, String)> {
-    let mut texts = Vec::new();
-    let mut stack = vec![base.to_path_buf()];
-    while let Some(dir) = stack.pop() {
-        let Ok(entries) = std::fs::read_dir(&dir) else {
-            continue;
-        };
-        for entry in entries.flatten() {
-            let path = entry.path();
-            let Ok(relative) = path.strip_prefix(base) else {
-                continue;
-            };
-            if ignore.is_ignored(relative) {
-                continue;
-            }
-            if path.is_dir() {
-                if path
-                    .file_name()
-                    .is_some_and(|name| name.to_string_lossy().starts_with('.'))
-                {
-                    continue;
-                }
-                stack.push(path);
-            } else if path
-                .extension()
-                .is_some_and(|ext| ext == "rs" || ext == "py")
-            {
-                if let Ok(text) = std::fs::read_to_string(&path) {
-                    texts.push((
-                        relative.to_string_lossy().replace('\\', "/"),
-                        text,
-                    ));
-                }
-            }
-        }
-    }
-    texts.sort_by(|a, b| a.0.cmp(&b.0));
-    texts
-}
-
-/// Merge one side's files into a single set of facts.
-#[must_use]
-pub fn facts_for(texts: &[(String, String)]) -> TreeFacts {
-    let mut merged = TreeFacts::default();
-    for (file, text) in texts {
-        let facts = extract_facts(file, text);
-        merged.calls.extend(facts.calls);
-        merged.constants.extend(facts.constants);
-        merged.functions.extend(facts.functions);
-    }
-    merged
-}
 
 /// Render the report as Markdown.
 ///

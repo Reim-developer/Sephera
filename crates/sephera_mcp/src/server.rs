@@ -20,7 +20,8 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    blast_radius, breaking, coupling, dead, dependency_path, diff, merge,
+    behavior, blast_radius, breaking, coupling, dead, dependency_path, diff,
+    merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, simulate, symbol_impact,
@@ -39,10 +40,10 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, BreakingInput, ContextInput, CouplingInput,
-        DeadInput, DiffInput, GraphInput, ImpactInput, LocInput, MergeInput,
-        ReviewInput, RiskInput, SimulateInput, SymbolsInput, UntestedInput,
-        WhyInput,
+        AffectedTestsInput, BehaviorInput, BreakingInput, ContextInput,
+        CouplingInput, DeadInput, DiffInput, GraphInput, ImpactInput, LocInput,
+        MergeInput, ReviewInput, RiskInput, SimulateInput, SymbolsInput,
+        UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1198,6 +1199,96 @@ impl SepheraServer {
         }
     }
 
+    /// Compare two refs and report the changes that still compile
+    /// but change behaviour: swapped call arguments and numeric
+    /// constant changes. The measurement is
+    /// `sephera_graph::behavior`'s, shared with the `behavior`
+    /// command, so the two cannot disagree. This is a report, not
+    /// a gate: there is no fail-on, because the detector's
+    /// precision is measured by its corpus.
+    #[tool(
+        name = "behavior",
+        description = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes. An argument-order swap is a call site whose arguments are the same multiset in a different order, where the callee's signature did not change — in Rust the swap must also type check at the swapped positions. A numeric constant change is a module-level constant whose numeric value changed while still used. String constants are never flagged: a version bump and a rewritten query are indistinguishable statically. Only Rust and Python are scanned. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn behavior(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<BehaviorInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let old_worktree = checkout_worktree(&source.repo_root, &param.from)
+            .map_err(map_internal_error("old ref checkout failed"))?;
+        let (_, old_index) =
+            build_graph_with_declarations(old_worktree.path(), &ignore_matcher)
+                .map_err(map_internal_error("old graph build failed"))?;
+        let old_facts =
+            behavior::collect_facts(old_worktree.path(), &ignore_matcher);
+        drop(old_worktree);
+
+        let (new_report, new_index, new_facts) = if let Some(to) = &param.to {
+            let new_worktree = checkout_worktree(&source.repo_root, to)
+                .map_err(map_internal_error("new ref checkout failed"))?;
+            let built = build_graph_with_declarations(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("new graph build failed"))?;
+            let facts =
+                behavior::collect_facts(new_worktree.path(), &ignore_matcher);
+            drop(new_worktree);
+            (built.0, built.1, facts)
+        } else {
+            let built = build_graph_with_declarations(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("working tree graph build failed"))?;
+            let facts =
+                behavior::collect_facts(&source.analysis_path, &ignore_matcher);
+            (built.0, built.1, facts)
+        };
+
+        let to_label = param.to.as_deref().unwrap_or("working tree");
+        let measured = behavior::measure_behavior(
+            &old_index,
+            &new_index,
+            &new_report,
+            &old_facts,
+            &new_facts,
+            &param.from,
+            to_label,
+        );
+        let built = BehaviorReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(behavior_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported behavior format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
     /// Dry-run a rename or move: what a real rename would have
     /// to touch, and what would block it, without editing the
     /// tree. The measurement is `sephera_graph::simulate`'s,
@@ -2114,6 +2205,137 @@ impl BreakingReport {
                 .collect(),
         }
     }
+}
+
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BehaviorReport {
+    /// The older ref, as the caller spelled it.
+    pub from: String,
+    /// The newer ref, as the caller spelled it, or "working tree".
+    pub to: String,
+    /// The changes, file then callee or name.
+    pub changes: Vec<BehaviorChangeReport>,
+}
+
+/// One silent behaviour change, as the `behavior` tool renders
+/// it.
+///
+/// The shape is flat on purpose: an agent reading the JSON should
+/// not have to unwrap a tagged enum. `kind` says which shape the
+/// other fields carry — `arg_order_swap` fills `callee`,
+/// `old_args`, and `new_args`; `constant_changed` fills `name`,
+/// `old_value`, and `new_value` — and the absent fields stay null
+/// rather than disappearing.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct BehaviorChangeReport {
+    /// `arg_order_swap` or `constant_changed`.
+    pub kind: String,
+    /// The file containing the change.
+    pub file: String,
+    /// The called name, for an argument swap.
+    pub callee: Option<String>,
+    /// Arguments as the older tree wrote them, for a swap.
+    pub old_args: Option<Vec<String>>,
+    /// Arguments as the newer tree writes them, for a swap.
+    pub new_args: Option<Vec<String>>,
+    /// The constant's name, for a constant change.
+    pub name: Option<String>,
+    /// The older value text, for a constant change.
+    pub old_value: Option<String>,
+    /// The newer value text, for a constant change.
+    pub new_value: Option<String>,
+}
+
+impl BehaviorReport {
+    fn from_measured(measured: &behavior::BehaviorReport) -> Self {
+        Self {
+            from: measured.from_ref.clone(),
+            to: measured.to_ref.clone(),
+            changes: measured
+                .changes
+                .iter()
+                .map(|change| match change {
+                    behavior::BehaviorChange::ArgOrderSwap {
+                        file,
+                        callee,
+                        old_args,
+                        new_args,
+                    } => BehaviorChangeReport {
+                        kind: "arg_order_swap".to_owned(),
+                        file: file.clone(),
+                        callee: Some(callee.clone()),
+                        old_args: Some(old_args.clone()),
+                        new_args: Some(new_args.clone()),
+                        name: None,
+                        old_value: None,
+                        new_value: None,
+                    },
+                    behavior::BehaviorChange::ConstantChanged {
+                        file,
+                        name,
+                        old_value,
+                        new_value,
+                    } => BehaviorChangeReport {
+                        kind: "constant_changed".to_owned(),
+                        file: file.clone(),
+                        callee: None,
+                        old_args: None,
+                        new_args: None,
+                        name: Some(name.clone()),
+                        old_value: Some(old_value.clone()),
+                        new_value: Some(new_value.clone()),
+                    },
+                })
+                .collect(),
+        }
+    }
+}
+
+/// Render a behavior report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn behavior_markdown(report: &BehaviorReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Silent behaviour changes: `{}` → `{}`\n",
+        report.from, report.to
+    );
+    let _ = writeln!(output, "{} change(s) found.", report.changes.len());
+    if report.changes.is_empty() {
+        let _ = writeln!(output, "\nNo silent behaviour change was found.");
+        return output;
+    }
+    for change in &report.changes {
+        let line = match change.kind.as_str() {
+            "arg_order_swap" => {
+                let old = change.old_args.as_deref().unwrap_or(&[]).join(", ");
+                let new = change.new_args.as_deref().unwrap_or(&[]).join(", ");
+                format!(
+                    "Swapped arguments at a call to `{}` in `{}`: ({}) → ({}).",
+                    change.callee.as_deref().unwrap_or("?"),
+                    change.file,
+                    old,
+                    new
+                )
+            }
+            _ => {
+                format!(
+                    "Changed `{}` in `{}`: {} → {}.",
+                    change.name.as_deref().unwrap_or("?"),
+                    change.file,
+                    change.old_value.as_deref().unwrap_or("?"),
+                    change.new_value.as_deref().unwrap_or("?"),
+                )
+            }
+        };
+        let _ = writeln!(output, "\n- {line}");
+    }
+    output
 }
 
 #[derive(serde::Serialize, schemars::JsonSchema)]

@@ -1434,10 +1434,7 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
     progress.set_message("Extracting the older side...");
     let (_, old_index) =
         build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
-    let old_facts = behavior::facts_for(&behavior::collect_texts(
-        old_worktree.path(),
-        &old_ignore,
-    ));
+    let old_facts = behavior::collect_facts(old_worktree.path(), &old_ignore);
     drop(old_worktree);
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
@@ -1458,10 +1455,7 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
         progress.set_message("Extracting the newer side...");
         let built =
             build_graph_with_declarations(new_worktree.path(), &new_ignore)?;
-        let facts = behavior::facts_for(&behavior::collect_texts(
-            new_worktree.path(),
-            &new_ignore,
-        ));
+        let facts = behavior::collect_facts(new_worktree.path(), &new_ignore);
         drop(new_worktree);
         (built.0, built.1, facts)
     } else {
@@ -1474,10 +1468,7 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
         progress.set_message("Extracting the working tree...");
         let built =
             build_graph_with_declarations(&source.analysis_path, &new_ignore)?;
-        let facts = behavior::facts_for(&behavior::collect_texts(
-            &source.analysis_path,
-            &new_ignore,
-        ));
+        let facts = behavior::collect_facts(&source.analysis_path, &new_ignore);
         (built.0, built.1, facts)
     };
 

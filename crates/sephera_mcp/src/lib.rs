@@ -24,6 +24,7 @@
 //! | `dead` | Find the files no entry point reaches |
 //! | `breaking` | Compare two refs: which declared symbols broke, joined to the files that still use them |
 //! | `diff` | Compare two refs: every declared symbol added, removed, or reshaped |
+//! | `behavior` | Compare two refs: the changes that still compile but change behaviour |
 //! | `simulate` | Dry-run a rename or move: what it would touch, and what would block it |
 //! | `untested` | Report the declared symbols no test exercises, through the import graph |
 //! | `merge` | Predict the merges git completes cleanly but that break the build, across base, ours, theirs |
