@@ -446,6 +446,32 @@ service UserService {
 }
 "#;
 
+/// An empty message and an empty service — both legal proto3,
+/// both previously rejected: the body loops checked for the
+/// closer only after processing an item, so a body whose first
+/// token was `}` fell into the unterminated arm. The corpus
+/// fixtures had worked around this with filler items; a real
+/// repo (metal-stack/api's `TaskServiceDeleteResponse {}`)
+/// does not.
+const OLD_EMPTY_BODIES: &str = r#"syntax = "proto3";
+package api;
+message Empty {
+}
+service EmptyService {
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+"#;
+
+/// The empty-bodies proto with both removed.
+const NEW_EMPTY_BODIES_REMOVED: &str = r#"syntax = "proto3";
+package api;
+message GetUserRequest {
+  string user_id = 1;
+}
+"#;
+
 const PY_TAGS_KWARGS: &str = r#"from api.user_pb2 import User
 
 
@@ -2716,6 +2742,39 @@ fn cases() -> Vec<Case> {
                 downstream: vec![],
                 note: None,
             }],
+            expected_added: vec![],
+            expected_notes: vec![],
+        },
+        // 60. Empty message and empty service removed. Regression:
+        // the body loops never checked for the closer before
+        // processing an item, so an empty body errored as
+        // unterminated — found on metal-stack/api's
+        // `TaskServiceDeleteResponse {}`.
+        Case {
+            name: "empty_message_and_service_bodies",
+            old_protos: vec![(user, OLD_EMPTY_BODIES)],
+            new_protos: vec![(user, NEW_EMPTY_BODIES_REMOVED)],
+            texts: vec![(py_gen, PY_GEN)],
+            old_edges: vec![],
+            new_edges: vec![],
+            expected: vec![
+                ExpBreak {
+                    element: "api.Empty",
+                    change: SchemaChange::Removed,
+                    proven: vec![],
+                    named: vec![],
+                    downstream: vec![],
+                    note: None,
+                },
+                ExpBreak {
+                    element: "api.EmptyService",
+                    change: SchemaChange::Removed,
+                    proven: vec![],
+                    named: vec![],
+                    downstream: vec![],
+                    note: None,
+                },
+            ],
             expected_added: vec![],
             expected_notes: vec![],
         },
