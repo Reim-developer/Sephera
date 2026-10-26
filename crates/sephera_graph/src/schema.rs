@@ -2332,29 +2332,63 @@ fn suffix_proto<'a>(
     found
 }
 
-/// Whether a generated file's directory shares a trailing path
-/// component with the proto file declaring a message: the directory
-/// signal that disambiguates a shared struct name.
+/// Whether a generated file's directory disambiguates a struct
+/// name shared by two packages. Among the proto files declaring
+/// the message, exactly one directory must win: either it is the
+/// same directory as the generated file, or it shares the longest
+/// trailing run of path segments with it and that run is at
+/// least two segments. A one-segment tail like `v2` is shared by
+/// every versioned package and proves nothing. The case this
+/// exists for is the sibling-root layout — protos under
+/// `proto/metalstack/admin/v2`, generated code under
+/// `go/metalstack/admin/v2` — where the old equality-or-nesting
+/// rule saw no signal at all and left every shared struct
+/// unmapped.
 fn dir_matches_proto(
     schema: &SchemaIndex,
     message: &str,
     generated_dir: &str,
 ) -> bool {
+    if generated_dir.is_empty() {
+        return false;
+    }
+    let gen_segments: Vec<&str> = generated_dir
+        .split('/')
+        .filter(|segment| !segment.is_empty())
+        .collect();
+    let mut same_dir = 0;
+    let mut best = 0;
+    let mut best_count = 0;
     for (path, file) in &schema.files {
         if !file.messages.contains_key(message) {
             continue;
         }
         let proto_dir = path.rsplit_once('/').map_or("", |(dir, _)| dir);
-        if !proto_dir.is_empty()
-            && !generated_dir.is_empty()
-            && (generated_dir == proto_dir
-                || generated_dir.ends_with(&format!("/{proto_dir}"))
-                || proto_dir.ends_with(&format!("/{generated_dir}")))
-        {
-            return true;
+        if proto_dir.is_empty() {
+            continue;
+        }
+        if proto_dir == generated_dir {
+            same_dir += 1;
+            continue;
+        }
+        let proto_segments: Vec<&str> = proto_dir
+            .split('/')
+            .filter(|segment| !segment.is_empty())
+            .collect();
+        let shared = proto_segments
+            .iter()
+            .rev()
+            .zip(gen_segments.iter().rev())
+            .take_while(|(a, b)| a == b)
+            .count();
+        if shared > best {
+            best = shared;
+            best_count = 1;
+        } else if shared == best && shared > 0 {
+            best_count += 1;
         }
     }
-    false
+    same_dir == 1 || (best >= 2 && best_count == 1)
 }
 
 /// Struct and interface names a Go file declares, via tree-sitter-go.
