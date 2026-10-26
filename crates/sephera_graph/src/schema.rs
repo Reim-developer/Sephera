@@ -739,6 +739,20 @@ pub fn parse_schema_file(file: &str, text: &str) -> Result<SchemaFile, SchemaErr
                 let name = cursor.expect_ident("a service name")?;
                 parse_service(&mut cursor, &mut schema, &name, "")?;
             }
+            Some("extend") => {
+                cursor.next();
+                // An extend block declares custom options on
+                // another type (the usual shape is `extend
+                // google.protobuf.MethodOptions { ... }`). It
+                // introduces no message, enum, or service, so
+                // v1's diff has nothing to track in it — skip
+                // the block. Real repos declare all their custom
+                // options this way; rejecting it failed whole
+                // runs on files that are valid proto3.
+                let _target = parse_type(&mut cursor)?;
+                cursor.expect_punct('{')?;
+                cursor.skip_balanced('{', '}')?;
+            }
             Some(";") => {
                 cursor.next();
             }
