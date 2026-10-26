@@ -563,9 +563,15 @@ impl<'a> Cursor<'a> {
     }
 
     /// Skip a balanced region up to and including the closing punct,
-    /// e.g. an option value `{ ... }` or a service-method body.
+    /// e.g. an enum-value option list or a service-method body.
+    /// The caller has already consumed the opening punct, so the
+    /// depth starts at one: starting at zero would drive the first
+    /// closer to minus one, never return, and run to end of file
+    /// reporting a block that was never unterminated — which is
+    /// exactly what this function did until a real repo with
+    /// method bodies proved it.
     fn skip_balanced(&mut self, open: char, close: char) -> Result<(), SchemaError> {
-        let mut depth = 0;
+        let mut depth = 1;
         loop {
             match self.next() {
                 Some(Token::Punct(c)) if c == open => depth += 1,
