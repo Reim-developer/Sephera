@@ -76,8 +76,14 @@ pub fn render_json(report: &UntestedReport) -> String {
 /// so it must not read as an error next to breaking's error rules.
 /// The counts ride on the run's properties, not on every result,
 /// because they describe the run and would only repeat per symbol.
+///
+/// `prefix` is the repo-relative prefix of the analysis directory
+/// (empty when the analysis directory is the repo root): the whole
+/// report comes from one tree rooted there, so every location takes
+/// the same prefix, and GitHub resolves the result from the repo
+/// root rather than from the analysed subdirectory.
 #[must_use]
-pub fn render_sarif(report: &UntestedReport) -> String {
+pub fn render_sarif(report: &UntestedReport, prefix: &str) -> String {
     let rules = vec![sarif::rule(
         "sephera-untested-symbol",
         "A declared symbol no test exercises.",
@@ -91,8 +97,19 @@ pub fn render_sarif(report: &UntestedReport) -> String {
                 "untested symbol `{}` ({:?})",
                 symbol.symbol, symbol.kind
             );
-            let location = sarif::file_location(&symbol.file);
-            sarif::result("sephera-untested-symbol", &message, &location, None)
+            let file = sarif::prefixed_path(prefix, &symbol.file);
+            let location = sarif::file_location(&file);
+            sarif::result(
+                "sephera-untested-symbol",
+                &message,
+                &location,
+                None,
+                &sarif::fingerprint(&[
+                    "sephera-untested-symbol",
+                    file.as_str(),
+                    symbol.symbol.as_str(),
+                ]),
+            )
         })
         .collect();
     let properties = serde_json::json!({
@@ -125,7 +142,14 @@ mod tests {
     }
 
     fn sarif(report: &UntestedReport) -> serde_json::Value {
-        serde_json::from_str(&render_sarif(report)).expect("valid JSON")
+        sarif_prefixed(report, "")
+    }
+
+    fn sarif_prefixed(
+        report: &UntestedReport,
+        prefix: &str,
+    ) -> serde_json::Value {
+        serde_json::from_str(&render_sarif(report, prefix)).expect("valid JSON")
     }
 
     fn has_no_region(value: &serde_json::Value) -> bool {
@@ -165,6 +189,22 @@ mod tests {
         assert!(message.contains("Function"));
         assert!(results[0].get("relatedLocations").is_none());
         assert!(has_no_region(&json));
+    }
+
+    // Regression for CodeRabbit PR #51 finding 1: SARIF URIs must resolve from the repo root, not the analysis directory.
+    #[test]
+    fn regression_sarif_prefixes_declaring_files_with_the_analysis_prefix() {
+        let json = sarif_prefixed(&report(), "pkg");
+        let result = &json["runs"][0]["results"][0];
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "pkg/lib.py"
+        );
+        assert!(
+            result["partialFingerprints"]["primaryLocationLineHash"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
     }
 
     #[test]

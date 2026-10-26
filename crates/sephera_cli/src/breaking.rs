@@ -230,8 +230,17 @@ pub fn json_value(report: &BreakingReport) -> serde_json::Value {
 /// Locations are file-level only. Neither report carries line
 /// numbers, and a line guessed by text search would be a fabricated
 /// location, so no `region` appears anywhere in the document.
+///
+/// `consumer_prefix` is the repo-relative prefix of the NEW side's
+/// analysis directory (empty when the new side is the repo root):
+/// consumer files come from the new tree, so their paths need it.
+/// The declaring file needs none — the old side is always a whole
+/// worktree checkout, so declaring paths are already
+/// repo-root-relative. Passing the analysis prefix to the related
+/// location too would double-prefix exactly the subdir + `--to` runs
+/// that produce results, so the two locations deliberately differ.
 #[must_use]
-pub fn render_sarif(report: &BreakingReport) -> String {
+pub fn render_sarif(report: &BreakingReport, consumer_prefix: &str) -> String {
     let rules = vec![
         sarif::rule(
             "sephera-breaking-removed",
@@ -306,12 +315,19 @@ pub fn render_sarif(report: &BreakingReport) -> String {
                 .expect("writing to a String must succeed");
         }
         for user in &broken.direct {
-            let location = sarif::file_location(&user.file);
+            let consumer = sarif::prefixed_path(consumer_prefix, &user.file);
+            let location = sarif::file_location(&consumer);
             results.push(sarif::result(
                 rule_id,
                 &message,
                 &location,
                 Some((&broken.file, "declared here in the older tree")),
+                &sarif::fingerprint(&[
+                    rule_id,
+                    broken.file.as_str(),
+                    broken.symbol.as_str(),
+                    consumer.as_str(),
+                ]),
             ));
         }
     }
@@ -441,7 +457,15 @@ mod tests {
     }
 
     fn sarif(report: &super::BreakingReport) -> serde_json::Value {
-        serde_json::from_str(&super::render_sarif(report)).expect("valid JSON")
+        sarif_prefixed(report, "")
+    }
+
+    fn sarif_prefixed(
+        report: &super::BreakingReport,
+        consumer_prefix: &str,
+    ) -> serde_json::Value {
+        serde_json::from_str(&super::render_sarif(report, consumer_prefix))
+            .expect("valid JSON")
     }
 
     fn user(file: &str) -> sephera_graph::symbol_impact::SymbolUser {
@@ -552,6 +576,41 @@ mod tests {
                     .contains("changed kind: Function → Class")
             );
         }
+    }
+
+    // Regression for CodeRabbit PR #51 finding 1: the declaring file is already repo-root-relative and must never take the consumer prefix.
+    #[test]
+    fn regression_sarif_prefixes_consumers_but_never_the_declaring_file() {
+        // The declaring file comes from the old side, which is always
+        // a whole-worktree checkout, so it is already repo-root
+        // relative; only the new-side consumer takes the prefix.
+        // Prefixing the related location too would double-prefix
+        // exactly the subdir + `--to` runs that produce results.
+        let json = sarif_prefixed(
+            &broken_consumed(
+                BreakChange::Removed,
+                None,
+                vec![user("user.py")],
+                vec![],
+                vec![],
+            ),
+            "pkg",
+        );
+        let result = &json["runs"][0]["results"][0];
+        assert_eq!(
+            result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
+            "pkg/user.py"
+        );
+        assert_eq!(
+            result["relatedLocations"][0]["physicalLocation"]["artifactLocation"]
+                ["uri"],
+            "lib.py"
+        );
+        assert!(
+            result["partialFingerprints"]["primaryLocationLineHash"]
+                .as_str()
+                .is_some_and(|value| !value.is_empty())
+        );
     }
 
     #[test]

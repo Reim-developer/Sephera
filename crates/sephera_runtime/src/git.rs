@@ -3,7 +3,7 @@
 // that out costs more than the answer. Only the clone is worth a runtime.
 use std::{
     ffi::OsStr,
-    path::Path,
+    path::{Path, PathBuf},
     process::{Command, Output},
 };
 
@@ -514,6 +514,32 @@ pub fn merge_base(repo: &Path, ours: &str, theirs: &str) -> Result<String> {
         ["merge-base", &ours_resolved, &theirs_resolved],
         "find the merge base",
     )
+}
+
+/// The work-tree root containing `dir`, or `None` when `dir` is not
+/// inside a git repository.
+///
+/// Best-effort only: callers that need a repo-relative spelling use
+/// it to prefix analysis-relative paths, and fall back to no prefix
+/// when it answers `None` rather than failing a report whose paths
+/// were already usable. `rev-parse --show-toplevel` answers in
+/// milliseconds, so this stays a short-lived query like the other
+/// rev-parse calls here. The root is canonicalised, so it compares
+/// equal with a canonicalised analysis directory even when the
+/// caller's path reached it through a symlink.
+#[must_use]
+pub fn repo_toplevel(dir: &Path) -> Option<PathBuf> {
+    git_stdout_string(
+        dir,
+        ["rev-parse", "--show-toplevel"],
+        "find the work-tree root",
+    )
+    .ok()
+    .filter(|toplevel| !toplevel.is_empty())
+    .map(|toplevel| {
+        let path = PathBuf::from(toplevel);
+        path.canonicalize().unwrap_or(path)
+    })
 }
 
 #[cfg(test)]
