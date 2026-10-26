@@ -141,3 +141,35 @@ the exit code changes.
   working tree but in neither ref is not part of either side's
   declarations — except when the working tree itself is the newer
   side, where untracked files are in the tree and counted.
+
+## SARIF export for code scanning
+
+`--format sarif` renders the same report as SARIF 2.1.0, so a
+pipeline can upload it to GitHub code scanning and get each break
+as a PR annotation instead of a log line:
+
+```bash
+sephera breaking --path . --from origin/main --to HEAD --format sarif --output results.sarif
+```
+
+```yaml
+- name: Run Sephera breaking
+  run: sephera breaking --path . --from origin/main --to HEAD --format sarif --output results.sarif
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
+Two honesty notes, because the artifact is only useful if its
+limits are visible. First, locations are file-level only: the
+report carries file paths, never line numbers, so no line is ever
+guessed — a result points at the consumer file, and the declaring
+file is a related location. GitHub accepts file-level results.
+Second, the result count is not the gate count: one result is
+emitted per broken symbol per direct consumer file, so a symbol
+with three consumers is three results but counts once toward
+`--fail-on`, and a break with no direct consumer emits no result
+at all, even though it still appears in the Markdown and JSON
+reports. Namespace users and downstream files are noted in the
+result message only, never as results of their own.

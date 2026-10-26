@@ -68,3 +68,29 @@ not read test bodies.
 are exercised by nothing. The report is still printed; only the
 exit code changes, so a pipeline can gate on test coverage without
 running the tests.
+
+## SARIF export for code scanning
+
+`--format sarif` renders the same report as SARIF 2.1.0, so a
+pipeline can upload it to GitHub code scanning and get each
+untested symbol as a PR annotation instead of a log line:
+
+```bash
+sephera untested --path . --format sarif --output results.sarif
+```
+
+```yaml
+- name: Run Sephera untested
+  run: sephera untested --path . --format sarif --output results.sarif
+- name: Upload SARIF
+  uses: github/codeql-action/upload-sarif@v3
+  with:
+    sarif_file: results.sarif
+```
+
+Locations are file-level only: the report carries file paths,
+never line numbers, so no line is ever guessed — a result points
+at the file that declares the untested symbol. GitHub accepts
+file-level results. The direct, indirect, and untested counts
+ride on the run's properties rather than repeating on every
+result.
