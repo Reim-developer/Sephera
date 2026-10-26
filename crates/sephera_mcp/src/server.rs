@@ -24,7 +24,7 @@ use sephera_graph::{
     dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
-    review, risk, simulate, symbol_impact,
+    review, risk, simulate, symbol_impact, test_priority,
     types::{GraphFormat, GraphQuery},
     untested,
 };
@@ -44,7 +44,8 @@ use crate::{
         AffectedTestsInput, ArchaeologyInput, BehaviorInput, BreakingInput,
         ContextInput, CouplingInput, DeadInput, DiffInput, GraphInput,
         ImpactInput, LocInput, MergeInput, ReviewInput, RiskInput,
-        SimulateInput, SymbolsInput, UntestedInput, WhyInput,
+        SimulateInput, SymbolsInput, TestPriorityInput, UntestedInput,
+        WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1554,6 +1555,78 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Rank the tree's untested symbols by what hurts most. The
+    /// measurement is `sephera_graph::test_priority`'s, shared with
+    /// the `test-priority` command, so the two cannot disagree.
+    #[tool(
+        name = "test_priority",
+        description = "Rank the declared symbols no test exercises by what hurts most: downstream × churn × (1 + coupled partners). This is untested joined to risk, not a new detector: the ranking lists the FULL untested set, ranked, never filtered — a symbol with zero downstream scores 0 and ranks last but stays listed, and tested symbols never appear, direct and indirect tiers alike. The order is total (score desc, file asc, symbol asc). The score is a ranking heuristic, not a probability. Only Rust and Python collect declarations, so only their symbols can be ranked. The analysis needs a git history; a tree that is not a git repository is an error. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn test_priority(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<TestPriorityInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // History first, as the CLI reads it: a tree with no readable
+        // history is the error this tool exists to state.
+        let commits =
+            recent_commit_files(&source.repo_root, param.window.unwrap_or(500))
+                .map_err(map_internal_error(
+                    "commit history could not be read",
+                ))?;
+
+        let (report, index) = build_graph_with_declarations(
+            &source.analysis_path,
+            &ignore_matcher,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+        let base_prefix = blast_radius::base_prefix_for(
+            &source.repo_root,
+            &source.analysis_path,
+        );
+        let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
+        let measured = test_priority::measure_test_priority(
+            &report,
+            &index,
+            &rebased,
+            test_priority::TestPriorityOptions {
+                coupling: coupling::CouplingOptions::default(),
+                limit: param
+                    .top
+                    .map(|top| usize::try_from(top).unwrap_or(usize::MAX)),
+            },
+        );
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(test_priority_markdown(&measured)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported test_priority format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// Render an untested report as Markdown for an agent's context window.
@@ -1591,6 +1664,57 @@ fn untested_markdown(report: &untested::UntestedReport) -> String {
             output,
             "\n- `{}` — `{}` ({:?})",
             symbol.file, symbol.symbol, symbol.kind
+        );
+    }
+    output
+}
+
+/// Render a test-priority ranking as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's ranking, as the other tools'
+/// Markdown follows its command's.
+fn test_priority_markdown(
+    report: &test_priority::TestPriorityReport,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(output, "# Test priority\n");
+    let _ = writeln!(
+        output,
+        "History: {} commits scanned, {} counted. Score is downstream \
+         × churn × (1 + coupled partners); the ranking is a heuristic, \
+         not a probability. {} symbol(s) exercised directly by a test, {} \
+         exercised indirectly through code the tests reach, {} untested \
+         and ranked below — zero-downstream symbols score 0 and rank \
+         last, but stay listed.",
+        report.commits_scanned,
+        report.commits_counted,
+        report.tested_direct,
+        report.tested_indirect,
+        report.symbols.len()
+    );
+
+    if report.symbols.is_empty() {
+        let _ = writeln!(
+            output,
+            "\nEvery declared symbol is named by a file the tests reach."
+        );
+        return output;
+    }
+
+    let _ = writeln!(output);
+    for symbol in &report.symbols {
+        let _ = writeln!(
+            output,
+            "- `{}` — `{}` ({:?}) — score {}, {} downstream, {} changes, {} coupled partner(s)",
+            symbol.file,
+            symbol.symbol,
+            symbol.kind,
+            symbol.score,
+            symbol.downstream,
+            symbol.churn,
+            symbol.coupled_partners
         );
     }
     output

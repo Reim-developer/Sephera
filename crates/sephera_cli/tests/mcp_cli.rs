@@ -273,6 +273,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "risk",
             "simulate",
             "symbols",
+            "test_priority",
             "untested",
             "why"
         ],

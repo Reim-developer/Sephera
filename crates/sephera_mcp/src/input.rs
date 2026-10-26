@@ -629,6 +629,39 @@ pub struct UntestedInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `test_priority` tool.
+///
+/// The question is about a whole tree, so there is no file
+/// argument: the tool ranks the tree's untested symbols by
+/// downstream × churn × coupling, highest score first.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct TestPriorityInput {
+    /// Absolute or relative path to the project root. Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Remote Git URL to analyze instead of a local path. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Git reference to analyze (a branch, tag, or commit). Only applies when `url` is set.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// How many recent commits to read. Defaults to 500, the CLI's
+    /// window. The window bounds every count in the ranking.
+    pub window: Option<u32>,
+    /// How many symbols the ranking returns, highest score first.
+    /// Defaults to the full ranked set.
+    pub top: Option<u32>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};
