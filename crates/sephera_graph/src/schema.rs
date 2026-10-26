@@ -2007,6 +2007,10 @@ struct GenField {
 struct GenMessage {
     /// Fields by proto name.
     fields: BTreeMap<String, GenField>,
+    /// The Go type name, computed at build time when the package
+    /// is known: the scan sites compare Go source text against
+    /// it and have no package to derive it from.
+    go_name: String,
 }
 
 /// One enum's generated shape.
@@ -2014,6 +2018,8 @@ struct GenMessage {
 struct GenEnum {
     /// Values by proto name.
     values: BTreeSet<String>,
+    /// The Go type name, as for `GenMessage::go_name`.
+    go_name: String,
 }
 
 /// One service's generated shape.
@@ -2074,16 +2080,20 @@ fn build_modules(
     coverage: &mut Vec<String>,
 ) -> Vec<GenModule> {
     // All schema messages/enums/services, for Go name matching.
-    let mut messages: BTreeMap<String, &SchemaMessage> = BTreeMap::new();
-    let mut enums: BTreeMap<String, &SchemaEnum> = BTreeMap::new();
+    // Each entry carries its file's package: the Go type name
+    // strips the whole package, and only the file knows where
+    // the package ends and the message path begins.
+    let mut messages: BTreeMap<String, (&SchemaMessage, &str)> =
+        BTreeMap::new();
+    let mut enums: BTreeMap<String, (&SchemaEnum, &str)> = BTreeMap::new();
     let mut services: BTreeMap<String, BTreeMap<String, SchemaMethod>> =
         BTreeMap::new();
     for file in old_schema.files.values() {
         for (name, message) in &file.messages {
-            messages.insert(name.clone(), message);
+            messages.insert(name.clone(), (message, file.package.as_str()));
         }
         for (name, enumeration) in &file.enums {
-            enums.insert(name.clone(), enumeration);
+            enums.insert(name.clone(), (enumeration, file.package.as_str()));
         }
         for (name, methods) in &file.services {
             services.insert(name.clone(), methods.clone());
@@ -2110,7 +2120,11 @@ fn build_modules(
                 let Some(proto_path) = proto_path else {
                     continue;
                 };
-                let Some(schema_file) = old_schema.files.get(&proto_path)
+                let schema_file = old_schema
+                    .files
+                    .get(&proto_path)
+                    .or_else(|| suffix_proto(old_schema, &proto_path));
+                let Some(schema_file) = schema_file
                 else {
                     // A generated file for a proto added on the new
                     // side has no old elements to join: skip it
@@ -2139,6 +2153,8 @@ fn build_modules(
                 );
                 for (name, message) in &schema_file.messages {
                     let mut gen_message = GenMessage::default();
+                    gen_message.go_name =
+                        go_type_name(&schema_file.package, name);
                     for field in message.by_number.values() {
                         gen_message.fields.insert(field.name.clone(), GenField {
                             proto: field.name.clone(),
@@ -2151,6 +2167,8 @@ fn build_modules(
                 }
                 for (name, enumeration) in &schema_file.enums {
                     let mut gen_enum = GenEnum::default();
+                    gen_enum.go_name =
+                        go_type_name(&schema_file.package, name);
                     for value in enumeration.by_number.values() {
                         gen_enum.values.insert(value.clone());
                     }
@@ -2179,8 +2197,8 @@ fn build_modules(
                         "",
                         |(dir, _)| dir,
                     );
-                for (name, message) in &messages {
-                    let go_name = go_struct_name(name);
+                for (name, (message, package)) in &messages {
+                    let go_name = go_type_name(package, name);
                     if !declared.structs.contains(&go_name) {
                         continue;
                     }
@@ -2188,7 +2206,7 @@ fn build_modules(
                     // with a directory signal: the generated file's
                     // directory sharing a suffix with the proto file's
                     // directory. Without one, ambiguity links nothing.
-                    if !go_name_unique(&messages, &go_name, name)
+                    if !go_name_unique(&messages, &go_name)
                         && !dir_matches_proto(
                             old_schema, name, generated_dir,
                         )
@@ -2200,6 +2218,7 @@ fn build_modules(
                         continue;
                     }
                     let mut gen_message = GenMessage::default();
+                    gen_message.go_name = go_name.clone();
                     for field in message.by_number.values() {
                         gen_message.fields.insert(field.name.clone(), GenField {
                             proto: field.name.clone(),
@@ -2210,14 +2229,13 @@ fn build_modules(
                     }
                     module.messages.insert(name.clone(), gen_message);
                 }
-                for (name, enumeration) in &enums {
-                    if !declared.structs.contains(name.rsplit_once('.').map_or(
-                        name.as_str(),
-                        |(_, last)| last,
-                    )) {
+                for (name, (enumeration, package)) in &enums {
+                    if !declared.structs.contains(&go_type_name(package, name))
+                    {
                         continue;
                     }
                     let mut gen_enum = GenEnum::default();
+                    gen_enum.go_name = go_type_name(package, name);
                     for value in enumeration.by_number.values() {
                         gen_enum.values.insert(value.clone());
                     }
@@ -2251,28 +2269,67 @@ fn build_modules(
     modules
 }
 
-/// The Go struct name for a qualified message name: drop the package
-/// segment, join nesting with underscores.
-fn go_struct_name(qualified: &str) -> String {
-    let segments: Vec<&str> = qualified.split('.').collect();
-    if segments.len() <= 1 {
-        return qualified.to_owned();
-    }
-    segments[1..].join("_")
+/// The Go type name for a qualified schema name: strip the whole
+/// package prefix, join nesting with underscores. protoc-gen-go
+/// names a type by its message path, not its package path: for
+/// package metalstack.admin.v2 the struct is
+/// `MachineServiceListRequest`, not the
+/// `admin_v2_MachineServiceListRequest` the old derivation
+/// produced by dropping only the first package segment. The old
+/// derivation passed only because every corpus fixture used a
+/// one-segment package, where the two agree.
+fn go_type_name(package: &str, qualified: &str) -> String {
+    let path = qualified
+        .strip_prefix(package)
+        .and_then(|rest| rest.strip_prefix('.'))
+        .unwrap_or(qualified);
+    path.replace('.', "_")
 }
 
-/// Whether exactly one schema message maps to a Go struct name.
+/// Whether exactly one schema message maps to a Go type name.
 fn go_name_unique(
-    messages: &BTreeMap<String, &SchemaMessage>,
+    messages: &BTreeMap<String, (&SchemaMessage, &str)>,
     go_name: &str,
-    candidate: &str,
 ) -> bool {
     messages
-        .keys()
-        .filter(|name| go_struct_name(name) == go_name)
+        .iter()
+        .filter(|(name, (_, package))| go_type_name(package, name) == go_name)
         .count()
         == 1
-        && messages.contains_key(candidate)
+}
+
+/// The proto a generated file maps to when the exact path misses:
+/// protoc's out-dir layout puts generated files under their own
+/// root (python/, go/) while protos live under proto/, so the
+/// path relative to each root is the same. Compare
+/// path-minus-first-segment; an ambiguous suffix maps nothing,
+/// and a root-level file never suffix-matches (the exact rule
+/// already covers it).
+fn suffix_proto<'a>(
+    schema: &'a SchemaIndex,
+    proto_path: &str,
+) -> Option<&'a SchemaFile> {
+    let stem = proto_path.strip_suffix(".proto")?;
+    let (_, suffix) = stem.split_once('/')?;
+    if suffix.is_empty() {
+        return None;
+    }
+    let mut found = None;
+    for (path, file) in &schema.files {
+        let Some(path_stem) = path.strip_suffix(".proto") else {
+            continue;
+        };
+        let Some((_, path_suffix)) = path_stem.split_once('/') else {
+            continue;
+        };
+        if path_suffix == suffix {
+            if found.is_some() {
+                return None;
+            }
+            found = Some(file);
+        }
+    }
+    found
 }
 
 /// Whether a generated file's directory shares a trailing path
@@ -2692,9 +2749,14 @@ fn scan_go_literal(
             if module_dir != consumer_dir {
                 continue;
             }
-            if let Some(qualified) = module.messages.keys().find(|qualified| {
-                *qualified == name || go_struct_name(qualified) == *name
-            }) {
+            if let Some(qualified) = module
+                .messages
+                .iter()
+                .find(|(qualified, gm)| {
+                    *qualified == name || gm.go_name == *name
+                })
+                .map(|(qualified, _)| qualified)
+            {
                 message =
                     Some((import.module_file.clone(), qualified.clone()));
             }
@@ -2709,19 +2771,16 @@ fn scan_go_literal(
                     if module.messages.contains_key(&name)
                         || module
                             .messages
-                            .keys()
-                            .any(|qualified| {
-                                go_struct_name(qualified) == name
-                            })
+                            .values()
+                            .any(|gm| gm.go_name == name)
                     {
                         let qualified = module
                             .messages
-                            .keys()
-                            .find(|qualified| {
-                                *qualified == &name
-                                    || go_struct_name(qualified) == name
+                            .iter()
+                            .find(|(qualified, gm)| {
+                                *qualified == &name || gm.go_name == name
                             })
-                            .cloned();
+                            .map(|(qualified, _)| qualified.clone());
                         if let Some(qualified) = qualified {
                             message = Some((
                                 import.module_file.clone(),
@@ -2838,20 +2897,19 @@ fn scan_go_selector(
         if import.alias.as_deref() == Some(operand_text.as_str()) {
             // A package-qualified symbol: a message, a service
             // interface, or an enum constant.
-            for message in module.messages.keys() {
-                if *message == field_text
-                    || go_struct_name(message) == field_text
-                {
+            for (message, gm) in &module.messages {
+                if *message == field_text || gm.go_name == field_text {
                     evidence.message_refs.insert((
                         import.module_file.clone(),
                         message.clone(),
                     ));
                 }
             }
-            for enumeration in module.enums.keys() {
-                let short = enumeration
-                    .rsplit_once('.')
-                    .map_or(enumeration.as_str(), |(_, last)| last);
+            for (enumeration, ge) in &module.enums {
+                // The enum constant pattern uses the Go type name,
+                // not the last package segment: `Color_RED`, and
+                // `Outer_Inner_RED` for a nested enum.
+                let short = ge.go_name.as_str();
                 if *enumeration == field_text || short == field_text {
                     evidence.enum_refs.insert((
                         import.module_file.clone(),
