@@ -1155,6 +1155,7 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
     let rendered = match arguments.format {
         BreakingOutputFormat::Markdown => breaking::render_markdown(&measured),
         BreakingOutputFormat::Json => breaking::render_json(&measured),
+        BreakingOutputFormat::Sarif => breaking::render_sarif(&measured),
     };
 
     if arguments.output_args.output.is_some() {

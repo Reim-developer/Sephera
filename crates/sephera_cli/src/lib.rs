@@ -21,6 +21,7 @@ mod progress;
 mod review;
 mod risk;
 mod run;
+mod sarif;
 mod simulate;
 mod skill;
 mod untested;

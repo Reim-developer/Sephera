@@ -1176,8 +1176,8 @@ tree_command_args!(
         value_enum,
         default_value = "markdown",
         value_name = "FORMAT",
-        help = "Output format for the report. Supports markdown and json.",
-        long_help = "Output format for the report. Supports markdown and json."
+        help = "Output format for the report. Supports markdown, json, and sarif.",
+        long_help = "Output format for the report. Supports markdown, json, and sarif."
     )]
     pub format: BreakingOutputFormat,
 
@@ -1512,6 +1512,9 @@ pub enum BreakingOutputFormat {
     /// Structured JSON.
     #[value(name = "json", help = "Render the report as JSON.")]
     Json,
+    /// SARIF 2.1.0 for code scanning.
+    #[value(name = "sarif", help = "Render the report as SARIF 2.1.0.")]
+    Sarif,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
