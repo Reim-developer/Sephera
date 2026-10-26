@@ -471,7 +471,14 @@ fn tokenize(file: &str, text: &str) -> Result<Vec<Token>, SchemaError> {
                 }
             }
             ';' | '{' | '}' | '(' | ')' | '[' | ']' | '<' | '>' | '='
-            | '.' | ',' => {
+            | '.' | ',' | ':' => {
+                // `:` is not a proto construct the parser interprets,
+                // but it appears inside text-format option aggregates
+                // (`repeated = {unique: true, items: {...}}`), which
+                // the parser skips rather than reads — and a skipped
+                // region still has to tokenize. Without it, one
+                // validating option in a real repo failed the whole
+                // run at the tokenizer, before any parsing began.
                 tokens.push(Token::Punct(c));
                 i += 1;
             }
