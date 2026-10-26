@@ -2049,6 +2049,71 @@ fn build_consumer_texts_side(
         .map_err(anyhow::Error::new)
 }
 
+/// One side of a schema comparison: its graph, its schema index,
+/// and its consumer texts.
+type SchemaSide = (
+    GraphReport,
+    sephera_graph::schema::SchemaIndex,
+    Vec<(String, String)>,
+);
+
+/// Build the newer side of a schema comparison from one base
+/// directory: its graph, its schema index, and its consumer texts.
+fn build_new_schema_side(
+    base: &Path,
+    settings: &SettingsArgs,
+    ignore_patterns: &[String],
+    no_gitignore: bool,
+) -> Result<SchemaSide> {
+    Ok((
+        build_graph_with_declarations(
+            base,
+            &build_ignore_matcher(
+                base,
+                settings,
+                ignore_patterns,
+                no_gitignore,
+            )?,
+        )?
+        .0,
+        build_schema_side(base, settings, ignore_patterns, no_gitignore)?,
+        build_consumer_texts_side(
+            base,
+            settings,
+            ignore_patterns,
+            no_gitignore,
+        )?,
+    ))
+}
+
+/// Only proven consumers fail the gate: a break nobody uses does
+/// not fail the run, and a break with only name-match consumers
+/// never fails it.
+fn schema_impact_gates(
+    measured: &schema_impact::SchemaImpactReport,
+    fail_on: Option<u64>,
+) -> Vec<Gate> {
+    fail_on.map_or_else(Vec::new, |limit| {
+        let with_proven = u64::try_from(
+            measured
+                .breaks
+                .iter()
+                .filter(|broken| !broken.proven.is_empty())
+                .count(),
+        )
+        .unwrap_or(u64::MAX);
+        if with_proven >= limit {
+            vec![Gate::new(
+                "schema breaks with proven consumers",
+                with_proven,
+                limit,
+            )]
+        } else {
+            Vec::new()
+        }
+    })
+}
+
 async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
     // A remote source has no two local refs to compare — its checkout
     // is one ref already — so schema-impact refuses it plainly,
@@ -2118,53 +2183,22 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
                 )
             })?;
         progress.set_message("Extracting the newer side...");
-        let built = build_graph_with_declarations(
-            new_worktree.path(),
-            &build_ignore_matcher(
-                new_worktree.path(),
-                &arguments.settings,
-                &arguments.ignore_args.ignore,
-                arguments.ignore_args.no_gitignore,
-            )?,
-        )?;
-        let schema = build_schema_side(
-            new_worktree.path(),
-            &arguments.settings,
-            &arguments.ignore_args.ignore,
-            arguments.ignore_args.no_gitignore,
-        )?;
-        let texts = build_consumer_texts_side(
+        let built = build_new_schema_side(
             new_worktree.path(),
             &arguments.settings,
             &arguments.ignore_args.ignore,
             arguments.ignore_args.no_gitignore,
         )?;
         drop(new_worktree);
-        (built.0, schema, texts)
+        built
     } else {
         progress.set_message("Extracting the working tree...");
-        let built = build_graph_with_declarations(
-            &source.analysis_path,
-            &build_ignore_matcher(
-                &source.analysis_path,
-                &arguments.settings,
-                &arguments.ignore_args.ignore,
-                arguments.ignore_args.no_gitignore,
-            )?,
-        )?;
-        let schema = build_schema_side(
+        build_new_schema_side(
             &source.analysis_path,
             &arguments.settings,
             &arguments.ignore_args.ignore,
             arguments.ignore_args.no_gitignore,
-        )?;
-        let texts = build_consumer_texts_side(
-            &source.analysis_path,
-            &arguments.settings,
-            &arguments.ignore_args.ignore,
-            arguments.ignore_args.no_gitignore,
-        )?;
-        (built.0, schema, texts)
+        )?
     };
     drop(old_worktree);
 
@@ -2191,28 +2225,7 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
     progress.finish();
     emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
 
-    // Only proven consumers fail the gate: a break nobody uses does
-    // not fail the run, and a break with only name-match consumers
-    // never fails it.
-    let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
-        let with_proven = u64::try_from(
-            measured
-                .breaks
-                .iter()
-                .filter(|broken| !broken.proven.is_empty())
-                .count(),
-        )
-        .unwrap_or(u64::MAX);
-        if with_proven >= limit {
-            vec![Gate::new(
-                "schema breaks with proven consumers",
-                with_proven,
-                limit,
-            )]
-        } else {
-            Vec::new()
-        }
-    });
+    let gates = schema_impact_gates(&measured, arguments.fail_on);
     Ok(gates)
 }
 

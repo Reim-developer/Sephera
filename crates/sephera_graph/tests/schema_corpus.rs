@@ -26,6 +26,16 @@ use std::path::PathBuf;
 use sephera_graph::schema::{
     SchemaChange, build_schema_index, measure_schema_impact,
 };
+/// One break as (element, change, proven, named, downstream, note).
+type BreakRow = (
+    String,
+    SchemaChange,
+    Vec<(String, String)>,
+    Vec<(String, String)>,
+    Vec<String>,
+    Option<String>,
+);
+
 use sephera_graph::types::{
     GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
 };
@@ -161,14 +171,7 @@ fn run(case: &Case) -> Result<(), String> {
         "new",
     );
 
-    let mut actual: Vec<(
-        String,
-        SchemaChange,
-        Vec<(String, String)>,
-        Vec<(String, String)>,
-        Vec<String>,
-        Option<String>,
-    )> = measured
+    let mut actual: Vec<BreakRow> = measured
         .breaks
         .iter()
         .map(|broken| {
@@ -201,14 +204,7 @@ fn run(case: &Case) -> Result<(), String> {
         })
         .collect();
     actual.sort_by(|a, b| a.0.cmp(&b.0));
-    let mut expected: Vec<(
-        String,
-        SchemaChange,
-        Vec<(String, String)>,
-        Vec<(String, String)>,
-        Vec<String>,
-        Option<String>,
-    )> = case
+    let mut expected: Vec<BreakRow> = case
         .expected
         .iter()
         .map(|broken| {

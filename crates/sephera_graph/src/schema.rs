@@ -109,28 +109,28 @@ impl SchemaChange {
     #[must_use]
     pub fn describe(&self) -> String {
         match self {
-            SchemaChange::Removed => "removed".to_owned(),
-            SchemaChange::Renamed { from, to } => {
+            Self::Removed => "removed".to_owned(),
+            Self::Renamed { from, to } => {
                 format!("renamed from `{from}` to `{to}`")
             }
-            SchemaChange::TypeChanged { from, to } => {
+            Self::TypeChanged { from, to } => {
                 format!("type changed from `{from}` to `{to}`")
             }
-            SchemaChange::NumberChanged { from, to } => {
+            Self::NumberChanged { from, to } => {
                 format!("field number changed from {from} to {to}")
             }
-            SchemaChange::LabelChanged { from, to } => {
+            Self::LabelChanged { from, to } => {
                 format!("label changed from `{from}` to `{to}`")
             }
-            SchemaChange::OneofChanged { from, to } => {
+            Self::OneofChanged { from, to } => {
                 let from = from.as_deref().unwrap_or("(none)");
                 let to = to.as_deref().unwrap_or("(none)");
                 format!("oneof membership changed from `{from}` to `{to}`")
             }
-            SchemaChange::InputChanged { from, to } => {
+            Self::InputChanged { from, to } => {
                 format!("input changed from `{from}` to `{to}`")
             }
-            SchemaChange::OutputChanged { from, to } => {
+            Self::OutputChanged { from, to } => {
                 format!("output changed from `{from}` to `{to}`")
             }
         }
@@ -171,13 +171,13 @@ impl ConsumerVia {
     #[must_use]
     pub const fn describe(self) -> &'static str {
         match self {
-            ConsumerVia::Import => "import",
-            ConsumerVia::StructLiteral => "struct literal",
-            ConsumerVia::ConstructorKwarg => "constructor keyword",
-            ConsumerVia::EnumConst => "enum constant",
-            ConsumerVia::MethodCall => "method call",
-            ConsumerVia::FieldAccess => "field access",
-            ConsumerVia::JsonKey => "JSON key",
+            Self::Import => "import",
+            Self::StructLiteral => "struct literal",
+            Self::ConstructorKwarg => "constructor keyword",
+            Self::EnumConst => "enum constant",
+            Self::MethodCall => "method call",
+            Self::FieldAccess => "field access",
+            Self::JsonKey => "JSON key",
         }
     }
 }
@@ -206,7 +206,7 @@ pub struct SchemaBreak {
     /// removed field's number is now reserved.
     pub note: Option<String>,
     /// Proven consumers: A1 for message/enum/service breaks, A2 for
-    /// field/enum-value breaks, A1 + MethodCall for method breaks.
+    /// field/enum-value breaks, A1 + `MethodCall` for method breaks.
     pub proven: Vec<SchemaConsumer>,
     /// Name-match consumers (Tier A3), flagged weaker evidence.
     pub named: Vec<SchemaConsumer>,
@@ -364,6 +364,37 @@ enum Token {
 /// Returns a [`SchemaError`] naming the file when the text contains a
 /// character the tokenizer cannot read, an unterminated string, or an
 /// unterminated comment.
+/// Scan a string literal starting at `bytes[i]` (the quote).
+/// Returns the value and the index just past the closing quote.
+fn scan_string(
+    bytes: &[u8],
+    i: usize,
+) -> Result<(String, usize), &'static str> {
+    let quote = bytes[i];
+    let mut j = i + 1;
+    let mut value = String::new();
+    while j < bytes.len() {
+        let b = bytes[j];
+        if b == quote {
+            return Ok((value, j + 1));
+        }
+        if b == b'\\' && j + 1 < bytes.len() {
+            let escaped = bytes[j + 1] as char;
+            value.push(match escaped {
+                'n' => '\n',
+                't' => '\t',
+                'r' => '\r',
+                other => other,
+            });
+            j += 2;
+        } else {
+            value.push(b as char);
+            j += 1;
+        }
+    }
+    Err("unterminated string literal")
+}
+
 fn tokenize(file: &str, text: &str) -> Result<Vec<Token>, SchemaError> {
     let bytes = text.as_bytes();
     let mut tokens = Vec::new();
@@ -397,35 +428,9 @@ fn tokenize(file: &str, text: &str) -> Result<Vec<Token>, SchemaError> {
                 i = j + 2;
             }
             '"' | '\'' => {
-                let quote = bytes[i];
-                let mut j = i + 1;
-                let mut value = String::new();
-                let mut closed = false;
-                while j < bytes.len() {
-                    let b = bytes[j];
-                    if b == quote {
-                        closed = true;
-                        break;
-                    }
-                    if b == b'\\' && j + 1 < bytes.len() {
-                        let escaped = bytes[j + 1] as char;
-                        value.push(match escaped {
-                            'n' => '\n',
-                            't' => '\t',
-                            'r' => '\r',
-                            other => other,
-                        });
-                        j += 2;
-                    } else {
-                        value.push(b as char);
-                        j += 1;
-                    }
-                }
-                if !closed {
-                    return Err(fail("unterminated string literal"));
-                }
+                let (value, next) = scan_string(bytes, i).map_err(fail)?;
                 tokens.push(Token::Str(value));
-                i = j + 1;
+                i = next;
             }
             'a'..='z' | 'A'..='Z' | '_' => {
                 let mut j = i;
@@ -455,7 +460,7 @@ fn tokenize(file: &str, text: &str) -> Result<Vec<Token>, SchemaError> {
             '-' => {
                 // A negative number only when a digit follows; a lone
                 // `-` is a tokenizer error, not a construct to guess at.
-                if bytes.get(i + 1).is_some_and(|b| b.is_ascii_digit()) {
+                if bytes.get(i + 1).is_some_and(u8::is_ascii_digit) {
                     let mut j = i + 1;
                     while j < bytes.len() && bytes[j].is_ascii_digit() {
                         j += 1;
@@ -499,7 +504,7 @@ struct Cursor<'a> {
 }
 
 impl<'a> Cursor<'a> {
-    fn new(file: &'a str, tokens: Vec<Token>) -> Self {
+    const fn new(file: &'a str, tokens: Vec<Token>) -> Self {
         Self {
             file,
             tokens,
@@ -609,12 +614,8 @@ impl<'a> Cursor<'a> {
         let mut depth = 0;
         loop {
             match self.next() {
-                Some(Token::Punct('{'))
-                | Some(Token::Punct('('))
-                | Some(Token::Punct('[')) => depth += 1,
-                Some(Token::Punct('}'))
-                | Some(Token::Punct(')'))
-                | Some(Token::Punct(']')) => depth -= 1,
+                Some(Token::Punct('{' | '(' | '[')) => depth += 1,
+                Some(Token::Punct('}' | ')' | ']')) => depth -= 1,
                 Some(Token::Punct(';')) if depth == 0 => return Ok(()),
                 Some(_) => {}
                 None => {
@@ -676,30 +677,9 @@ pub fn parse_schema_file(
         match cursor.peek_ident() {
             None => break,
             Some("syntax") => {
-                cursor.next();
-                cursor.expect_punct('=')?;
-                match cursor.next() {
-                    Some(Token::Str(value)) if value == "proto3" => {
-                        saw_syntax = true;
-                    }
-                    Some(Token::Str(value)) if value == "proto2" => {
-                        return Err(
-                            cursor.error("proto2 is not supported in v1")
-                        );
-                    }
-                    Some(Token::Str(_)) => {
-                        return Err(cursor.error(
-                            "unsupported syntax version (expected \"proto3\")",
-                        ));
-                    }
-                    other => {
-                        return Err(cursor.error(&format!(
-                            "expected a syntax string, found {}",
-                            describe(other.as_ref())
-                        )));
-                    }
+                if parse_syntax(&mut cursor)? {
+                    saw_syntax = true;
                 }
-                cursor.expect_punct(';')?;
             }
             Some("package") => {
                 cursor.next();
@@ -750,17 +730,7 @@ pub fn parse_schema_file(
             }
             Some("extend") => {
                 cursor.next();
-                // An extend block declares custom options on
-                // another type (the usual shape is `extend
-                // google.protobuf.MethodOptions { ... }`). It
-                // introduces no message, enum, or service, so
-                // v1's diff has nothing to track in it — skip
-                // the block. Real repos declare all their custom
-                // options this way; rejecting it failed whole
-                // runs on files that are valid proto3.
-                let _target = parse_type(&mut cursor)?;
-                cursor.expect_punct('{')?;
-                cursor.skip_balanced('{', '}')?;
+                parse_extend(&mut cursor)?;
             }
             Some(";") => {
                 cursor.next();
@@ -798,6 +768,45 @@ fn qualified(package: &str, prefix: &str, name: &str) -> String {
     }
     out.push_str(name);
     out
+}
+
+/// Skip a top-level extend block. An extend block declares custom
+/// options on another type (the usual shape is `extend
+/// google.protobuf.MethodOptions { ... }`). It introduces no
+/// message, enum, or service, so v1's diff has nothing to track
+/// in it — skip the block. Real repos declare all their custom
+/// options this way; rejecting it failed whole runs on files
+/// that are valid proto3.
+fn parse_extend(cursor: &mut Cursor<'_>) -> Result<(), SchemaError> {
+    let _target = parse_type(cursor)?;
+    cursor.expect_punct('{')?;
+    cursor.skip_balanced('{', '}')?;
+    Ok(())
+}
+
+/// Parse a `syntax = "...";` declaration. Returns true when
+/// the file declares proto3; proto2 and anything else are errors.
+fn parse_syntax(cursor: &mut Cursor<'_>) -> Result<bool, SchemaError> {
+    cursor.next();
+    cursor.expect_punct('=')?;
+    let proto3 = match cursor.next() {
+        Some(Token::Str(value)) if value == "proto3" => true,
+        Some(Token::Str(value)) if value == "proto2" => {
+            return Err(cursor.error("proto2 is not supported in v1"));
+        }
+        Some(Token::Str(_)) => {
+            return Err(cursor
+                .error("unsupported syntax version (expected \"proto3\")"));
+        }
+        other => {
+            return Err(cursor.error(&format!(
+                "expected a syntax string, found {}",
+                describe(other.as_ref())
+            )));
+        }
+    };
+    cursor.expect_punct(';')?;
+    Ok(proto3)
 }
 
 /// Parse a message body. `prefix` is the enclosing message path
@@ -880,7 +889,7 @@ fn parse_message(
                 cursor.next();
                 cursor.skip_to_semicolon()?;
             }
-            Some("extensions") | Some("extend") | Some("group") => {
+            Some("extensions" | "extend" | "group") => {
                 return Err(
                     cursor.error("proto2-only construct in a proto3 file")
                 );
@@ -934,8 +943,7 @@ fn parse_reserved(
                     numbers.insert(start);
                 }
             }
-            Some(Token::Str(_)) => {}
-            Some(Token::Punct(',')) => {}
+            Some(Token::Str(_) | Token::Punct(',')) => {}
             Some(Token::Punct(';')) => return Ok(()),
             other => {
                 return Err(cursor.error(&format!(
@@ -957,7 +965,7 @@ fn parse_field(
     if let Some(word) = cursor.peek_ident() {
         match word {
             "optional" | "repeated" => {
-                label = word.to_owned();
+                label = word.into();
                 cursor.next();
             }
             "required" => {
@@ -1189,8 +1197,7 @@ fn parse_reserved_enum(
                     enumeration.reserved_numbers.insert(start);
                 }
             }
-            Some(Token::Str(_)) => {}
-            Some(Token::Punct(',')) => {}
+            Some(Token::Str(_) | Token::Punct(',')) => {}
             Some(Token::Punct(';')) => return Ok(()),
             other => {
                 return Err(cursor.error(&format!(
@@ -1319,9 +1326,10 @@ pub fn collect_schema_files(
 }
 
 /// Collect every Go and Python file under `base`, as (relative path,
-/// text) pairs, respecting the ignore matcher. The consumer scan runs
-/// over these texts; generated files are found among them by marker
-/// or suffix, never by directory.
+/// text) pairs, respecting the ignore matcher.
+///
+/// The consumer scan runs over these texts; generated files are
+/// found among them by marker or suffix, never by directory.
 ///
 /// # Errors
 ///
@@ -1454,7 +1462,7 @@ enum BreakTarget {
         /// The value's name on the old side.
         value: String,
     },
-    /// One rpc method: consumers are A1 service namers + MethodCall.
+    /// One rpc method: consumers are A1 service namers + `MethodCall`.
     Method {
         /// The service's qualified name.
         service: String,
@@ -1534,6 +1542,71 @@ fn diff_indexes(
     (breaks, added)
 }
 
+/// Diff one service present on both sides: removed methods, and
+/// input/output changes on methods present on both sides.
+fn diff_service(
+    path: &str,
+    service: &str,
+    old_methods: &BTreeMap<String, SchemaMethod>,
+    new_methods: &BTreeMap<String, SchemaMethod>,
+    breaks: &mut Vec<PendingBreak>,
+    added: &mut Vec<SchemaElement>,
+) {
+    for (method, old_method) in old_methods {
+        let Some(new_method) = new_methods.get(method) else {
+            breaks.push(PendingBreak {
+                schema_file: path.to_owned(),
+                element: format!("{service}.{method}"),
+                change: SchemaChange::Removed,
+                note: None,
+                target: BreakTarget::Method {
+                    service: service.to_owned(),
+                    method: method.clone(),
+                },
+            });
+            continue;
+        };
+        if old_method.input != new_method.input {
+            breaks.push(PendingBreak {
+                schema_file: path.to_owned(),
+                element: format!("{service}.{method}"),
+                change: SchemaChange::InputChanged {
+                    from: old_method.input.clone(),
+                    to: new_method.input.clone(),
+                },
+                note: None,
+                target: BreakTarget::Method {
+                    service: service.to_owned(),
+                    method: method.clone(),
+                },
+            });
+        }
+        if old_method.output != new_method.output {
+            breaks.push(PendingBreak {
+                schema_file: path.to_owned(),
+                element: format!("{service}.{method}"),
+                change: SchemaChange::OutputChanged {
+                    from: old_method.output.clone(),
+                    to: new_method.output.clone(),
+                },
+                note: None,
+                target: BreakTarget::Method {
+                    service: service.to_owned(),
+                    method: method.clone(),
+                },
+            });
+        }
+    }
+    for method in new_methods.keys() {
+        if !old_methods.contains_key(method) {
+            added.push(SchemaElement {
+                schema_file: path.to_owned(),
+                element: format!("{service}.{method}"),
+            });
+        }
+    }
+}
+
 /// Diff one file present on both sides.
 fn diff_file(
     path: &str,
@@ -1595,59 +1668,7 @@ fn diff_file(
             });
             continue;
         };
-        for (method, old_method) in old_methods {
-            let Some(new_method) = new_methods.get(method) else {
-                breaks.push(PendingBreak {
-                    schema_file: path.to_owned(),
-                    element: format!("{service}.{method}"),
-                    change: SchemaChange::Removed,
-                    note: None,
-                    target: BreakTarget::Method {
-                        service: service.clone(),
-                        method: method.clone(),
-                    },
-                });
-                continue;
-            };
-            if old_method.input != new_method.input {
-                breaks.push(PendingBreak {
-                    schema_file: path.to_owned(),
-                    element: format!("{service}.{method}"),
-                    change: SchemaChange::InputChanged {
-                        from: old_method.input.clone(),
-                        to: new_method.input.clone(),
-                    },
-                    note: None,
-                    target: BreakTarget::Method {
-                        service: service.clone(),
-                        method: method.clone(),
-                    },
-                });
-            }
-            if old_method.output != new_method.output {
-                breaks.push(PendingBreak {
-                    schema_file: path.to_owned(),
-                    element: format!("{service}.{method}"),
-                    change: SchemaChange::OutputChanged {
-                        from: old_method.output.clone(),
-                        to: new_method.output.clone(),
-                    },
-                    note: None,
-                    target: BreakTarget::Method {
-                        service: service.clone(),
-                        method: method.clone(),
-                    },
-                });
-            }
-        }
-        for method in new_methods.keys() {
-            if !old_methods.contains_key(method) {
-                added.push(SchemaElement {
-                    schema_file: path.to_owned(),
-                    element: format!("{service}.{method}"),
-                });
-            }
-        }
+        diff_service(path, service, old_methods, new_methods, breaks, added);
     }
     for service in new_file.services.keys() {
         if !old_file.services.contains_key(service) {
@@ -1966,9 +1987,16 @@ fn generated_marker(text: &str, lang: GeneratedLang) -> bool {
 fn find_generated(texts: &[(String, String)]) -> Vec<GeneratedFile> {
     let mut generated = Vec::new();
     for (path, text) in texts {
-        let lang = if path.ends_with(".go") {
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str());
+        let is_go = extension.is_some_and(|ext| ext.eq_ignore_ascii_case("go"));
+        let is_python = extension.is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("py") || ext.eq_ignore_ascii_case("pyi")
+        });
+        let lang = if is_go {
             GeneratedLang::Go
-        } else if path.ends_with(".py") || path.ends_with(".pyi") {
+        } else if is_python {
             GeneratedLang::Python
         } else {
             continue;
@@ -2060,6 +2088,194 @@ struct GenModule {
 /// struct name matching messages in two packages with no directory
 /// signal to choose between) links nothing and notes it, rather than
 /// guessing.
+/// Build the Python half of the consumer-join catalog for one
+/// generated file: link it to its old proto by path, then index
+/// that proto's messages, enums, and services with their generated
+/// spellings. Returns `None` when the file cannot be a break
+/// target (a proto added on the new side, or no matching proto).
+fn build_python_module(
+    old_schema: &SchemaIndex,
+    new_schema: &SchemaIndex,
+    generated_file: &GeneratedFile,
+    coverage: &mut Vec<String>,
+) -> Option<GenModule> {
+    let proto_path = generated_file
+        .path
+        .strip_suffix("_pb2.py")
+        .or_else(|| generated_file.path.strip_suffix("_pb2.pyi"))
+        .or_else(|| generated_file.path.strip_suffix("_pb2_grpc.py"))
+        .map(|stem| format!("{stem}.proto"));
+    let proto_path = proto_path?;
+    let schema_file = old_schema
+        .files
+        .get(&proto_path)
+        .or_else(|| suffix_proto(old_schema, &proto_path));
+    let Some(schema_file) = schema_file else {
+        // A generated file for a proto added on the new
+        // side has no old elements to join: skip it
+        // silently rather than crying about a file that
+        // cannot be a break target.
+        if new_schema.files.contains_key(&proto_path) {
+            return None;
+        }
+        coverage.push(format!(
+            "generated file {} has no matching .proto in the tree; its elements are not indexed",
+            generated_file.path
+        ));
+        return None;
+    };
+    let mut module = GenModule {
+        file: generated_file.path.clone(),
+        lang: Some(GeneratedLang::Python),
+        ..Default::default()
+    };
+    module.py_module = Some(
+        generated_file
+            .path
+            .trim_end_matches(".py")
+            .trim_end_matches(".pyi")
+            .replace('/', "."),
+    );
+    for (name, message) in &schema_file.messages {
+        let mut gen_message = GenMessage {
+            go_name: go_type_name(&schema_file.package, name),
+            ..Default::default()
+        };
+        for field in message.by_number.values() {
+            gen_message.fields.insert(
+                field.name.clone(),
+                GenField {
+                    proto: field.name.clone(),
+                    go: go_field_name(&field.name),
+                    py: field.name.clone(),
+                    json: field.json_name.clone(),
+                },
+            );
+        }
+        module.messages.insert(name.clone(), gen_message);
+    }
+    for (name, enumeration) in &schema_file.enums {
+        let mut gen_enum = GenEnum {
+            go_name: go_type_name(&schema_file.package, name),
+            ..Default::default()
+        };
+        for value in enumeration.by_number.values() {
+            gen_enum.values.insert(value.clone());
+        }
+        module.enums.insert(name.clone(), gen_enum);
+    }
+    for (name, methods) in &schema_file.services {
+        let mut gen_service = GenService::default();
+        for method in methods.keys() {
+            gen_service.methods.insert(method.clone());
+        }
+        module.services.insert(name.clone(), gen_service);
+    }
+    Some(module)
+}
+
+/// Build the Go half of the consumer-join catalog for one
+/// generated file: link it by declared struct/interface name to
+/// the old schema's messages, enums, and services. Returns `None`
+/// when the file declares nothing the old schema knows.
+fn build_go_module(
+    old_schema: &SchemaIndex,
+    messages: &BTreeMap<String, (&SchemaMessage, &str)>,
+    enums: &BTreeMap<String, (&SchemaEnum, &str)>,
+    services: &BTreeMap<String, BTreeMap<String, SchemaMethod>>,
+    generated_file: &GeneratedFile,
+    text: &str,
+) -> Option<GenModule> {
+    let declared = go_declarations(text);
+    let package = go_package_clause(text);
+    let mut module = GenModule {
+        file: generated_file.path.clone(),
+        lang: Some(GeneratedLang::Go),
+        go_package: package,
+        ..Default::default()
+    };
+    let generated_dir = generated_file
+        .path
+        .rsplit_once('/')
+        .map_or("", |(dir, _)| dir);
+    for (name, (message, package)) in messages {
+        let go_name = go_type_name(package, name);
+        if !declared.structs.contains(&go_name) {
+            continue;
+        }
+        // A struct name shared by two packages links only
+        // with a directory signal: the generated file's
+        // directory sharing a suffix with the proto file's
+        // directory. Without one, ambiguity links nothing
+        // — silently. An earlier version pushed a note
+        // per declined (file, message) pair, but that
+        // note fires for every cross-package decline
+        // even when another file maps the message, so
+        // on a real repo it buried the report under
+        // dozens of lines about mappings that were
+        // never lost. The loss that matters is per
+        // break, and the per-element unjoined note in
+        // measure_schema_impact already reports exactly
+        // that.
+        if !go_name_unique(messages, &go_name)
+            && !dir_matches_proto(old_schema, name, generated_dir)
+        {
+            continue;
+        }
+        let mut gen_message = GenMessage {
+            go_name: go_name.clone(),
+            ..Default::default()
+        };
+        for field in message.by_number.values() {
+            gen_message.fields.insert(
+                field.name.clone(),
+                GenField {
+                    proto: field.name.clone(),
+                    go: go_field_name(&field.name),
+                    py: field.name.clone(),
+                    json: field.json_name.clone(),
+                },
+            );
+        }
+        module.messages.insert(name.clone(), gen_message);
+    }
+    for (name, (enumeration, package)) in enums {
+        if !declared.structs.contains(&go_type_name(package, name)) {
+            continue;
+        }
+        let mut gen_enum = GenEnum {
+            go_name: go_type_name(package, name),
+            ..Default::default()
+        };
+        for value in enumeration.by_number.values() {
+            gen_enum.values.insert(value.clone());
+        }
+        module.enums.insert(name.clone(), gen_enum);
+    }
+    for (name, methods) in services {
+        let short = name.rsplit_once('.').map_or(name.as_str(), |(_, l)| l);
+        let client = format!("{short}Client");
+        let server = format!("{short}Server");
+        if !declared.interfaces.contains(&client)
+            && !declared.interfaces.contains(&server)
+        {
+            continue;
+        }
+        let mut gen_service = GenService::default();
+        for method in methods.keys() {
+            gen_service.methods.insert(method.clone());
+        }
+        module.services.insert(name.clone(), gen_service);
+    }
+    if module.messages.is_empty()
+        && module.enums.is_empty()
+        && module.services.is_empty()
+    {
+        return None;
+    }
+    Some(module)
+}
+
 /// Build the consumer-join catalog: which generated file implements
 /// which schema element, and each element's generated spellings.
 ///
@@ -2107,165 +2323,24 @@ fn build_modules(
         };
         match generated_file.lang {
             GeneratedLang::Python => {
-                let proto_path = generated_file
-                    .path
-                    .strip_suffix("_pb2.py")
-                    .or_else(|| generated_file.path.strip_suffix("_pb2.pyi"))
-                    .or_else(|| {
-                        generated_file.path.strip_suffix("_pb2_grpc.py")
-                    })
-                    .map(|stem| format!("{stem}.proto"));
-                let Some(proto_path) = proto_path else {
-                    continue;
-                };
-                let schema_file = old_schema
-                    .files
-                    .get(&proto_path)
-                    .or_else(|| suffix_proto(old_schema, &proto_path));
-                let Some(schema_file) = schema_file else {
-                    // A generated file for a proto added on the new
-                    // side has no old elements to join: skip it
-                    // silently rather than crying about a file that
-                    // cannot be a break target.
-                    if new_schema.files.contains_key(&proto_path) {
-                        continue;
-                    }
-                    coverage.push(format!(
-                        "generated file {} has no matching .proto in the tree; its elements are not indexed",
-                        generated_file.path
-                    ));
-                    continue;
-                };
-                let mut module = GenModule {
-                    file: generated_file.path.clone(),
-                    lang: Some(GeneratedLang::Python),
-                    ..Default::default()
-                };
-                module.py_module = Some(
-                    generated_file
-                        .path
-                        .trim_end_matches(".py")
-                        .trim_end_matches(".pyi")
-                        .replace('/', "."),
-                );
-                for (name, message) in &schema_file.messages {
-                    let mut gen_message = GenMessage::default();
-                    gen_message.go_name =
-                        go_type_name(&schema_file.package, name);
-                    for field in message.by_number.values() {
-                        gen_message.fields.insert(
-                            field.name.clone(),
-                            GenField {
-                                proto: field.name.clone(),
-                                go: go_field_name(&field.name),
-                                py: field.name.clone(),
-                                json: field.json_name.clone(),
-                            },
-                        );
-                    }
-                    module.messages.insert(name.clone(), gen_message);
+                if let Some(module) = build_python_module(
+                    old_schema,
+                    new_schema,
+                    generated_file,
+                    coverage,
+                ) {
+                    modules.push(module);
                 }
-                for (name, enumeration) in &schema_file.enums {
-                    let mut gen_enum = GenEnum::default();
-                    gen_enum.go_name = go_type_name(&schema_file.package, name);
-                    for value in enumeration.by_number.values() {
-                        gen_enum.values.insert(value.clone());
-                    }
-                    module.enums.insert(name.clone(), gen_enum);
-                }
-                for (name, methods) in &schema_file.services {
-                    let mut gen_service = GenService::default();
-                    for method in methods.keys() {
-                        gen_service.methods.insert(method.clone());
-                    }
-                    module.services.insert(name.clone(), gen_service);
-                }
-                modules.push(module);
             }
             GeneratedLang::Go => {
-                let declared = go_declarations(text);
-                let package = go_package_clause(text);
-                let mut module = GenModule {
-                    file: generated_file.path.clone(),
-                    lang: Some(GeneratedLang::Go),
-                    go_package: package,
-                    ..Default::default()
-                };
-                let generated_dir = generated_file
-                    .path
-                    .rsplit_once('/')
-                    .map_or("", |(dir, _)| dir);
-                for (name, (message, package)) in &messages {
-                    let go_name = go_type_name(package, name);
-                    if !declared.structs.contains(&go_name) {
-                        continue;
-                    }
-                    // A struct name shared by two packages links only
-                    // with a directory signal: the generated file's
-                    // directory sharing a suffix with the proto file's
-                    // directory. Without one, ambiguity links nothing
-                    // — silently. An earlier version pushed a note
-                    // per declined (file, message) pair, but that
-                    // note fires for every cross-package decline
-                    // even when another file maps the message, so
-                    // on a real repo it buried the report under
-                    // dozens of lines about mappings that were
-                    // never lost. The loss that matters is per
-                    // break, and the per-element unjoined note in
-                    // measure_schema_impact already reports exactly
-                    // that.
-                    if !go_name_unique(&messages, &go_name)
-                        && !dir_matches_proto(old_schema, name, generated_dir)
-                    {
-                        continue;
-                    }
-                    let mut gen_message = GenMessage::default();
-                    gen_message.go_name = go_name.clone();
-                    for field in message.by_number.values() {
-                        gen_message.fields.insert(
-                            field.name.clone(),
-                            GenField {
-                                proto: field.name.clone(),
-                                go: go_field_name(&field.name),
-                                py: field.name.clone(),
-                                json: field.json_name.clone(),
-                            },
-                        );
-                    }
-                    module.messages.insert(name.clone(), gen_message);
-                }
-                for (name, (enumeration, package)) in &enums {
-                    if !declared.structs.contains(&go_type_name(package, name))
-                    {
-                        continue;
-                    }
-                    let mut gen_enum = GenEnum::default();
-                    gen_enum.go_name = go_type_name(package, name);
-                    for value in enumeration.by_number.values() {
-                        gen_enum.values.insert(value.clone());
-                    }
-                    module.enums.insert(name.clone(), gen_enum);
-                }
-                for (name, methods) in &services {
-                    let short =
-                        name.rsplit_once('.').map_or(name.as_str(), |(_, l)| l);
-                    let client = format!("{short}Client");
-                    let server = format!("{short}Server");
-                    if !declared.interfaces.contains(&client)
-                        && !declared.interfaces.contains(&server)
-                    {
-                        continue;
-                    }
-                    let mut gen_service = GenService::default();
-                    for method in methods.keys() {
-                        gen_service.methods.insert(method.clone());
-                    }
-                    module.services.insert(name.clone(), gen_service);
-                }
-                if !module.messages.is_empty()
-                    || !module.enums.is_empty()
-                    || !module.services.is_empty()
-                {
+                if let Some(module) = build_go_module(
+                    old_schema,
+                    &messages,
+                    &enums,
+                    &services,
+                    generated_file,
+                    text,
+                ) {
                     modules.push(module);
                 }
             }
@@ -2473,7 +2548,7 @@ fn go_package_clause(text: &str) -> Option<String> {
 }
 
 /// The text of a tree-sitter node, lossy on invalid UTF-8 boundaries.
-fn node_slice<'a>(text: &'a str, node: &tree_sitter::Node<'_>) -> String {
+fn node_slice(text: &str, node: &tree_sitter::Node<'_>) -> String {
     let start = node.start_byte().min(text.len());
     let end = node.end_byte().min(text.len());
     if start >= end {
@@ -2948,7 +3023,7 @@ fn scan_go_selector(
                         enumeration.clone(),
                     ));
                 }
-                for value in module.enums[enumeration].values.iter() {
+                for value in &module.enums[enumeration].values {
                     if field_text == format!("{short}_{value}") {
                         evidence.enum_consts.insert((
                             import.module_file.clone(),
@@ -2990,10 +3065,12 @@ fn scan_go_selector(
 
 /// Collect a Python file's imports: plain imports (dotted path, alias)
 /// and from-imports (module, bound names with aliases).
-fn python_imports(
-    root: &tree_sitter::Node<'_>,
-    text: &str,
-) -> (Vec<(String, Option<String>)>, Vec<(String, Vec<String>)>) {
+/// A Python file's imports: plain imports (dotted path, alias)
+/// and from-imports (module, bound names with aliases).
+type PythonImports =
+    (Vec<(String, Option<String>)>, Vec<(String, Vec<String>)>);
+
+fn python_imports(root: &tree_sitter::Node<'_>, text: &str) -> PythonImports {
     let mut plain = Vec::new();
     let mut from_imports = Vec::new();
     let mut stack = vec![*root];
@@ -3031,7 +3108,7 @@ fn python_imports(
                         "dotted_name" if module.is_none() => {
                             module = Some(node_slice(text, &child));
                         }
-                        "dotted_name" => {
+                        "dotted_name" | "identifier" => {
                             names.push(node_slice(text, &child));
                         }
                         "aliased_import" => {
@@ -3043,13 +3120,8 @@ fn python_imports(
                                 }
                             }
                         }
-                        "identifier" => {
-                            names.push(node_slice(text, &child));
-                        }
-                        "wildcard_import" => {
-                            // A wildcard import binds no single name:
-                            // it is never evidence for one message.
-                        }
+                        // A wildcard import binds no single name:
+                        // it is never evidence for one message.
                         _ => {}
                     }
                 }
@@ -3255,7 +3327,8 @@ fn scan_python(
 }
 
 /// The dotted chain of a Python attribute or call function, e.g.
-/// `foo.bar_pb2.User.Status` → ["foo", "bar_pb2", "User", "Status"].
+/// `foo.bar_pb2.User.Status`, whose segments are `foo`, `bar_pb2`,
+/// `User`, and `Status`.
 fn python_chain(node: &tree_sitter::Node<'_>, text: &str) -> Vec<String> {
     let mut segments = Vec::new();
     let mut current = *node;
@@ -3378,6 +3451,88 @@ fn scan_python_call(
 /// `mod.Msg.Enum.VALUE` / `mod.Enum.VALUE` names the enum value
 /// (A2), and any other chain ending in a generated field name is a
 /// field access (A3, receiver unknown).
+/// Scan a Python attribute chain whose remainder is one segment:
+/// a message, enum, or service-Stub reference, plus — when the
+/// chain root is a from-imported bound name — an enum constant or
+/// field access through that binding.
+fn scan_python_single(
+    module: &GenModule,
+    module_file: &str,
+    name: &str,
+    bound_root: Option<&str>,
+    evidence: &mut FileEvidence,
+) {
+    for message in module.messages.keys() {
+        let short = message
+            .rsplit_once('.')
+            .map_or(message.as_str(), |(_, last)| last);
+        if short == name || *message == *name {
+            evidence
+                .message_refs
+                .insert((module_file.to_owned(), message.clone()));
+        }
+    }
+    for enumeration in module.enums.keys() {
+        let short = enumeration
+            .rsplit_once('.')
+            .map_or(enumeration.as_str(), |(_, last)| last);
+        if short == name || *enumeration == *name {
+            evidence
+                .enum_refs
+                .insert((module_file.to_owned(), enumeration.clone()));
+        }
+    }
+    for service in module.services.keys() {
+        let short = service
+            .rsplit_once('.')
+            .map_or(service.as_str(), |(_, last)| last);
+        if *name == format!("{short}Stub") {
+            evidence
+                .service_refs
+                .insert((module_file.to_owned(), service.clone()));
+        }
+    }
+    // A from-imported root with one segment left: `Color.RED`
+    // where Color was from-imported, or `User.name` where User
+    // was. The chain root is the bound name, so the leaf is an
+    // enum value of that enum or a field access on that message
+    // — the same evidence the plain-import chain gives, through
+    // the binding instead of the module path. Without this, the
+    // most common Python enum-value form names nothing.
+    if let Some(root) = bound_root {
+        for enumeration in module.enums.keys() {
+            let short = enumeration
+                .rsplit_once('.')
+                .map_or(enumeration.as_str(), |(_, last)| last);
+            if (short == root || *enumeration == *root)
+                && module.enums[enumeration].values.contains(name)
+            {
+                evidence.enum_consts.insert((
+                    module_file.to_owned(),
+                    enumeration.clone(),
+                    name.to_owned(),
+                ));
+            }
+        }
+        for (message, gen_message) in &module.messages {
+            let short = message
+                .rsplit_once('.')
+                .map_or(message.as_str(), |(_, last)| last);
+            if short == root || *message == *root {
+                for field in gen_message.fields.values() {
+                    if field.py == *name {
+                        evidence.field_accesses.insert((
+                            module_file.to_owned(),
+                            message.clone(),
+                            field.proto.clone(),
+                        ));
+                    }
+                }
+            }
+        }
+    }
+}
+
 fn scan_python_attribute(
     node: &tree_sitter::Node<'_>,
     text: &str,
@@ -3396,80 +3551,21 @@ fn scan_python_attribute(
     let Some(module) = modules.get(&module_file) else {
         return;
     };
-    // Message reference: the remainder is exactly the message, the
-    // enum, or the service's Stub class.
+    // Message reference: the remainder is exactly the message,
+    // the enum, or the service's Stub class.
     if rest.len() == 1 {
-        let name = &rest[0];
-        for message in module.messages.keys() {
-            let short = message
-                .rsplit_once('.')
-                .map_or(message.as_str(), |(_, last)| last);
-            if short == name || *message == *name {
-                evidence
-                    .message_refs
-                    .insert((module_file.clone(), message.clone()));
-            }
-        }
-        for enumeration in module.enums.keys() {
-            let short = enumeration
-                .rsplit_once('.')
-                .map_or(enumeration.as_str(), |(_, last)| last);
-            if short == name || *enumeration == *name {
-                evidence
-                    .enum_refs
-                    .insert((module_file.clone(), enumeration.clone()));
-            }
-        }
-        for service in module.services.keys() {
-            let short = service
-                .rsplit_once('.')
-                .map_or(service.as_str(), |(_, last)| last);
-            if *name == format!("{short}Stub") {
-                evidence
-                    .service_refs
-                    .insert((module_file.clone(), service.clone()));
-            }
-        }
-        // A from-imported root with one segment left: `Color.RED`
-        // where Color was from-imported, or `User.name` where User
-        // was. The chain root is the bound name, so the leaf is an
-        // enum value of that enum or a field access on that message
-        // — the same evidence the plain-import chain gives, through
-        // the binding instead of the module path. Without this, the
-        // most common Python enum-value form names nothing.
-        if chain.len() == 2 {
-            let root = &chain[0];
-            for enumeration in module.enums.keys() {
-                let short = enumeration
-                    .rsplit_once('.')
-                    .map_or(enumeration.as_str(), |(_, last)| last);
-                if (short == root || *enumeration == *root)
-                    && module.enums[enumeration].values.contains(name)
-                {
-                    evidence.enum_consts.insert((
-                        module_file.clone(),
-                        enumeration.clone(),
-                        name.clone(),
-                    ));
-                }
-            }
-            for (message, gen_message) in &module.messages {
-                let short = message
-                    .rsplit_once('.')
-                    .map_or(message.as_str(), |(_, last)| last);
-                if short == root || *message == *root {
-                    for field in gen_message.fields.values() {
-                        if field.py == *name {
-                            evidence.field_accesses.insert((
-                                module_file.clone(),
-                                message.clone(),
-                                field.proto.clone(),
-                            ));
-                        }
-                    }
-                }
-            }
-        }
+        let bound_root = if chain.len() == 2 {
+            Some(chain[0].as_str())
+        } else {
+            None
+        };
+        scan_python_single(
+            module,
+            &module_file,
+            &rest[0],
+            bound_root,
+            evidence,
+        );
         return;
     }
     // Enum constant: the remainder ends in Enum + VALUE, optionally
@@ -3480,15 +3576,15 @@ fn scan_python_attribute(
             let short = enumeration
                 .rsplit_once('.')
                 .map_or(enumeration.as_str(), |(_, last)| last);
-            if short == enum_name || *enumeration == *enum_name {
-                if module.enums[enumeration].values.contains(value) {
-                    evidence.enum_consts.insert((
-                        module_file.clone(),
-                        enumeration.clone(),
-                        value.clone(),
-                    ));
-                    return;
-                }
+            if (short == enum_name || *enumeration == *enum_name)
+                && module.enums[enumeration].values.contains(value)
+            {
+                evidence.enum_consts.insert((
+                    module_file.clone(),
+                    enumeration.clone(),
+                    value.clone(),
+                ));
+                return;
             }
         }
     }
@@ -3515,7 +3611,7 @@ fn scan_python_attribute(
 
 /// Rank a `via` for deterministic consumer ordering: proven evidence
 /// before name-match, in the design's listing order.
-fn via_rank(via: ConsumerVia) -> u8 {
+const fn via_rank(via: ConsumerVia) -> u8 {
     match via {
         ConsumerVia::Import => 0,
         ConsumerVia::StructLiteral => 1,
@@ -3549,6 +3645,126 @@ fn sort_consumers(consumers: &mut Vec<SchemaConsumer>) {
 /// `consumers()` cannot see whole-module imports (see the module
 /// docs). Generated files are never consumers, and namespace
 /// (wildcard) imports are never evidence.
+/// Coverage notes that do not depend on the join: the
+/// Tier-A-inapplicable note, one assumed-mapping note per
+/// markerless generated file, and one note per file vendoring
+/// well-known protos.
+fn push_coverage_notes(
+    old_schema: &SchemaIndex,
+    new_schema: &SchemaIndex,
+    generated: &[GeneratedFile],
+    coverage: &mut Vec<String>,
+) {
+    if (!old_schema.files.is_empty() || !new_schema.files.is_empty())
+        && generated.is_empty()
+    {
+        coverage.push(
+            "Tier A is inapplicable: no generated Go or Python code \
+             was found in the tree, so no generated-code consumers \
+             could be seen. This report never claims \"0 consumers\" \
+             for a tree it could not see."
+                .to_owned(),
+        );
+    }
+    for file in generated {
+        if file.assumed {
+            coverage.push(format!(
+                "generator mapping assumed for {}: generated-code markers \
+                 not detected, so the pinned mapping applies on the file \
+                 suffix alone",
+                file.path
+            ));
+        }
+    }
+    for (path, file) in &new_schema.files {
+        if file.vendors_well_known {
+            coverage.push(format!(
+                "file {path} vendors well-known protos \
+                 (google/protobuf/) and is indexed like any other file"
+            ));
+        }
+    }
+}
+
+/// Scan every non-generated Go/Python file once for consumer
+/// evidence, returning the per-file evidence and whether any file
+/// imports generated code at all.
+fn scan_consumer_evidence(
+    new_texts: &[(String, String)],
+    generated_files: &BTreeSet<String>,
+    modules_vec: &[GenModule],
+    modules: &BTreeMap<String, GenModule>,
+    new_report: &GraphReport,
+) -> (BTreeMap<String, FileEvidence>, bool) {
+    // Scan every non-generated Go/Python file once.
+    let mut evidence_by_file: BTreeMap<String, FileEvidence> = BTreeMap::new();
+    let mut any_generated_import = false;
+    for (path, text) in new_texts {
+        if generated_files.contains(path) {
+            continue;
+        }
+        let extension = std::path::Path::new(path)
+            .extension()
+            .and_then(|ext| ext.to_str());
+        let is_code = extension.is_some_and(|ext| {
+            ext.eq_ignore_ascii_case("go")
+                || ext.eq_ignore_ascii_case("py")
+                || ext.eq_ignore_ascii_case("pyi")
+        });
+        if !is_code {
+            continue;
+        }
+        let lang =
+            if extension.is_some_and(|ext| ext.eq_ignore_ascii_case("go")) {
+                GeneratedLang::Go
+            } else {
+                GeneratedLang::Python
+            };
+        let mut parser = tree_sitter::Parser::new();
+        let language_fn = match lang {
+            GeneratedLang::Go => tree_sitter_go::LANGUAGE,
+            GeneratedLang::Python => tree_sitter_python::LANGUAGE,
+        };
+        if parser.set_language(&language_fn.into()).is_err() {
+            continue;
+        }
+        let Some(tree) = parser.parse(text, None) else {
+            continue;
+        };
+        let root = tree.root_node();
+        let imports = match lang {
+            GeneratedLang::Go => {
+                let specs = go_imports(&root, text);
+                resolve_go_imports(path, &specs, modules_vec, new_report)
+            }
+            GeneratedLang::Python => {
+                let (plain, from_imports) = python_imports(&root, text);
+                resolve_python_imports(
+                    &plain,
+                    &from_imports,
+                    modules_vec,
+                    new_report,
+                    path,
+                )
+            }
+        };
+        if !imports.is_empty() {
+            any_generated_import = true;
+        }
+        let mut evidence = FileEvidence::default();
+        match lang {
+            GeneratedLang::Go => {
+                scan_go(&root, path, text, &imports, modules, &mut evidence);
+            }
+            GeneratedLang::Python => {
+                scan_python(&root, text, &imports, modules, &mut evidence);
+            }
+        }
+        evidence_by_file.insert(path.clone(), evidence);
+    }
+    (evidence_by_file, any_generated_import)
+}
+
 #[must_use]
 pub fn measure_schema_impact(
     old_schema: &SchemaIndex,
@@ -3567,35 +3783,7 @@ pub fn measure_schema_impact(
     let generated_files: BTreeSet<String> =
         generated.iter().map(|file| file.path.clone()).collect();
 
-    if !old_schema.files.is_empty() || !new_schema.files.is_empty() {
-        if generated.is_empty() {
-            coverage.push(
-                "Tier A is inapplicable: no generated Go or Python code \
-                 was found in the tree, so no generated-code consumers \
-                 could be seen. This report never claims \"0 consumers\" \
-                 for a tree it could not see."
-                    .to_owned(),
-            );
-        }
-    }
-    for file in &generated {
-        if file.assumed {
-            coverage.push(format!(
-                "generator mapping assumed for {}: generated-code markers \
-                 not detected, so the pinned mapping applies on the file \
-                 suffix alone",
-                file.path
-            ));
-        }
-    }
-    for (path, file) in &new_schema.files {
-        if file.vendors_well_known {
-            coverage.push(format!(
-                "file {path} vendors well-known protos \
-                 (google/protobuf/) and is indexed like any other file"
-            ));
-        }
-    }
+    push_coverage_notes(old_schema, new_schema, &generated, &mut coverage);
 
     let modules_vec = build_modules(
         old_schema,
@@ -3628,66 +3816,13 @@ pub fn measure_schema_impact(
         }
     }
 
-    // Scan every non-generated Go/Python file once.
-    let mut evidence_by_file: BTreeMap<String, FileEvidence> = BTreeMap::new();
-    let mut any_generated_import = false;
-    for (path, text) in new_texts {
-        if generated_files.contains(path) {
-            continue;
-        }
-        if !(path.ends_with(".go")
-            || path.ends_with(".py")
-            || path.ends_with(".pyi"))
-        {
-            continue;
-        }
-        let lang = if path.ends_with(".go") {
-            GeneratedLang::Go
-        } else {
-            GeneratedLang::Python
-        };
-        let mut parser = tree_sitter::Parser::new();
-        let language_fn = match lang {
-            GeneratedLang::Go => tree_sitter_go::LANGUAGE,
-            GeneratedLang::Python => tree_sitter_python::LANGUAGE,
-        };
-        if parser.set_language(&language_fn.into()).is_err() {
-            continue;
-        }
-        let Some(tree) = parser.parse(text, None) else {
-            continue;
-        };
-        let root = tree.root_node();
-        let imports = match lang {
-            GeneratedLang::Go => {
-                let specs = go_imports(&root, text);
-                resolve_go_imports(path, &specs, &modules_vec, new_report)
-            }
-            GeneratedLang::Python => {
-                let (plain, from_imports) = python_imports(&root, text);
-                resolve_python_imports(
-                    &plain,
-                    &from_imports,
-                    &modules_vec,
-                    new_report,
-                    path,
-                )
-            }
-        };
-        if !imports.is_empty() {
-            any_generated_import = true;
-        }
-        let mut evidence = FileEvidence::default();
-        match lang {
-            GeneratedLang::Go => {
-                scan_go(&root, path, text, &imports, &modules, &mut evidence);
-            }
-            GeneratedLang::Python => {
-                scan_python(&root, text, &imports, &modules, &mut evidence);
-            }
-        }
-        evidence_by_file.insert(path.clone(), evidence);
-    }
+    let (evidence_by_file, any_generated_import) = scan_consumer_evidence(
+        new_texts,
+        &generated_files,
+        &modules_vec,
+        &modules,
+        new_report,
+    );
     if !modules_vec.is_empty() && !any_generated_import {
         coverage.push(
             "no Go or Python code in the tree imports generated code; \
@@ -3774,6 +3909,61 @@ fn primary_generated_file(
 }
 
 /// Join one pending break to its consumers, tier by tier.
+/// Join one message, enum, or service break to its consumers:
+/// A1 via `consumers()` for Python from-imports, plus the AST
+/// message check for Go and Python plain imports. The symbol is
+/// the short name: that is what import statements bind.
+fn join_element_consumers(
+    target: &BreakTarget,
+    message: &str,
+    modules: &BTreeMap<String, GenModule>,
+    evidence_by_file: &BTreeMap<String, FileEvidence>,
+    new_report: &GraphReport,
+    oracle: &ResolutionOracle<'_>,
+    proven: &mut Vec<SchemaConsumer>,
+) {
+    // A1: consumers() for Python from-imports, plus the AST
+    // message check for Go and Python plain imports. The
+    // symbol is the short name: that is what import
+    // statements bind.
+    let short = message.rsplit_once('.').map_or(message, |(_, last)| last);
+    let is_service = matches!(target, BreakTarget::Service(_));
+    for module in modules.values() {
+        let implements = if is_service {
+            module.services.contains_key(message)
+        } else if matches!(target, BreakTarget::Enum(_)) {
+            module.enums.contains_key(message)
+        } else {
+            module.messages.contains_key(message)
+        };
+        if !implements {
+            continue;
+        }
+        let (direct, _) = consumers(new_report, oracle, &module.file, short);
+        for user in direct {
+            proven.push(SchemaConsumer {
+                file: user.file,
+                via: ConsumerVia::Import,
+            });
+        }
+    }
+    for (file, evidence) in evidence_by_file {
+        let refs = if is_service {
+            &evidence.service_refs
+        } else if matches!(target, BreakTarget::Enum(_)) {
+            &evidence.enum_refs
+        } else {
+            &evidence.message_refs
+        };
+        if refs.iter().any(|(_, qualified)| qualified == message) {
+            proven.push(SchemaConsumer {
+                file: file.clone(),
+                via: ConsumerVia::Import,
+            });
+        }
+    }
+}
+
 fn join_consumers(
     pending: &PendingBreak,
     modules: &BTreeMap<String, GenModule>,
@@ -3787,49 +3977,15 @@ fn join_consumers(
         BreakTarget::Message(message)
         | BreakTarget::Enum(message)
         | BreakTarget::Service(message) => {
-            // A1: consumers() for Python from-imports, plus the AST
-            // message check for Go and Python plain imports. The
-            // symbol is the short name: that is what import
-            // statements bind.
-            let short = message
-                .rsplit_once('.')
-                .map_or(message.as_str(), |(_, last)| last);
-            let is_service = matches!(pending.target, BreakTarget::Service(_));
-            for module in modules.values() {
-                let implements = if is_service {
-                    module.services.contains_key(message)
-                } else if matches!(pending.target, BreakTarget::Enum(_)) {
-                    module.enums.contains_key(message)
-                } else {
-                    module.messages.contains_key(message)
-                };
-                if !implements {
-                    continue;
-                }
-                let (direct, _) =
-                    consumers(new_report, oracle, &module.file, short);
-                for user in direct {
-                    proven.push(SchemaConsumer {
-                        file: user.file,
-                        via: ConsumerVia::Import,
-                    });
-                }
-            }
-            for (file, evidence) in evidence_by_file {
-                let refs = if is_service {
-                    &evidence.service_refs
-                } else if matches!(pending.target, BreakTarget::Enum(_)) {
-                    &evidence.enum_refs
-                } else {
-                    &evidence.message_refs
-                };
-                if refs.iter().any(|(_, qualified)| qualified == message) {
-                    proven.push(SchemaConsumer {
-                        file: file.clone(),
-                        via: ConsumerVia::Import,
-                    });
-                }
-            }
+            join_element_consumers(
+                &pending.target,
+                message,
+                modules,
+                evidence_by_file,
+                new_report,
+                oracle,
+                &mut proven,
+            );
         }
         BreakTarget::Field {
             message,
