@@ -295,6 +295,106 @@ service UserService {
 }
 "#;
 
+/// Like `OLD_PROTO`, but the rpc method carries a body of custom
+/// options — the shape a real repo (metal-stack/api's
+/// `wrongproject.proto`) uses. `skip_balanced` never handled this
+/// until the depth fix: it started at zero after the caller had
+/// already consumed the opener, so the first closer drove it to
+/// minus one and it ran to end of file.
+const OLD_METHOD_BODY_OPTS: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+  string email = 3;
+  string user_id = 4;
+  string nickname = 5 [json_name = "nick"];
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  BLUE = 2;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User) {
+    option (tenant_roles) = TENANT_ROLE_OWNER;
+    option (metalstack.api.v2.auditing) = AUDITING_INCLUDED;
+  }
+}
+"#;
+
+/// The method-body service with the method removed; the service
+/// keeps an option so the body is non-empty and parses.
+const NEW_METHOD_BODY_REMOVED: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+  string email = 3;
+  string user_id = 4;
+  string nickname = 5 [json_name = "nick"];
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1;
+  BLUE = 2;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  option deprecated = true;
+}
+"#;
+
+/// Like `OLD_PROTO`, but the `RED` value carries a custom option.
+const OLD_ENUM_VALUE_OPTS: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+  string email = 3;
+  string user_id = 4;
+  string nickname = 5 [json_name = "nick"];
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  RED = 1 [(custom.opt) = true];
+  BLUE = 2;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+"#;
+
+/// The enum-option proto with `RED` removed.
+const NEW_ENUM_VALUE_OPTS_REMOVED: &str = r#"syntax = "proto3";
+package api;
+message User {
+  string name = 1;
+  int32 age = 2;
+  string email = 3;
+  string user_id = 4;
+  string nickname = 5 [json_name = "nick"];
+}
+enum Color {
+  COLOR_UNSPECIFIED = 0;
+  BLUE = 2;
+}
+message GetUserRequest {
+  string user_id = 1;
+}
+service UserService {
+  rpc GetUser (GetUserRequest) returns (User);
+}
+"#;
+
 const NEW_REMOVE_NAME: &str = r#"syntax = "proto3";
 package api;
 message User {
@@ -2478,6 +2578,64 @@ fn cases() -> Vec<Case> {
             }],
             expected_added: vec![],
             expected_notes: vec!["mapping assumed"],
+        },
+        // 57. Method removed from a service whose method carries a
+        // body of custom options. Regression: skip_balanced started
+        // at depth zero after the caller consumed the opener, so
+        // any method body — and any enum-value option list — failed
+        // the whole parse as "unterminated". Found on a real repo,
+        // not a fixture: metal-stack/api's wrongproject.proto.
+        Case {
+            name: "method_body_options_parse",
+            old_protos: vec![(user, OLD_METHOD_BODY_OPTS)],
+            new_protos: vec![(user, NEW_METHOD_BODY_REMOVED)],
+            texts: vec![(py_grpc, PY_GRPC_GEN), (py_consumer, PY_SERVICE_CALL)],
+            old_edges: vec![
+                edge(py_consumer, py_grpc, "api.user_pb2_grpc", &[]),
+                gap_edge(py_consumer, "api.user_pb2_grpc.UserServiceStub"),
+            ],
+            new_edges: vec![
+                edge(py_consumer, py_grpc, "api.user_pb2_grpc", &[]),
+                gap_edge(py_consumer, "api.user_pb2_grpc.UserServiceStub"),
+            ],
+            expected: vec![ExpBreak {
+                element: "api.UserService.GetUser",
+                change: SchemaChange::Removed,
+                proven: vec![("consumer.py", "method call")],
+                named: vec![],
+                downstream: vec![],
+                note: None,
+            }],
+            expected_added: vec![],
+            expected_notes: vec![],
+        },
+        // 58. Enum value removed where the value carries a custom
+        // option list. Same skip_balanced regression, second call
+        // site: enum-value options also consumed their opener
+        // before calling it.
+        Case {
+            name: "enum_value_options_parse",
+            old_protos: vec![(user, OLD_ENUM_VALUE_OPTS)],
+            new_protos: vec![(user, NEW_ENUM_VALUE_OPTS_REMOVED)],
+            texts: vec![(py_gen, PY_GEN), (py_consumer, PY_FROM_ENUM)],
+            old_edges: vec![
+                edge(py_consumer, py_gen, "api.user_pb2", &[]),
+                gap_edge(py_consumer, "api.user_pb2.Color"),
+            ],
+            new_edges: vec![
+                edge(py_consumer, py_gen, "api.user_pb2", &[]),
+                gap_edge(py_consumer, "api.user_pb2.Color"),
+            ],
+            expected: vec![ExpBreak {
+                element: "api.Color.RED",
+                change: SchemaChange::Removed,
+                proven: vec![("consumer.py", "enum constant")],
+                named: vec![],
+                downstream: vec![],
+                note: None,
+            }],
+            expected_added: vec![],
+            expected_notes: vec![],
         },
     ]
 }
