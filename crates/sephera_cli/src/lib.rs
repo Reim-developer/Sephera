@@ -2,6 +2,7 @@
 
 mod affected_tests;
 mod args;
+mod behavior;
 mod breaking;
 mod budget;
 mod change_impact;

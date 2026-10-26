@@ -202,6 +202,12 @@ pub enum Commands {
         after_long_help = "Examples:\\n  sephera diff --path . --from origin/main\\n  sephera diff --path . --from v1.0.0 --to v2.0.0\\n  sephera diff --path . --from origin/main --format json"
     )]
     Diff(DiffArgs),
+    /// Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes
+    #[command(
+        long_about = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes.\\n\\nTwo detectors, both deliberately narrow, because the general question is undecidable and a detector that answers it by guessing trains a team to ignore it. An argument-order swap is a call site whose arguments are the same multiset in a different order, where the callee's signature did not change — in Rust the swap must also type check at the swapped positions, or it is a compile error, not a silent change. A numeric constant change is a module-level constant whose numeric value changed while still used, in its own file or through an import. String constants are never flagged: a version bump and a rewritten query are indistinguishable statically.\\n\\n`--from` names the older side and is required. `--to` names the newer side; when it is absent, the newer side is the working tree. The analysis needs a git repository. A tree that is not one is an error, not an empty report. This is a report, not a gate: there is no `--fail-on`, because the detector's precision is measured by its corpus, and a gate on an unproven detector would punish asking.",
+        after_long_help = "Examples:\\n  sephera behavior --path . --from origin/main\\n  sephera behavior --path . --from v1.0.0 --to v2.0.0\\n  sephera behavior --path . --from origin/main --format json"
+    )]
+    Behavior(BehaviorArgs),
     /// Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree
     #[command(
         long_about = "Dry-run a rename or move: what a real rename would have to touch, and what would block it, without editing the tree.\\n\\nA rename is the most common refactor and the one taken on faith: the tool renames the declaration and every import it can find, and the breakage shows up in CI. This measures the rename beforehand. The consumer set is exactly `breaking`'s — a resolved edge to the declaring file naming the symbol, an unresolved item half whose parent statement lands there, a namespace import of the whole file — because a consumer is a consumer whether the symbol broke or is about to move. What `breaking` cannot say, this adds: the destination collision. Renaming onto a name the destination file already declares is a duplicate definition in every language, so it blocks the rename outright; a direct consumer that already declares the new name is a shadowing warning instead, because the severity is language dependent.\\n\\nOnly Rust and Python collect declarations today, so only their symbols can be renamed. The analysis needs one tree, not a git repository: it simulates against the working tree as it stands.",
@@ -1274,6 +1280,52 @@ pub enum MergeOutputFormat {
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
 pub enum DiffOutputFormat {
     /// Markdown list of changed symbols.
+    #[value(name = "markdown", help = "Render the report as Markdown.")]
+    Markdown,
+    /// Structured JSON.
+    #[value(name = "json", help = "Render the report as JSON.")]
+    Json,
+}
+
+tree_command_args!(
+    #[doc = "Compare two refs and report the changes that still compile but change behaviour: swapped call arguments and numeric constant changes."]
+    BehaviorArgs {
+        /// The older reference: the side symbols are compared from
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The older reference to compare from.",
+        long_help = "The older reference: a branch, tag, or commit the symbols are compared from. Required, because a comparison without a starting point compares against nothing. `origin/main` is the usual spelling for a branch review."
+    )]
+    pub from: String,
+
+        /// The newer reference; when absent, the working tree
+    #[arg(
+        long,
+        value_name = "REF",
+        help = "The newer reference to compare to; the working tree when absent.",
+        long_help = "The newer reference to compare to. When absent, the newer side is the working tree itself — staged, unstaged, and untracked files included — which is the form a branch review takes before it is pushed. When present, both sides are checked out into temporary worktrees, so the working tree is left untouched."
+    )]
+    pub to: Option<String>,
+
+        /// Output format for the report
+    #[arg(
+        long,
+        value_enum,
+        default_value = "markdown",
+        value_name = "FORMAT",
+        help = "Output format for the report. Supports markdown and json.",
+        long_help = "Output format for the report. Supports markdown and json."
+    )]
+    pub format: BehaviorOutputFormat,
+
+    }
+);
+
+/// Output format for the behavior report.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+pub enum BehaviorOutputFormat {
+    /// Markdown report with the count first.
     #[value(name = "markdown", help = "Render the report as Markdown.")]
     Markdown,
     /// Structured JSON.
