@@ -662,6 +662,35 @@ pub struct TestPriorityInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `schema_impact` tool.
+///
+/// The comparison is between two refs of one local repository, so
+/// there is no `url` argument: a remote checkout is one ref already
+/// and has no second ref to compare against. `from` is required;
+/// `to` defaults to the working tree.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct SchemaImpactInput {
+    /// Absolute or relative path to the repository root.
+    pub path: Option<String>,
+    /// The older reference: a branch, tag, or commit the schema
+    /// elements are compared from.
+    pub from: String,
+    /// The newer reference to compare to. When absent, the working
+    /// tree itself — staged, unstaged, and untracked files included.
+    pub to: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root, so `dist/**` and `**/node_modules/**` both exclude a whole
+    /// tree. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

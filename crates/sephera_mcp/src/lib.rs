@@ -30,6 +30,7 @@
 //! | `untested` | Report the declared symbols no test exercises, through the import graph |
 //! | `merge` | Predict the merges git completes cleanly but that break the build, across base, ours, theirs |
 //! | `test_priority` | Rank the untested symbols by what hurts most: downstream × churn × coupling |
+//! | `schema_impact` | Compare two refs: which schema elements changed, joined to the in-repo code that consumes exactly those elements |
 //!
 //! Every tool accepts `ignore` patterns and a `no_gitignore` switch. Both match
 //! the CLI exactly: the same arguments produce the same file set, because an

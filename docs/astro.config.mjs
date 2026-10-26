@@ -38,6 +38,7 @@ export default defineConfig({
 						{ slug: 'commands/archaeology' },
 						{ slug: 'commands/untested' },
 						{ slug: 'commands/test-priority' },
+						{ slug: 'commands/schema-impact' },
 						{ slug: 'commands/merge' },
 						{ slug: 'commands/guard' },
 						{ slug: 'commands/watch' },
