@@ -271,6 +271,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "merge",
             "review",
             "risk",
+            "schema_impact",
             "simulate",
             "symbols",
             "test_priority",

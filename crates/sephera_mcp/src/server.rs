@@ -24,7 +24,7 @@ use sephera_graph::{
     dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
-    review, risk, simulate, symbol_impact, test_priority,
+    review, risk, schema, simulate, symbol_impact, test_priority,
     types::{GraphFormat, GraphQuery},
     untested,
 };
@@ -44,8 +44,8 @@ use crate::{
         AffectedTestsInput, ArchaeologyInput, BehaviorInput, BreakingInput,
         ContextInput, CouplingInput, DeadInput, DiffInput, GraphInput,
         ImpactInput, LocInput, MergeInput, ReviewInput, RiskInput,
-        SimulateInput, SymbolsInput, TestPriorityInput, UntestedInput,
-        WhyInput,
+        SchemaImpactInput, SimulateInput, SymbolsInput, TestPriorityInput,
+        UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1627,6 +1627,156 @@ impl SepheraServer {
             )),
         }
     }
+
+    /// Compare two refs and report which schema elements changed,
+    /// joined to the in-repo code that consumes exactly those
+    /// elements, through the generated-code boundary. The measurement
+    /// is `sephera_graph::schema`'s, shared with the `schema-impact`
+    /// command, so the two cannot disagree. `from` names the older
+    /// side and is required; `to` names the newer side, and when it
+    /// is absent the newer side is the working tree. Only proven
+    /// consumers (message imports, field-anchored literals and
+    /// keywords, enum constants, method calls) are gate-grade
+    /// evidence; name-match consumers are flagged weaker evidence and
+    /// never fail a gate. Proto3 only: a proto2 file errors naming
+    /// the file, never a partial report. Requires a git repository;
+    /// a tree without one is an error rather than an empty report.
+    /// Use format=markdown for a compact summary or json for the
+    /// entries as data.
+    #[tool(
+        name = "schema_impact",
+        description = "Compare two refs and report which schema elements changed, joined to the in-repo code that consumes exactly those elements, through the generated-code boundary. `from` names the older side and is required; `to` names the newer side, and when it is absent the newer side is the working tree. Only proven consumers (message imports, field-anchored literals and keywords, enum constants, method calls) are gate-grade evidence; name-match consumers are flagged weaker evidence and never fail a gate. Proto3 only: a proto2 file errors naming the file, never a partial report. Requires a git repository; a tree without one is an error rather than an empty report. Use format=markdown for a compact summary or json for the entries as data."
+    )]
+    async fn schema_impact(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<SchemaImpactInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        // A tree that is not a git repository has no refs to compare.
+        if repo_toplevel(&source.analysis_path).is_none() {
+            return Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "schema_impact needs a git repository; {} is not inside one",
+                    source.analysis_path.display()
+                ),
+                None,
+            ));
+        }
+
+        let old_worktree = checkout_worktree(&source.repo_root, &param.from)
+            .map_err(map_internal_error("old ref checkout failed"))?;
+        let (old_report, _) = build_old_side(
+            old_worktree.path(),
+            &source,
+            param.to.is_none(),
+            &ignore_matcher,
+        )?;
+        let old_base = if param.to.is_none() {
+            old_worktree.path().join(analysis_prefix(&source))
+        } else {
+            old_worktree.path().to_path_buf()
+        };
+        let old_schema = schema::collect_schema_files(&old_base, &ignore_matcher)
+            .and_then(|files| schema::build_schema_index(&files))
+            .map_err(|error| {
+                map_internal_error("old schema index build failed")(
+                    anyhow::Error::new(error),
+                )
+            })?;
+
+        let (new_report, new_schema, new_texts) = if let Some(to) = &param.to
+        {
+            let new_worktree = checkout_worktree(&source.repo_root, to)
+                .map_err(map_internal_error("new ref checkout failed"))?;
+            let built = build_graph_with_declarations(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("new graph build failed"))?;
+            let new_schema =
+                schema::collect_schema_files(new_worktree.path(), &ignore_matcher)
+                    .and_then(|files| schema::build_schema_index(&files))
+                    .map_err(|error| {
+                        map_internal_error("new schema index build failed")(
+                            anyhow::Error::new(error),
+                        )
+                    })?;
+            let new_texts = schema::collect_consumer_texts(
+                new_worktree.path(),
+                &ignore_matcher,
+            )
+            .map_err(|error| {
+                map_internal_error("new consumer texts build failed")(
+                    anyhow::Error::new(error),
+                )
+            })?;
+            drop(new_worktree);
+            (built.0, new_schema, new_texts)
+        } else {
+            let built = build_graph_with_declarations(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(map_internal_error("working tree graph build failed"))?;
+            let new_schema = schema::collect_schema_files(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .and_then(|files| schema::build_schema_index(&files))
+            .map_err(|error| {
+                map_internal_error("new schema index build failed")(
+                    anyhow::Error::new(error),
+                )
+            })?;
+            let new_texts = schema::collect_consumer_texts(
+                &source.analysis_path,
+                &ignore_matcher,
+            )
+            .map_err(|error| {
+                map_internal_error("new consumer texts build failed")(
+                    anyhow::Error::new(error),
+                )
+            })?;
+            (built.0, new_schema, new_texts)
+        };
+        drop(old_worktree);
+
+        let to_label = param.to.as_deref().unwrap_or("working tree");
+        let measured = schema::measure_schema_impact(
+            &old_schema,
+            &new_schema,
+            &old_report,
+            &new_report,
+            &new_texts,
+            &param.from,
+            to_label,
+        );
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(schema_impact_markdown(&measured)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported schema_impact format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
 }
 
 /// Render an untested report as Markdown for an agent's context window.
@@ -1724,6 +1874,92 @@ fn test_priority_markdown(
             report.symbols.len(),
             report.untested_total
         );
+    }
+    output
+}
+
+/// Render a schema-impact report as Markdown for an agent's context
+/// window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's. Proven consumers come first and
+/// name-match consumers are explicitly labelled weaker evidence;
+/// the empty state says the same "No schema breaks." the CLI prints.
+fn schema_impact_markdown(report: &schema::SchemaImpactReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# Schema impact: {} → {}\n",
+        report.from_ref, report.to_ref
+    );
+
+    if report.breaks.is_empty() {
+        let _ = writeln!(output, "No schema breaks.");
+        return output;
+    }
+
+    for broken in &report.breaks {
+        let _ = writeln!(
+            output,
+            "## `{}` — {}",
+            broken.element,
+            broken.change.describe()
+        );
+        let _ = writeln!(output, "Schema file: `{}`", broken.schema_file);
+        if let Some(note) = &broken.note {
+            let _ = writeln!(output, "Note: {note}");
+        }
+        if broken.proven.is_empty() {
+            let _ = writeln!(output, "No proven consumers.");
+        } else {
+            let _ = writeln!(output, "Proven consumers:");
+            for consumer in &broken.proven {
+                let _ = writeln!(
+                    output,
+                    "- `{}` — {}",
+                    consumer.file,
+                    consumer.via.describe()
+                );
+            }
+        }
+        if !broken.named.is_empty() {
+            let _ = writeln!(
+                output,
+                "Name-match consumers (weaker evidence — receiver \
+                 unknown, never gate-grade):"
+            );
+            for consumer in &broken.named {
+                let _ = writeln!(
+                    output,
+                    "- `{}` — {}",
+                    consumer.file,
+                    consumer.via.describe()
+                );
+            }
+        }
+        if !broken.downstream.is_empty() {
+            let _ = writeln!(output, "Downstream files:");
+            for file in &broken.downstream {
+                let _ = writeln!(output, "- `{file}`");
+            }
+        }
+        let _ = writeln!(output);
+    }
+
+    if !report.added.is_empty() {
+        let _ = writeln!(output, "Added (informational):");
+        for element in &report.added {
+            let _ = writeln!(
+                output,
+                "- `{}` in `{}`",
+                element.element, element.schema_file
+            );
+        }
+    }
+    for note in &report.coverage {
+        let _ = writeln!(output, "Coverage note: {note}");
     }
     output
 }
