@@ -84,6 +84,10 @@ pub struct TestPriorityReport {
     /// The untested symbols, highest score first. Zero-downstream
     /// symbols score 0 and rank last, but stay listed.
     pub symbols: Vec<PrioritizedSymbol>,
+    /// The untested set's full size, before any `--top` truncation:
+    /// without it a truncated ranking would report its own head
+    /// count as the untested count.
+    pub untested_total: usize,
     /// Symbols exercised directly, named by a test file itself.
     pub tested_direct: usize,
     /// Symbols exercised indirectly, named by a file the tests reach.
@@ -191,12 +195,14 @@ pub fn measure_test_priority(
             .then_with(|| left.file.cmp(&right.file))
             .then_with(|| left.symbol.cmp(&right.symbol))
     });
+    let untested_total = symbols.len();
     if let Some(limit) = options.limit {
         symbols.truncate(limit);
     }
 
     TestPriorityReport {
         symbols,
+        untested_total,
         tested_direct: untested.tested_direct,
         tested_indirect: untested.tested_indirect,
         commits_scanned: coupling.commits_scanned,

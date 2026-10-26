@@ -30,12 +30,12 @@ pub fn render_markdown(report: &TestPriorityReport) -> String {
         .expect("writing to a String must succeed");
     writeln!(
         output,
-        "History: {} commits scanned, {} counted. Score is downstream \\\n         × churn × (1 + coupled partners); the ranking is a heuristic, \\\n         not a probability. {} symbol(s) exercised directly by a test, {} \\\n         exercised indirectly through code the tests reach, {} untested \\\n         and ranked below — zero-downstream symbols score 0 and rank \\\n         last, but stay listed.",
+        "History: {} commits scanned, {} counted. Score is downstream \\\n         × churn × (1 + coupled partners); the ranking is a heuristic, \\\n         not a probability. {} symbol(s) exercised directly by a test, {} \\\n         exercised indirectly through code the tests reach, {} untested \\\n         in total and ranked below — zero-downstream symbols score 0 and \\\n         rank last, but stay listed.",
         report.commits_scanned,
         report.commits_counted,
         report.tested_direct,
         report.tested_indirect,
-        report.symbols.len()
+        report.untested_total
     )
     .expect("writing to a String must succeed");
 
@@ -60,6 +60,15 @@ pub fn render_markdown(report: &TestPriorityReport) -> String {
             symbol.downstream,
             symbol.churn,
             symbol.coupled_partners
+        )
+        .expect("writing to a String must succeed");
+    }
+    if report.symbols.len() < report.untested_total {
+        writeln!(
+            output,
+            "\nShowing {} of {} — rerun without --top for the full ranking.",
+            report.symbols.len(),
+            report.untested_total
         )
         .expect("writing to a String must succeed");
     }
@@ -92,6 +101,7 @@ mod tests {
                 coupled_partners: 1,
                 score: 72,
             }],
+            untested_total: 1,
             tested_direct: 3,
             tested_indirect: 5,
             commits_scanned: 500,
@@ -112,9 +122,21 @@ mod tests {
     }
 
     #[test]
+    fn a_truncated_ranking_says_how_many_it_hides() {
+        let truncated = TestPriorityReport {
+            untested_total: 2629,
+            ..report()
+        };
+        let rendered = render_markdown(&truncated);
+        assert!(rendered.contains("2629 untested in total"), "{rendered}");
+        assert!(rendered.contains("Showing 1 of 2629"), "{rendered}");
+    }
+
+    #[test]
     fn an_empty_ranking_says_what_it_means() {
         let empty = TestPriorityReport {
             symbols: Vec::new(),
+            untested_total: 0,
             ..report()
         };
         let rendered = render_markdown(&empty);

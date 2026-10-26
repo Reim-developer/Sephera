@@ -123,6 +123,7 @@ fn top_truncates_from_the_head() {
     let symbols = parsed["symbols"].as_array().expect("symbols");
     assert_eq!(symbols.len(), 1);
     assert_eq!(symbols[0]["symbol"], "add");
+    assert_eq!(parsed["untested_total"], 3);
 }
 
 #[test]

@@ -1937,6 +1937,7 @@ async fn test_priority_tool_ranks_untested_symbols() {
         .expect("test_priority output must be JSON");
     let symbols = parsed["symbols"].as_array().expect("symbols");
     assert_eq!(symbols.len(), 3, "{output}");
+    assert_eq!(parsed["untested_total"], 3);
     assert_eq!(symbols[0]["symbol"], "add");
     assert_eq!(symbols[0]["downstream"], 2);
     assert_eq!(symbols[0]["score"], 4);

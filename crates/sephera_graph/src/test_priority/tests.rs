@@ -348,4 +348,7 @@ fn limit_truncates_from_the_head() {
     );
     assert_eq!(measured.symbols.len(), 1);
     assert_eq!(measured.symbols[0].symbol, "add");
+    // The head count is not the untested count: the report keeps
+    // the full set's size beside the truncated list.
+    assert_eq!(measured.untested_total, 2);
 }

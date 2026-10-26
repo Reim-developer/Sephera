@@ -1686,13 +1686,13 @@ fn test_priority_markdown(
          × churn × (1 + coupled partners); the ranking is a heuristic, \
          not a probability. {} symbol(s) exercised directly by a test, {} \
          exercised indirectly through code the tests reach, {} untested \
-         and ranked below — zero-downstream symbols score 0 and rank \
-         last, but stay listed.",
+         in total and ranked below — zero-downstream symbols score 0 and \
+         rank last, but stay listed.",
         report.commits_scanned,
         report.commits_counted,
         report.tested_direct,
         report.tested_indirect,
-        report.symbols.len()
+        report.untested_total
     );
 
     if report.symbols.is_empty() {
@@ -1715,6 +1715,14 @@ fn test_priority_markdown(
             symbol.downstream,
             symbol.churn,
             symbol.coupled_partners
+        );
+    }
+    if report.symbols.len() < report.untested_total {
+        let _ = writeln!(
+            output,
+            "\nShowing {} of {} — rerun without top for the full ranking.",
+            report.symbols.len(),
+            report.untested_total
         );
     }
     output
