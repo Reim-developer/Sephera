@@ -1708,6 +1708,85 @@ async fn behavior_tool_flags_a_swap_in_json_and_markdown() {
     );
 }
 
+fn archaeology_input(dir: &Path, format: Option<String>) -> ArchaeologyInput {
+    ArchaeologyInput {
+        path: Some(dir.to_string_lossy().into_owned()),
+        file: "new.py".to_owned(),
+        symbol: "new_name".to_owned(),
+        at: None,
+        window: None,
+        ignore: None,
+        no_gitignore: None,
+        format,
+    }
+}
+
+/// A repository where `old_name` is born, renamed to `new_name`,
+/// then moved to a new file — the same consumer throughout, so
+/// each step is proven by consumer continuity.
+fn repo_with_rename_and_move() -> tempfile::TempDir {
+    let temp_dir = tempfile::tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "lib.py", b"def old_name(a, b):\n    return a - b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import old_name\n\n\nprint(old_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "born"]);
+    write_file(dir, "lib.py", b"def new_name(a, b):\n    return a - b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from lib import new_name\n\n\nprint(new_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "renamed"]);
+    std::fs::remove_file(dir.join("lib.py")).unwrap();
+    write_file(dir, "new.py", b"def new_name(a, b):\n    return a - b\n");
+    write_file(
+        dir,
+        "user.py",
+        b"from new import new_name\n\n\nprint(new_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "moved"]);
+    temp_dir
+}
+
+#[tokio::test]
+async fn archaeology_tool_traces_birth_rename_and_move() {
+    let repo = repo_with_rename_and_move();
+    let server = SepheraServer::new();
+
+    let output = server
+        .archaeology(param_for(archaeology_input(repo.path(), None)))
+        .await
+        .expect("archaeology tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("archaeology output must be JSON");
+    let steps = parsed["steps"].as_array().expect("steps is an array");
+    assert_eq!(steps.len(), 3, "{output}");
+    assert_eq!(steps[0]["kind"], "born", "{output}");
+    assert_eq!(steps[1]["kind"], "renamed", "{output}");
+    assert_eq!(steps[2]["kind"], "moved", "{output}");
+    assert_eq!(parsed["origin_found"], true, "{output}");
+
+    let markdown = server
+        .archaeology(param_for(archaeology_input(
+            repo.path(),
+            Some("markdown".to_owned()),
+        )))
+        .await
+        .expect("archaeology tool should succeed for a temp repo");
+    assert!(
+        markdown.contains("Moved `new_name` from `lib.py` to `new.py`."),
+        "{markdown}"
+    );
+}
+
 /// A plain tree, no git repository: `lib.py` declares `add`,
 /// `user.py` imports it, `other.py` already declares `sum`.
 fn tree_with_consumer() -> tempfile::TempDir {

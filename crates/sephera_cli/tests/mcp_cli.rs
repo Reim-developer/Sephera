@@ -258,6 +258,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
         names,
         vec![
             "affected_tests",
+            "archaeology",
             "behavior",
             "breaking",
             "context",

@@ -20,8 +20,8 @@ use rmcp::{
 };
 
 use sephera_graph::{
-    behavior, blast_radius, breaking, coupling, dead, dependency_path, diff,
-    merge,
+    archaeology, behavior, blast_radius, breaking, coupling, dead,
+    dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, simulate, symbol_impact,
@@ -31,8 +31,8 @@ use sephera_graph::{
 use sephera_runtime::{
     ContextCommandInput, ResolvedContextCommand, ResolvedContextOptions,
     ResolvedSource, SourceRequest, build_context_report, changed_files,
-    checkout_worktree, merge_base, recent_commit_files,
-    resolve_context_command, resolve_source,
+    checkout_worktree, commit_meta, first_parent_commit, log_commits_for_file,
+    merge_base, recent_commit_files,
 };
 use sephera_scan::{CodeLoc, IgnoreMatcher};
 use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
@@ -40,10 +40,10 @@ use sephera_symbols::{SymbolAnalyzer, SymbolDetail};
 use crate::{
     error::{build_ignore_matcher, map_internal_error, serialize_json},
     input::{
-        AffectedTestsInput, BehaviorInput, BreakingInput, ContextInput,
-        CouplingInput, DeadInput, DiffInput, GraphInput, ImpactInput, LocInput,
-        MergeInput, ReviewInput, RiskInput, SimulateInput, SymbolsInput,
-        UntestedInput, WhyInput,
+        AffectedTestsInput, ArchaeologyInput, BehaviorInput, BreakingInput,
+        ContextInput, CouplingInput, DeadInput, DiffInput, GraphInput,
+        ImpactInput, LocInput, MergeInput, ReviewInput, RiskInput,
+        SimulateInput, SymbolsInput, UntestedInput, WhyInput,
     },
     render::render_context_markdown,
 };
@@ -1289,6 +1289,139 @@ impl SepheraServer {
         }
     }
 
+    /// Trace one symbol through history: every rename and move,
+    /// its former names, and who changed it. The measurement is
+    /// `sephera_graph::archaeology`'s, shared with the
+    /// `archaeology` command, so the two cannot disagree.
+    /// Identity is proven by consumer continuity, never by name
+    /// similarity, and a trail that stops early says why rather
+    /// than implying its oldest step is the birth. A symbol that
+    /// is not declared at the starting ref is a caller error, not
+    /// an empty trail.
+    #[tool(
+        name = "archaeology",
+        description = "Trace one symbol through history: every rename and move, its former names, and who changed it. Identity is proven by consumer continuity, never by name similarity: a symbol in one commit is the same symbol as one in an older commit when exactly one declared symbol in the older tree has the same direct consumer set. A rename that also gains or loses a consumer in the same commit is not proven and ends the trail, and an unconsumed symbol's rename cannot be proven at all, so the trail stops as ambiguous rather than guessing. First-parent only; one whole-tree build happens per commit that touched the tracked file. Use format=markdown for a compact summary or json for the steps as data."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn archaeology(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<ArchaeologyInput>,
+    ) -> Result<String, rmcp::ErrorData> {
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: None,
+                git_ref: None,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+        let repo_root = source.repo_root;
+
+        let start_ref = param.at.as_deref().unwrap_or("HEAD");
+        let start_meta = commit_meta(&repo_root, start_ref)
+            .map_err(map_internal_error("starting ref resolution failed"))?;
+        let start = archaeology::HistoryCommit {
+            hash: start_meta.hash,
+            author: start_meta.author,
+            date: start_meta.date,
+            message: start_meta.message,
+        };
+
+        let log = |from_ref: &str, file: &str| {
+            log_commits_for_file(&repo_root, from_ref, file)
+                .map(|commits| {
+                    commits
+                        .into_iter()
+                        .map(|meta| archaeology::HistoryCommit {
+                            hash: meta.hash,
+                            author: meta.author,
+                            date: meta.date,
+                            message: meta.message,
+                        })
+                        .collect()
+                })
+                .map_err(|error| {
+                    archaeology::ArchaeologyError::History(error.to_string())
+                })
+        };
+        let build = |commit: &archaeology::HistoryCommit| {
+            let worktree = checkout_worktree(&repo_root, &commit.hash)
+                .map_err(|error| {
+                    archaeology::ArchaeologyError::Build(error.to_string())
+                })?;
+            let (report, index) =
+                build_graph_with_declarations(worktree.path(), &ignore_matcher)
+                    .map_err(|error| {
+                        archaeology::ArchaeologyError::Build(error.to_string())
+                    })?;
+            Ok(archaeology::HistorySnapshot {
+                commit: commit.clone(),
+                index,
+                report,
+            })
+        };
+        let parent = |hash: &str| {
+            first_parent_commit(&repo_root, hash)
+                .map(|parent| {
+                    parent.map(|meta| archaeology::HistoryCommit {
+                        hash: meta.hash,
+                        author: meta.author,
+                        date: meta.date,
+                        message: meta.message,
+                    })
+                })
+                .map_err(|error| {
+                    archaeology::ArchaeologyError::History(error.to_string())
+                })
+        };
+
+        let measured = archaeology::trace_symbol(
+            &start,
+            &param.file,
+            &param.symbol,
+            param.window.unwrap_or(500),
+            &log,
+            &build,
+            &parent,
+        )
+        .map_err(|error| match error {
+            archaeology::ArchaeologyError::SymbolNotFound => {
+                rmcp::ErrorData::invalid_params(
+                    format!(
+                        "`{}` is not declared in `{}` at `{start_ref}`",
+                        param.symbol, param.file
+                    ),
+                    None,
+                )
+            }
+            other => rmcp::ErrorData::internal_error(
+                format!("archaeology failed: {other}"),
+                None,
+            ),
+        })?;
+        let built = ArchaeologyReport::from_measured(&measured);
+
+        match param.format.as_deref() {
+            None | Some("json") => serialize_json(&built),
+            Some("markdown") => Ok(archaeology_markdown(&built)),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported archaeology format `{other}`; expected \
+                     json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
     /// Dry-run a rename or move: what a real rename would have
     /// to touch, and what would block it, without editing the
     /// tree. The measurement is `sephera_graph::simulate`'s,
@@ -2207,6 +2340,152 @@ impl BreakingReport {
     }
 }
 
+/// The trail of one symbol through history, as the `archaeology`
+/// tool renders it.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ArchaeologyReport {
+    /// The file the symbol was queried in.
+    pub file: String,
+    /// The name the symbol was queried by.
+    pub symbol: String,
+    /// The steps, oldest first.
+    pub steps: Vec<ArchaeologyStepReport>,
+    /// True when the trail reached a birth.
+    pub origin_found: bool,
+    /// Why the trail ends without a birth, when it does.
+    pub note: Option<String>,
+}
+
+/// One step of the trail, as the `archaeology` tool renders it.
+///
+/// The shape is flat on purpose: `kind` says which shape the
+/// other fields carry — `born` fills neither `from_*` field, the
+/// other kinds fill both — and the absent fields stay null rather
+/// than disappearing.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct ArchaeologyStepReport {
+    /// `born`, `renamed`, `moved`, or `moved_and_renamed`.
+    pub kind: String,
+    /// The commit that introduced the `to` identity.
+    pub commit: String,
+    /// The commit's author.
+    pub author: String,
+    /// The commit's date.
+    pub date: String,
+    /// The commit's subject line.
+    pub message: String,
+    /// The file the symbol lived in before this step, absent for
+    /// a birth.
+    pub from_file: Option<String>,
+    /// The name the symbol had before this step, absent for a
+    /// birth.
+    pub from_name: Option<String>,
+    /// The file the symbol lives in from this step on.
+    pub to_file: String,
+    /// The name the symbol has from this step on.
+    pub to_name: String,
+}
+
+impl ArchaeologyReport {
+    fn from_measured(measured: &archaeology::ArchaeologyReport) -> Self {
+        Self {
+            file: measured.file.clone(),
+            symbol: measured.symbol.clone(),
+            steps: measured
+                .steps
+                .iter()
+                .map(|step| {
+                    let kind = match step.kind {
+                        archaeology::ArchaeologyKind::Born => "born",
+                        archaeology::ArchaeologyKind::Renamed => "renamed",
+                        archaeology::ArchaeologyKind::Moved => "moved",
+                        archaeology::ArchaeologyKind::MovedAndRenamed => {
+                            "moved_and_renamed"
+                        }
+                    };
+                    ArchaeologyStepReport {
+                        kind: kind.to_owned(),
+                        commit: step.commit.clone(),
+                        author: step.author.clone(),
+                        date: step.date.clone(),
+                        message: step.message.clone(),
+                        from_file: step.from_file.clone(),
+                        from_name: step.from_name.clone(),
+                        to_file: step.to_file.clone(),
+                        to_name: step.to_name.clone(),
+                    }
+                })
+                .collect(),
+            origin_found: measured.origin_found,
+            note: measured.note.clone(),
+        }
+    }
+}
+
+/// Render an archaeology report as Markdown for an agent's
+/// context window.
+///
+/// The wording follows the CLI's report, as the other tools'
+/// Markdown follows its command's.
+fn archaeology_markdown(report: &ArchaeologyReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let _ = writeln!(
+        output,
+        "# History of `{}` in `{}`\n",
+        report.symbol, report.file
+    );
+    if report.steps.is_empty() {
+        let _ = writeln!(output, "No step of the trail could be proven.");
+    }
+    for step in &report.steps {
+        let detail = match step.kind.as_str() {
+            "born" => {
+                format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
+            }
+            "renamed" => {
+                format!(
+                    "Renamed `{}` → `{}` in `{}`.",
+                    step.from_name.as_deref().unwrap_or("?"),
+                    step.to_name,
+                    step.to_file
+                )
+            }
+            "moved" => {
+                format!(
+                    "Moved `{}` from `{}` to `{}`.",
+                    step.to_name,
+                    step.from_file.as_deref().unwrap_or("?"),
+                    step.to_file
+                )
+            }
+            _ => {
+                format!(
+                    "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
+                    step.from_name.as_deref().unwrap_or("?"),
+                    step.from_file.as_deref().unwrap_or("?"),
+                    step.to_name,
+                    step.to_file
+                )
+            }
+        };
+        let _ = writeln!(
+            output,
+            "- {detail} — {} by {} ({}): {}",
+            step.commit, step.author, step.date, step.message
+        );
+    }
+    if report.origin_found {
+        let _ = writeln!(output, "\nThe trail reaches the symbol's birth.");
+    } else if let Some(note) = &report.note {
+        let _ = writeln!(output, "\nNote: {note}");
+    }
+    output
+}
+
+/// The silent behaviour changes between two refs, as the
+/// `behavior` tool renders it.
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct BehaviorReport {
     /// The older ref, as the caller spelled it.
