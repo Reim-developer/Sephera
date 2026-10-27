@@ -111,3 +111,41 @@ fn unknown_symbol_is_an_error_not_an_empty_report() {
         "{stderr}"
     );
 }
+
+#[test]
+fn regression_simulate_dot_slash_and_absolute_spellings() {
+    let tree = tree_with_consumer();
+    let dot_slash = run_simulate(
+        tree.path(),
+        &["./lib.py", "--symbol", "add", "--to", "total"],
+    );
+    assert!(
+        dot_slash.status.success(),
+        "{}",
+        String::from_utf8_lossy(&dot_slash.stderr)
+    );
+    let absolute = tree.path().join("lib.py");
+    let absolute_output = run_simulate(
+        tree.path(),
+        &[
+            absolute.to_str().unwrap(),
+            "--symbol",
+            "add",
+            "--to",
+            "total",
+        ],
+    );
+    assert!(
+        absolute_output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&absolute_output.stderr)
+    );
+    for output in [&dot_slash, &absolute_output] {
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        assert!(
+            stdout.contains("Safe to rename: 1 file(s) must update"),
+            "{stdout}"
+        );
+        assert!(stdout.contains("`user.py` (lib.add)."), "{stdout}");
+    }
+}

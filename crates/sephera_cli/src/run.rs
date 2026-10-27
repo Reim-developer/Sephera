@@ -1207,6 +1207,38 @@ fn normalize_archaeology_file(source: &ResolvedSource, file: &str) -> String {
     prefix.join(path).to_string_lossy().replace('\\', "/")
 }
 
+/// The graph's spelling of a file inside one analysed tree.
+///
+/// The graph spells files relative to the analysis root, so a
+/// `./`-prefixed or absolute spelling of a file that is in the
+/// tree names a declaration the exact-match lookup then misses,
+/// and the error claims the file declares nothing — wrong about
+/// a file that does. When the spelling resolves to a real file
+/// under the analysis root, it is rewritten to that relative
+/// spelling; anything else passes through untouched, so a missing
+/// file still errors exactly as before.
+#[must_use]
+fn normalize_tree_file(analysis_path: &Path, file: &str) -> String {
+    let candidate = Path::new(file);
+    let absolute = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        analysis_path.join(candidate)
+    };
+    if let (Ok(canonical), Ok(base)) = (
+        std::fs::canonicalize(&absolute),
+        std::fs::canonicalize(analysis_path),
+    ) && let Ok(relative) = canonical.strip_prefix(&base)
+    {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    let mut stripped = file;
+    while let Some(rest) = stripped.strip_prefix("./") {
+        stripped = rest;
+    }
+    stripped.replace('\\', "/")
+}
+
 /// The base the old side of a comparison is built from.
 ///
 /// When `scoped` is set, the build is restricted to the analysis
@@ -1906,14 +1938,21 @@ async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
 
     // A simulated rename that names nothing is a typo, not a
     // report: the measurement errors, and the error names the file
-    // and symbol the caller spelled.
+    // and symbol. The file spellings are normalised to the
+    // graph's first, so a `./`-prefixed or absolute spelling of a
+    // file that is in the tree is not misread as naming nothing.
+    let file = normalize_tree_file(&source.analysis_path, &arguments.file);
+    let to_file = arguments
+        .to_file
+        .as_deref()
+        .map(|to| normalize_tree_file(&source.analysis_path, to));
     let measured = simulate::measure_simulate(
         &index,
         &report,
-        &arguments.file,
+        &file,
         &arguments.symbol,
         &arguments.to,
-        arguments.to_file.as_deref(),
+        to_file.as_deref(),
     )?;
 
     let rendered = match arguments.format {
