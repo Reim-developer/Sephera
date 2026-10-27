@@ -844,10 +844,7 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
         &CliReporter(&progress),
     )?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
     let measured = coupling::measure_coupling(
         &report,
@@ -926,10 +923,7 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
         &CliReporter(&progress),
     )?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased_commits = coupling::rebase_commit_paths(&commits, &base_prefix);
     let rebased_changed = review::rebase_changed_paths(&changed, &base_prefix);
     let measured = review::measure_review(
@@ -1018,10 +1012,7 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
         &CliReporter(&progress),
     )?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
     let measured = risk::measure_risk(
         &report,
@@ -1141,6 +1132,28 @@ fn analysis_prefix(source: &ResolvedSource) -> PathBuf {
         return PathBuf::new();
     };
     sarif::relative_path(&canonical, &toplevel)
+}
+
+/// The `/`-separated repo-relative prefix history spellings carry
+/// but graph spellings do not, for rebasing git paths onto the
+/// graph's spelling.
+///
+/// `base_prefix_for` cannot answer this for a local path:
+/// `resolve_source` sets `repo_root` equal to `analysis_path`, so
+/// stripping one from the other is empty even inside a repository,
+/// while git spells history from the work-tree root. A `--path pkg`
+/// run therefore compared root-relative history (`pkg/a.py`) against
+/// base-relative graph paths (`a.py`) and found nothing: coupling
+/// empty, risk churn zero, test-priority churn zero, and review
+/// changed files reported absent. `analysis_prefix` asks git for
+/// the work-tree root, so the rebase strips the real prefix.
+#[must_use]
+fn history_base_prefix(source: &ResolvedSource) -> String {
+    analysis_prefix(source)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// SARIF's spelling of `analysis_prefix`: `/`-separated, for the
@@ -2055,10 +2068,7 @@ async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
     let (report, index) =
         build_graph_with_declarations(&source.analysis_path, &ignore)?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
     let measured = test_priority::measure_test_priority(
         &report,

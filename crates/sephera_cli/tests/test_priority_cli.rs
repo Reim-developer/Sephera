@@ -204,3 +204,26 @@ fn regression_test_priority_help_has_real_line_breaks() {
         "Examples block lost its line break:\n{stdout}"
     );
 }
+
+// Regression: the same --path <subdir> prefix bug in test-priority's
+// churn factor. The symbols are ranked under the subdirectory, but
+// their files' history was counted as zero because git's
+// root-relative paths never met the graph's base-relative ones.
+#[test]
+fn regression_test_priority_subdir_path_counts_churn() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/lib.py", b"def lonely(x):\n    return x\n");
+    commit_all(dir, "seed");
+    write_file(dir, "pkg/lib.py", b"def lonely(x):\n    return x + 1\n");
+    commit_all(dir, "touch lib");
+
+    let output = run_test_priority(&dir.join("pkg"), &["--format", "json"]);
+    let parsed = symbols_json(&output);
+    assert_eq!(parsed["commits_counted"], 2, "{parsed}");
+    let symbols = parsed["symbols"].as_array().expect("symbols");
+    assert_eq!(symbols.len(), 1, "{parsed}");
+    assert_eq!(symbols[0]["symbol"], "lonely");
+    assert_eq!(symbols[0]["churn"], 2, "{parsed}");
+}

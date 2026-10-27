@@ -208,13 +208,24 @@ pub fn changed_files(
     repo_root: &Path,
     reference: Option<&str>,
 ) -> Result<Vec<String>> {
+    // Both readings must run from the work-tree root, or their
+    // spellings disagree: `git diff` names files from the root
+    // wherever it runs, while `git ls-files --others` names them
+    // from the working directory. A caller passing a subdirectory
+    // would otherwise get tracked changes in root spelling and
+    // untracked files in base spelling, and the rebase onto the
+    // graph's spelling could only ever match one of the two. A
+    // directory that is not in a repository keeps today's working
+    // directory, so the same error arrives as before.
+    let root =
+        repo_toplevel(repo_root).unwrap_or_else(|| repo_root.to_path_buf());
     let diff = git_stdout_string(
-        repo_root,
+        &root,
         ["diff", "--name-only", "-z", reference.unwrap_or("HEAD")],
         "read the changed files",
     )?;
     let untracked = git_stdout_string(
-        repo_root,
+        &root,
         ["ls-files", "--others", "--exclude-standard", "-z"],
         "read the untracked files",
     )?;
@@ -776,6 +787,35 @@ mod tests {
                 "gone.txt".to_owned(),
                 "new.txt".to_owned()
             ]
+        );
+    }
+
+    #[test]
+    fn regression_changed_files_from_a_subdir_spells_both_readings_from_the_root()
+     {
+        // `git diff` names files from the repository root wherever
+        // it runs, while `git ls-files --others` names them from
+        // the working directory. Called with a subdirectory, the
+        // change used to mix the two spellings: a tracked edit came
+        // back root-relative and an untracked file base-relative,
+        // so no single rebase could match both to the graph.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::create_dir(dir.join("pkg")).expect("mkdir");
+        fs::write(dir.join("pkg/a.py"), "x = 1\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+
+        fs::write(dir.join("pkg/a.py"), "x = 2\n").expect("write");
+        fs::write(dir.join("pkg/new.py"), "z = 3\n").expect("write");
+
+        let changed =
+            changed_files(&dir.join("pkg"), None).expect("the change reads");
+        assert_eq!(
+            changed,
+            vec!["pkg/a.py".to_owned(), "pkg/new.py".to_owned()],
+            "both readings in the repository root's spelling"
         );
     }
 

@@ -165,3 +165,47 @@ fn regression_review_subdir_breaking_section_finds_consumers() {
         "consumer.py"
     );
 }
+
+// Regression: the same --path <subdir> prefix bug in review's own
+// readings. The changed file is spelled from the repository root
+// by git and from the analysis base by the graph; with the empty
+// prefix the dirty file missed the graph and was reported absent,
+// and the coupling warnings counted zero commits.
+#[test]
+fn regression_review_subdir_changed_file_is_present() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/a.py", b"def fa():\n    return 1\n");
+    write_file(dir, "pkg/b.py", b"def fb():\n    return 100\n");
+    commit_all(dir, "seed");
+    for round in 2..=4 {
+        write_file(
+            dir,
+            "pkg/a.py",
+            format!("def fa():\n    return {round}\n").as_bytes(),
+        );
+        write_file(
+            dir,
+            "pkg/b.py",
+            format!("def fb():\n    return {round}\n").as_bytes(),
+        );
+        commit_all(dir, "the pair moves");
+    }
+    write_file(dir, "pkg/a.py", b"def fa():\n    return 4  # dirty\n");
+
+    let output = run_review(&dir.join("pkg"), &["--format", "json"]);
+    assert!(output.status.success(), "{output:?}");
+    let parsed: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("valid json");
+
+    assert_eq!(parsed["commits_counted"], 4, "{parsed}");
+    assert_eq!(parsed["changed"][0]["file"], "a.py", "{parsed}");
+    assert_eq!(parsed["changed"][0]["present"], true, "{parsed}");
+    assert_eq!(
+        parsed["warnings"].as_array().expect("warnings").len(),
+        1,
+        "{parsed}"
+    );
+    assert_eq!(parsed["warnings"][0]["partner"], "b.py", "{parsed}");
+}
