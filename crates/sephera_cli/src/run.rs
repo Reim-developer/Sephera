@@ -1734,16 +1734,31 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
                 source.repo_root.display()
             )
         })?;
-    let old_ignore = build_ignore_matcher(
+    // Without --to the old side is scoped to --path, like the new
+    // side and like breaking's old side: call sites and constants
+    // are keyed by file, so a whole-tree old side against a scoped
+    // new side pairs nothing and silently reports no changes.
+    // The facts come from the same scoped base the index does, so
+    // their file spellings line up. With --to both sides are
+    // whole-tree checkouts, the same rule breaking documents.
+    let scoped = arguments.to.is_none();
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) = build_old_side(
         old_worktree.path(),
+        &source,
+        scoped,
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    progress.set_message("Extracting the older side...");
-    let (_, old_index) =
-        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
-    let old_facts = behavior::collect_facts(old_worktree.path(), &old_ignore);
+    let old_base = old_side_base(old_worktree.path(), &source, scoped);
+    let old_ignore = build_ignore_matcher(
+        &old_base,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    let old_facts = behavior::collect_facts(&old_base, &old_ignore);
     drop(old_worktree);
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
