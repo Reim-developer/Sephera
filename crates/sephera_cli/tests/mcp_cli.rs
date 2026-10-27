@@ -176,6 +176,13 @@ impl Mcp {
         self.stdin.flush().expect("stdin should flush");
     }
 
+    /// Send one line verbatim, without JSON encoding it first: the way
+    /// to feed the server a malformed line.
+    fn send_raw(&mut self, line: &str) {
+        writeln!(self.stdin, "{line}").expect("stdin should accept a line");
+        self.stdin.flush().expect("stdin should flush");
+    }
+
     /// The next line, or `None` when the server closes the connection.
     fn next_line(&mut self) -> Option<String> {
         match self.lines.recv_timeout(REPLY_TIMEOUT) {
@@ -425,6 +432,40 @@ fn an_empty_file_list_is_rejected_with_invalid_params() {
         .expect_err("an empty list is not a question");
 
     assert_eq!(error["code"], -32602, "invalid params: {error}");
+}
+
+/// Malformed lines must not kill the session.
+///
+/// rmcp's stdio transport ended the session on the first line its
+/// codec could not parse, silently with exit code 0: a non-JSON
+/// line, an empty line, a `jsonrpc: "1.0"` line, and a JSON array
+/// each killed the server in a sweep probe, and every later call
+/// died with it. The server now runs on a transport that skips
+/// lines that are not client messages, so the next well-formed
+/// request is answered as if the garbage had never arrived. On the
+/// unfixed transport this test fails at the first `tools/list`
+/// after the garbage: the connection is already closed.
+#[test]
+fn regression_malformed_lines_do_not_kill_the_session() {
+    let mut mcp = Mcp::start();
+    let _ = mcp.handshake();
+
+    for garbage in [
+        "not json at all",
+        "",
+        "   ",
+        r#"{"jsonrpc":"1.0","id":99,"method":"tools/list"}"#,
+        "[1,2,3]",
+    ] {
+        mcp.send_raw(garbage);
+        let listed = mcp
+            .call("tools/list", json!({}))
+            .expect("the server must still answer after a malformed line");
+        assert!(
+            listed["result"]["tools"].is_array(),
+            "tools/list must answer after {garbage:?}: {listed}"
+        );
+    }
 }
 
 /// A `schema_impact` call naming a path that is not a directory must

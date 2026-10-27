@@ -11,13 +11,17 @@
 //! Handlers are thin by design: resolve a source, delegate to `sephera_core`,
 //! then format. They hold no state between calls.
 
+use std::sync::Arc;
+
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::tool::ToolRouter,
     model::{ServerCapabilities, ServerInfo},
+    service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage},
     tool, tool_handler, tool_router,
-    transport::io::stdio,
+    transport::Transport,
 };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 use sephera_graph::{
     archaeology, behavior, blast_radius, breaking, coupling, dead,
@@ -4520,10 +4524,96 @@ fn parse_graph_format(
 /// # Errors
 ///
 /// Returns an error if the transport or server setup fails.
+/// Stdio transport that survives a malformed line.
+///
+/// rmcp's own stdio transport ends the session on the first line its
+/// codec cannot parse: a stray non-JSON line, an empty line, a
+/// `jsonrpc: "1.0"` line, or a JSON array all killed the server
+/// silently with exit code 0, and every later tool call in the
+/// session died with it. A client that echoes a log line to the
+/// server's stdin, or a wrapped launcher that prints a banner, must
+/// not be able to do that.
+///
+/// This transport parses each line itself and simply skips the ones
+/// that are not a client message, so the session continues at the
+/// next well-formed line. Skipping is the only honest option for a
+/// line that does not parse: no request id can be recovered from it,
+/// so no `-32700` response could name what failed. A line that
+/// parses as JSON but is not a client message (wrong version, wrong
+/// shape) is skipped for the same reason — the codec would have
+/// ended the stream on it, and ending the stream is the failure this
+/// transport exists to prevent. Everything else is rmcp's behaviour
+/// unchanged: valid messages are dispatched exactly as before, and
+/// EOF still ends the session cleanly.
+///
+/// The writer lives behind an `Arc<Mutex>` because `Transport::send`
+/// must return a `'static` future, which cannot borrow the transport.
+struct LenientStdioTransport {
+    reader: tokio::io::BufReader<tokio::io::Stdin>,
+    writer: Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
+}
+
+impl LenientStdioTransport {
+    fn new() -> Self {
+        Self {
+            reader: tokio::io::BufReader::new(tokio::io::stdin()),
+            writer: Arc::new(tokio::sync::Mutex::new(tokio::io::stdout())),
+        }
+    }
+}
+
+impl Transport<RoleServer> for LenientStdioTransport {
+    type Error = std::io::Error;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<RoleServer>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let writer = Arc::clone(&self.writer);
+        async move {
+            let mut text = serde_json::to_string(&item).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+            })?;
+            text.push('\n');
+            let mut guard = writer.lock().await;
+            guard.write_all(text.as_bytes()).await?;
+            guard.flush().await
+        }
+    }
+
+    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
+        loop {
+            let mut line = String::new();
+            match self.reader.read_line(&mut line).await {
+                Ok(0) | Err(_) => return None,
+                Ok(_) => {
+                    if let Ok(message) = serde_json::from_str::<
+                        RxJsonRpcMessage<RoleServer>,
+                    >(&line)
+                    {
+                        return Some(message);
+                    }
+                    // Not a client message: skip it and read on. The
+                    // session survives; the next well-formed line is
+                    // answered as if the garbage had never arrived.
+                }
+            }
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        self.writer.lock().await.flush().await
+    }
+}
+
+/// Serve the MCP protocol over stdio.
+///
+/// # Errors
+///
+/// Returns an error if the transport or server setup fails.
 pub async fn run_mcp_server() -> anyhow::Result<()> {
     let server = SepheraServer::new();
-    let transport = stdio();
-    let service = server.serve(transport).await?;
+    let service = server.serve(LenientStdioTransport::new()).await?;
     service.waiting().await?;
     Ok(())
 }
