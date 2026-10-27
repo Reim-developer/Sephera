@@ -27,7 +27,9 @@ pub fn rebase_changed_paths(
 ) -> Vec<String> {
     changed
         .iter()
-        .filter_map(|path| sephera_graph::coupling::rebase_path(path, base_prefix))
+        .filter_map(|path| {
+            sephera_graph::coupling::rebase_path(path, base_prefix)
+        })
         .collect()
 }
 

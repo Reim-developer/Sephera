@@ -104,7 +104,8 @@ pub fn measure_risk(
     // Churn is coupling's own count, read off the same pass over
     // the same window, so the two reports' commit counts agree by
     // construction rather than by two loops kept in step by hand.
-    let counted = counted_commits(&tracked, commits, options.coupling.max_commit_files);
+    let counted =
+        counted_commits(&tracked, commits, options.coupling.max_commit_files);
     let churn = counted.file_counts;
 
     let coupling = measure_coupling(report, commits, options.coupling);

@@ -211,8 +211,9 @@ pub fn normalize_relative_path(relative_path: &Path) -> String {
     // Separators only, and only where a backslash is one. On Unix it is a legal
     // character in a file name, so rewriting it unconditionally would let a
     // pattern meant for one file silently apply to a whole directory.
-    let normalized =
-        sephera_core::path_utils::forward_slashes(&relative_path.to_string_lossy());
+    let normalized = sephera_core::path_utils::forward_slashes(
+        &relative_path.to_string_lossy(),
+    );
     if normalized.is_empty() {
         ".".to_owned()
     } else {
