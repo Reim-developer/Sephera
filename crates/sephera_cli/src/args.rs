@@ -133,7 +133,7 @@ pub enum Commands {
     Watch(WatchArgs),
     /// Start an MCP (Model Context Protocol) server over stdio
     #[command(
-        long_about = "Start an MCP server that exposes Sephera tools (loc, context, graph) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories."
+        long_about = "Start an MCP server that exposes Sephera's analysis tools over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories. The tool list is discoverable with `tools/list` once the server is running, which is the one place it cannot go stale — the old text named three tools here while the server served twenty."
     )]
     Mcp,
     /// Analyze dependency graph via Tree-sitter import extraction
@@ -517,9 +517,9 @@ pub struct WatchArgs {
         long,
         value_enum,
         value_name = "TARGET",
-        required_unless_present = "once",
+        required = true,
         help = "What to re-run when the tree changes.",
-        long_help = "What to re-run when the tree changes. Choose one of graph, symbols, loc, or depends-on. Required unless --once is passed."
+        long_help = "What to re-run when the tree changes. Choose one of graph, symbols, loc, or depends-on. Required: `--once` without a target has nothing to run, and the old `required_unless_present` spelling let it parse only to fail later with a message claiming the opposite."
     )]
     pub target: Option<WatchTarget>,
 
@@ -711,8 +711,9 @@ tree_command_args!(
     #[arg(
         long,
         value_name = "PATH",
+        conflicts_with = "diff",
         help = "Focused file or directory inside the base path.",
-        long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to limit the graph to specific files or directories."
+        long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to limit the graph to specific files or directories. Cannot be combined with `--diff`, which selects its files from git: the diff path never read this flag, so combining them used to run the diff unscoped without saying so."
     )]
     pub focus: Vec<PathBuf>,
 

@@ -224,6 +224,106 @@ async fn coupling_tool_without_history_is_an_error() {
     assert!(result.is_err(), "a tree with no history must not answer");
 }
 
+/// A repository whose coupled pair lives under a subdirectory, with
+/// no import between the two files: seed plus three rounds touching
+/// both, so the pair's co-change count is 4.
+fn repo_with_a_subdir_hidden_pair() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/a.py", b"def fa():\n    return 1\n");
+    write_file(dir, "pkg/b.py", b"def fb():\n    return 100\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "seed"]);
+    for round in 2..=4 {
+        write_file(
+            dir,
+            "pkg/a.py",
+            format!("def fa():\n    return {round}\n").as_bytes(),
+        );
+        write_file(
+            dir,
+            "pkg/b.py",
+            format!("def fb():\n    return {round}\n").as_bytes(),
+        );
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "the pair moves"]);
+    }
+    temp_dir
+}
+
+// Regression: the MCP twin of the CLI's --path <subdir> history bug.
+// Git spells history from the repository root while the graph spells
+// it from the analysis base, and the MCP handlers rebased with
+// `base_prefix_for`, which strips repo_root from analysis_path —
+// empty for a local path, because `resolve_source` sets the two
+// equal. A coupling tool call scoped to a subdirectory therefore
+// compared root-relative history (`pkg/a.py`) against base-relative
+// graph paths (`a.py`) and found nothing, however often the pair
+// moved together.
+#[tokio::test]
+async fn regression_coupling_tool_subdir_path_counts_history() {
+    let server = SepheraServer::new();
+    let temp_dir = repo_with_a_subdir_hidden_pair();
+
+    let result = server
+        .coupling(param_for(CouplingInput {
+            path: Some(
+                temp_dir.path().join("pkg").to_string_lossy().into_owned(),
+            ),
+            url: None,
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            commits: None,
+            min_co_changes: Some(1),
+            format: None,
+        }))
+        .await;
+
+    let output = result.expect("coupling tool should succeed for a git repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("coupling output must be JSON");
+    assert_eq!(parsed["commits_counted"], 4, "{output}");
+    let pairs = parsed["pairs"].as_array().expect("pairs is a list");
+    assert_eq!(pairs.len(), 1, "{output}");
+    assert_eq!(pairs[0]["first"], "a.py");
+    assert_eq!(pairs[0]["second"], "b.py");
+    assert_eq!(pairs[0]["co_changes"], 4, "{output}");
+}
+
+// Regression: the same prefix bug in the MCP review tool's own
+// readings. The changed file is spelled from the repository root by
+// git and from the analysis base by the graph; with the empty prefix
+// the dirty file missed the graph and was reported absent, and the
+// coupling warnings counted zero commits.
+#[tokio::test]
+async fn regression_review_tool_subdir_changed_file_is_present() {
+    let server = SepheraServer::new();
+    let temp_dir = repo_with_a_subdir_hidden_pair();
+    write_file(
+        temp_dir.path(),
+        "pkg/a.py",
+        b"def fa():\n    return 4  # dirty\n",
+    );
+
+    let output = server
+        .review(param_for(review_input(&temp_dir.path().join("pkg"), None)))
+        .await
+        .expect("review tool should succeed for a temp repo");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("review output must be JSON");
+
+    assert_eq!(parsed["commits_counted"], 4, "{output}");
+    assert_eq!(parsed["changed"][0]["file"], "a.py", "{output}");
+    assert_eq!(parsed["changed"][0]["present"], true, "{output}");
+    assert_eq!(
+        parsed["warnings"].as_array().expect("warnings").len(),
+        1,
+        "{output}"
+    );
+}
+
 #[tokio::test]
 async fn impact_tool_accepts_several_files_at_once() {
     // Asking about a change rather than a single file is the common case, and
@@ -2206,4 +2306,167 @@ async fn schema_impact_tool_rejects_an_unknown_format() {
         }))
         .await;
     assert!(result.is_err(), "an unknown format is an error");
+}
+
+#[tokio::test]
+async fn regression_graph_tool_focus_on_a_missing_path_is_an_error() {
+    // The `graph` tool took the same `--focus` flag as the CLI command but
+    // skipped its existence check: a mistyped scope narrowed the answer to
+    // nothing, which reads as a finding about the repository rather than
+    // a typo.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/main.rs", b"fn main() {}\n");
+
+    let error = server
+        .graph(param_for(GraphInput {
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: Some(vec!["nope.py".to_owned()]),
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            depends_on: None,
+            format: None,
+        }))
+        .await
+        .expect_err("a scope naming nothing is a caller mistake");
+    assert!(
+        error.message.contains("nope.py"),
+        "the scope must be named: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn regression_graph_tool_focus_dotdot_escape_is_rejected() {
+    // The MCP twin of the CLI's `..` escape: from a subdirectory base,
+    // `../sibling` names a real directory beside the base, and only the
+    // canonicalised prefix test refuses it.
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "pkg/main.rs", b"fn main() {}\n");
+    write_file(temp_dir.path(), "sibling/other.rs", b"pub fn other() {}\n");
+
+    let error = server
+        .graph(param_for(GraphInput {
+            path: Some(
+                temp_dir.path().join("pkg").to_string_lossy().into_owned(),
+            ),
+            url: None,
+            git_ref: None,
+            focus: Some(vec!["../sibling".to_owned()]),
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            depends_on: None,
+            format: None,
+        }))
+        .await
+        .expect_err("a scope beside the base is not a scope inside it");
+    assert!(
+        error.message.contains("must resolve inside"),
+        "the escape must be named: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn regression_impact_tool_focus_on_a_missing_path_is_an_error() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(
+        temp_dir.path(),
+        "src/user.rs",
+        b"use crate::a;\nfn b() {}\n",
+    );
+
+    let error = server
+        .impact(param_for(ImpactInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: Some(vec!["nope.py".to_owned()]),
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            fail_on: None,
+            symbol: None,
+            format: None,
+        }))
+        .await
+        .expect_err("a scope naming nothing is a caller mistake");
+    assert!(
+        error.message.contains("nope.py"),
+        "the scope must be named: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn regression_affected_tests_tool_focus_on_a_missing_path_is_an_error() {
+    let server = SepheraServer::new();
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn a() {}\n");
+    write_file(
+        temp_dir.path(),
+        "src/user.rs",
+        b"use crate::a;\nfn b() {}\n",
+    );
+
+    let error = server
+        .affected_tests(param_for(AffectedTestsInput {
+            files: vec!["src/lib.rs".to_owned()],
+            path: Some(temp_dir.path().to_string_lossy().into_owned()),
+            url: None,
+            git_ref: None,
+            focus: Some(vec!["nope.py".to_owned()]),
+            ignore: None,
+            no_gitignore: None,
+            depth: None,
+            format: None,
+        }))
+        .await
+        .expect_err("a scope naming nothing is a caller mistake");
+    assert!(
+        error.message.contains("nope.py"),
+        "the scope must be named: {}",
+        error.message
+    );
+}
+
+#[tokio::test]
+async fn regression_coupling_tool_url_clone_reads_full_history() {
+    // The history tools passed `false` for `requires_history`, so a URL
+    // source without a ref cloned at depth 1 and every history
+    // measurement read a single commit: the hidden pair never appeared,
+    // not because the files never changed together but because the clone
+    // never saw them do it. The CLI history commands already passed
+    // `true`; the MCP tools now do too.
+    let server = SepheraServer::new();
+    let temp_dir = repo_with_a_hidden_pair();
+    let url = format!("file://{}", temp_dir.path().display());
+
+    let output = server
+        .coupling(param_for(CouplingInput {
+            path: None,
+            url: Some(url),
+            git_ref: None,
+            ignore: None,
+            no_gitignore: None,
+            commits: None,
+            min_co_changes: Some(1),
+            format: None,
+        }))
+        .await
+        .expect("coupling tool should succeed for a file:// URL");
+    let parsed: serde_json::Value =
+        serde_json::from_str(&output).expect("coupling output must be JSON");
+    assert_eq!(parsed["commits_counted"], 4, "{output}");
+    let pairs = parsed["pairs"].as_array().expect("pairs is a list");
+    assert_eq!(pairs.len(), 1, "{output}");
+    assert_eq!(pairs[0]["co_changes"], 4, "{output}");
 }

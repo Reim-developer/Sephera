@@ -184,13 +184,25 @@ pub fn measure_symbol_all(
 ) -> Result<Vec<SymbolImpact>> {
     let mut matched = Vec::with_capacity(requested.len());
     let mut unknown = Vec::new();
+    // One file is one impact, however many spellings of it were typed,
+    // for the same reason `blast_radius::measure_all` deduplicates: a
+    // repeated target must not double the report's file count.
+    let mut seen: BTreeSet<String> = BTreeSet::new();
 
     for raw in requested {
         match super::blast_radius::match_path(report, raw, base_prefix) {
-            Some(canonical) => matched.push(measure_symbol_scoped(
-                report, &canonical, symbol, depth, focus,
-            )?),
-            None => unknown.push(raw.clone()),
+            Some(canonical) => {
+                if seen.insert(canonical.clone()) {
+                    matched.push(measure_symbol_scoped(
+                        report, &canonical, symbol, depth, focus,
+                    )?);
+                }
+            }
+            None => {
+                if !unknown.iter().any(|path| path == raw) {
+                    unknown.push(raw.clone());
+                }
+            }
         }
     }
 

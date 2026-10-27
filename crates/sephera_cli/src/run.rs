@@ -47,10 +47,12 @@ use crate::{
     gate::{self, Gate},
     guard, impact, merge,
     output::{
-        emit_rendered_output, print_available_profiles, print_report,
-        print_symbol_report, print_symbols_by_file, render_context_json,
+        emit_rendered_output, print_available_profiles, render_context_json,
         render_context_markdown, render_graph, render_loc_csv, render_loc_json,
-        render_loc_markdown, render_symbol_json, render_symbol_markdown,
+        render_loc_markdown, render_report_table,
+        render_symbol_declarations_table, render_symbol_json,
+        render_symbol_markdown, render_symbol_table,
+        render_symbols_by_file_table,
     },
     progress::{self, CliProgress, CliReporter},
     review, risk, sarif, schema_impact, simulate, skill, test_priority,
@@ -173,8 +175,12 @@ const fn no_gates() -> Vec<Gate> {
 /// `--once` short-circuits to a single run, which keeps the watch argument
 /// parsing usable from scripts without needing a separate code path.
 fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
+    // Unreachable through clap, which requires `--target` outright: the old
+    // `required_unless_present = "once"` spelling let `watch --once` parse
+    // and die here claiming the target was required *unless* `--once` was
+    // passed — while `--once` was exactly what had been passed.
     let Some(target) = arguments.target else {
-        anyhow::bail!("`--target` is required unless `--once` is passed");
+        anyhow::bail!("`--target` is required");
     };
 
     if target == WatchTarget::DependsOn && arguments.on.is_none() {
@@ -199,6 +205,19 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
             &ignore,
             &arguments.settings,
         ));
+    }
+
+    // The live loop prints "Watching ..." before it ever touches the root,
+    // so a nonexistent root or a file-as-root used to announce a watch that
+    // never started and only then fail inside the watcher. `--once` fails
+    // cleanly through the analysis command's own path check; the live loop
+    // gets the same check here, in the same words as `sephera_scan`'s
+    // project-file validation, before anything claims to be watching.
+    if !root.is_dir() {
+        if !root.exists() {
+            anyhow::bail!("path `{}` does not exist", root.display());
+        }
+        anyhow::bail!("path `{}` is not a directory", root.display());
     }
 
     println!(
@@ -360,6 +379,57 @@ fn build_ignore_matcher(
     }
 }
 
+/// A focus scope must name something inside the analysis base that
+/// exists.
+///
+/// A scope naming nothing used to narrow the answer to nothing with no
+/// complaint: `graph --focus nope.py` reported an empty graph and
+/// `impact --focus nope-dir` reported "No file imports this one", and
+/// both read as findings about the repository rather than as typos.
+/// `context --focus` already refuses a path it cannot resolve; a scope
+/// is the same kind of reference and gets the same refusal. A scope
+/// that exists but holds no recognised file still reports empty, which
+/// is a real answer about a real place.
+fn check_focus_paths_exist(
+    base_path: &std::path::Path,
+    focus: &[PathBuf],
+) -> Result<()> {
+    // Canonicalised once, not `absolute`: `absolute` normalises `.` but not
+    // `..`, so `base/../sibling` used to pass the prefix test below while
+    // naming a directory outside the analysis base that exists on disk.
+    // Canonicalising both sides closes that escape; a scope that exists but
+    // sits outside the base is refused, never silently widened.
+    let base = std::fs::canonicalize(base_path).with_context(|| {
+        format!("could not resolve base path `{}`", base_path.display())
+    })?;
+    for path in focus {
+        let candidate = if path.is_absolute() {
+            path.clone()
+        } else {
+            base_path.join(path)
+        };
+        if !candidate.exists() {
+            anyhow::bail!(
+                "focus path `{}` does not exist inside `{}`",
+                path.display(),
+                base_path.display()
+            );
+        }
+        let resolved =
+            std::fs::canonicalize(&candidate).with_context(|| {
+                format!("could not resolve focus path `{}`", path.display())
+            })?;
+        if resolved.strip_prefix(&base).is_err() {
+            anyhow::bail!(
+                "focus path `{}` must resolve inside `{}`",
+                path.display(),
+                base_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
     let source = resolve_source(
         &SourceRequest {
@@ -385,13 +455,12 @@ async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
 
     // Only the table is meant for a terminal. The other three are text meant
     // for a pipe or a file, so the spinner has to be gone before they are
-    // emitted or it interleaves with the payload.
+    // emitted or it interleaves with the payload. The table is still text
+    // once rendered, so it goes through the same `--output` path as the
+    // other formats: before this it printed straight to stdout and a
+    // `--output` file was silently never written.
     let rendered = match arguments.format {
-        LocOutputFormat::Table => {
-            progress.finish();
-            print_report(&report);
-            return Ok(no_gates());
-        }
+        LocOutputFormat::Table => render_report_table(&report),
         LocOutputFormat::Json => render_loc_json(&report),
         LocOutputFormat::Markdown => render_loc_markdown(&report),
         LocOutputFormat::Csv => render_loc_csv(&report),
@@ -444,13 +513,30 @@ async fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
     progress.finish();
 
     let rendered = match arguments.format {
+        // Rendered to a string like the other two formats, so `--output`
+        // works here too: the print forms could only go to stdout, which
+        // is how a table report with `--output` used to print to the
+        // terminal and never create the file.
         SymbolOutputFormat::Table => {
-            if arguments.by_file {
-                print_symbols_by_file(&detail);
+            let mut rendered = if arguments.by_file {
+                render_symbols_by_file_table(&detail)
             } else {
-                print_symbol_report(&detail.report);
+                render_symbol_table(&detail.report)
+            };
+            // `--detail` reaches every format, not just markdown and json.
+            // It used to change nothing here, so a table run with the flag
+            // answered the summary question while the caller asked for the
+            // declaration list.
+            if arguments.detail
+                && let Some(declarations) =
+                    render_symbol_declarations_table(&detail)
+            {
+                if !rendered.is_empty() {
+                    rendered.push_str("\n\n");
+                }
+                rendered.push_str(&declarations);
             }
-            None
+            Some(rendered)
         }
         // `by_file` reaches every format, not just the table. It used to be
         // honoured only here, so `--by-file --format json` produced a
@@ -583,6 +669,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     progress.set_message("Extracting imports...");
     // No query: the report must cover the whole repository, because a
@@ -809,7 +896,10 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // History commands read the history: a depth-1 clone would
+        // cap every window at one commit, so URL runs need the full
+        // clone. Local paths ignore this flag.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Reading history...");
@@ -844,10 +934,7 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
         &CliReporter(&progress),
     )?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
     let measured = coupling::measure_coupling(
         &report,
@@ -880,7 +967,9 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // As coupling's: the coupling warnings read the history, so
+        // URL runs need the full clone, not a depth-1 one.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Reviewing the change...");
@@ -926,10 +1015,7 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
         &CliReporter(&progress),
     )?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased_commits = coupling::rebase_commit_paths(&commits, &base_prefix);
     let rebased_changed = review::rebase_changed_paths(&changed, &base_prefix);
     let measured = review::measure_review(
@@ -983,7 +1069,9 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // As coupling's: churn and coupling read the history, so
+        // URL runs need the full clone, not a depth-1 one.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Ranking risk...");
@@ -1018,10 +1106,7 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
         &CliReporter(&progress),
     )?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
     let measured = risk::measure_risk(
         &report,
@@ -1143,6 +1228,28 @@ fn analysis_prefix(source: &ResolvedSource) -> PathBuf {
     sarif::relative_path(&canonical, &toplevel)
 }
 
+/// The `/`-separated repo-relative prefix history spellings carry
+/// but graph spellings do not, for rebasing git paths onto the
+/// graph's spelling.
+///
+/// `base_prefix_for` cannot answer this for a local path:
+/// `resolve_source` sets `repo_root` equal to `analysis_path`, so
+/// stripping one from the other is empty even inside a repository,
+/// while git spells history from the work-tree root. A `--path pkg`
+/// run therefore compared root-relative history (`pkg/a.py`) against
+/// base-relative graph paths (`a.py`) and found nothing: coupling
+/// empty, risk churn zero, test-priority churn zero, and review
+/// changed files reported absent. `analysis_prefix` asks git for
+/// the work-tree root, so the rebase strips the real prefix.
+#[must_use]
+fn history_base_prefix(source: &ResolvedSource) -> String {
+    analysis_prefix(source)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
+}
+
 /// SARIF's spelling of `analysis_prefix`: `/`-separated, for the
 /// URI joins in `sarif::prefixed_path`.
 #[must_use]
@@ -1157,6 +1264,86 @@ fn sarif_repo_prefix(source: &ResolvedSource) -> String {
         return String::new();
     };
     sarif::path_prefix(&canonical, &toplevel)
+}
+
+/// The repo-relative spelling of an archaeology file argument.
+///
+/// The help promises the file is spelled relative to the analysis
+/// root, but the snapshots are whole-tree builds whose index spells
+/// files from the repository root, and the commit log is a git
+/// pathspec: the two providers only agree when the file reaches
+/// them repo-relative. A scoped run therefore has two spellings
+/// that must both work — the analysis-relative one the help
+/// promises (`lib.py` under `--path pkg`) and the root-relative
+/// one root runs already use (`pkg/lib.py`) — and a third shape
+/// that must not silently degrade: a root-relative spelling under
+/// a scoped run used to make the log query run from the analysis
+/// directory, where the pathspec matched nothing, so the walk fell
+/// back to visiting every parent and the window counted commits
+/// that never touched the file. Normalising here, and running the
+/// git providers from the work-tree root, makes every spelling
+/// take the file-log walk.
+///
+/// The one spelling this cannot disambiguate is an
+/// analysis-relative file whose spelling already starts with the
+/// analysis prefix (`pkg/lib.py` meaning `pkg/pkg/lib.py` under
+/// `--path pkg`): the root-relative reading wins, because it is
+/// the spelling root runs already established.
+#[must_use]
+fn normalize_archaeology_file(source: &ResolvedSource, file: &str) -> String {
+    let mut current = file;
+    while let Some(rest) = current.strip_prefix("./") {
+        current = rest;
+    }
+    let mut path = PathBuf::from(current);
+    if path.is_absolute() {
+        if let Some(toplevel) = repo_toplevel(&source.analysis_path)
+            && let Ok(relative) = path.strip_prefix(&toplevel)
+        {
+            path = relative.to_path_buf();
+        }
+        return path.to_string_lossy().replace('\\', "/");
+    }
+    let prefix = analysis_prefix(source);
+    if prefix.as_os_str().is_empty()
+        || path == prefix
+        || path.starts_with(&prefix)
+    {
+        return path.to_string_lossy().replace('\\', "/");
+    }
+    prefix.join(path).to_string_lossy().replace('\\', "/")
+}
+
+/// The graph's spelling of a file inside one analysed tree.
+///
+/// The graph spells files relative to the analysis root, so a
+/// `./`-prefixed or absolute spelling of a file that is in the
+/// tree names a declaration the exact-match lookup then misses,
+/// and the error claims the file declares nothing — wrong about
+/// a file that does. When the spelling resolves to a real file
+/// under the analysis root, it is rewritten to that relative
+/// spelling; anything else passes through untouched, so a missing
+/// file still errors exactly as before.
+#[must_use]
+fn normalize_tree_file(analysis_path: &Path, file: &str) -> String {
+    let candidate = Path::new(file);
+    let absolute = if candidate.is_absolute() {
+        candidate.to_path_buf()
+    } else {
+        analysis_path.join(candidate)
+    };
+    if let (Ok(canonical), Ok(base)) = (
+        std::fs::canonicalize(&absolute),
+        std::fs::canonicalize(analysis_path),
+    ) && let Ok(relative) = canonical.strip_prefix(&base)
+    {
+        return relative.to_string_lossy().replace('\\', "/");
+    }
+    let mut stripped = file;
+    while let Some(rest) = stripped.strip_prefix("./") {
+        stripped = rest;
+    }
+    stripped.replace('\\', "/")
 }
 
 /// The base the old side of a comparison is built from.
@@ -1470,6 +1657,12 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
     // move while the newer side is built. The newer side is the
     // working tree when --to is absent, and a second worktree
     // otherwise, so the working tree is never disturbed either way.
+    // Without --to the old side is scoped to --path, like the new
+    // side and like breaking's old side: building it whole-tree
+    // while the new side is scoped compares root-relative paths
+    // against subdir-relative ones, and every scoped symbol reads
+    // as removed plus added. With --to both sides are whole-tree
+    // checkouts, the same rule breaking documents.
     let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
         .with_context(|| {
             format!(
@@ -1478,15 +1671,15 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
                 source.repo_root.display()
             )
         })?;
-    let old_ignore = build_ignore_matcher(
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) = build_old_side(
         old_worktree.path(),
+        &source,
+        arguments.to.is_none(),
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    progress.set_message("Extracting the older side...");
-    let (_, old_index) =
-        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
     drop(old_worktree);
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
@@ -1633,7 +1826,15 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
     .await?;
     let progress = CliProgress::start("Tracing the symbol through history...");
 
-    let repo_root = source.repo_root;
+    // The git providers run from the work-tree root and the file
+    // reaches them repo-relative (see `normalize_archaeology_file`):
+    // the providers only agree on one basis, and the root is the
+    // one the whole-tree snapshots already use. Outside a
+    // repository the root falls back to the analysis path, and the
+    // first git call fails as before.
+    let file = normalize_archaeology_file(&source, &arguments.file);
+    let repo_root =
+        repo_toplevel(&source.analysis_path).unwrap_or(source.repo_root);
 
     // The providers trace_symbol walks on, as thin closures over
     // the named functions below: the commit log, one commit's
@@ -1666,7 +1867,7 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
     };
     let measured = archaeology::trace_symbol(
         &start,
-        &arguments.file,
+        &file,
         &arguments.symbol,
         arguments.window,
         &log,
@@ -1728,16 +1929,31 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
                 source.repo_root.display()
             )
         })?;
-    let old_ignore = build_ignore_matcher(
+    // Without --to the old side is scoped to --path, like the new
+    // side and like breaking's old side: call sites and constants
+    // are keyed by file, so a whole-tree old side against a scoped
+    // new side pairs nothing and silently reports no changes.
+    // The facts come from the same scoped base the index does, so
+    // their file spellings line up. With --to both sides are
+    // whole-tree checkouts, the same rule breaking documents.
+    let scoped = arguments.to.is_none();
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) = build_old_side(
         old_worktree.path(),
+        &source,
+        scoped,
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    progress.set_message("Extracting the older side...");
-    let (_, old_index) =
-        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
-    let old_facts = behavior::collect_facts(old_worktree.path(), &old_ignore);
+    let old_base = old_side_base(old_worktree.path(), &source, scoped);
+    let old_ignore = build_ignore_matcher(
+        &old_base,
+        &arguments.settings,
+        &arguments.ignore_args.ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+    let old_facts = behavior::collect_facts(&old_base, &old_ignore);
     drop(old_worktree);
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
@@ -1829,14 +2045,21 @@ async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
 
     // A simulated rename that names nothing is a typo, not a
     // report: the measurement errors, and the error names the file
-    // and symbol the caller spelled.
+    // and symbol. The file spellings are normalised to the
+    // graph's first, so a `./`-prefixed or absolute spelling of a
+    // file that is in the tree is not misread as naming nothing.
+    let file = normalize_tree_file(&source.analysis_path, &arguments.file);
+    let to_file = arguments
+        .to_file
+        .as_deref()
+        .map(|to| normalize_tree_file(&source.analysis_path, to));
     let measured = simulate::measure_simulate(
         &index,
         &report,
-        &arguments.file,
+        &file,
         &arguments.symbol,
         &arguments.to,
-        arguments.to_file.as_deref(),
+        to_file.as_deref(),
     )?;
 
     let rendered = match arguments.format {
@@ -1914,7 +2137,9 @@ async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // As coupling's: churn and coupling read the history, so
+        // URL runs need the full clone, not a depth-1 one.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Ranking untested symbols...");
@@ -1939,10 +2164,7 @@ async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
     let (report, index) =
         build_graph_with_declarations(&source.analysis_path, &ignore)?;
 
-    let base_prefix = sephera_graph::blast_radius::base_prefix_for(
-        &source.repo_root,
-        &source.analysis_path,
-    );
+    let base_prefix = history_base_prefix(&source);
     let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
     let measured = test_priority::measure_test_priority(
         &report,
@@ -2086,6 +2308,31 @@ fn build_new_schema_side(
 /// Only proven consumers fail the gate: a break nobody uses does
 /// not fail the run, and a break with only name-match consumers
 /// never fails it.
+/// Fail before the repository check when `--path` names something that
+/// is not a directory at all.
+///
+/// A file inside a repository used to be reported as "not inside
+/// one", and a nonexistent path the same, because `repo_toplevel`
+/// answers `None` for both. The single-tree commands fail this way
+/// through `sephera_scan`'s project-file validation; this command
+/// checks the same thing in the same words before asking about the
+/// repo, and the MCP tool mirrors it so the two cannot disagree.
+fn ensure_schema_analysis_dir(source: &ResolvedSource) -> Result<()> {
+    if source.analysis_path.is_dir() {
+        return Ok(());
+    }
+    if !source.analysis_path.exists() {
+        anyhow::bail!(
+            "path `{}` does not exist",
+            source.analysis_path.display()
+        );
+    }
+    anyhow::bail!(
+        "path `{}` is not a directory",
+        source.analysis_path.display()
+    );
+}
+
 fn schema_impact_gates(
     measured: &schema_impact::SchemaImpactReport,
     fail_on: Option<u64>,
@@ -2130,6 +2377,11 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A path that is not a directory at all must say so, rather than
+    // falling through to the repository check below; the check lives
+    // in its own function so this already-long function stays under
+    // clippy's line limit.
+    ensure_schema_analysis_dir(&source)?;
     // A tree that is not a git repository has no refs to compare:
     // an error, never an empty report.
     if repo_toplevel(&source.analysis_path).is_none() {
@@ -2281,6 +2533,7 @@ async fn run_affected_tests(
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     progress.set_message("Extracting imports...");
     let report = build_graph_with_progress(
@@ -2569,19 +2822,35 @@ fn run_graph_diff(
         GraphOutputFormat::Json => {
             change_impact::render_json(&changes, spec, &skipped)
         }
-        _ => change_impact::render_markdown(&changes, spec, &skipped),
+        GraphOutputFormat::Markdown => {
+            change_impact::render_markdown(&changes, spec, &skipped)
+        }
+        GraphOutputFormat::Xml => {
+            change_impact::render_xml(&changes, spec, &skipped)
+        }
+        GraphOutputFormat::Dot => {
+            change_impact::render_dot(&changes, spec, &skipped)
+        }
     };
 
-    let gates = arguments
-        .fail_on_unresolved
-        .map(|limit| {
-            vec![Gate::new(
-                "unresolved local paths",
-                report.metrics.unresolved_local_edges,
-                limit,
-            )]
-        })
-        .unwrap_or_default();
+    // Both thresholds the non-diff path honours. `--fail-on-cycles` used
+    // to be accepted here and then dropped, so a diff run over a cyclic
+    // tree exited 0 where the same tree without `--diff` exited 2.
+    let mut gates = Vec::new();
+    if let Some(limit) = arguments.fail_on_cycles {
+        gates.push(Gate::new(
+            "circular dependencies",
+            report.metrics.circular_dependencies,
+            limit,
+        ));
+    }
+    if let Some(limit) = arguments.fail_on_unresolved {
+        gates.push(Gate::new(
+            "unresolved local paths",
+            report.metrics.unresolved_local_edges,
+            limit,
+        ));
+    }
 
     if arguments.output_args.output.is_some() {
         progress.set_message("Writing output...");
@@ -2612,6 +2881,7 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     if let Some(spec) = arguments.diff.as_deref() {
         return run_graph_diff(&source, &ignore, arguments, spec);

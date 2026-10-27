@@ -240,3 +240,208 @@ fn graph_command_reports_missing_depends_on_target() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("did not resolve to an analyzed graph node"));
 }
+
+fn git(repo: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .expect("git should run");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn regression_diff_mode_honours_fail_on_cycles() {
+    // `graph --diff --fail-on-cycles 1` on a cyclic tree used to exit 0:
+    // the diff path built only the unresolved-paths gate and dropped the
+    // cycles gate the non-diff path honours, so the same tree failed
+    // without `--diff` and passed with it.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "cyc_a.py", b"import cyc_b\n");
+    write_file(temp_dir.path(), "cyc_b.py", b"import cyc_a\n");
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+    git(temp_dir.path(), &["init"]);
+    git(temp_dir.path(), &["config", "user.name", "Sephera Tests"]);
+    git(
+        temp_dir.path(),
+        &["config", "user.email", "tests@example.com"],
+    );
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "base"]);
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 2\n");
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "second"]);
+
+    let plain = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--fail-on-cycles",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(plain.status.code(), Some(2), "non-diff gate fires");
+
+    let diffed = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--diff",
+            "HEAD~1",
+            "--fail-on-cycles",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        diffed.status.code(),
+        Some(2),
+        "diff mode must fire the same gate: {}",
+        String::from_utf8_lossy(&diffed.stderr)
+    );
+}
+
+#[test]
+fn regression_diff_mode_honours_the_requested_format() {
+    // `graph --diff --format xml` and `--format dot` used to return the
+    // Markdown report: the diff path matched only json and fell through
+    // to markdown for everything else, so a consumer asking for XML got
+    // a document no XML parser accepts.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+    write_file(temp_dir.path(), "user.py", b"from lib import f\n");
+    git(temp_dir.path(), &["init"]);
+    git(temp_dir.path(), &["config", "user.name", "Sephera Tests"]);
+    git(
+        temp_dir.path(),
+        &["config", "user.email", "tests@example.com"],
+    );
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "base"]);
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 2\n");
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "second"]);
+
+    for (format, marker) in [("xml", "<?xml"), ("dot", "digraph")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+            .args([
+                "graph",
+                "--path",
+                temp_dir.path().to_str().unwrap(),
+                "--diff",
+                "HEAD~1",
+                "--format",
+                format,
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).expect("text output");
+        assert!(
+            text.contains(marker),
+            "--format {format} must render {marker}, got: {text}"
+        );
+        assert!(
+            !text.contains("# Change impact"),
+            "--format {format} must not fall back to Markdown: {text}"
+        );
+    }
+}
+
+#[test]
+fn regression_diff_with_focus_is_rejected_rather_than_ignored() {
+    // `graph --diff --focus <path>` used to exit 0 and run the diff
+    // unscoped: the diff path never read the focus flag. `--diff`
+    // selects its files from git, so scoping it by focus is a different
+    // question, and the honest answer is a rejection, like `--diff`
+    // with `--what-depends-on` already gets.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--diff",
+            "HEAD~1",
+            "--focus",
+            "lib.py",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--focus") && stderr.contains("--diff"),
+        "the conflict must name both flags: {stderr}"
+    );
+}
+
+#[test]
+fn regression_focus_on_a_missing_path_is_an_error() {
+    // `graph --focus nope.py` used to exit 0 with an empty graph: a scope
+    // naming nothing narrowed the answer to nothing with no complaint,
+    // which reads as a finding about the repository rather than a typo.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "main.rs", b"fn main() {}\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--focus",
+            "nope.py",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nope.py"),
+        "the scope must be named: {stderr}"
+    );
+}
+
+#[test]
+fn regression_focus_dotdot_escape_is_rejected() {
+    // `std::path::absolute` normalises `.` but not `..`, so `--focus
+    // ../sibling` from a subdirectory base used to pass the containment
+    // check: the first components matched, and the sibling exists on disk.
+    // A scope must resolve inside the analysis base, not beside it.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "pkg/main.rs", b"fn main() {}\n");
+    write_file(temp_dir.path(), "sibling/other.rs", b"pub fn other() {}\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().join("pkg").to_str().unwrap(),
+            "--focus",
+            "../sibling",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must resolve inside"),
+        "the escape must be named: {stderr}"
+    );
+}

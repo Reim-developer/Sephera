@@ -131,3 +131,118 @@ fn missing_symbol_is_an_error_not_an_empty_trail() {
         run_archaeology(repo.path(), &["new.py", "--symbol", "no_such_name"]);
     assert!(!output.status.success());
 }
+
+/// A repository where `pkg/lib.py` declares `old_name`, one
+/// consumer imports it by its root-valid path, and a later commit
+/// renames it — the trail a scoped run must be able to walk.
+fn repo_with_scoped_rename() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "pkg/lib.py",
+        b"def old_name(a, b):\n    return a - b\n",
+    );
+    write_file(
+        dir,
+        "pkg/user.py",
+        b"from pkg.lib import old_name\n\n\nprint(old_name(x, y))\n",
+    );
+    write_file(dir, "other.py", b"VALUE = 1\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "born"]);
+    write_file(
+        dir,
+        "pkg/lib.py",
+        b"def new_name(a, b):\n    return a - b\n",
+    );
+    write_file(
+        dir,
+        "pkg/user.py",
+        b"from pkg.lib import new_name\n\n\nprint(new_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "renamed"]);
+    temp_dir
+}
+
+#[test]
+fn regression_archaeology_scoped_path_accepts_analysis_relative_spelling() {
+    let repo = repo_with_scoped_rename();
+    let pkg = repo.path().join("pkg");
+    let output = run_archaeology(&pkg, &["lib.py", "--symbol", "new_name"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Renamed `old_name` → `new_name` in `pkg/lib.py`."),
+        "{stdout}"
+    );
+    assert!(
+        stdout.contains("Born as `old_name` in `pkg/lib.py`."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("reaches the symbol's birth"), "{stdout}");
+}
+
+#[test]
+fn regression_archaeology_scoped_path_root_relative_spelling_uses_file_log() {
+    // Three commits that never touch the tracked file sit between
+    // its birth and its rename. A walk that queries the file's log
+    // reaches the birth inside a window of 3; a walk that falls
+    // back to visiting every parent burns the window on the
+    // filler commits and stops with a note instead.
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "pkg/lib.py",
+        b"def old_name(a, b):\n    return a - b\n",
+    );
+    write_file(
+        dir,
+        "pkg/user.py",
+        b"from pkg.lib import old_name\n\n\nprint(old_name(x, y))\n",
+    );
+    write_file(dir, "other.py", b"VALUE = 1\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "born"]);
+    for value in [2, 3, 4] {
+        write_file(dir, "other.py", format!("VALUE = {value}\n").as_bytes());
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "filler"]);
+    }
+    write_file(
+        dir,
+        "pkg/lib.py",
+        b"def new_name(a, b):\n    return a - b\n",
+    );
+    write_file(
+        dir,
+        "pkg/user.py",
+        b"from pkg.lib import new_name\n\n\nprint(new_name(x, y))\n",
+    );
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "renamed"]);
+    let pkg = dir.join("pkg");
+    let output = run_archaeology(
+        &pkg,
+        &["pkg/lib.py", "--symbol", "new_name", "--window", "3"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains("Renamed `old_name` → `new_name` in `pkg/lib.py`."),
+        "{stdout}"
+    );
+    assert!(stdout.contains("reaches the symbol's birth"), "{stdout}");
+}

@@ -180,18 +180,33 @@ pub fn measure_all(
 ) -> Result<Vec<BlastRadius>> {
     let mut matched = Vec::with_capacity(requested.len());
     let mut unknown = Vec::new();
+    // One file is one radius, however many spellings of it were typed:
+    // asking about `lib.py` twice used to report "2 files" with the same
+    // section twice, and the header count was wrong rather than merely
+    // redundant. Deduplication is on the canonical spelling, so
+    // `./lib.py` and `lib.py` collapse too.
+    let mut seen: std::collections::BTreeSet<String> =
+        std::collections::BTreeSet::new();
 
     for raw in requested {
         match match_path(report, raw, base_prefix) {
             // `measure` reads the target from the query, and a whole-repository
             // report has none, so the canonical spelling is passed explicitly.
             Some(canonical) => {
-                // `measure_scoped` refuses a report that describes a different
-                // file, so a query-filtered report is caught here by
-                // construction rather than by a second copy of that check.
-                matched.push(measure_scoped(report, &canonical, depth, focus)?);
+                if seen.insert(canonical.clone()) {
+                    // `measure_scoped` refuses a report that describes a different
+                    // file, so a query-filtered report is caught here by
+                    // construction rather than by a second copy of that check.
+                    matched.push(measure_scoped(
+                        report, &canonical, depth, focus,
+                    )?);
+                }
             }
-            None => unknown.push(raw.clone()),
+            None => {
+                if !unknown.iter().any(|path| path == raw) {
+                    unknown.push(raw.clone());
+                }
+            }
         }
     }
 

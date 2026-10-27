@@ -133,3 +133,39 @@ fn identical_refs_report_no_silent_change() {
         "{stdout}"
     );
 }
+
+/// A repository whose scoped tree swaps one call's arguments in
+/// the working tree: the scoped no-`--to` scan must pair the old
+/// and new call sites, which only share a spelling when the old
+/// side is scoped too.
+fn repo_with_scoped_swap() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/lib.py", b"def divide(a, b):\n    return a - b\n");
+    write_file(dir, "pkg/user.py", b"print(divide(10, 2))\n");
+    write_file(dir, "other/outer.py", b"def run():\n    return 1\n");
+    git(dir, &["add", "."]);
+    git(dir, &["commit", "-qm", "seed"]);
+    write_file(dir, "pkg/user.py", b"print(divide(2, 10))\n");
+    temp_dir
+}
+
+#[test]
+fn regression_behavior_subdir_without_to_scopes_the_old_side() {
+    let repo = repo_with_scoped_swap();
+    let pkg = repo.path().join("pkg");
+    let output = run_behavior(&pkg, &["--from", "HEAD"]);
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    assert!(
+        stdout.contains(
+            "Swapped arguments at a call to `divide` in `user.py`: (10, 2) → (2, 10)."
+        ),
+        "{stdout}"
+    );
+}

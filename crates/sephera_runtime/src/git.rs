@@ -169,9 +169,16 @@ pub fn recent_commit_files(
     repo_root: &Path,
     limit: u32,
 ) -> Result<Vec<Vec<String>>> {
+    // `core.quotepath=false`: without it git quotes every
+    // non-ASCII path in octal (`"caf\303\251.py"`), and that quoted
+    // spelling never meets the graph's UTF-8 spelling — so a
+    // repository with unicode filenames counted zero history, the
+    // same silent-empty shape as a wrong analysis prefix.
     let output = git_stdout_string(
         repo_root,
         [
+            "-c",
+            "core.quotepath=false",
             "log",
             "--name-only",
             "--format=%x1e%H",
@@ -208,13 +215,24 @@ pub fn changed_files(
     repo_root: &Path,
     reference: Option<&str>,
 ) -> Result<Vec<String>> {
+    // Both readings must run from the work-tree root, or their
+    // spellings disagree: `git diff` names files from the root
+    // wherever it runs, while `git ls-files --others` names them
+    // from the working directory. A caller passing a subdirectory
+    // would otherwise get tracked changes in root spelling and
+    // untracked files in base spelling, and the rebase onto the
+    // graph's spelling could only ever match one of the two. A
+    // directory that is not in a repository keeps today's working
+    // directory, so the same error arrives as before.
+    let root =
+        repo_toplevel(repo_root).unwrap_or_else(|| repo_root.to_path_buf());
     let diff = git_stdout_string(
-        repo_root,
+        &root,
         ["diff", "--name-only", "-z", reference.unwrap_or("HEAD")],
         "read the changed files",
     )?;
     let untracked = git_stdout_string(
-        repo_root,
+        &root,
         ["ls-files", "--others", "--exclude-standard", "-z"],
         "read the untracked files",
     )?;
@@ -776,6 +794,63 @@ mod tests {
                 "gone.txt".to_owned(),
                 "new.txt".to_owned()
             ]
+        );
+    }
+
+    #[test]
+    fn regression_recent_commit_files_spells_unicode_names_unquoted() {
+        // Git quotes non-ASCII paths in octal by default, and the
+        // quoted spelling never meets the graph's UTF-8 spelling:
+        // history over a repository with unicode filenames counted
+        // zero commits. The log call disables quoting, so the names
+        // come back exactly as the files are spelled.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("café.py"), "x = 1\n").expect("write");
+        fs::write(dir.join("münchen.py"), "y = 2\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+        fs::write(dir.join("café.py"), "x = 1\n# 2\n").expect("write");
+        fs::write(dir.join("münchen.py"), "y = 2\n# 2\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "second"]);
+
+        let commits = recent_commit_files(dir, 10).expect("history reads");
+        assert_eq!(commits.len(), 2);
+        assert_eq!(
+            commits[0],
+            vec!["café.py".to_owned(), "münchen.py".to_owned()],
+            "the names as the files are spelled, not git's octal quoting"
+        );
+    }
+
+    #[test]
+    fn regression_changed_files_from_a_subdir_spells_both_readings_from_the_root()
+     {
+        // `git diff` names files from the repository root wherever
+        // it runs, while `git ls-files --others` names them from
+        // the working directory. Called with a subdirectory, the
+        // change used to mix the two spellings: a tracked edit came
+        // back root-relative and an untracked file base-relative,
+        // so no single rebase could match both to the graph.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::create_dir(dir.join("pkg")).expect("mkdir");
+        fs::write(dir.join("pkg/a.py"), "x = 1\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+
+        fs::write(dir.join("pkg/a.py"), "x = 2\n").expect("write");
+        fs::write(dir.join("pkg/new.py"), "z = 3\n").expect("write");
+
+        let changed =
+            changed_files(&dir.join("pkg"), None).expect("the change reads");
+        assert_eq!(
+            changed,
+            vec!["pkg/a.py".to_owned(), "pkg/new.py".to_owned()],
+            "both readings in the repository root's spelling"
         );
     }
 

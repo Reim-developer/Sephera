@@ -140,14 +140,34 @@ pub fn is_ignored(paths: &[PathBuf]) -> bool {
 }
 
 /// Whether one path sits inside a directory that should not trigger a re-run.
+///
+/// Only non-final components count: a path *inside* `target/` is build
+/// output, but a source file that merely *is named* `target`, `build`,
+/// `dist`, or `vendor` sits inside no ignored directory, and the old
+/// any-component check silently unwatched exactly those files — an edit
+/// to a `build` script or a file called `target` never re-ran anything.
+/// The price of the narrower rule is one spurious re-run when an ignored
+/// directory itself is created or removed (its own path has no parent
+/// component to match); the files inside it still never trigger, which is
+/// what the debounce exists to absorb.
 #[must_use]
 pub fn is_ignored_path(path: &Path) -> bool {
-    path.components().any(|component| {
-        component
+    let mut components = path.components().peekable();
+    while let Some(component) = components.next() {
+        // The final component names the changed path itself, not a
+        // directory containing it, so it must not match on its own.
+        if components.peek().is_none() {
+            break;
+        }
+        if component
             .as_os_str()
             .to_str()
             .is_some_and(|name| ignored_directories().contains(&name))
-    })
+        {
+            return true;
+        }
+    }
+    false
 }
 
 /// The root to watch, resolved so relative paths keep working.
@@ -172,6 +192,38 @@ mod tests {
     fn source_paths_are_watched() {
         assert!(!is_ignored_path(Path::new("src/main.rs")));
         assert!(!is_ignored_path(Path::new("crates/core/graph.rs")));
+    }
+
+    #[test]
+    fn regression_a_file_named_like_an_ignored_directory_is_watched() {
+        // A file called `target` is not build output: it sits inside no
+        // ignored directory, so editing it must re-run. The old
+        // any-component check ignored it, and a live watch proved it —
+        // appending to such a file produced no second run.
+        for path in [
+            "target",
+            "src/target",
+            "build",
+            "dist",
+            "vendor",
+            "node_modules",
+            ".git",
+            "__pycache__",
+            ".venv",
+        ] {
+            assert!(
+                !is_ignored_path(Path::new(path)),
+                "{path} names the changed path itself, not its parent"
+            );
+        }
+    }
+
+    #[test]
+    fn regression_paths_inside_ignored_directories_stay_ignored() {
+        assert!(is_ignored_path(Path::new("target/debug/deps/lib.rs")));
+        assert!(is_ignored_path(Path::new("src/target/debug/lib.rs")));
+        assert!(is_ignored_path(Path::new("a/node_modules/pkg/index.js")));
+        assert!(is_ignored_path(Path::new(".git/objects/ab/cdef")));
     }
 
     #[test]

@@ -8,10 +8,6 @@ use sephera_scan::CodeLocReport;
 
 use super::timing::render_elapsed_line;
 
-pub fn print_report(report: &CodeLocReport) {
-    println!("{}", render_report_table(report));
-}
-
 #[must_use]
 pub fn render_report_table(report: &CodeLocReport) -> String {
     let mut output = String::new();

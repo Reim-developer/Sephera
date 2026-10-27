@@ -193,33 +193,64 @@ const fn display_name(name: &str) -> &str {
     if name.is_empty() { "(anonymous)" } else { name }
 }
 
-/// Print the per-language summary as a terminal table.
-pub fn print_symbol_report(report: &SymbolReport) {
+/// Render the per-language summary as a terminal table, without a trailing
+/// newline, so the caller decides how it is emitted: printed to stdout or
+/// written to a `--output` file. The string form is what lets the table
+/// format honour `--output` at all -- the print form below can only go to
+/// stdout, which is how a table report with `--output` used to print to the
+/// terminal and never create the file.
+#[must_use]
+pub fn render_symbol_table(report: &SymbolReport) -> String {
     let grid = language_grid(report);
-
-    println!("{}", Format::Table.render(&grid));
-
-    println!("Files scanned: {}", report.files_scanned);
-    println!("Languages detected: {}", report.languages_detected);
+    let mut output = Format::Table.render(&grid);
+    let _ = writeln!(output, "\nFiles scanned: {}", report.files_scanned);
+    let _ =
+        writeln!(output, "Languages detected: {}", report.languages_detected);
     if report.files_skipped > 0 {
-        println!(
+        let _ = writeln!(
+            output,
             "Files skipped (empty or larger than the parse limit): {}",
             report.files_skipped
         );
     }
+    output.trim_end_matches('\n').to_owned()
 }
 
-/// Print the per-file breakdown as a terminal table.
-pub fn print_symbols_by_file(detail: &SymbolDetail) {
+/// Render the per-file breakdown as a terminal table, without a trailing
+/// newline. A repository with no declarations still gets its count line:
+/// the old print form returned early on an empty grid, so `--by-file` on
+/// an empty tree exited 0 printing nothing at all, which reads as a
+/// crashed or truncated run rather than as an empty answer.
+#[must_use]
+pub fn render_symbols_by_file_table(detail: &SymbolDetail) -> String {
     let ranked = symbols_by_file(detail);
     let grid = by_file_grid(&ranked);
 
     if grid.is_empty() {
-        return;
+        return "Files with declarations: 0".to_owned();
     }
 
-    println!("{}", Format::Table.render(&grid));
-    println!("Files with declarations: {}", ranked.len());
+    let mut output = Format::Table.render(&grid);
+    let _ = writeln!(output, "\nFiles with declarations: {}", ranked.len());
+    output.trim_end_matches('\n').to_owned()
+}
+
+/// Render the declaration list as a terminal table, or nothing when there
+/// is nothing to list.
+///
+/// The table format used to drop `--detail` entirely: the summary (or the
+/// per-file breakdown) printed and the flag that asks for every declaration
+/// changed nothing, while markdown and json both listed them. A format that
+/// accepts a flag and ignores it is the same class of bug `--by-file`
+/// was in json and markdown before the shared grids existed.
+#[must_use]
+pub fn render_symbol_declarations_table(
+    detail: &SymbolDetail,
+) -> Option<String> {
+    if detail.symbols.is_empty() {
+        return None;
+    }
+    Some(Format::Table.render(&declaration_grid(&detail.symbols)))
 }
 
 /// Render a symbol report as JSON.
@@ -333,7 +364,7 @@ mod tests {
 
     use super::{
         TOTALS_LABEL, by_file_grid, declaration_grid, language_grid,
-        print_symbol_report, render_symbol_json, render_symbol_markdown,
+        render_symbol_json, render_symbol_markdown, render_symbol_table,
         symbols_by_file,
     };
     use crate::output::grid::{Column, Format};
@@ -403,7 +434,12 @@ mod tests {
             render_symbol_markdown(&detail, false)
                 .contains("| `Files skipped` | 2 |")
         );
-        print_symbol_report(&detail.report);
+        assert!(
+            render_symbol_table(&detail.report).contains(
+                "Files skipped (empty or larger than the parse limit): 2"
+            ),
+            "the table carries the skipped count too"
+        );
     }
 
     /// The three formats read the same grids, so every column heading appears in

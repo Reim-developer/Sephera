@@ -11,13 +11,17 @@
 //! Handlers are thin by design: resolve a source, delegate to `sephera_core`,
 //! then format. They hold no state between calls.
 
+use std::sync::Arc;
+
 use rmcp::{
     ServerHandler, ServiceExt,
     handler::server::tool::ToolRouter,
     model::{ServerCapabilities, ServerInfo},
+    service::{RoleServer, RxJsonRpcMessage, TxJsonRpcMessage},
     tool, tool_handler, tool_router,
-    transport::io::stdio,
+    transport::Transport,
 };
+use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 use sephera_graph::{
     archaeology, behavior, blast_radius, breaking, coupling, dead,
@@ -315,6 +319,7 @@ impl SepheraServer {
             .into_iter()
             .map(std::path::PathBuf::from)
             .collect();
+        check_focus_paths_exist(&source.analysis_path, &focus_paths)?;
         let query = param.depends_on.map(GraphQuery::DependsOn);
 
         let mut report = build_graph(
@@ -383,6 +388,14 @@ impl SepheraServer {
         .await
         .map_err(map_internal_error("source resolution failed"))?;
 
+        let focus_paths: Vec<std::path::PathBuf> = param
+            .focus
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        check_focus_paths_exist(&source.analysis_path, &focus_paths)?;
+
         // The whole repository, because the radius of one file routinely reaches
         // past any subtree and every target shares this one build.
         let report = build_graph(
@@ -400,17 +413,9 @@ impl SepheraServer {
         );
         // Normalised the same way `graph --focus` normalises, so an absolute scope
         // path is compared in the graph's spelling rather than against its own.
-        let focus = build_focus_set(
-            &source.analysis_path,
-            &param
-                .focus
-                .unwrap_or_default()
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect::<Vec<_>>(),
-        )
-        .into_iter()
-        .collect::<Vec<_>>();
+        let focus = build_focus_set(&source.analysis_path, &focus_paths)
+            .into_iter()
+            .collect::<Vec<_>>();
 
         // One build, two questions: the file's whole radius, or the
         // radius of one name inside it when `symbol` is set. The symbol
@@ -495,6 +500,14 @@ impl SepheraServer {
         .await
         .map_err(map_internal_error("source resolution failed"))?;
 
+        let focus_paths: Vec<std::path::PathBuf> = param
+            .focus
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        check_focus_paths_exist(&source.analysis_path, &focus_paths)?;
+
         let report = build_graph(
             &source.analysis_path,
             &ignore_matcher,
@@ -508,17 +521,9 @@ impl SepheraServer {
             &source.repo_root,
             &source.analysis_path,
         );
-        let focus = build_focus_set(
-            &source.analysis_path,
-            &param
-                .focus
-                .unwrap_or_default()
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect::<Vec<_>>(),
-        )
-        .into_iter()
-        .collect::<Vec<_>>();
+        let focus = build_focus_set(&source.analysis_path, &focus_paths)
+            .into_iter()
+            .collect::<Vec<_>>();
 
         let impacts = sephera_graph::affected_tests::measure_tests_all(
             &report,
@@ -664,7 +669,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -687,10 +692,7 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
         let min_co_changes = param.min_co_changes.unwrap_or(3);
         let measured = coupling::measure_coupling(
@@ -742,7 +744,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -768,10 +770,7 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased_commits =
             coupling::rebase_commit_paths(&commits, &base_prefix);
         let prefix = base_prefix.trim_matches('/');
@@ -846,7 +845,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -868,10 +867,7 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
         let measured = risk::measure_risk(
             &report,
@@ -1580,7 +1576,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -1598,10 +1594,7 @@ impl SepheraServer {
             &ignore_matcher,
         )
         .map_err(map_internal_error("graph build failed"))?;
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
         let measured = test_priority::measure_test_priority(
             &report,
@@ -1664,6 +1657,27 @@ impl SepheraServer {
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
+
+        // A path that is not a directory at all must say so, rather
+        // than falling through to the repository check below: a file
+        // inside a repository used to be reported as "not inside
+        // one", and a nonexistent path the same, because
+        // `repo_toplevel` answers `None` for both. Same words as the
+        // CLI's schema-impact check, so the two cannot disagree.
+        if !source.analysis_path.is_dir() {
+            let message = if source.analysis_path.exists() {
+                format!(
+                    "path `{}` is not a directory",
+                    source.analysis_path.display()
+                )
+            } else {
+                format!(
+                    "path `{}` does not exist",
+                    source.analysis_path.display()
+                )
+            };
+            return Err(rmcp::ErrorData::invalid_params(message, None));
+        }
 
         // A tree that is not a git repository has no refs to compare.
         if repo_toplevel(&source.analysis_path).is_none() {
@@ -2271,6 +2285,27 @@ fn analysis_prefix(source: &ResolvedSource) -> std::path::PathBuf {
         |_| std::path::PathBuf::new(),
         std::path::Path::to_path_buf,
     )
+}
+
+/// The `/`-separated repo-relative prefix history spellings carry
+/// but graph spellings do not, for rebasing git paths onto the
+/// graph's spelling: the twin of the CLI's `history_base_prefix`.
+///
+/// `base_prefix_for` cannot answer this for a local path:
+/// `resolve_source` sets `repo_root` equal to `analysis_path`, so
+/// stripping one from the other is empty even inside a repository,
+/// while git spells history from the work-tree root. A tool call
+/// scoped to a subdirectory therefore compared root-relative history
+/// (`pkg/a.py`) against base-relative graph paths (`a.py`) and found
+/// nothing. `analysis_prefix` asks git for the work-tree root, so
+/// the rebase strips the real prefix.
+#[must_use]
+fn history_base_prefix(source: &ResolvedSource) -> String {
+    analysis_prefix(source)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Build the old side of a comparison from its checkout worktree,
@@ -4469,6 +4504,61 @@ impl ServerHandler for SepheraServer {
     }
 }
 
+/// A focus scope must name something inside the analysis base that exists.
+///
+/// The CLI's `check_focus_paths_exist` twin: the dependency runs CLI → MCP
+/// → core, so MCP cannot import the CLI's copy and the same rule lives
+/// here. Canonicalised on both sides, because `absolute` normalises `.`
+/// but not `..` and a scope beside the base must be refused, not widened.
+/// A nonexistent scope is the caller's mistake, so it surfaces as invalid
+/// params rather than an internal error.
+///
+/// # Errors
+///
+/// Returns an invalid-params error naming a scope that does not exist or
+/// resolves outside the base, or a base that cannot be resolved.
+fn check_focus_paths_exist(
+    base_path: &std::path::Path,
+    focus: &[std::path::PathBuf],
+) -> Result<(), rmcp::ErrorData> {
+    let invalid =
+        |message: String| rmcp::ErrorData::invalid_params(message, None);
+    let base = std::fs::canonicalize(base_path).map_err(|_| {
+        invalid(format!(
+            "could not resolve base path `{}`",
+            base_path.display()
+        ))
+    })?;
+    for path in focus {
+        let candidate = if path.is_absolute() {
+            path.clone()
+        } else {
+            base_path.join(path)
+        };
+        if !candidate.exists() {
+            return Err(invalid(format!(
+                "focus path `{}` does not exist inside `{}`",
+                path.display(),
+                base_path.display()
+            )));
+        }
+        let resolved = std::fs::canonicalize(&candidate).map_err(|_| {
+            invalid(format!(
+                "could not resolve focus path `{}`",
+                path.display()
+            ))
+        })?;
+        if resolved.strip_prefix(&base).is_err() {
+            return Err(invalid(format!(
+                "focus path `{}` must resolve inside `{}`",
+                path.display(),
+                base_path.display()
+            )));
+        }
+    }
+    Ok(())
+}
+
 /// Map a requested graph output format onto [`GraphFormat`].
 ///
 /// An absent value keeps JSON, which is the historical behaviour of this tool.
@@ -4499,10 +4589,104 @@ fn parse_graph_format(
 /// # Errors
 ///
 /// Returns an error if the transport or server setup fails.
+/// Stdio transport that survives a malformed line.
+///
+/// rmcp's own stdio transport ends the session on the first line its
+/// codec cannot parse: a stray non-JSON line, an empty line, a
+/// `jsonrpc: "1.0"` line, or a JSON array all killed the server
+/// silently with exit code 0, and every later tool call in the
+/// session died with it. A client that echoes a log line to the
+/// server's stdin, or a wrapped launcher that prints a banner, must
+/// not be able to do that.
+///
+/// This transport parses each line itself and simply skips the ones
+/// that are not a client message, so the session continues at the
+/// next well-formed line. Skipping is the only honest option for a
+/// line that does not parse: no request id can be recovered from it,
+/// so no `-32700` response could name what failed. A line that
+/// parses as JSON but is not a client message (wrong version, wrong
+/// shape) is skipped for the same reason — the codec would have
+/// ended the stream on it, and ending the stream is the failure this
+/// transport exists to prevent. Everything else is rmcp's behaviour
+/// unchanged: valid messages are dispatched exactly as before, and
+/// EOF still ends the session cleanly.
+///
+/// The writer lives behind an `Arc<Mutex>` because `Transport::send`
+/// must return a `'static` future, which cannot borrow the transport.
+struct LenientStdioTransport {
+    reader: tokio::io::BufReader<tokio::io::Stdin>,
+    writer: Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
+    /// Bytes of the line currently being read. Persistent across calls so
+    /// a read cancelled partway through a line does not lose the bytes
+    /// already arrived; cleared only after a complete line is consumed.
+    line_buf: Vec<u8>,
+}
+
+impl LenientStdioTransport {
+    fn new() -> Self {
+        Self {
+            reader: tokio::io::BufReader::new(tokio::io::stdin()),
+            writer: Arc::new(tokio::sync::Mutex::new(tokio::io::stdout())),
+            line_buf: Vec::new(),
+        }
+    }
+}
+
+impl Transport<RoleServer> for LenientStdioTransport {
+    type Error = std::io::Error;
+
+    fn send(
+        &mut self,
+        item: TxJsonRpcMessage<RoleServer>,
+    ) -> impl Future<Output = Result<(), Self::Error>> + Send + 'static {
+        let writer = Arc::clone(&self.writer);
+        async move {
+            let mut text = serde_json::to_string(&item).map_err(|error| {
+                std::io::Error::new(std::io::ErrorKind::InvalidData, error)
+            })?;
+            text.push('\n');
+            let mut guard = writer.lock().await;
+            guard.write_all(text.as_bytes()).await?;
+            guard.flush().await
+        }
+    }
+
+    async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
+        loop {
+            match self.reader.read_until(b'\n', &mut self.line_buf).await {
+                Ok(0) | Err(_) => return None,
+                Ok(_) => {
+                    let parsed = serde_json::from_slice::<
+                        RxJsonRpcMessage<RoleServer>,
+                    >(&self.line_buf);
+                    self.line_buf.clear();
+                    if let Ok(message) = parsed {
+                        return Some(message);
+                    }
+                    // Not a client message: skip it and read on. The
+                    // session survives; the next well-formed line is
+                    // answered as if the garbage had never arrived. Lines
+                    // are read as bytes rather than UTF-8 strings, so a
+                    // line that is not valid UTF-8 is garbage to skip,
+                    // not an error that ends the session.
+                }
+            }
+        }
+    }
+
+    async fn close(&mut self) -> Result<(), Self::Error> {
+        self.writer.lock().await.flush().await
+    }
+}
+
+/// Serve the MCP protocol over stdio.
+///
+/// # Errors
+///
+/// Returns an error if the transport or server setup fails.
 pub async fn run_mcp_server() -> anyhow::Result<()> {
     let server = SepheraServer::new();
-    let transport = stdio();
-    let service = server.serve(transport).await?;
+    let service = server.serve(LenientStdioTransport::new()).await?;
     service.waiting().await?;
     Ok(())
 }

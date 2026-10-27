@@ -47,9 +47,11 @@ pub fn execute(arguments: &SkillArgs) -> Result<()> {
     if arguments.print && arguments.command.is_some() {
         anyhow::bail!("`--print` cannot be combined with `install`; drop one");
     }
-    let target = target_dir(arguments)?;
+    let (project, target) = target_dir(arguments)?;
     match &arguments.command {
-        Some(SkillCommand::Install { force }) => install(&target, *force),
+        Some(SkillCommand::Install { force }) => {
+            install(&target, &project, *force)
+        }
         None => {
             println!("{}", target.display());
             println!("{SUMMARY}");
@@ -58,8 +60,9 @@ pub fn execute(arguments: &SkillArgs) -> Result<()> {
     }
 }
 
-/// Where the skill goes: `<skills-dir>/sephera-change-safety`.
-fn target_dir(arguments: &SkillArgs) -> Result<PathBuf> {
+/// Where the skill goes: `<skills-dir>/sephera-change-safety`, plus the
+/// project root the symlink check is bounded by.
+fn target_dir(arguments: &SkillArgs) -> Result<(PathBuf, PathBuf)> {
     let project = match &arguments.path {
         Some(path) => path.clone(),
         None => std::env::current_dir()
@@ -70,7 +73,7 @@ fn target_dir(arguments: &SkillArgs) -> Result<PathBuf> {
         Some(dir) => project.join(dir),
         None => project.join(".claude").join("skills"),
     };
-    Ok(skills.join(SKILL_NAME))
+    Ok((project, skills.join(SKILL_NAME)))
 }
 
 /// Copy the embedded files to the target.
@@ -79,14 +82,15 @@ fn target_dir(arguments: &SkillArgs) -> Result<PathBuf> {
 /// a skill the user tuned by hand, and overwriting it without being
 /// asked would destroy work this tool cannot reconstruct.
 ///
-/// A symlink at or under the target is refused even with `--force`:
-/// `fs::write` and `fs::create_dir_all` follow links, so a link a
-/// repository committed under `.claude/skills/` would send the
-/// install's bytes to whatever the link names. Links above the
-/// target are the caller's own path, not the skill's, and are not
-/// checked.
-fn install(target: &Path, force: bool) -> Result<()> {
-    reject_symlinks(target)?;
+/// A symlink at, under, or above the target up to the project root is
+/// refused even with `--force`: `fs::write` and `fs::create_dir_all`
+/// follow links, so a link a repository committed under
+/// `.claude/skills/` — or at `.claude/skills` or `.claude` itself —
+/// would send the install's bytes to whatever the link names. Only
+/// the project root itself and anything above it are the caller's own
+/// path, and are not checked.
+fn install(target: &Path, project: &Path, force: bool) -> Result<()> {
+    reject_symlinks(target, project)?;
     if target.exists() && !force {
         anyhow::bail!(
             "skill already exists at {}; re-run with `install --force` to overwrite it",
@@ -111,10 +115,22 @@ fn install(target: &Path, force: bool) -> Result<()> {
 ///
 /// Every path the install will create or overwrite is checked: the
 /// target itself, each written file's parent directories down to
-/// the target, and each written file. A link anywhere on those
-/// paths would redirect a write, so the install stops before
-/// writing anything. A path that does not exist yet is not a link.
-fn reject_symlinks(target: &Path) -> Result<()> {
+/// the target, and each written file — and, since a link above the
+/// target redirects the target's own creation just as surely, every
+/// ancestor of the target down to the project root. A repository
+/// that commits `.claude/skills` (or `.claude` itself) as a symlink
+/// used to pass the old check, which stopped at the target, and the
+/// install then wrote the skill into whatever the link named.
+/// A link anywhere on those paths would redirect a write, so the
+/// install stops before writing anything. A path that does not
+/// exist yet is not a link.
+///
+/// The project root itself is the boundary and is never checked:
+/// a symlinked project root — a worktree path, a symlinked home —
+/// is the caller's path, not the skill's. An absolute `--dir`
+/// outside the project likewise contributes no ancestors, because
+/// no ancestor of the target lies inside the project to check.
+fn reject_symlinks(target: &Path, project: &Path) -> Result<()> {
     let mut candidates = vec![target.to_path_buf()];
     for (relative, _) in FILES {
         let path = target.join(relative);
@@ -127,6 +143,14 @@ fn reject_symlinks(target: &Path) -> Result<()> {
             ancestor = dir.parent();
         }
         candidates.push(path);
+    }
+    let mut ancestor = target.parent();
+    while let Some(dir) = ancestor {
+        if !dir.starts_with(project) || dir == project {
+            break;
+        }
+        candidates.push(dir.to_path_buf());
+        ancestor = dir.parent();
     }
     for path in candidates {
         let is_link = path

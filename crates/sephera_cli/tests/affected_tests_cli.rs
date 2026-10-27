@@ -121,6 +121,25 @@ fn a_rust_change_reports_its_test_module_and_a_runnable_plan() {
 }
 
 #[test]
+fn regression_affected_tests_focus_on_a_missing_path_is_an_error() {
+    // `affected-tests --focus` took the same flag as `graph` and `impact`
+    // but skipped their existence check: a mistyped scope narrowed the
+    // answer to zero tests, which reads as a finding about the repository
+    // rather than a typo.
+    let temp_dir = rust_repo();
+    let output = run_affected(
+        temp_dir.path(),
+        &["src/core.rs", "--focus", "nope.py", "--format", "json"],
+    );
+    assert!(!output.status.success(), "{output:?}");
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nope.py"),
+        "the scope must be named: {stderr}"
+    );
+}
+
+#[test]
 fn a_python_change_plans_the_pytest_file() {
     let temp_dir = python_repo();
     let output =

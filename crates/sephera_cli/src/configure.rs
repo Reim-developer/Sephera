@@ -54,6 +54,27 @@ pub fn expand(
     let config = load_config(argv.as_slice())?;
 
     let Some(config) = config else {
+        // A `--profile` with no config file to read it from is the same
+        // no-op the profile check below exists to refuse: the flag was
+        // typed because the user expected something to happen, and
+        // discovery finding nothing is not a reason to run unconfigured.
+        // `--no-config` is exempt because that combination is clap's
+        // conflict to report, not this function's. `--url` is exempt
+        // because discovery anchors on the caller's directory while a
+        // remote run's config lives in the cloned repository, where the
+        // command's own resolution -- context's, for example -- still
+        // applies the profile and refuses a missing one itself.
+        if !argv.iter().any(|argument| argument == "--no-config")
+            && !argv.iter().any(|argument| {
+                argument == "--url" || argument.starts_with("--url=")
+            })
+            && let Some(requested) = selected_profile(&argv, cli_for_help)
+        {
+            anyhow::bail!(
+                "profile `{requested}` was requested but no `.sephera.toml` \
+                 was found; a profile can only come from a config file"
+            );
+        }
         return Ok(ExpandedArgs {
             argv,
             config_path: None,
@@ -73,6 +94,26 @@ pub fn expand(
     let Some(command) = resolve_command(&argv, cli_for_help, &config) else {
         // Nothing here names a command, so there is nothing for a config table to
         // configure. `--help` and `--version` land here.
+        //
+        // Except a `--profile`: commands outside the config schema (such
+        // as `why`) still accept the flag through the shared settings
+        // group, but no `[profiles.<name>.<command>]` table can exist for
+        // them, so the flag could never do anything. That is a silent
+        // no-op of exactly the kind the check below refuses, so it errors
+        // here rather than running unconfigured. A bare `--help` or
+        // `--version` has no subcommand-looking first argument and keeps
+        // the old behaviour.
+        if let Some(requested) = requested_command(&argv, cli_for_help)
+            && !requested.starts_with('-')
+            && let Some(profile) = selected_profile(&argv, cli_for_help)
+        {
+            anyhow::bail!(
+                "command `{requested}` has no profile section; profiles are \
+                 defined per command for loc, symbols, graph, impact, \
+                 context, and watch, so `--profile {profile}` cannot apply \
+                 to it"
+            );
+        }
         return Ok(ExpandedArgs {
             argv,
             config_path: Some(config.source_path),
@@ -124,6 +165,10 @@ pub fn expand(
             // Naming the section explains why a profile that exists for another
             // command does not count.
             let section = format!("[profiles.{requested}.{}]", command.name());
+            // The wording below is pinned verbatim by a context_config
+            // test ("no profiles are defined"), so it stays as written
+            // even though it reads awkwardly; the fix here is the error
+            // itself, not its grammar.
             let defined = if available.is_empty() {
                 "no profiles are defined".to_owned()
             } else {

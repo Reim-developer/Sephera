@@ -15,8 +15,8 @@ pub use graph::render_graph;
 pub use loc::{render_loc_csv, render_loc_json, render_loc_markdown};
 pub use profiles::print_available_profiles;
 pub use symbols::{
-    print_symbol_report, print_symbols_by_file, render_symbol_json,
-    render_symbol_markdown,
+    render_symbol_declarations_table, render_symbol_json,
+    render_symbol_markdown, render_symbol_table, render_symbols_by_file_table,
 };
-pub use table::{print_report, render_report_table};
+pub use table::render_report_table;
 pub use write::emit_rendered_output;

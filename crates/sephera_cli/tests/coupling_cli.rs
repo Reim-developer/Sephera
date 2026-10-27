@@ -133,3 +133,82 @@ fn coupling_in_a_tree_without_history_is_an_error_with_a_reason() {
         "the error should name what could not be read: {stderr}"
     );
 }
+
+/// A repository whose coupled pair lives under a subdirectory:
+// seed plus three rounds touching both files, no import between them.
+fn repo_with_subdir_pair() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "pkg/a.py", b"def fa():\n    return 1\n");
+    write_file(dir, "pkg/b.py", b"def fb():\n    return 100\n");
+    commit_all(dir, "seed");
+    for round in 2..=4 {
+        write_file(
+            dir,
+            "pkg/a.py",
+            format!("def fa():\n    return {round}\n").as_bytes(),
+        );
+        write_file(
+            dir,
+            "pkg/b.py",
+            format!("def fb():\n    return {round}\n").as_bytes(),
+        );
+        commit_all(dir, "the pair moves");
+    }
+    temp_dir
+}
+
+// Regression: git spells history from the repository root while the
+// graph spells it from the analysis base, and the old prefix
+// computation stripped repo_root from analysis_path — empty for a
+// local path, because resolve_source sets the two equal. A --path
+// <subdir> run therefore counted zero commits and reported no
+// coupling at all, however often the pair moved together.
+#[test]
+fn regression_coupling_subdir_path_counts_history() {
+    let temp_dir = repo_with_subdir_pair();
+    let output = run_coupling(
+        temp_dir.path(),
+        &["--path", "pkg", "--min-co-changes", "1", "--format", "json"],
+    );
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("coupling json");
+    assert_eq!(json["commits_scanned"], 4, "{json}");
+    assert_eq!(json["commits_counted"], 4, "{json}");
+    let pairs = json["pairs"].as_array().expect("pairs is a list");
+    assert_eq!(pairs.len(), 1, "{json}");
+    assert_eq!(pairs[0]["first"], "a.py");
+    assert_eq!(pairs[0]["second"], "b.py");
+    assert_eq!(pairs[0]["co_changes"], 4, "{json}");
+}
+
+// The same bug from inside the subdirectory: --path . with the
+// working directory under pkg/ is the same analysis base, so it
+// must count the same history rather than the same nothing.
+#[test]
+fn regression_coupling_subdir_path_counts_history_from_inside() {
+    let temp_dir = repo_with_subdir_pair();
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .arg("coupling")
+        .args(["--path", ".", "--min-co-changes", "1", "--format", "json"])
+        .current_dir(temp_dir.path().join("pkg"))
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let json: serde_json::Value =
+        serde_json::from_slice(&output.stdout).expect("coupling json");
+    assert_eq!(json["commits_counted"], 4, "{json}");
+    let pairs = json["pairs"].as_array().expect("pairs is a list");
+    assert_eq!(pairs.len(), 1, "{json}");
+    assert_eq!(pairs[0]["co_changes"], 4, "{json}");
+}
