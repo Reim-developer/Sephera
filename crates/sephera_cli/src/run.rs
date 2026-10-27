@@ -383,7 +383,7 @@ fn check_focus_paths_exist(
         let candidate = if path.is_absolute() {
             path.clone()
         } else {
-            base_path.join(path);
+            base_path.join(path)
         };
         let absolute_candidate = std::path::absolute(&candidate)
             .unwrap_or_else(|_| candidate.clone());

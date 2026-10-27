@@ -216,11 +216,6 @@ pub fn render_symbol_table(report: &SymbolReport) -> String {
     output.trim_end_matches('\n').to_owned()
 }
 
-/// Print the per-language summary as a terminal table.
-pub fn print_symbol_report(report: &SymbolReport) {
-    println!("{}", render_symbol_table(report));
-}
-
 /// Render the per-file breakdown as a terminal table, without a trailing
 /// newline. A repository with no declarations still gets its count line:
 /// the old print form returned early on an empty grid, so `--by-file` on
@@ -238,11 +233,6 @@ pub fn render_symbols_by_file_table(detail: &SymbolDetail) -> String {
     let mut output = Format::Table.render(&grid);
     let _ = writeln!(output, "\nFiles with declarations: {}", ranked.len());
     output.trim_end_matches('\n').to_owned()
-}
-
-/// Print the per-file breakdown as a terminal table.
-pub fn print_symbols_by_file(detail: &SymbolDetail) {
-    println!("{}", render_symbols_by_file_table(detail));
 }
 
 /// Render the declaration list as a terminal table, or nothing when there
@@ -374,8 +364,7 @@ mod tests {
 
     use super::{
         TOTALS_LABEL, by_file_grid, declaration_grid, language_grid,
-        print_symbol_report, render_symbol_json, render_symbol_markdown,
-        symbols_by_file,
+        render_symbol_json, render_symbol_markdown, symbols_by_file,
     };
     use crate::output::grid::{Column, Format};
 
@@ -444,7 +433,12 @@ mod tests {
             render_symbol_markdown(&detail, false)
                 .contains("| `Files skipped` | 2 |")
         );
-        print_symbol_report(&detail.report);
+        assert!(
+            render_symbol_table(&detail.report).contains(
+                "Files skipped (empty or larger than the parse limit): 2"
+            ),
+            "the table carries the skipped count too"
+        );
     }
 
     /// The three formats read the same grids, so every column heading appears in
