@@ -95,24 +95,33 @@ impl Default for CouplingOptions {
 /// belongs to the analysis with the prefix removed. A file outside
 /// it belongs to a different tree and is dropped here rather than
 /// left for the node intersection to miss by a spelling.
+/// Rebase one git-spelled path onto the graph's spelling.
+///
+/// This is the single home of the prefix rule both rebase helpers
+/// share: a path under the analysis base loses the prefix, a path
+/// outside it is dropped (`None`), and an empty prefix means the
+/// base is the repository root, so every path is kept as-is.
+#[must_use]
+pub fn rebase_path(path: &str, base_prefix: &str) -> Option<String> {
+    let prefix = base_prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return Some(path.to_owned());
+    }
+    path.strip_prefix(&format!("{prefix}/"))
+        .map(ToOwned::to_owned)
+}
+
 #[must_use]
 pub fn rebase_commit_paths(
     commits: &[Vec<String>],
     base_prefix: &str,
 ) -> Vec<Vec<String>> {
-    let prefix = base_prefix.trim_matches('/');
-    if prefix.is_empty() {
-        return commits.to_vec();
-    }
-    let with_slash = format!("{prefix}/");
     commits
         .iter()
         .map(|commit| {
             commit
                 .iter()
-                .filter_map(|path| {
-                    path.strip_prefix(&with_slash).map(ToOwned::to_owned)
-                })
+                .filter_map(|path| rebase_path(path, base_prefix))
                 .collect()
         })
         .collect()

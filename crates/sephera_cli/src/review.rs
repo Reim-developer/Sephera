@@ -14,25 +14,20 @@ pub use sephera_graph::review::{ReviewOptions, ReviewReport, measure_review};
 /// Rebase git's repo-root spelling of the changed files onto the
 /// graph's spelling.
 ///
-/// The same rule `rebase_commit_paths` applies to history: a file
-/// under the analysis base belongs to the analysis with the prefix
-/// removed, and a file outside it belongs to a different tree and is
-/// dropped rather than left to miss by a spelling.
+/// A thin adapter over [`sephera_graph::coupling::rebase_path`], the
+/// single home of the prefix rule: a file under the analysis base
+/// belongs to the analysis with the prefix removed, and a file
+/// outside it belongs to a different tree and is dropped rather than
+/// left to miss by a spelling. History uses the same rule through
+/// `rebase_commit_paths`, so the two spellings cannot drift apart.
 #[must_use]
 pub fn rebase_changed_paths(
     changed: &[String],
     base_prefix: &str,
 ) -> Vec<String> {
-    let prefix = base_prefix.trim_matches('/');
-    if prefix.is_empty() {
-        return changed.to_vec();
-    }
-    let with_slash = format!("{prefix}/");
     changed
         .iter()
-        .filter_map(|path| {
-            path.strip_prefix(&with_slash).map(ToOwned::to_owned)
-        })
+        .filter_map(|path| sephera_graph::coupling::rebase_path(path, base_prefix))
         .collect()
 }
 
