@@ -427,6 +427,55 @@ fn an_empty_file_list_is_rejected_with_invalid_params() {
     assert_eq!(error["code"], -32602, "invalid params: {error}");
 }
 
+/// A `schema_impact` call naming a path that is not a directory must
+/// say so, with the same words as the CLI: a file inside a
+/// repository is not "not inside one", and neither is a path that
+/// does not exist at all.
+#[test]
+fn regression_schema_impact_tool_rejects_a_non_directory_path() {
+    let mut mcp = Mcp::start();
+    let _ = mcp.handshake();
+    let (dir, relative) = fixture();
+    let file = dir.path().join(&relative);
+
+    let error = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "schema_impact",
+                "arguments": { "path": file, "from": "v1" },
+            }),
+        )
+        .expect_err("a file path is not an analysable tree");
+    assert_eq!(error["code"], -32602, "invalid params: {error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("is not a directory")),
+        "{error}"
+    );
+
+    let error = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "schema_impact",
+                "arguments": {
+                    "path": "/definitely-not-here-zzz-123",
+                    "from": "v1",
+                },
+            }),
+        )
+        .expect_err("a nonexistent path is not an analysable tree");
+    assert_eq!(error["code"], -32602, "invalid params: {error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("does not exist")),
+        "{error}"
+    );
+}
+
 #[test]
 fn the_server_closes_the_connection_when_the_handshake_is_skipped() {
     // Found the hard way while writing a probe: the server drops a client that

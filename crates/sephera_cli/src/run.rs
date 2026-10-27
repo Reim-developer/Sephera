@@ -2300,6 +2300,31 @@ fn build_new_schema_side(
 /// Only proven consumers fail the gate: a break nobody uses does
 /// not fail the run, and a break with only name-match consumers
 /// never fails it.
+/// Fail before the repository check when `--path` names something that
+/// is not a directory at all.
+///
+/// A file inside a repository used to be reported as "not inside
+/// one", and a nonexistent path the same, because `repo_toplevel`
+/// answers `None` for both. The single-tree commands fail this way
+/// through `sephera_scan`'s project-file validation; this command
+/// checks the same thing in the same words before asking about the
+/// repo, and the MCP tool mirrors it so the two cannot disagree.
+fn ensure_schema_analysis_dir(source: &ResolvedSource) -> Result<()> {
+    if source.analysis_path.is_dir() {
+        return Ok(());
+    }
+    if !source.analysis_path.exists() {
+        anyhow::bail!(
+            "path `{}` does not exist",
+            source.analysis_path.display()
+        );
+    }
+    anyhow::bail!(
+        "path `{}` is not a directory",
+        source.analysis_path.display()
+    );
+}
+
 fn schema_impact_gates(
     measured: &schema_impact::SchemaImpactReport,
     fail_on: Option<u64>,
@@ -2344,6 +2369,11 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A path that is not a directory at all must say so, rather than
+    // falling through to the repository check below; the check lives
+    // in its own function so this already-long function stays under
+    // clippy's line limit.
+    ensure_schema_analysis_dir(&source)?;
     // A tree that is not a git repository has no refs to compare:
     // an error, never an empty report.
     if repo_toplevel(&source.analysis_path).is_none() {

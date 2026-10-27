@@ -1665,6 +1665,27 @@ impl SepheraServer {
         .await
         .map_err(map_internal_error("source resolution failed"))?;
 
+        // A path that is not a directory at all must say so, rather
+        // than falling through to the repository check below: a file
+        // inside a repository used to be reported as "not inside
+        // one", and a nonexistent path the same, because
+        // `repo_toplevel` answers `None` for both. Same words as the
+        // CLI's schema-impact check, so the two cannot disagree.
+        if !source.analysis_path.is_dir() {
+            let message = if source.analysis_path.exists() {
+                format!(
+                    "path `{}` is not a directory",
+                    source.analysis_path.display()
+                )
+            } else {
+                format!(
+                    "path `{}` does not exist",
+                    source.analysis_path.display()
+                )
+            };
+            return Err(rmcp::ErrorData::invalid_params(message, None));
+        }
+
         // A tree that is not a git repository has no refs to compare.
         if repo_toplevel(&source.analysis_path).is_none() {
             return Err(rmcp::ErrorData::invalid_params(

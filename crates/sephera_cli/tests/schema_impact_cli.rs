@@ -275,6 +275,60 @@ fn scoped_run_reports_in_scope_break_without_out_of_scope_consumer() {
     assert!(!text.contains("consumer.py"), "{text}");
 }
 
+/// A `--path` that names a file inside a repository must say the path
+/// is not a directory, not that it "is not inside" a repository: the
+/// file is inside one, and the old message blamed the wrong thing
+/// because `repo_toplevel` answers `None` for a file path too. Found
+/// by the adversarial battery, which also showed the nonexistent-path
+/// twin below.
+#[test]
+fn regression_file_as_path_is_not_a_directory() {
+    let repo = repo_with_removal();
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .arg("schema-impact")
+        .arg("--path")
+        .arg(repo.path().join("consumer.py"))
+        .arg("--from")
+        .arg("v1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("is not a directory"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("not inside one"),
+        "{}",
+        stderr(&output)
+    );
+}
+
+#[test]
+fn regression_nonexistent_path_does_not_exist() {
+    let repo = repo_with_removal();
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .arg("schema-impact")
+        .arg("--path")
+        .arg(repo.path().join("no-such-dir"))
+        .arg("--from")
+        .arg("v1")
+        .output()
+        .unwrap();
+    assert!(!output.status.success());
+    assert!(
+        stderr(&output).contains("does not exist"),
+        "{}",
+        stderr(&output)
+    );
+    assert!(
+        !stderr(&output).contains("not inside one"),
+        "{}",
+        stderr(&output)
+    );
+}
+
 #[test]
 fn identical_sides_report_no_breaks() {
     let temp_dir = tempdir().unwrap();
