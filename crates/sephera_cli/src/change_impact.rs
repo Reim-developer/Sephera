@@ -243,9 +243,16 @@ pub fn render_xml(
 /// Render one report per changed file as a Graphviz DOT graph.
 ///
 /// Nodes are changed files and their dependents; an edge runs from a
-/// dependent to the changed file it imports, the same direction the
-/// whole-graph DOT renderer uses. Node ids are sequential rather than
-/// derived from paths, for the same reason the whole-graph renderer
+/// dependent to the changed file it reaches. A solid edge is a direct
+/// import -- the dependent's `imports` names the changed file -- while a
+/// dashed edge labelled `transitive` is reachability through the import
+/// graph only: drawing it as a plain edge used to present a transitive
+/// dependent as a direct importer. Paths the graph does not hold --
+/// deleted, ignored, or outside the base -- are nodes labelled
+/// `(not in graph)` with a dashed outline, matching the XML renderer's
+/// `<skipped-not-in-graph>` section, instead of ordinary nodes that read
+/// as analysed files with no dependents. Node ids are sequential rather
+/// than derived from paths, for the same reason the whole-graph renderer
 /// does it that way: a path-derived id breaks on spaces and collides
 /// between paths that differ only in a separator.
 #[must_use]
@@ -262,21 +269,25 @@ pub fn render_dot(
     );
     output.push_str("    edge [fontsize=8];\n");
     let _ = writeln!(output, "    // Change impact for `{spec}`");
+    output.push_str(
+        "    // A dashed edge is transitive reachability, not a direct import.\n",
+    );
     output.push('\n');
 
     // Each file is declared once, on first sight: declaring a node twice
-    // would emit two definitions for one id.
+    // would emit two definitions for one id. Graph files come first so a
+    // path that is both held and skipped is drawn as held; skipped paths
+    // are declared after, marked, and never overwrite a graph node.
     let mut ids: std::collections::BTreeMap<&str, usize> =
         std::collections::BTreeMap::new();
-    let mut files: Vec<&str> = Vec::new();
+    let mut graph_files: Vec<&str> = Vec::new();
     for change in changes {
-        files.push(change.file.as_str());
+        graph_files.push(change.file.as_str());
         for dependent in &change.radius.dependents {
-            files.push(dependent.file.as_str());
+            graph_files.push(dependent.file.as_str());
         }
     }
-    files.extend(skipped.iter().map(String::as_str));
-    for file in files {
+    for file in graph_files {
         if ids.contains_key(file) {
             continue;
         }
@@ -284,13 +295,37 @@ pub fn render_dot(
         ids.insert(file, id);
         let _ = writeln!(output, "    n{id} [label=\"{}\"];", dot_escape(file));
     }
+    for file in skipped {
+        if ids.contains_key(file.as_str()) {
+            continue;
+        }
+        let id = ids.len();
+        ids.insert(file.as_str(), id);
+        let _ = writeln!(
+            output,
+            "    n{id} [label=\"{} (not in graph)\", style=dashed];",
+            dot_escape(file)
+        );
+    }
 
     output.push('\n');
     for change in changes {
         let changed_id = ids[change.file.as_str()];
         for dependent in &change.radius.dependents {
             let dependent_id = ids[dependent.file.as_str()];
-            let _ = writeln!(output, "    n{dependent_id} -> n{changed_id};");
+            // `imports` holds the names a direct dependent imports from the
+            // target, and is empty for a file that only reaches it through
+            // another dependent: that is the directness test, because the
+            // radius itself is the transitive closure.
+            if dependent.imports.is_empty() {
+                let _ = writeln!(
+                    output,
+                    "    n{dependent_id} -> n{changed_id} [style=dashed, label=\"transitive\"];"
+                );
+            } else {
+                let _ =
+                    writeln!(output, "    n{dependent_id} -> n{changed_id};");
+            }
         }
     }
     output.push_str("}\n");
@@ -630,5 +665,38 @@ mod tests {
         // itself is a labelled node rather than a bare name.
         assert!(dot.contains("[label=\"a.rs\"]"), "{dot}");
         assert!(dot.contains("[label=\"b.rs\"]"), "{dot}");
+    }
+
+    #[test]
+    fn regression_diff_dot_marks_skipped_nodes_and_transitive_edges() {
+        // The fixture chain is a.rs <- b.rs <- d.rs, with c.rs also
+        // importing a.rs directly. The DOT renderer used to draw d.rs -> a.rs
+        // as a plain edge -- an import d.rs never wrote -- and a skipped
+        // path as an ordinary node, which reads as an analysed file with
+        // no dependents rather than a file the graph does not hold.
+        let changes =
+            measure_changes(&repo_report(), &["a.rs".to_owned()], "", None);
+        let dot = render_dot(&changes, "HEAD~1", &["gone.rs".to_owned()]);
+
+        assert!(
+            dot.contains("[label=\"gone.rs (not in graph)\", style=dashed]"),
+            "a skipped path must not look like an analysed file: {dot}"
+        );
+        assert!(
+            !dot.contains("[label=\"d.rs (not in graph)\""),
+            "only skipped paths are marked: {dot}"
+        );
+        let transitive = dot
+            .lines()
+            .filter(|line| line.contains("[style=dashed, label=\"transitive\"]"))
+            .count();
+        assert_eq!(transitive, 1, "only d.rs reaches a.rs transitively: {dot}");
+        let direct = dot
+            .lines()
+            .filter(|line| {
+                line.contains("->") && !line.contains("transitive")
+            })
+            .count();
+        assert_eq!(direct, 2, "b.rs and c.rs import a.rs directly: {dot}");
     }
 }
