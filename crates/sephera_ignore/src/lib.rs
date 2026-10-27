@@ -212,7 +212,7 @@ pub fn normalize_relative_path(relative_path: &Path) -> String {
     // character in a file name, so rewriting it unconditionally would let a
     // pattern meant for one file silently apply to a whole directory.
     let normalized =
-        sephera_core::paths::forward_slashes(&relative_path.to_string_lossy());
+        sephera_core::path_utils::forward_slashes(&relative_path.to_string_lossy());
     if normalized.is_empty() {
         ".".to_owned()
     } else {
