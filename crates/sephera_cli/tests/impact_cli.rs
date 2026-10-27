@@ -376,3 +376,29 @@ fn regression_focus_on_a_missing_path_is_an_error() {
         "the scope must be named: {stderr}"
     );
 }
+
+#[test]
+fn regression_a_repeated_target_is_reported_once() {
+    // `impact lib.py lib.py` used to report "Blast radius for 2 files"
+    // with the same section twice: the batch measurement never
+    // deduplicated its targets, so the header count was wrong rather
+    // than merely redundant. Different spellings of the same file
+    // collapse too, because deduplication is on the canonical spelling.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "lib.py", "def f():\n    return 1\n");
+    write_file(temp_dir.path(), "user.py", "from lib import f\n");
+
+    for targets in [&["lib.py", "lib.py"][..], &["lib.py", "./lib.py"][..]] {
+        let mut args = targets.to_vec();
+        args.extend(["--format", "json"]);
+        let output = run_impact(temp_dir.path(), &args);
+        assert!(output.status.success());
+        let json: serde_json::Value =
+            serde_json::from_slice(&output.stdout).expect("impact json");
+        assert_eq!(
+            json["targets"].as_array().map(Vec::len),
+            Some(1),
+            "one file, however it was spelled: {json}"
+        );
+    }
+}
