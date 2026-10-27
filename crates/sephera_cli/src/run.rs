@@ -809,7 +809,10 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // History commands read the history: a depth-1 clone would
+        // cap every window at one commit, so URL runs need the full
+        // clone. Local paths ignore this flag.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Reading history...");
@@ -877,7 +880,9 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // As coupling's: the coupling warnings read the history, so
+        // URL runs need the full clone, not a depth-1 one.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Reviewing the change...");
@@ -977,7 +982,9 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // As coupling's: churn and coupling read the history, so
+        // URL runs need the full clone, not a depth-1 one.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Ranking risk...");
@@ -2043,7 +2050,9 @@ async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
             url: arguments.source.url.clone(),
             git_ref: arguments.source.git_ref.clone(),
         },
-        false,
+        // As coupling's: churn and coupling read the history, so
+        // URL runs need the full clone, not a depth-1 one.
+        true,
     )
     .await?;
     let progress = CliProgress::start("Ranking untested symbols...");

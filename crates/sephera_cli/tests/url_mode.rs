@@ -292,3 +292,101 @@ fn graph_url_mode_supports_reverse_dependency_queries() {
             .starts_with("file://")
     );
 }
+
+// Regression: history commands resolved remote sources with
+// requires_history=false, so a --url run cloned at depth 1 and
+// every history window collapsed to a single commit — coupling
+// reported the seed commit's pairs as the whole history, and
+// --commits was silently capped at one. History commands now ask
+// for the full clone.
+#[test]
+fn regression_coupling_url_reads_the_full_history() {
+    let remote_repo = build_remote_repo();
+    write_file(remote_repo.path(), "a.py", b"def fa():\n    return 1\n");
+    write_file(remote_repo.path(), "b.py", b"def fb():\n    return 100\n");
+    commit_all(remote_repo.path(), "seed");
+    for round in 2..=4 {
+        write_file(
+            remote_repo.path(),
+            "a.py",
+            format!("def fa():\n    return {round}\n").as_bytes(),
+        );
+        write_file(
+            remote_repo.path(),
+            "b.py",
+            format!("def fb():\n    return {round}\n").as_bytes(),
+        );
+        commit_all(remote_repo.path(), "the pair moves");
+    }
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "coupling",
+            "--url",
+            &remote_repo_url(remote_repo.path()),
+            "--min-co-changes",
+            "1",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["commits_scanned"], 4, "{parsed}");
+    assert_eq!(parsed["commits_counted"], 4, "{parsed}");
+    let pairs = parsed["pairs"].as_array().expect("pairs");
+    let pair = pairs
+        .iter()
+        .find(|pair| pair["first"] == "a.py" && pair["second"] == "b.py")
+        .expect("the pair must be reported: {parsed}");
+    assert_eq!(pair["co_changes"], 4, "{parsed}");
+}
+
+// The same depth-1 collapse in test-priority's churn factor: with
+// one commit of history the file's churn read 1 whatever its past.
+#[test]
+fn regression_test_priority_url_reads_the_full_history() {
+    let remote_repo = build_remote_repo();
+    write_file(
+        remote_repo.path(),
+        "lib.py",
+        b"def lonely(x):\n    return x\n",
+    );
+    commit_all(remote_repo.path(), "seed");
+    write_file(
+        remote_repo.path(),
+        "lib.py",
+        b"def lonely(x):\n    return x + 1\n",
+    );
+    commit_all(remote_repo.path(), "touch lib");
+    write_file(
+        remote_repo.path(),
+        "lib.py",
+        b"def lonely(x):\n    return x + 2\n",
+    );
+    commit_all(remote_repo.path(), "touch lib again");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "test-priority",
+            "--url",
+            &remote_repo_url(remote_repo.path()),
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+    assert!(output.status.success());
+
+    let parsed: Value = serde_json::from_slice(&output.stdout).unwrap();
+    assert_eq!(parsed["commits_scanned"], 3, "{parsed}");
+    assert_eq!(parsed["commits_counted"], 3, "{parsed}");
+    let symbols = parsed["symbols"].as_array().expect("symbols");
+    let lonely = symbols
+        .iter()
+        .find(|symbol| symbol["symbol"] == "lonely")
+        .expect("lonely must be ranked: {parsed}");
+    assert_eq!(lonely["churn"], 3, "{parsed}");
+}
