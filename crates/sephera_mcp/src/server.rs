@@ -4615,6 +4615,10 @@ fn parse_graph_format(
 struct LenientStdioTransport {
     reader: tokio::io::BufReader<tokio::io::Stdin>,
     writer: Arc<tokio::sync::Mutex<tokio::io::Stdout>>,
+    /// Bytes of the line currently being read. Persistent across calls so
+    /// a read cancelled partway through a line does not lose the bytes
+    /// already arrived; cleared only after a complete line is consumed.
+    line_buf: Vec<u8>,
 }
 
 impl LenientStdioTransport {
@@ -4622,6 +4626,7 @@ impl LenientStdioTransport {
         Self {
             reader: tokio::io::BufReader::new(tokio::io::stdin()),
             writer: Arc::new(tokio::sync::Mutex::new(tokio::io::stdout())),
+            line_buf: Vec::new(),
         }
     }
 }
@@ -4647,19 +4652,22 @@ impl Transport<RoleServer> for LenientStdioTransport {
 
     async fn receive(&mut self) -> Option<RxJsonRpcMessage<RoleServer>> {
         loop {
-            let mut line = String::new();
-            match self.reader.read_line(&mut line).await {
+            match self.reader.read_until(b'\n', &mut self.line_buf).await {
                 Ok(0) | Err(_) => return None,
                 Ok(_) => {
-                    if let Ok(message) = serde_json::from_str::<
+                    let parsed = serde_json::from_slice::<
                         RxJsonRpcMessage<RoleServer>,
-                    >(&line)
-                    {
+                    >(&self.line_buf);
+                    self.line_buf.clear();
+                    if let Ok(message) = parsed {
                         return Some(message);
                     }
                     // Not a client message: skip it and read on. The
                     // session survives; the next well-formed line is
-                    // answered as if the garbage had never arrived.
+                    // answered as if the garbage had never arrived. Lines
+                    // are read as bytes rather than UTF-8 strings, so a
+                    // line that is not valid UTF-8 is garbage to skip,
+                    // not an error that ends the session.
                 }
             }
         }

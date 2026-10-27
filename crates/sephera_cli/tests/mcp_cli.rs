@@ -183,6 +183,18 @@ impl Mcp {
         self.stdin.flush().expect("stdin should flush");
     }
 
+    /// Send one line as raw bytes: the way to feed the server a line
+    /// that is not valid UTF-8 at all.
+    fn send_bytes(&mut self, line: &[u8]) {
+        self.stdin
+            .write_all(line)
+            .expect("stdin should accept a line");
+        self.stdin
+            .write_all(b"\n")
+            .expect("stdin should accept a newline");
+        self.stdin.flush().expect("stdin should flush");
+    }
+
     /// The next line, or `None` when the server closes the connection.
     fn next_line(&mut self) -> Option<String> {
         match self.lines.recv_timeout(REPLY_TIMEOUT) {
@@ -466,6 +478,31 @@ fn regression_malformed_lines_do_not_kill_the_session() {
             "tools/list must answer after {garbage:?}: {listed}"
         );
     }
+}
+
+/// A non-UTF-8 line must not kill the session.
+///
+/// The lenient transport read lines as UTF-8 strings, so one invalid
+/// byte made `read_line` fail and the session ended with exit code 0:
+/// the same silent death the malformed-line fix closed for valid UTF-8
+/// garbage, one layer deeper. Lines are now read as bytes and parsed
+/// from the byte slice, so garbage of any encoding is skipped and the
+/// next well-formed request is answered. On the unfixed transport this
+/// test fails at the `tools/list` after the bad line: the connection
+/// is already closed.
+#[test]
+fn regression_non_utf8_line_does_not_kill_the_session() {
+    let mut mcp = Mcp::start();
+    let _ = mcp.handshake();
+
+    mcp.send_bytes(&[0xff, 0xfe, b'x']);
+    let listed = mcp
+        .call("tools/list", json!({}))
+        .expect("the server must still answer after a non-UTF-8 line");
+    assert!(
+        listed["result"]["tools"].is_array(),
+        "tools/list must answer after a non-UTF-8 line: {listed}"
+    );
 }
 
 /// A `schema_impact` call naming a path that is not a directory must
