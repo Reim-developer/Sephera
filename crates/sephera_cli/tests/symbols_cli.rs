@@ -424,3 +424,18 @@ fn regression_table_output_writes_the_file_instead_of_stdout() {
     assert!(written.contains("Rust"), "{written}");
     assert!(written.contains("Files scanned:"), "{written}");
 }
+
+#[test]
+fn regression_detail_lists_declarations_in_table_format() {
+    // `symbols --format table --detail` used to print the summary and
+    // nothing else: the flag changed nothing in table format while
+    // markdown and json both listed every declaration.
+    let dir = repo();
+
+    let output = run(dir.path(), &["--format", "table", "--detail"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).expect("table is text");
+    assert!(text.contains("helper"), "{text}");
+    assert!(text.contains("real_function"), "{text}");
+    assert!(text.contains("method"), "{text}");
+}

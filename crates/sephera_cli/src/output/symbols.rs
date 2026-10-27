@@ -246,6 +246,24 @@ pub fn print_symbols_by_file(detail: &SymbolDetail) {
     }
 }
 
+/// Render the declaration list as a terminal table, or nothing when there
+/// is nothing to list.
+///
+/// The table format used to drop `--detail` entirely: the summary (or the
+/// per-file breakdown) printed and the flag that asks for every declaration
+/// changed nothing, while markdown and json both listed them. A format that
+/// accepts a flag and ignores it is the same class of bug `--by-file`
+/// was in json and markdown before the shared grids existed.
+#[must_use]
+pub fn render_symbol_declarations_table(
+    detail: &SymbolDetail,
+) -> Option<String> {
+    if detail.symbols.is_empty() {
+        return None;
+    }
+    Some(Format::Table.render(&declaration_grid(&detail.symbols)))
+}
+
 /// Render a symbol report as JSON.
 ///
 /// `by_file` adds the per-file breakdown, matching what `--by-file` means in every

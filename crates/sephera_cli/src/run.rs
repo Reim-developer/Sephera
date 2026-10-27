@@ -49,7 +49,8 @@ use crate::{
     output::{
         emit_rendered_output, print_available_profiles, render_context_json,
         render_context_markdown, render_graph, render_loc_csv, render_loc_json,
-        render_loc_markdown, render_report_table, render_symbol_json,
+        render_loc_markdown, render_report_table,
+        render_symbol_declarations_table, render_symbol_json,
         render_symbol_markdown, render_symbol_table,
         render_symbols_by_file_table,
     },
@@ -449,11 +450,25 @@ async fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
         // is how a table report with `--output` used to print to the
         // terminal and never create the file.
         SymbolOutputFormat::Table => {
-            if arguments.by_file {
-                Some(render_symbols_by_file_table(&detail))
+            let mut rendered = if arguments.by_file {
+                render_symbols_by_file_table(&detail)
             } else {
-                Some(render_symbol_table(&detail.report))
+                render_symbol_table(&detail.report)
+            };
+            // `--detail` reaches every format, not just markdown and json.
+            // It used to change nothing here, so a table run with the flag
+            // answered the summary question while the caller asked for the
+            // declaration list.
+            if arguments.detail
+                && let Some(declarations) =
+                    render_symbol_declarations_table(&detail)
+            {
+                if !rendered.is_empty() {
+                    rendered.push_str("\n\n");
+                }
+                rendered.push_str(&declarations);
             }
+            Some(rendered)
         }
         // `by_file` reaches every format, not just the table. It used to be
         // honoured only here, so `--by-file --format json` produced a
