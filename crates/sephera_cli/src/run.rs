@@ -1159,6 +1159,54 @@ fn sarif_repo_prefix(source: &ResolvedSource) -> String {
     sarif::path_prefix(&canonical, &toplevel)
 }
 
+/// The repo-relative spelling of an archaeology file argument.
+///
+/// The help promises the file is spelled relative to the analysis
+/// root, but the snapshots are whole-tree builds whose index spells
+/// files from the repository root, and the commit log is a git
+/// pathspec: the two providers only agree when the file reaches
+/// them repo-relative. A scoped run therefore has two spellings
+/// that must both work — the analysis-relative one the help
+/// promises (`lib.py` under `--path pkg`) and the root-relative
+/// one root runs already use (`pkg/lib.py`) — and a third shape
+/// that must not silently degrade: a root-relative spelling under
+/// a scoped run used to make the log query run from the analysis
+/// directory, where the pathspec matched nothing, so the walk fell
+/// back to visiting every parent and the window counted commits
+/// that never touched the file. Normalising here, and running the
+/// git providers from the work-tree root, makes every spelling
+/// take the file-log walk.
+///
+/// The one spelling this cannot disambiguate is an
+/// analysis-relative file whose spelling already starts with the
+/// analysis prefix (`pkg/lib.py` meaning `pkg/pkg/lib.py` under
+/// `--path pkg`): the root-relative reading wins, because it is
+/// the spelling root runs already established.
+#[must_use]
+fn normalize_archaeology_file(source: &ResolvedSource, file: &str) -> String {
+    let mut current = file;
+    while let Some(rest) = current.strip_prefix("./") {
+        current = rest;
+    }
+    let mut path = PathBuf::from(current);
+    if path.is_absolute() {
+        if let Some(toplevel) = repo_toplevel(&source.analysis_path)
+            && let Ok(relative) = path.strip_prefix(&toplevel)
+        {
+            path = relative.to_path_buf();
+        }
+        return path.to_string_lossy().replace('\\', "/");
+    }
+    let prefix = analysis_prefix(source);
+    if prefix.as_os_str().is_empty()
+        || path == prefix
+        || path.starts_with(&prefix)
+    {
+        return path.to_string_lossy().replace('\\', "/");
+    }
+    prefix.join(path).to_string_lossy().replace('\\', "/")
+}
+
 /// The base the old side of a comparison is built from.
 ///
 /// When `scoped` is set, the build is restricted to the analysis
@@ -1639,7 +1687,15 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
     .await?;
     let progress = CliProgress::start("Tracing the symbol through history...");
 
-    let repo_root = source.repo_root;
+    // The git providers run from the work-tree root and the file
+    // reaches them repo-relative (see `normalize_archaeology_file`):
+    // the providers only agree on one basis, and the root is the
+    // one the whole-tree snapshots already use. Outside a
+    // repository the root falls back to the analysis path, and the
+    // first git call fails as before.
+    let file = normalize_archaeology_file(&source, &arguments.file);
+    let repo_root =
+        repo_toplevel(&source.analysis_path).unwrap_or(source.repo_root);
 
     // The providers trace_symbol walks on, as thin closures over
     // the named functions below: the commit log, one commit's
@@ -1672,7 +1728,7 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
     };
     let measured = archaeology::trace_symbol(
         &start,
-        &arguments.file,
+        &file,
         &arguments.symbol,
         arguments.window,
         &log,
