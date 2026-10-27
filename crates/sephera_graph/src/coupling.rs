@@ -127,6 +127,64 @@ pub fn rebase_commit_paths(
         .collect()
 }
 
+/// The commits a history window counts, with their per-file counts.
+///
+/// One home for the counting rule `measure_coupling` and
+/// `measure_risk` share: a commit counts only when it touches at
+/// least one tracked file and at most `max_commit_files` of them,
+/// and each counted commit's files are sorted and deduplicated
+/// first, so a file one commit touches twice still counts once.
+/// Both reports read the same window off this one pass, so their
+/// commit counts agree by construction rather than by two loops
+/// kept in step by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountedCommits<'a> {
+    /// One deduplicated, sorted file list per counted commit.
+    pub files: Vec<Vec<&'a str>>,
+    /// Counted commits per tracked file.
+    pub file_counts: BTreeMap<&'a str, u64>,
+    /// Commits that passed the rule.
+    pub counted: u64,
+}
+
+/// Count a history window under coupling's rule.
+///
+/// `tracked` is the graph's file set, in the graph's spelling;
+/// rebasing git's spelling onto it is the caller's job, done once
+/// before this call.
+#[must_use]
+pub fn counted_commits<'a>(
+    tracked: &BTreeSet<&'a str>,
+    commits: &'a [Vec<String>],
+    max_commit_files: usize,
+) -> CountedCommits<'a> {
+    let mut files: Vec<Vec<&'a str>> = Vec::new();
+    let mut file_counts: BTreeMap<&'a str, u64> = BTreeMap::new();
+    let mut counted = 0_u64;
+    for commit in commits {
+        let mut commit_files: Vec<&'a str> = commit
+            .iter()
+            .map(String::as_str)
+            .filter(|path| tracked.contains(path))
+            .collect();
+        commit_files.sort_unstable();
+        commit_files.dedup();
+        if commit_files.is_empty() || commit_files.len() > max_commit_files {
+            continue;
+        }
+        counted += 1;
+        for file in &commit_files {
+            *file_counts.entry(file).or_default() += 1;
+        }
+        files.push(commit_files);
+    }
+    CountedCommits {
+        files,
+        file_counts,
+        counted,
+    }
+}
+
 /// Measure hidden coupling over `commits`, in the graph's spelling.
 ///
 /// `commits` is one file list per commit, newest first, as
@@ -154,25 +212,10 @@ pub fn measure_coupling(
         }
     }
 
-    let mut file_commits: BTreeMap<&str, u64> = BTreeMap::new();
+    let counted = counted_commits(&tracked, commits, options.max_commit_files);
+    let file_commits = counted.file_counts;
     let mut pair_commits: BTreeMap<(&str, &str), u64> = BTreeMap::new();
-    let mut counted = 0_u64;
-
-    for commit in commits {
-        let mut files: Vec<&str> = commit
-            .iter()
-            .map(String::as_str)
-            .filter(|path| tracked.contains(path))
-            .collect();
-        files.sort_unstable();
-        files.dedup();
-        if files.is_empty() || files.len() > options.max_commit_files {
-            continue;
-        }
-        counted += 1;
-        for file in &files {
-            *file_commits.entry(file).or_default() += 1;
-        }
+    for files in &counted.files {
         for (index, first) in files.iter().enumerate() {
             for second in &files[index + 1..] {
                 *pair_commits.entry((first, second)).or_default() += 1;
@@ -219,7 +262,7 @@ pub fn measure_coupling(
     CouplingReport {
         pairs,
         commits_scanned: u64::try_from(commits.len()).unwrap_or(u64::MAX),
-        commits_counted: counted,
+        commits_counted: counted.counted,
     }
 }
 

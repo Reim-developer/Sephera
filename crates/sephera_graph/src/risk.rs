@@ -33,7 +33,7 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use super::blast_radius::reachable_dependents_with_distance;
-use super::coupling::{CouplingOptions, measure_coupling};
+use super::coupling::{CouplingOptions, counted_commits, measure_coupling};
 use super::types::GraphReport;
 
 /// Thresholds for one risk ranking.
@@ -101,29 +101,11 @@ pub fn measure_risk(
         .map(|node| node.file_path.as_str())
         .collect();
 
-    // Churn, counted under coupling's rule: the same pass over the
-    // same window, so the two reports' commit counts agree by
-    // construction rather than by two loops kept in step by hand --
-    // the rule is small, and it is restated here because coupling
-    // does not publish its per-file counts.
-    let mut churn: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut counted = 0_u64;
-    for commit in commits {
-        let mut files: Vec<&str> = commit
-            .iter()
-            .map(String::as_str)
-            .filter(|path| tracked.contains(path))
-            .collect();
-        files.sort_unstable();
-        files.dedup();
-        if files.is_empty() || files.len() > options.coupling.max_commit_files {
-            continue;
-        }
-        counted += 1;
-        for file in &files {
-            *churn.entry(file).or_default() += 1;
-        }
-    }
+    // Churn is coupling's own count, read off the same pass over
+    // the same window, so the two reports' commit counts agree by
+    // construction rather than by two loops kept in step by hand.
+    let counted = counted_commits(&tracked, commits, options.coupling.max_commit_files);
+    let churn = counted.file_counts;
 
     let coupling = measure_coupling(report, commits, options.coupling);
     let mut partners: BTreeMap<&str, usize> = BTreeMap::new();
@@ -179,7 +161,7 @@ pub fn measure_risk(
     RiskReport {
         files,
         commits_scanned: coupling.commits_scanned,
-        commits_counted: counted,
+        commits_counted: counted.counted,
     }
 }
 
