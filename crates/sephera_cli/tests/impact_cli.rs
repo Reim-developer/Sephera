@@ -385,8 +385,8 @@ fn regression_a_repeated_target_is_reported_once() {
     // than merely redundant. Different spellings of the same file
     // collapse too, because deduplication is on the canonical spelling.
     let temp_dir = tempdir().unwrap();
-    write_file(temp_dir.path(), "lib.py", "def f():\n    return 1\n");
-    write_file(temp_dir.path(), "user.py", "from lib import f\n");
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+    write_file(temp_dir.path(), "user.py", b"from lib import f\n");
 
     for targets in [&["lib.py", "lib.py"][..], &["lib.py", "./lib.py"][..]] {
         let mut args = targets.to_vec();
