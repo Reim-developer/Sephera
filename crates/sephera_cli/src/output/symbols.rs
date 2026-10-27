@@ -364,7 +364,8 @@ mod tests {
 
     use super::{
         TOTALS_LABEL, by_file_grid, declaration_grid, language_grid,
-        render_symbol_json, render_symbol_markdown, symbols_by_file,
+        render_symbol_json, render_symbol_markdown, render_symbol_table,
+        symbols_by_file,
     };
     use crate::output::grid::{Column, Format};
 
