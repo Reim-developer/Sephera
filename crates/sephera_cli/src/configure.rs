@@ -59,8 +59,15 @@ pub fn expand(
         // typed because the user expected something to happen, and
         // discovery finding nothing is not a reason to run unconfigured.
         // `--no-config` is exempt because that combination is clap's
-        // conflict to report, not this function's.
+        // conflict to report, not this function's. `--url` is exempt
+        // because discovery anchors on the caller's directory while a
+        // remote run's config lives in the cloned repository, where the
+        // command's own resolution -- context's, for example -- still
+        // applies the profile and refuses a missing one itself.
         if !argv.iter().any(|argument| argument == "--no-config")
+            && !argv.iter().any(|argument| {
+                argument == "--url" || argument.starts_with("--url=")
+            })
             && let Some(requested) = selected_profile(&argv, cli_for_help)
         {
             anyhow::bail!(
