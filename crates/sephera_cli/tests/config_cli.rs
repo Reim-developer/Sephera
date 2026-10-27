@@ -326,3 +326,65 @@ fn a_repository_with_no_config_file_works() {
         String::from_utf8_lossy(&output.stderr)
     );
 }
+
+#[test]
+fn regression_profile_with_no_config_file_is_an_error() {
+    // `loc --profile dev` in a tree with no `.sephera.toml` at all used
+    // to run unconfigured and exit 0: the expansion returned early when
+    // discovery found nothing, before the profile check that refuses a
+    // profile resolving to nothing when a file is present.
+    let directory = tree();
+
+    let output = run(
+        directory.path(),
+        &["loc", "--path", ".", "--profile", "dev"],
+    );
+
+    assert!(
+        !output.status.success(),
+        "a profile that cannot be read must say so"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(stderr.contains("dev"), "the name must be given: {stderr}");
+    assert!(
+        stderr.contains("no `.sephera.toml` was found"),
+        "the reason must be given: {stderr}"
+    );
+}
+
+#[test]
+fn regression_profile_for_a_command_without_a_profile_section_is_an_error() {
+    // `why` accepts `--profile` through the shared settings group, but
+    // the config schema has no `why` section, so the flag could never
+    // do anything for it -- with or without a config file present. It
+    // used to run unconfigured and exit 0.
+    let directory = tree();
+    write(
+        directory.path(),
+        ".sephera.toml",
+        "[profiles.dev.loc]\nformat = \"json\"\n",
+    );
+
+    let output = run(
+        directory.path(),
+        &[
+            "why",
+            "--path",
+            ".",
+            "--profile",
+            "dev",
+            "main.rs",
+            "lib.py",
+        ],
+    );
+
+    assert!(
+        !output.status.success(),
+        "a profile that cannot apply must say so"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("has no profile section"),
+        "the reason must be given: {stderr}"
+    );
+}

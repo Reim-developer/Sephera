@@ -54,6 +54,20 @@ pub fn expand(
     let config = load_config(argv.as_slice())?;
 
     let Some(config) = config else {
+        // A `--profile` with no config file to read it from is the same
+        // no-op the profile check below exists to refuse: the flag was
+        // typed because the user expected something to happen, and
+        // discovery finding nothing is not a reason to run unconfigured.
+        // `--no-config` is exempt because that combination is clap's
+        // conflict to report, not this function's.
+        if !argv.iter().any(|argument| argument == "--no-config")
+            && let Some(requested) = selected_profile(&argv, cli_for_help)
+        {
+            anyhow::bail!(
+                "profile `{requested}` was requested but no `.sephera.toml` \
+                 was found; a profile can only come from a config file"
+            );
+        }
         return Ok(ExpandedArgs {
             argv,
             config_path: None,
@@ -73,6 +87,26 @@ pub fn expand(
     let Some(command) = resolve_command(&argv, cli_for_help, &config) else {
         // Nothing here names a command, so there is nothing for a config table to
         // configure. `--help` and `--version` land here.
+        //
+        // Except a `--profile`: commands outside the config schema (such
+        // as `why`) still accept the flag through the shared settings
+        // group, but no `[profiles.<name>.<command>]` table can exist for
+        // them, so the flag could never do anything. That is a silent
+        // no-op of exactly the kind the check below refuses, so it errors
+        // here rather than running unconfigured. A bare `--help` or
+        // `--version` has no subcommand-looking first argument and keeps
+        // the old behaviour.
+        if let Some(requested) = requested_command(&argv, cli_for_help)
+            && !requested.starts_with('-')
+            && let Some(profile) = selected_profile(&argv, cli_for_help)
+        {
+            anyhow::bail!(
+                "command `{requested}` has no profile section; profiles are \
+                 defined per command for loc, symbols, graph, impact, \
+                 context, and watch, so `--profile {profile}` cannot apply \
+                 to it"
+            );
+        }
         return Ok(ExpandedArgs {
             argv,
             config_path: Some(config.source_path),
@@ -125,12 +159,12 @@ pub fn expand(
             // command does not count.
             let section = format!("[profiles.{requested}.{}]", command.name());
             let defined = if available.is_empty() {
-                "no profiles are defined".to_owned()
+                "no profiles".to_owned()
             } else {
-                format!("only these are defined: {}", available.join(", "))
+                format!("only these profiles: {}", available.join(", "))
             };
             anyhow::bail!(
-                "profile `{requested}` was not found in `{}`; it defines {defined} \
+                "profile `{requested}` was not found in `{}`; the file defines {defined} \
                  (looking for `{section}`)",
                 config.source_path.display(),
             );
