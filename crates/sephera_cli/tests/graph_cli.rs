@@ -385,3 +385,32 @@ fn regression_diff_with_focus_is_rejected_rather_than_ignored() {
         "the conflict must name both flags: {stderr}"
     );
 }
+
+#[test]
+fn regression_focus_on_a_missing_path_is_an_error() {
+    // `graph --focus nope.py` used to exit 0 with an empty graph: a scope
+    // naming nothing narrowed the answer to nothing with no complaint,
+    // which reads as a finding about the repository rather than a typo.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "main.rs", b"fn main() {}\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--focus",
+            "nope.py",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nope.py"),
+        "the scope must be named: {stderr}"
+    );
+}

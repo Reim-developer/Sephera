@@ -362,6 +362,49 @@ fn build_ignore_matcher(
     }
 }
 
+/// A focus scope must name something inside the analysis base that
+/// exists.
+///
+/// A scope naming nothing used to narrow the answer to nothing with no
+/// complaint: `graph --focus nope.py` reported an empty graph and
+/// `impact --focus nope-dir` reported "No file imports this one", and
+/// both read as findings about the repository rather than as typos.
+/// `context --focus` already refuses a path it cannot resolve; a scope
+/// is the same kind of reference and gets the same refusal. A scope
+/// that exists but holds no recognised file still reports empty, which
+/// is a real answer about a real place.
+fn check_focus_paths_exist(
+    base_path: &std::path::Path,
+    focus: &[PathBuf],
+) -> Result<()> {
+    let base = std::path::absolute(base_path)
+        .unwrap_or_else(|_| base_path.to_path_buf());
+    for path in focus {
+        let candidate = if path.is_absolute() {
+            path.clone()
+        } else {
+            base_path.join(path);
+        };
+        let absolute_candidate = std::path::absolute(&candidate)
+            .unwrap_or_else(|_| candidate.clone());
+        if absolute_candidate.strip_prefix(&base).is_err() {
+            anyhow::bail!(
+                "focus path `{}` must resolve inside `{}`",
+                path.display(),
+                base_path.display()
+            );
+        }
+        if !candidate.exists() {
+            anyhow::bail!(
+                "focus path `{}` does not exist inside `{}`",
+                path.display(),
+                base_path.display()
+            );
+        }
+    }
+    Ok(())
+}
+
 async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
     let source = resolve_source(
         &SourceRequest {
@@ -601,6 +644,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     progress.set_message("Extracting imports...");
     // No query: the report must cover the whole repository, because a
@@ -2781,6 +2825,7 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     if let Some(spec) = arguments.diff.as_deref() {
         return run_graph_diff(&source, &ignore, arguments, spec);

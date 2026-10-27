@@ -351,3 +351,28 @@ fn a_symbol_threshold_compares_against_the_symbol_count() {
     );
     assert_eq!(crossed.status.code(), Some(2), "one direct user reaches 1");
 }
+
+#[test]
+fn regression_focus_on_a_missing_path_is_an_error() {
+    // `impact --focus nope-dir` used to report "No file imports this one":
+    // a scope naming nothing narrowed the answer to zero dependents,
+    // which reads as a safety finding rather than a typo. A scope that
+    // exists but holds no dependents still reports zero, which is a real
+    // answer about a real place.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "src/lib.rs", b"pub fn f() {}\n");
+    write_file(temp_dir.path(), "src/user.rs", b"use crate::lib::f;\n");
+
+    let output =
+        run_impact(temp_dir.path(), &["src/lib.rs", "--focus", "nope-dir"]);
+
+    assert!(
+        !output.status.success(),
+        "a missing scope must fail, not report zero"
+    );
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("nope-dir"),
+        "the scope must be named: {stderr}"
+    );
+}
