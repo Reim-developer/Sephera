@@ -307,3 +307,50 @@ fn regression_diff_mode_honours_fail_on_cycles() {
         String::from_utf8_lossy(&diffed.stderr)
     );
 }
+
+#[test]
+fn regression_diff_mode_honours_the_requested_format() {
+    // `graph --diff --format xml` and `--format dot` used to return the
+    // Markdown report: the diff path matched only json and fell through
+    // to markdown for everything else, so a consumer asking for XML got
+    // a document no XML parser accepts.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+    write_file(temp_dir.path(), "user.py", b"from lib import f\n");
+    git(temp_dir.path(), &["init"]);
+    git(temp_dir.path(), &["config", "user.name", "Sephera Tests"]);
+    git(
+        temp_dir.path(),
+        &["config", "user.email", "tests@example.com"],
+    );
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "base"]);
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 2\n");
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "second"]);
+
+    for (format, marker) in [("xml", "<?xml"), ("dot", "digraph")] {
+        let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+            .args([
+                "graph",
+                "--path",
+                temp_dir.path().to_str().unwrap(),
+                "--diff",
+                "HEAD~1",
+                "--format",
+                format,
+            ])
+            .output()
+            .unwrap();
+        assert!(output.status.success());
+        let text = String::from_utf8(output.stdout).expect("text output");
+        assert!(
+            text.contains(marker),
+            "--format {format} must render {marker}, got: {text}"
+        );
+        assert!(
+            !text.contains("# Change impact"),
+            "--format {format} must not fall back to Markdown: {text}"
+        );
+    }
+}

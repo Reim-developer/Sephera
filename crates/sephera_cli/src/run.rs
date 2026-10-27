@@ -2722,7 +2722,15 @@ fn run_graph_diff(
         GraphOutputFormat::Json => {
             change_impact::render_json(&changes, spec, &skipped)
         }
-        _ => change_impact::render_markdown(&changes, spec, &skipped),
+        GraphOutputFormat::Markdown => {
+            change_impact::render_markdown(&changes, spec, &skipped)
+        }
+        GraphOutputFormat::Xml => {
+            change_impact::render_xml(&changes, spec, &skipped)
+        }
+        GraphOutputFormat::Dot => {
+            change_impact::render_dot(&changes, spec, &skipped)
+        }
     };
 
     // Both thresholds the non-diff path honours. `--fail-on-cycles` used

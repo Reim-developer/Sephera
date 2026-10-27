@@ -189,6 +189,129 @@ pub fn render_json(
     })
 }
 
+/// Render one report per changed file as XML.
+///
+/// The diff path used to render markdown for every non-JSON format, so
+/// `--diff --format xml` and `--diff --format dot` both returned a
+/// Markdown document: a consumer asking for XML got a document no XML
+/// parser accepts, with nothing saying the format had been downgraded.
+#[must_use]
+pub fn render_xml(
+    changes: &[ChangeImpact],
+    spec: &str,
+    skipped: &[String],
+) -> String {
+    let mut output = String::new();
+    output.push_str("<?xml version=\"1.0\" encoding=\"UTF-8\"?>\n");
+    let _ = writeln!(output, "<change-impact spec=\"{}\">", xml_escape(spec));
+    output.push_str("  <changes>\n");
+    for change in changes {
+        let _ = writeln!(
+            output,
+            "    <change file=\"{}\" dependent-count=\"{}\">",
+            xml_escape(&change.file),
+            impact::dependent_count(&change.radius)
+        );
+        for dependent in &change.radius.dependents {
+            let imports = dependent
+                .imports
+                .iter()
+                .map(String::as_str)
+                .collect::<Vec<_>>()
+                .join(", ");
+            let _ = writeln!(
+                output,
+                "      <dependent file=\"{}\" imports=\"{}\" />",
+                xml_escape(&dependent.file),
+                xml_escape(&imports)
+            );
+        }
+        output.push_str("    </change>\n");
+    }
+    output.push_str("  </changes>\n");
+    if !skipped.is_empty() {
+        output.push_str("  <skipped-not-in-graph>\n");
+        for path in skipped {
+            let _ = writeln!(output, "    <path>{}</path>", xml_escape(path));
+        }
+        output.push_str("  </skipped-not-in-graph>\n");
+    }
+    output.push_str("</change-impact>\n");
+    output
+}
+
+/// Render one report per changed file as a Graphviz DOT graph.
+///
+/// Nodes are changed files and their dependents; an edge runs from a
+/// dependent to the changed file it imports, the same direction the
+/// whole-graph DOT renderer uses. Node ids are sequential rather than
+/// derived from paths, for the same reason the whole-graph renderer
+/// does it that way: a path-derived id breaks on spaces and collides
+/// between paths that differ only in a separator.
+#[must_use]
+pub fn render_dot(
+    changes: &[ChangeImpact],
+    spec: &str,
+    skipped: &[String],
+) -> String {
+    let mut output = String::new();
+    output.push_str("digraph change_impact {\n");
+    output.push_str("    rankdir=LR;\n");
+    output.push_str(
+        "    node [shape=box, fontname=\"Helvetica\", fontsize=10];\n",
+    );
+    output.push_str("    edge [fontsize=8];\n");
+    let _ = writeln!(output, "    // Change impact for `{spec}`");
+    output.push('\n');
+
+    // Each file is declared once, on first sight: declaring a node twice
+    // would emit two definitions for one id.
+    let mut ids: std::collections::BTreeMap<&str, usize> =
+        std::collections::BTreeMap::new();
+    let mut declare = |output: &mut String, file: &str| {
+        if ids.contains_key(file) {
+            return;
+        }
+        let id = ids.len();
+        ids.insert(file, id);
+        let _ = writeln!(output, "    n{id} [label=\"{}\"];", dot_escape(file));
+    };
+    for change in changes {
+        declare(&mut output, &change.file);
+        for dependent in &change.radius.dependents {
+            declare(&mut output, &dependent.file);
+        }
+    }
+    for path in skipped {
+        declare(&mut output, path);
+    }
+
+    output.push('\n');
+    for change in changes {
+        let changed_id = ids[change.file.as_str()];
+        for dependent in &change.radius.dependents {
+            let dependent_id = ids[dependent.file.as_str()];
+            let _ = writeln!(output, "    n{dependent_id} -> n{changed_id};");
+        }
+    }
+    output.push_str("}\n");
+    output
+}
+
+/// Escape text for an XML attribute or element body.
+fn xml_escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}
+
+/// Escape text for a DOT label.
+fn dot_escape(text: &str) -> String {
+    text.replace('\\', "\\\\").replace('"', "\\\"")
+}
+
 /// The query a caller should build the report with for `--diff`.
 ///
 /// Returned rather than inlined so the one-line comment explaining why it is
@@ -212,8 +335,8 @@ mod tests {
     use crate::impact::match_path;
 
     use super::{
-        ChangeImpact, measure_changes as measure_changes_raw, render_json,
-        render_markdown,
+        ChangeImpact, measure_changes as measure_changes_raw, render_dot,
+        render_json, render_markdown, render_xml,
     };
 
     /// Measure changes against a fixture report.
@@ -472,5 +595,41 @@ mod tests {
             markdown.contains("Nothing in this repository imports it."),
             "{markdown}"
         );
+    }
+
+    #[test]
+    fn regression_diff_xml_is_xml_and_escapes_paths() {
+        // `--diff --format xml` used to return the Markdown report, so a
+        // consumer asking for XML got a document no XML parser accepts.
+        let changes =
+            measure_changes(&repo_report(), &["a.rs".to_owned()], "", None);
+        let xml = render_xml(&changes, "HEAD~1", &["gone<rs".to_owned()]);
+
+        assert!(
+            xml.starts_with("<?xml version=\"1.0\""),
+            "an XML document, not Markdown: {xml}"
+        );
+        assert!(xml.contains("<change-impact spec=\"HEAD~1\">"), "{xml}");
+        assert!(xml.contains("<change file=\"a.rs\""), "{xml}");
+        assert!(xml.contains("dependent-count=\"3\""), "{xml}");
+        assert!(
+            xml.contains("<path>gone&lt;rs</path>"),
+            "a path is text, not markup: {xml}"
+        );
+    }
+
+    #[test]
+    fn regression_diff_dot_draws_dependents_pointing_at_changed_files() {
+        // `--diff --format dot` used to return the Markdown report as well.
+        let changes =
+            measure_changes(&repo_report(), &["a.rs".to_owned()], "", None);
+        let dot = render_dot(&changes, "HEAD~1", &[]);
+
+        assert!(dot.contains("digraph change_impact"), "{dot}");
+        assert!(dot.contains("->"), "{dot}");
+        // Every dependent points at the changed file, and the changed file
+        // itself is a labelled node rather than a bare name.
+        assert!(dot.contains("[label=\"a.rs\"]"), "{dot}");
+        assert!(dot.contains("[label=\"b.rs\"]"), "{dot}");
     }
 }
