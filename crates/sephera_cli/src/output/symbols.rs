@@ -222,15 +222,17 @@ pub fn print_symbol_report(report: &SymbolReport) {
 }
 
 /// Render the per-file breakdown as a terminal table, without a trailing
-/// newline. Empty when no file holds a declaration, matching the print form
-/// it was split out of; the empty case is its own fix, not this one's.
+/// newline. A repository with no declarations still gets its count line:
+/// the old print form returned early on an empty grid, so `--by-file` on
+/// an empty tree exited 0 printing nothing at all, which reads as a
+/// crashed or truncated run rather than as an empty answer.
 #[must_use]
 pub fn render_symbols_by_file_table(detail: &SymbolDetail) -> String {
     let ranked = symbols_by_file(detail);
     let grid = by_file_grid(&ranked);
 
     if grid.is_empty() {
-        return String::new();
+        return "Files with declarations: 0".to_owned();
     }
 
     let mut output = Format::Table.render(&grid);
@@ -240,10 +242,7 @@ pub fn render_symbols_by_file_table(detail: &SymbolDetail) -> String {
 
 /// Print the per-file breakdown as a terminal table.
 pub fn print_symbols_by_file(detail: &SymbolDetail) {
-    let rendered = render_symbols_by_file_table(detail);
-    if !rendered.is_empty() {
-        println!("{rendered}");
-    }
+    println!("{}", render_symbols_by_file_table(detail));
 }
 
 /// Render the declaration list as a terminal table, or nothing when there

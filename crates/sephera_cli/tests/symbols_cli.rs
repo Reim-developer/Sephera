@@ -439,3 +439,16 @@ fn regression_detail_lists_declarations_in_table_format() {
     assert!(text.contains("real_function"), "{text}");
     assert!(text.contains("method"), "{text}");
 }
+
+#[test]
+fn regression_by_file_on_an_empty_tree_still_reports() {
+    // `symbols --format table --by-file` on a tree with no declarations
+    // used to exit 0 printing nothing: the printer returned early on an
+    // empty grid, dropping even the count line the summary format prints.
+    let dir = tempdir().expect("temp dir");
+
+    let output = run(dir.path(), &["--format", "table", "--by-file"]);
+    assert!(output.status.success());
+    let text = String::from_utf8(output.stdout).expect("table is text");
+    assert!(text.contains("Files with declarations: 0"), "{text}");
+}
