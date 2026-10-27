@@ -206,6 +206,57 @@ fn install_force_refuses_a_symlinked_skill_dir() {
 }
 
 #[test]
+#[cfg(unix)]
+fn regression_install_refuses_a_symlinked_skills_dir() {
+    // The old symlink check stopped at the target, so a link at
+    // `.claude/skills` itself passed it and the install wrote the skill
+    // into the link's destination. A sweep run proved the escape with a
+    // live binary before this test existed.
+    use std::os::unix::fs::symlink;
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+    let victim = dir.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+    std::fs::create_dir_all(dir.path().join(".claude")).unwrap();
+    symlink(&victim, dir.path().join(".claude").join("skills")).unwrap();
+    let output = sephera(&["skill", "install", "--path", path, "--force"]);
+    assert!(
+        !output.status.success(),
+        "install through a symlinked skills dir must fail, got: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).contains("symlink"));
+    assert!(
+        !victim.join("sephera-change-safety").exists(),
+        "nothing may be written through the link"
+    );
+}
+
+#[test]
+#[cfg(unix)]
+fn regression_install_refuses_a_symlinked_claude_dir() {
+    // Same escape one level higher: `.claude` itself as a symlink used
+    // to pass the check and redirect the whole install.
+    use std::os::unix::fs::symlink;
+    let dir = tempdir().unwrap();
+    let path = dir.path().to_str().unwrap();
+    let victim = dir.path().join("victim");
+    std::fs::create_dir_all(&victim).unwrap();
+    symlink(&victim, dir.path().join(".claude")).unwrap();
+    let output = sephera(&["skill", "install", "--path", path, "--force"]);
+    assert!(
+        !output.status.success(),
+        "install through a symlinked .claude dir must fail, got: {}",
+        stdout(&output)
+    );
+    assert!(stderr(&output).contains("symlink"));
+    assert!(
+        !victim.join("skills").exists(),
+        "nothing may be written through the link"
+    );
+}
+
+#[test]
 fn print_and_install_together_are_an_error() {
     let dir = tempdir().unwrap();
     let path = dir.path().to_str().unwrap();
