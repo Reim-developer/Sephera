@@ -28,6 +28,7 @@ fn stderr(output: &Output) -> String {
 fn stdout(output: &Output) -> String {
     String::from_utf8_lossy(&output.stdout).into_owned()
 }
+
 /// `watch --once` without `--target` used to parse and then die in
 /// `run_watch` claiming the target was "required unless `--once` is
 /// passed" — while `--once` was exactly what had been passed. The
@@ -46,6 +47,7 @@ fn regression_once_without_target_is_a_parse_error() {
         "the old contradictory wording must be gone: {text}"
     );
 }
+
 /// A live watch used to print "Watching ..." before it ever touched
 /// the root, so a nonexistent root or a file-as-root announced a
 /// watch that never started and only then failed inside the watcher.
@@ -82,3 +84,93 @@ fn regression_live_watch_validates_root_before_announcing() {
     assert!(combined.contains("is not a directory"), "{combined}");
 }
 
+/// A live watch re-runs when a file named exactly `target` changes.
+///
+/// The old ignore predicate matched any path component against the
+/// ignored-directory list, so a source file called `target` — which
+/// sits inside no ignored directory — never triggered a re-run. A
+/// sweep run proved it live: one initial run, then silence after an
+/// append. The unit tests pin the predicate; this pins the wiring.
+#[test]
+fn regression_live_watch_reruns_on_a_file_named_target() {
+    let dir = tempdir().unwrap();
+    let target_file = dir.path().join("target");
+    std::fs::write(&target_file, "x = 1\n").unwrap();
+    std::fs::write(dir.path().join("normal.py"), "y = 2\n").unwrap();
+
+    let mut child: Child = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .arg("watch")
+        .arg("--target")
+        .arg("loc")
+        .arg("--path")
+        .arg(dir.path())
+        .stdin(Stdio::null())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::null())
+        .spawn()
+        .unwrap();
+    let stdout = child.stdout.take().unwrap();
+    let (tx, rx): (mpsc::Sender<String>, Receiver<String>) = mpsc::channel();
+    std::thread::spawn(move || {
+        let mut reader = BufReader::new(stdout);
+        loop {
+            let mut line = String::new();
+            match reader.read_line(&mut line) {
+                Ok(0) | Err(_) => return,
+                Ok(_) => {
+                    if tx.send(line).is_err() {
+                        return;
+                    }
+                }
+            }
+        }
+    });
+
+    let scans = wait_for_scans(&rx, 1, Duration::from_secs(15));
+    assert!(
+        scans >= 1,
+        "the initial run never printed its Scanning header"
+    );
+    {
+        let mut file = std::fs::OpenOptions::new()
+            .append(true)
+            .open(&target_file)
+            .unwrap();
+        writeln!(file, "z = 3").unwrap();
+    }
+    // One more header, not two: the first wait already consumed the
+    // initial run's header, so the re-run contributes exactly one.
+    let rescans = wait_for_scans(&rx, 1, Duration::from_secs(15));
+    let _ = child.kill();
+    let _ = child.wait();
+    assert!(
+        rescans >= 1,
+        "editing a file named `target` produced no second run"
+    );
+}
+
+/// Drain lines until `wanted` lines containing "Scanning" have been
+/// seen, or the deadline passes. Returns how many were seen.
+fn wait_for_scans(
+    rx: &Receiver<String>,
+    wanted: usize,
+    budget: Duration,
+) -> usize {
+    let deadline = Instant::now() + budget;
+    let mut seen = 0;
+    while seen < wanted {
+        let left = deadline.saturating_duration_since(Instant::now());
+        if left.is_zero() {
+            break;
+        }
+        match rx.recv_timeout(left) {
+            Ok(line) => {
+                if line.contains("Scanning") {
+                    seen += 1;
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    seen
+}
