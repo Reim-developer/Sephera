@@ -517,9 +517,9 @@ pub struct WatchArgs {
         long,
         value_enum,
         value_name = "TARGET",
-        required_unless_present = "once",
+        required = true,
         help = "What to re-run when the tree changes.",
-        long_help = "What to re-run when the tree changes. Choose one of graph, symbols, loc, or depends-on. Required unless --once is passed."
+        long_help = "What to re-run when the tree changes. Choose one of graph, symbols, loc, or depends-on. Required: `--once` without a target has nothing to run, and the old `required_unless_present` spelling let it parse only to fail later with a message claiming the opposite."
     )]
     pub target: Option<WatchTarget>,
 

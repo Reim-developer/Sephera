@@ -175,8 +175,12 @@ const fn no_gates() -> Vec<Gate> {
 /// `--once` short-circuits to a single run, which keeps the watch argument
 /// parsing usable from scripts without needing a separate code path.
 fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
+    // Unreachable through clap, which requires `--target` outright: the old
+    // `required_unless_present = "once"` spelling let `watch --once` parse
+    // and die here claiming the target was required *unless* `--once` was
+    // passed — while `--once` was exactly what had been passed.
     let Some(target) = arguments.target else {
-        anyhow::bail!("`--target` is required unless `--once` is passed");
+        anyhow::bail!("`--target` is required");
     };
 
     if target == WatchTarget::DependsOn && arguments.on.is_none() {
