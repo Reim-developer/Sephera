@@ -165,13 +165,17 @@ pub fn expand(
             // Naming the section explains why a profile that exists for another
             // command does not count.
             let section = format!("[profiles.{requested}.{}]", command.name());
+            // The wording below is pinned verbatim by a context_config
+            // test ("no profiles are defined"), so it stays as written
+            // even though it reads awkwardly; the fix here is the error
+            // itself, not its grammar.
             let defined = if available.is_empty() {
-                "no profiles".to_owned()
+                "no profiles are defined".to_owned()
             } else {
-                format!("only these profiles: {}", available.join(", "))
+                format!("only these are defined: {}", available.join(", "))
             };
             anyhow::bail!(
-                "profile `{requested}` was not found in `{}`; the file defines {defined} \
+                "profile `{requested}` was not found in `{}`; it defines {defined} \
                  (looking for `{section}`)",
                 config.source_path.display(),
             );
