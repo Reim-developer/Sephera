@@ -47,10 +47,10 @@ use crate::{
     gate::{self, Gate},
     guard, impact, merge,
     output::{
-        emit_rendered_output, print_available_profiles, print_report,
-        print_symbol_report, print_symbols_by_file, render_context_json,
-        render_context_markdown, render_graph, render_loc_csv, render_loc_json,
-        render_loc_markdown, render_symbol_json, render_symbol_markdown,
+        emit_rendered_output, print_available_profiles, print_symbol_report,
+        print_symbols_by_file, render_context_json, render_context_markdown,
+        render_graph, render_loc_csv, render_loc_json, render_loc_markdown,
+        render_report_table, render_symbol_json, render_symbol_markdown,
     },
     progress::{self, CliProgress, CliReporter},
     review, risk, sarif, schema_impact, simulate, skill, test_priority,
@@ -385,13 +385,12 @@ async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
 
     // Only the table is meant for a terminal. The other three are text meant
     // for a pipe or a file, so the spinner has to be gone before they are
-    // emitted or it interleaves with the payload.
+    // emitted or it interleaves with the payload. The table is still text
+    // once rendered, so it goes through the same `--output` path as the
+    // other formats: before this it printed straight to stdout and a
+    // `--output` file was silently never written.
     let rendered = match arguments.format {
-        LocOutputFormat::Table => {
-            progress.finish();
-            print_report(&report);
-            return Ok(no_gates());
-        }
+        LocOutputFormat::Table => render_report_table(&report),
         LocOutputFormat::Json => render_loc_json(&report),
         LocOutputFormat::Markdown => render_loc_markdown(&report),
         LocOutputFormat::Csv => render_loc_csv(&report),

@@ -93,3 +93,33 @@ fn loc_command_returns_error_for_invalid_regex_ignore() {
         assert_snapshot!(stderr);
     });
 }
+
+#[test]
+fn regression_table_output_writes_the_file_instead_of_stdout() {
+    // `loc --format table --output <file>` used to print the table to stdout
+    // and never create the file: the table branch returned before the shared
+    // `--output` path ran. A table is text once rendered, so it goes through
+    // the same path as json, markdown, and csv.
+    let temp_dir = tempdir().unwrap();
+    std::fs::write(temp_dir.path().join("main.rs"), b"fn main() {}\n").unwrap();
+    let destination = temp_dir.path().join("out").join("loc.txt");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args(["loc", "--path"])
+        .arg(temp_dir.path())
+        .args(["--format", "table", "--output"])
+        .arg(&destination)
+        .output()
+        .unwrap();
+
+    assert!(output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "with --output nothing goes to stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let written =
+        std::fs::read_to_string(&destination).expect("the report file");
+    assert!(written.contains("Rust"), "{written}");
+    assert!(written.contains("Files scanned: 1"), "{written}");
+}
