@@ -414,8 +414,8 @@ impl SepheraServer {
         // Normalised the same way `graph --focus` normalises, so an absolute scope
         // path is compared in the graph's spelling rather than against its own.
         let focus = build_focus_set(&source.analysis_path, &focus_paths)
-        .into_iter()
-        .collect::<Vec<_>>();
+            .into_iter()
+            .collect::<Vec<_>>();
 
         // One build, two questions: the file's whole radius, or the
         // radius of one name inside it when `symbol` is set. The symbol
@@ -522,8 +522,8 @@ impl SepheraServer {
             &source.analysis_path,
         );
         let focus = build_focus_set(&source.analysis_path, &focus_paths)
-        .into_iter()
-        .collect::<Vec<_>>();
+            .into_iter()
+            .collect::<Vec<_>>();
 
         let impacts = sephera_graph::affected_tests::measure_tests_all(
             &report,
@@ -4521,7 +4521,8 @@ fn check_focus_paths_exist(
     base_path: &std::path::Path,
     focus: &[std::path::PathBuf],
 ) -> Result<(), rmcp::ErrorData> {
-    let invalid = |message: String| rmcp::ErrorData::invalid_params(message, None);
+    let invalid =
+        |message: String| rmcp::ErrorData::invalid_params(message, None);
     let base = std::fs::canonicalize(base_path).map_err(|_| {
         invalid(format!(
             "could not resolve base path `{}`",

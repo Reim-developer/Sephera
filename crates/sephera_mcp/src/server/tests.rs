@@ -2352,11 +2352,7 @@ async fn regression_graph_tool_focus_dotdot_escape_is_rejected() {
     let error = server
         .graph(param_for(GraphInput {
             path: Some(
-                temp_dir
-                    .path()
-                    .join("pkg")
-                    .to_string_lossy()
-                    .into_owned(),
+                temp_dir.path().join("pkg").to_string_lossy().into_owned(),
             ),
             url: None,
             git_ref: None,

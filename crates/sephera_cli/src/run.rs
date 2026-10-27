@@ -415,9 +415,10 @@ fn check_focus_paths_exist(
                 base_path.display()
             );
         }
-        let resolved = std::fs::canonicalize(&candidate).with_context(|| {
-            format!("could not resolve focus path `{}`", path.display())
-        })?;
+        let resolved =
+            std::fs::canonicalize(&candidate).with_context(|| {
+                format!("could not resolve focus path `{}`", path.display())
+            })?;
         if resolved.strip_prefix(&base).is_err() {
             anyhow::bail!(
                 "focus path `{}` must resolve inside `{}`",

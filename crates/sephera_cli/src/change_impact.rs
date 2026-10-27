@@ -688,14 +688,14 @@ mod tests {
         );
         let transitive = dot
             .lines()
-            .filter(|line| line.contains("[style=dashed, label=\"transitive\"]"))
+            .filter(|line| {
+                line.contains("[style=dashed, label=\"transitive\"]")
+            })
             .count();
         assert_eq!(transitive, 1, "only d.rs reaches a.rs transitively: {dot}");
         let direct = dot
             .lines()
-            .filter(|line| {
-                line.contains("->") && !line.contains("transitive")
-            })
+            .filter(|line| line.contains("->") && !line.contains("transitive"))
             .count();
         assert_eq!(direct, 2, "b.rs and c.rs import a.rs directly: {dot}");
     }
