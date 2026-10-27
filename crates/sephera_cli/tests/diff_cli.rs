@@ -120,3 +120,72 @@ fn identical_refs_report_no_changes() {
     assert!(text.contains("0 symbol(s) changed."), "{text}");
     assert!(text.contains("No declared symbol was added"), "{text}");
 }
+
+/// A repository whose `pkg` scope removes one symbol and reshapes
+/// another, while `other` also changes: the scoped no-`--to` diff
+/// must see only the scope, in the scope's spelling.
+fn repo_with_scoped_and_outside_changes() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(
+        dir,
+        "pkg/lib.py",
+        b"def add(a, b):\n    return a + b\n\ndef greet(name):\n    return name\n",
+    );
+    write_file(
+        dir,
+        "pkg/user.py",
+        b"from pkg.lib import add\n\n\nprint(add(1, 2))\n",
+    );
+    write_file(
+        dir,
+        "other/outer.py",
+        b"from pkg.lib import add\n\n\nprint(add(3, 4))\n",
+    );
+    commit_all(dir, "seed");
+    git(dir, &["branch", "old"]);
+    // The working tree is the newer side: remove `add`, reshape
+    // `greet` into a class, and change nothing outside the scope.
+    write_file(dir, "pkg/lib.py", b"class greet:\n    pass\n");
+    temp_dir
+}
+
+#[test]
+fn regression_diff_subdir_without_to_scopes_the_old_side() {
+    let temp_dir = repo_with_scoped_and_outside_changes();
+    let pkg = temp_dir.path().join("pkg");
+    let output = run_diff(&pkg, &["--from", "old"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(text.contains("2 symbol(s) changed."), "{text}");
+    assert!(text.contains("Removed `add` from `lib.py`"), "{text}");
+    assert!(
+        text.contains("Changed `greet` in `lib.py` from Function to Class."),
+        "{text}"
+    );
+    // No root-relative spelling, and nothing from outside the scope.
+    assert!(!text.contains("pkg/"), "{text}");
+    assert!(!text.contains("other/"), "{text}");
+    assert!(!text.contains("Added"), "{text}");
+}
+
+#[test]
+fn regression_diff_subdir_created_after_from_is_added_not_an_error() {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    git(dir, &["init", "-q"]);
+    write_file(dir, "other/outer.py", b"def run():\n    return 1\n");
+    commit_all(dir, "seed");
+    git(dir, &["branch", "old"]);
+    // The scope does not exist at the old ref; it only appears in
+    // the working tree, so everything in it is an addition.
+    write_file(dir, "pkg/lib.py", b"def add(a, b):\n    return a + b\n");
+    let pkg = dir.join("pkg");
+    let output = run_diff(&pkg, &["--from", "old"]);
+    assert!(output.status.success(), "{output:?}");
+    let text = stdout(&output);
+    assert!(text.contains("1 symbol(s) changed."), "{text}");
+    assert!(text.contains("Added `add` in `lib.py`"), "{text}");
+    assert!(!text.contains("Removed"), "{text}");
+}

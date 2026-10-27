@@ -1470,6 +1470,12 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
     // move while the newer side is built. The newer side is the
     // working tree when --to is absent, and a second worktree
     // otherwise, so the working tree is never disturbed either way.
+    // Without --to the old side is scoped to --path, like the new
+    // side and like breaking's old side: building it whole-tree
+    // while the new side is scoped compares root-relative paths
+    // against subdir-relative ones, and every scoped symbol reads
+    // as removed plus added. With --to both sides are whole-tree
+    // checkouts, the same rule breaking documents.
     let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
         .with_context(|| {
             format!(
@@ -1478,15 +1484,15 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
                 source.repo_root.display()
             )
         })?;
-    let old_ignore = build_ignore_matcher(
+    progress.set_message("Extracting the older side...");
+    let (_, old_index) = build_old_side(
         old_worktree.path(),
+        &source,
+        arguments.to.is_none(),
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
-    progress.set_message("Extracting the older side...");
-    let (_, old_index) =
-        build_graph_with_declarations(old_worktree.path(), &old_ignore)?;
     drop(old_worktree);
 
     let to_label = arguments.to.as_deref().unwrap_or("working tree");
