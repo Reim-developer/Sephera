@@ -711,8 +711,9 @@ tree_command_args!(
     #[arg(
         long,
         value_name = "PATH",
+        conflicts_with = "diff",
         help = "Focused file or directory inside the base path.",
-        long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to limit the graph to specific files or directories."
+        long_help = "Focused file or directory inside the selected analysis base. Repeat this flag to limit the graph to specific files or directories. Cannot be combined with `--diff`, which selects its files from git: the diff path never read this flag, so combining them used to run the diff unscoped without saying so."
     )]
     pub focus: Vec<PathBuf>,
 

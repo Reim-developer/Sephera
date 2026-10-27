@@ -354,3 +354,34 @@ fn regression_diff_mode_honours_the_requested_format() {
         );
     }
 }
+
+#[test]
+fn regression_diff_with_focus_is_rejected_rather_than_ignored() {
+    // `graph --diff --focus <path>` used to exit 0 and run the diff
+    // unscoped: the diff path never read the focus flag. `--diff`
+    // selects its files from git, so scoping it by focus is a different
+    // question, and the honest answer is a rejection, like `--diff`
+    // with `--what-depends-on` already gets.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--diff",
+            "HEAD~1",
+            "--focus",
+            "lib.py",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("--focus") && stderr.contains("--diff"),
+        "the conflict must name both flags: {stderr}"
+    );
+}
