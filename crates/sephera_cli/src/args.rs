@@ -133,7 +133,7 @@ pub enum Commands {
     Watch(WatchArgs),
     /// Start an MCP (Model Context Protocol) server over stdio
     #[command(
-        long_about = "Start an MCP server that exposes Sephera tools (loc, context, graph) over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories."
+        long_about = "Start an MCP server that exposes Sephera's analysis tools over the Model Context Protocol.\n\nThis allows AI agents such as Claude Desktop, Cursor, and other MCP-compatible clients to call Sephera directly, including URL-mode analysis of remote repositories. The tool list is discoverable with `tools/list` once the server is running, which is the one place it cannot go stale — the old text named three tools here while the server served twenty."
     )]
     Mcp,
     /// Analyze dependency graph via Tree-sitter import extraction
