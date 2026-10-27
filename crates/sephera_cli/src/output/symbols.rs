@@ -193,33 +193,57 @@ const fn display_name(name: &str) -> &str {
     if name.is_empty() { "(anonymous)" } else { name }
 }
 
-/// Print the per-language summary as a terminal table.
-pub fn print_symbol_report(report: &SymbolReport) {
+/// Render the per-language summary as a terminal table, without a trailing
+/// newline, so the caller decides how it is emitted: printed to stdout or
+/// written to a `--output` file. The string form is what lets the table
+/// format honour `--output` at all -- the print form below can only go to
+/// stdout, which is how a table report with `--output` used to print to the
+/// terminal and never create the file.
+#[must_use]
+pub fn render_symbol_table(report: &SymbolReport) -> String {
     let grid = language_grid(report);
-
-    println!("{}", Format::Table.render(&grid));
-
-    println!("Files scanned: {}", report.files_scanned);
-    println!("Languages detected: {}", report.languages_detected);
+    let mut output = Format::Table.render(&grid);
+    let _ = writeln!(output, "\nFiles scanned: {}", report.files_scanned);
+    let _ =
+        writeln!(output, "Languages detected: {}", report.languages_detected);
     if report.files_skipped > 0 {
-        println!(
+        let _ = writeln!(
+            output,
             "Files skipped (empty or larger than the parse limit): {}",
             report.files_skipped
         );
     }
+    output.trim_end_matches('\n').to_owned()
 }
 
-/// Print the per-file breakdown as a terminal table.
-pub fn print_symbols_by_file(detail: &SymbolDetail) {
+/// Print the per-language summary as a terminal table.
+pub fn print_symbol_report(report: &SymbolReport) {
+    println!("{}", render_symbol_table(report));
+}
+
+/// Render the per-file breakdown as a terminal table, without a trailing
+/// newline. Empty when no file holds a declaration, matching the print form
+/// it was split out of; the empty case is its own fix, not this one's.
+#[must_use]
+pub fn render_symbols_by_file_table(detail: &SymbolDetail) -> String {
     let ranked = symbols_by_file(detail);
     let grid = by_file_grid(&ranked);
 
     if grid.is_empty() {
-        return;
+        return String::new();
     }
 
-    println!("{}", Format::Table.render(&grid));
-    println!("Files with declarations: {}", ranked.len());
+    let mut output = Format::Table.render(&grid);
+    let _ = writeln!(output, "\nFiles with declarations: {}", ranked.len());
+    output.trim_end_matches('\n').to_owned()
+}
+
+/// Print the per-file breakdown as a terminal table.
+pub fn print_symbols_by_file(detail: &SymbolDetail) {
+    let rendered = render_symbols_by_file_table(detail);
+    if !rendered.is_empty() {
+        println!("{rendered}");
+    }
 }
 
 /// Render a symbol report as JSON.

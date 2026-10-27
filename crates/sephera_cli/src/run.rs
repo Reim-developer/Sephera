@@ -47,10 +47,11 @@ use crate::{
     gate::{self, Gate},
     guard, impact, merge,
     output::{
-        emit_rendered_output, print_available_profiles, print_symbol_report,
-        print_symbols_by_file, render_context_json, render_context_markdown,
-        render_graph, render_loc_csv, render_loc_json, render_loc_markdown,
-        render_report_table, render_symbol_json, render_symbol_markdown,
+        emit_rendered_output, print_available_profiles, render_context_json,
+        render_context_markdown, render_graph, render_loc_csv, render_loc_json,
+        render_loc_markdown, render_report_table, render_symbol_json,
+        render_symbol_markdown, render_symbol_table,
+        render_symbols_by_file_table,
     },
     progress::{self, CliProgress, CliReporter},
     review, risk, sarif, schema_impact, simulate, skill, test_priority,
@@ -443,13 +444,16 @@ async fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
     progress.finish();
 
     let rendered = match arguments.format {
+        // Rendered to a string like the other two formats, so `--output`
+        // works here too: the print forms could only go to stdout, which
+        // is how a table report with `--output` used to print to the
+        // terminal and never create the file.
         SymbolOutputFormat::Table => {
             if arguments.by_file {
-                print_symbols_by_file(&detail);
+                Some(render_symbols_by_file_table(&detail))
             } else {
-                print_symbol_report(&detail.report);
+                Some(render_symbol_table(&detail.report))
             }
-            None
         }
         // `by_file` reaches every format, not just the table. It used to be
         // honoured only here, so `--by-file --format json` produced a

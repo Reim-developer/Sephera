@@ -390,3 +390,37 @@ fn a_missing_path_exits_with_the_failure_code() {
         "a failed run must not print a report that looks like a finding"
     );
 }
+
+#[test]
+fn regression_table_output_writes_the_file_instead_of_stdout() {
+    // `symbols --format table --output <file>` used to print the table to
+    // stdout and never create the file: the table branch printed directly
+    // instead of going through the shared `--output` path the other two
+    // formats use.
+    let dir = repo();
+    let destination = dir.path().join("out").join("symbols.txt");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "symbols",
+            "--path",
+            dir.path().to_str().expect("utf-8 path"),
+            "--format",
+            "table",
+            "--output",
+            destination.to_str().expect("utf-8 path"),
+        ])
+        .output()
+        .expect("symbols should run");
+
+    assert!(output.status.success());
+    assert!(
+        output.stdout.is_empty(),
+        "with --output nothing goes to stdout: {:?}",
+        String::from_utf8_lossy(&output.stdout)
+    );
+    let written =
+        std::fs::read_to_string(&destination).expect("the report file");
+    assert!(written.contains("Rust"), "{written}");
+    assert!(written.contains("Files scanned:"), "{written}");
+}
