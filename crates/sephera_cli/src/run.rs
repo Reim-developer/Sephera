@@ -2725,16 +2725,24 @@ fn run_graph_diff(
         _ => change_impact::render_markdown(&changes, spec, &skipped),
     };
 
-    let gates = arguments
-        .fail_on_unresolved
-        .map(|limit| {
-            vec![Gate::new(
-                "unresolved local paths",
-                report.metrics.unresolved_local_edges,
-                limit,
-            )]
-        })
-        .unwrap_or_default();
+    // Both thresholds the non-diff path honours. `--fail-on-cycles` used
+    // to be accepted here and then dropped, so a diff run over a cyclic
+    // tree exited 0 where the same tree without `--diff` exited 2.
+    let mut gates = Vec::new();
+    if let Some(limit) = arguments.fail_on_cycles {
+        gates.push(Gate::new(
+            "circular dependencies",
+            report.metrics.circular_dependencies,
+            limit,
+        ));
+    }
+    if let Some(limit) = arguments.fail_on_unresolved {
+        gates.push(Gate::new(
+            "unresolved local paths",
+            report.metrics.unresolved_local_edges,
+            limit,
+        ));
+    }
 
     if arguments.output_args.output.is_some() {
         progress.set_message("Writing output...");

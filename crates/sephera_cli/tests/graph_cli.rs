@@ -240,3 +240,70 @@ fn graph_command_reports_missing_depends_on_target() {
     let stderr = String::from_utf8(output.stderr).unwrap();
     assert!(stderr.contains("did not resolve to an analyzed graph node"));
 }
+
+fn git(repo: &std::path::Path, args: &[&str]) {
+    let output = Command::new("git")
+        .current_dir(repo)
+        .args(args)
+        .output()
+        .expect("git should run");
+    assert!(
+        output.status.success(),
+        "git {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
+#[test]
+fn regression_diff_mode_honours_fail_on_cycles() {
+    // `graph --diff --fail-on-cycles 1` on a cyclic tree used to exit 0:
+    // the diff path built only the unresolved-paths gate and dropped the
+    // cycles gate the non-diff path honours, so the same tree failed
+    // without `--diff` and passed with it.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "cyc_a.py", b"import cyc_b\n");
+    write_file(temp_dir.path(), "cyc_b.py", b"import cyc_a\n");
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 1\n");
+    git(temp_dir.path(), &["init"]);
+    git(temp_dir.path(), &["config", "user.name", "Sephera Tests"]);
+    git(
+        temp_dir.path(),
+        &["config", "user.email", "tests@example.com"],
+    );
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "base"]);
+    write_file(temp_dir.path(), "lib.py", b"def f():\n    return 2\n");
+    git(temp_dir.path(), &["add", "-A"]);
+    git(temp_dir.path(), &["commit", "-m", "second"]);
+
+    let plain = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--fail-on-cycles",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(plain.status.code(), Some(2), "non-diff gate fires");
+
+    let diffed = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().to_str().unwrap(),
+            "--diff",
+            "HEAD~1",
+            "--fail-on-cycles",
+            "1",
+        ])
+        .output()
+        .unwrap();
+    assert_eq!(
+        diffed.status.code(),
+        Some(2),
+        "diff mode must fire the same gate: {}",
+        String::from_utf8_lossy(&diffed.stderr)
+    );
+}
