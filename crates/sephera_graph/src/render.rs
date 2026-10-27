@@ -578,6 +578,14 @@ fn render_xml_edges(output: &mut String, report: &GraphReport) {
 }
 
 /// Renders the graph report as a Graphviz DOT file.
+///
+/// Node ids are sequential (`n0`, `n1`, ...) rather than derived from
+/// paths, the way the Markdown Mermaid diagram already does it. A
+/// path-derived id is not a DOT id: a file named `my mod.py` produced
+/// `my mod_py`, which is a syntax error, and two files that differ only
+/// in a separator -- `a/b.py` and `a-b.py` -- produced the same id and
+/// merged into one node. The label still carries the file name, so
+/// nothing a reader needs is lost.
 fn render_graph_dot(report: &GraphReport) -> String {
     let mut output = String::new();
 
@@ -588,6 +596,13 @@ fn render_graph_dot(report: &GraphReport) -> String {
     );
     output.push_str("    edge [fontsize=8];\n\n");
 
+    let node_ids: std::collections::BTreeMap<&str, usize> = report
+        .nodes
+        .iter()
+        .enumerate()
+        .map(|(index, node)| (node.file_path.as_str(), index))
+        .collect();
+
     // Node definitions with labels
     for node in &report.nodes {
         let short_name = node
@@ -595,8 +610,8 @@ fn render_graph_dot(report: &GraphReport) -> String {
             .rsplit_once('/')
             .map_or(node.file_path.as_str(), |(_, name)| name);
         let label = dot_escape(short_name);
-        let id = dot_node_id(&node.file_path);
-        let _ = writeln!(output, "    {id} [label=\"{label}\"];");
+        let id = node_ids[node.file_path.as_str()];
+        let _ = writeln!(output, "    n{id} [label=\"{label}\"];");
     }
 
     output.push('\n');
@@ -606,10 +621,11 @@ fn render_graph_dot(report: &GraphReport) -> String {
         if !edge.resolved {
             continue;
         }
-        if let Some(ref to) = edge.to {
-            let from_id = dot_node_id(&edge.from);
-            let to_id = dot_node_id(to);
-            let _ = writeln!(output, "    {from_id} -> {to_id};");
+        if let Some(ref to) = edge.to
+            && let (Some(from_id), Some(to_id)) =
+                (node_ids.get(edge.from.as_str()), node_ids.get(to.as_str()))
+        {
+            let _ = writeln!(output, "    n{from_id} -> n{to_id};");
         }
     }
 
@@ -629,11 +645,6 @@ fn xml_escape(text: &str) -> String {
 /// Escapes special DOT label characters.
 fn dot_escape(text: &str) -> String {
     text.replace('\\', "\\\\").replace('"', "\\\"")
-}
-
-/// Converts a file path to a valid DOT node ID.
-fn dot_node_id(path: &str) -> String {
-    path.replace(['/', '.', '-'], "_")
 }
 
 fn format_query(query: &GraphQuery) -> String {
@@ -1063,5 +1074,79 @@ mod tests {
         assert!(dot.contains("digraph dependencies"));
         assert!(dot.contains("rankdir=LR"));
         assert!(dot.contains("->"));
+    }
+
+    #[test]
+    fn regression_dot_ids_survive_spaces_and_separator_collisions() {
+        // Node ids used to be derived from paths, so `my mod.py` produced
+        // `my mod_py` -- a DOT syntax error, since an id cannot contain a
+        // space -- and `a/b.py` and `a-b.py` produced the same id and
+        // merged into one node. Sequential ids cannot do either.
+        let mut report = sample_report();
+        report.nodes = vec![
+            GraphNode {
+                file_path: "my mod.py".to_owned(),
+                language: Some("Python"),
+                imports_count: 1,
+                imported_by_count: 0,
+            },
+            GraphNode {
+                file_path: "a/b.py".to_owned(),
+                language: Some("Python"),
+                imports_count: 0,
+                imported_by_count: 1,
+            },
+            GraphNode {
+                file_path: "a-b.py".to_owned(),
+                language: Some("Python"),
+                imports_count: 0,
+                imported_by_count: 1,
+            },
+        ];
+        report.edges = vec![
+            GraphEdge {
+                from: "my mod.py".to_owned(),
+                to: Some("a/b.py".to_owned()),
+                import_path: "a.b".to_owned(),
+                items: Vec::new(),
+                resolved: true,
+                kind: ImportKind::Dependency,
+                local_gap: false,
+                cfg_gated: false,
+            },
+            GraphEdge {
+                from: "my mod.py".to_owned(),
+                to: Some("a-b.py".to_owned()),
+                import_path: "a_b".to_owned(),
+                items: Vec::new(),
+                resolved: true,
+                kind: ImportKind::Dependency,
+                local_gap: false,
+                cfg_gated: false,
+            },
+        ];
+
+        let dot = render_graph(&report, GraphFormat::Dot);
+        assert!(
+            !dot.contains("my mod_py"),
+            "a space must never reach a node id: {dot}"
+        );
+        // Short names label the nodes (`a/b.py` labels as `b.py`), so the
+        // collision check is that all three files get their own definition
+        // line rather than two of them sharing one id.
+        let definitions =
+            dot.lines().filter(|line| line.contains("[label=")).count();
+        assert_eq!(
+            definitions, 3,
+            "each file gets exactly one node definition: {dot}"
+        );
+        assert!(dot.contains("[label=\"b.py\"]"), "{dot}");
+        assert!(dot.contains("[label=\"a-b.py\"]"), "{dot}");
+        assert_eq!(
+            dot.matches("->").count(),
+            2,
+            "both edges survive as distinct arrows: {dot}"
+        );
+        assert!(dot.contains("[label=\"my mod.py\"]"), "{dot}");
     }
 }
