@@ -46,4 +46,39 @@ fn regression_once_without_target_is_a_parse_error() {
         "the old contradictory wording must be gone: {text}"
     );
 }
+/// A live watch used to print "Watching ..." before it ever touched
+/// the root, so a nonexistent root or a file-as-root announced a
+/// watch that never started and only then failed inside the watcher.
+/// The root is now validated first, in the same words as the
+/// single-tree commands' path check.
+#[test]
+fn regression_live_watch_validates_root_before_announcing() {
+    let dir = tempdir().unwrap();
+    let missing = dir.path().join("no-such-dir");
+    let output = sephera(&[
+        "watch",
+        "--target",
+        "loc",
+        "--path",
+        missing.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(!combined.contains("Watching"), "{combined}");
+    assert!(combined.contains("does not exist"), "{combined}");
+
+    let file = dir.path().join("a.py");
+    std::fs::write(&file, "x = 1\n").unwrap();
+    let output = sephera(&[
+        "watch",
+        "--target",
+        "loc",
+        "--path",
+        file.to_str().unwrap(),
+    ]);
+    assert!(!output.status.success());
+    let combined = format!("{}{}", stdout(&output), stderr(&output));
+    assert!(!combined.contains("Watching"), "{combined}");
+    assert!(combined.contains("is not a directory"), "{combined}");
+}
 

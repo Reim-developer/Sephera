@@ -207,6 +207,19 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
         ));
     }
 
+    // The live loop prints "Watching ..." before it ever touches the root,
+    // so a nonexistent root or a file-as-root used to announce a watch that
+    // never started and only then fail inside the watcher. `--once` fails
+    // cleanly through the analysis command's own path check; the live loop
+    // gets the same check here, in the same words as `sephera_scan`'s
+    // project-file validation, before anything claims to be watching.
+    if !root.is_dir() {
+        if !root.exists() {
+            anyhow::bail!("path `{}` does not exist", root.display());
+        }
+        anyhow::bail!("path `{}` is not a directory", root.display());
+    }
+
     println!(
         "Watching {} for changes. Press Ctrl+C to stop.",
         root.display()
