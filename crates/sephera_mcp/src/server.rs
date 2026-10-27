@@ -319,6 +319,7 @@ impl SepheraServer {
             .into_iter()
             .map(std::path::PathBuf::from)
             .collect();
+        check_focus_paths_exist(&source.analysis_path, &focus_paths)?;
         let query = param.depends_on.map(GraphQuery::DependsOn);
 
         let mut report = build_graph(
@@ -387,6 +388,14 @@ impl SepheraServer {
         .await
         .map_err(map_internal_error("source resolution failed"))?;
 
+        let focus_paths: Vec<std::path::PathBuf> = param
+            .focus
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        check_focus_paths_exist(&source.analysis_path, &focus_paths)?;
+
         // The whole repository, because the radius of one file routinely reaches
         // past any subtree and every target shares this one build.
         let report = build_graph(
@@ -404,15 +413,7 @@ impl SepheraServer {
         );
         // Normalised the same way `graph --focus` normalises, so an absolute scope
         // path is compared in the graph's spelling rather than against its own.
-        let focus = build_focus_set(
-            &source.analysis_path,
-            &param
-                .focus
-                .unwrap_or_default()
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect::<Vec<_>>(),
-        )
+        let focus = build_focus_set(&source.analysis_path, &focus_paths)
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -499,6 +500,14 @@ impl SepheraServer {
         .await
         .map_err(map_internal_error("source resolution failed"))?;
 
+        let focus_paths: Vec<std::path::PathBuf> = param
+            .focus
+            .unwrap_or_default()
+            .into_iter()
+            .map(std::path::PathBuf::from)
+            .collect();
+        check_focus_paths_exist(&source.analysis_path, &focus_paths)?;
+
         let report = build_graph(
             &source.analysis_path,
             &ignore_matcher,
@@ -512,15 +521,7 @@ impl SepheraServer {
             &source.repo_root,
             &source.analysis_path,
         );
-        let focus = build_focus_set(
-            &source.analysis_path,
-            &param
-                .focus
-                .unwrap_or_default()
-                .into_iter()
-                .map(std::path::PathBuf::from)
-                .collect::<Vec<_>>(),
-        )
+        let focus = build_focus_set(&source.analysis_path, &focus_paths)
         .into_iter()
         .collect::<Vec<_>>();
 
@@ -668,7 +669,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -743,7 +744,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -844,7 +845,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -1575,7 +1576,7 @@ impl SepheraServer {
                 url: param.url,
                 git_ref: param.git_ref,
             },
-            false,
+            true,
         )
         .await
         .map_err(map_internal_error("source resolution failed"))?;
@@ -4501,6 +4502,60 @@ impl ServerHandler for SepheraServer {
                 env!("CARGO_PKG_VERSION"),
             ))
     }
+}
+
+/// A focus scope must name something inside the analysis base that exists.
+///
+/// The CLI's `check_focus_paths_exist` twin: the dependency runs CLI → MCP
+/// → core, so MCP cannot import the CLI's copy and the same rule lives
+/// here. Canonicalised on both sides, because `absolute` normalises `.`
+/// but not `..` and a scope beside the base must be refused, not widened.
+/// A nonexistent scope is the caller's mistake, so it surfaces as invalid
+/// params rather than an internal error.
+///
+/// # Errors
+///
+/// Returns an invalid-params error naming a scope that does not exist or
+/// resolves outside the base, or a base that cannot be resolved.
+fn check_focus_paths_exist(
+    base_path: &std::path::Path,
+    focus: &[std::path::PathBuf],
+) -> Result<(), rmcp::ErrorData> {
+    let invalid = |message: String| rmcp::ErrorData::invalid_params(message, None);
+    let base = std::fs::canonicalize(base_path).map_err(|_| {
+        invalid(format!(
+            "could not resolve base path `{}`",
+            base_path.display()
+        ))
+    })?;
+    for path in focus {
+        let candidate = if path.is_absolute() {
+            path.clone()
+        } else {
+            base_path.join(path)
+        };
+        if !candidate.exists() {
+            return Err(invalid(format!(
+                "focus path `{}` does not exist inside `{}`",
+                path.display(),
+                base_path.display()
+            )));
+        }
+        let resolved = std::fs::canonicalize(&candidate).map_err(|_| {
+            invalid(format!(
+                "could not resolve focus path `{}`",
+                path.display()
+            ))
+        })?;
+        if resolved.strip_prefix(&base).is_err() {
+            return Err(invalid(format!(
+                "focus path `{}` must resolve inside `{}`",
+                path.display(),
+                base_path.display()
+            )));
+        }
+    }
+    Ok(())
 }
 
 /// Map a requested graph output format onto [`GraphFormat`].
