@@ -268,22 +268,21 @@ pub fn render_dot(
     // would emit two definitions for one id.
     let mut ids: std::collections::BTreeMap<&str, usize> =
         std::collections::BTreeMap::new();
-    let mut declare = |output: &mut String, file: &str| {
+    let mut files: Vec<&str> = Vec::new();
+    for change in changes {
+        files.push(change.file.as_str());
+        for dependent in &change.radius.dependents {
+            files.push(dependent.file.as_str());
+        }
+    }
+    files.extend(skipped.iter().map(String::as_str));
+    for file in files {
         if ids.contains_key(file) {
-            return;
+            continue;
         }
         let id = ids.len();
         ids.insert(file, id);
         let _ = writeln!(output, "    n{id} [label=\"{}\"];", dot_escape(file));
-    };
-    for change in changes {
-        declare(&mut output, &change.file);
-        for dependent in &change.radius.dependents {
-            declare(&mut output, &dependent.file);
-        }
-    }
-    for path in skipped {
-        declare(&mut output, path);
     }
 
     output.push('\n');
