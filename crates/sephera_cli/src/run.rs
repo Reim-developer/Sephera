@@ -394,26 +394,33 @@ fn check_focus_paths_exist(
     base_path: &std::path::Path,
     focus: &[PathBuf],
 ) -> Result<()> {
-    let base = std::path::absolute(base_path)
-        .unwrap_or_else(|_| base_path.to_path_buf());
+    // Canonicalised once, not `absolute`: `absolute` normalises `.` but not
+    // `..`, so `base/../sibling` used to pass the prefix test below while
+    // naming a directory outside the analysis base that exists on disk.
+    // Canonicalising both sides closes that escape; a scope that exists but
+    // sits outside the base is refused, never silently widened.
+    let base = std::fs::canonicalize(base_path).with_context(|| {
+        format!("could not resolve base path `{}`", base_path.display())
+    })?;
     for path in focus {
         let candidate = if path.is_absolute() {
             path.clone()
         } else {
             base_path.join(path)
         };
-        let absolute_candidate = std::path::absolute(&candidate)
-            .unwrap_or_else(|_| candidate.clone());
-        if absolute_candidate.strip_prefix(&base).is_err() {
+        if !candidate.exists() {
             anyhow::bail!(
-                "focus path `{}` must resolve inside `{}`",
+                "focus path `{}` does not exist inside `{}`",
                 path.display(),
                 base_path.display()
             );
         }
-        if !candidate.exists() {
+        let resolved = std::fs::canonicalize(&candidate).with_context(|| {
+            format!("could not resolve focus path `{}`", path.display())
+        })?;
+        if resolved.strip_prefix(&base).is_err() {
             anyhow::bail!(
-                "focus path `{}` does not exist inside `{}`",
+                "focus path `{}` must resolve inside `{}`",
                 path.display(),
                 base_path.display()
             );
@@ -2525,6 +2532,7 @@ async fn run_affected_tests(
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     progress.set_message("Extracting imports...");
     let report = build_graph_with_progress(

@@ -414,3 +414,34 @@ fn regression_focus_on_a_missing_path_is_an_error() {
         "the scope must be named: {stderr}"
     );
 }
+
+#[test]
+fn regression_focus_dotdot_escape_is_rejected() {
+    // `std::path::absolute` normalises `.` but not `..`, so `--focus
+    // ../sibling` from a subdirectory base used to pass the containment
+    // check: the first components matched, and the sibling exists on disk.
+    // A scope must resolve inside the analysis base, not beside it.
+    let temp_dir = tempdir().unwrap();
+    write_file(temp_dir.path(), "pkg/main.rs", b"fn main() {}\n");
+    write_file(temp_dir.path(), "sibling/other.rs", b"pub fn other() {}\n");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_sephera"))
+        .args([
+            "graph",
+            "--path",
+            temp_dir.path().join("pkg").to_str().unwrap(),
+            "--focus",
+            "../sibling",
+            "--format",
+            "json",
+        ])
+        .output()
+        .unwrap();
+
+    assert!(!output.status.success());
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("must resolve inside"),
+        "the escape must be named: {stderr}"
+    );
+}
