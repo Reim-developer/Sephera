@@ -488,9 +488,13 @@ fn render_xml_metrics(output: &mut String, report: &GraphReport) {
             report.metrics.unresolved_local_edges
         );
         for sample in &report.metrics.unresolved_local_samples {
+            // Every other interpolated value in this document is escaped;
+            // this one was not, so a sample containing `&` or `<` produced
+            // XML no parser accepts.
             let _ = writeln!(
                 output,
-                "    <unresolved-local>{sample}</unresolved-local>"
+                "    <unresolved-local>{}</unresolved-local>",
+                xml_escape(sample)
             );
         }
     }
@@ -1148,5 +1152,25 @@ mod tests {
             "both edges survive as distinct arrows: {dot}"
         );
         assert!(dot.contains("[label=\"my mod.py\"]"), "{dot}");
+    }
+
+    #[test]
+    fn regression_xml_escapes_unresolved_local_samples() {
+        // Every other interpolated value in the XML document was escaped;
+        // unresolved-local samples were written raw, so a sample
+        // containing `&` or `<` produced XML no parser accepts.
+        let mut report = sample_report();
+        report.metrics.unresolved_local_edges = 1;
+        report.metrics.unresolved_local_samples = vec!["a&b<c".to_owned()];
+
+        let xml = render_graph(&report, GraphFormat::Xml);
+        assert!(
+            xml.contains("<unresolved-local>a&amp;b&lt;c</unresolved-local>"),
+            "a sample is text, not markup: {xml}"
+        );
+        assert!(
+            !xml.contains("<unresolved-local>a&b<c</unresolved-local>"),
+            "{xml}"
+        );
     }
 }
