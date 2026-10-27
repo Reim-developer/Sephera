@@ -169,9 +169,16 @@ pub fn recent_commit_files(
     repo_root: &Path,
     limit: u32,
 ) -> Result<Vec<Vec<String>>> {
+    // `core.quotepath=false`: without it git quotes every
+    // non-ASCII path in octal (`"caf\303\251.py"`), and that quoted
+    // spelling never meets the graph's UTF-8 spelling — so a
+    // repository with unicode filenames counted zero history, the
+    // same silent-empty shape as a wrong analysis prefix.
     let output = git_stdout_string(
         repo_root,
         [
+            "-c",
+            "core.quotepath=false",
             "log",
             "--name-only",
             "--format=%x1e%H",
@@ -787,6 +794,34 @@ mod tests {
                 "gone.txt".to_owned(),
                 "new.txt".to_owned()
             ]
+        );
+    }
+
+    #[test]
+    fn regression_recent_commit_files_spells_unicode_names_unquoted() {
+        // Git quotes non-ASCII paths in octal by default, and the
+        // quoted spelling never meets the graph's UTF-8 spelling:
+        // history over a repository with unicode filenames counted
+        // zero commits. The log call disables quoting, so the names
+        // come back exactly as the files are spelled.
+        let temp = tempfile::tempdir().expect("temp dir");
+        let dir = temp.path();
+        git(dir, &["init", "-q"]);
+        fs::write(dir.join("café.py"), "x = 1\n").expect("write");
+        fs::write(dir.join("münchen.py"), "y = 2\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "first"]);
+        fs::write(dir.join("café.py"), "x = 1\n# 2\n").expect("write");
+        fs::write(dir.join("münchen.py"), "y = 2\n# 2\n").expect("write");
+        git(dir, &["add", "."]);
+        git(dir, &["commit", "-qm", "second"]);
+
+        let commits = recent_commit_files(dir, 10).expect("history reads");
+        assert_eq!(commits.len(), 2);
+        assert_eq!(
+            commits[0],
+            vec!["café.py".to_owned(), "münchen.py".to_owned()],
+            "the names as the files are spelled, not git's octal quoting"
         );
     }
 
