@@ -691,10 +691,7 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
         let min_co_changes = param.min_co_changes.unwrap_or(3);
         let measured = coupling::measure_coupling(
@@ -772,10 +769,7 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased_commits =
             coupling::rebase_commit_paths(&commits, &base_prefix);
         let prefix = base_prefix.trim_matches('/');
@@ -872,10 +866,7 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
         let measured = risk::measure_risk(
             &report,
@@ -1602,10 +1593,7 @@ impl SepheraServer {
             &ignore_matcher,
         )
         .map_err(map_internal_error("graph build failed"))?;
-        let base_prefix = blast_radius::base_prefix_for(
-            &source.repo_root,
-            &source.analysis_path,
-        );
+        let base_prefix = history_base_prefix(&source);
         let rebased = coupling::rebase_commit_paths(&commits, &base_prefix);
         let measured = test_priority::measure_test_priority(
             &report,
@@ -2296,6 +2284,27 @@ fn analysis_prefix(source: &ResolvedSource) -> std::path::PathBuf {
         |_| std::path::PathBuf::new(),
         std::path::Path::to_path_buf,
     )
+}
+
+/// The `/`-separated repo-relative prefix history spellings carry
+/// but graph spellings do not, for rebasing git paths onto the
+/// graph's spelling: the twin of the CLI's `history_base_prefix`.
+///
+/// `base_prefix_for` cannot answer this for a local path:
+/// `resolve_source` sets `repo_root` equal to `analysis_path`, so
+/// stripping one from the other is empty even inside a repository,
+/// while git spells history from the work-tree root. A tool call
+/// scoped to a subdirectory therefore compared root-relative history
+/// (`pkg/a.py`) against base-relative graph paths (`a.py`) and found
+/// nothing. `analysis_prefix` asks git for the work-tree root, so
+/// the rebase strips the real prefix.
+#[must_use]
+fn history_base_prefix(source: &ResolvedSource) -> String {
+    analysis_prefix(source)
+        .components()
+        .map(|component| component.as_os_str().to_string_lossy().into_owned())
+        .collect::<Vec<_>>()
+        .join("/")
 }
 
 /// Build the old side of a comparison from its checkout worktree,
