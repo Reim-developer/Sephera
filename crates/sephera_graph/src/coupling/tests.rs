@@ -4,68 +4,9 @@
 //! returns, because that list is the contract the measurement reads:
 //! one list per commit, paths in the graph's spelling.
 
-use std::path::PathBuf;
-
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
-
 use super::{CouplingOptions, measure_coupling, rebase_commit_paths};
 
-fn node(path: &str) -> GraphNode {
-    GraphNode {
-        file_path: path.to_owned(),
-        language: Some("Rust"),
-        imports_count: 1,
-        imported_by_count: 1,
-    }
-}
-
-fn resolved_edge(from: &str, to: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: "crate::x".to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
-
-fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
-    GraphReport {
-        base_path: PathBuf::from("."),
-        focus_paths: vec![],
-        depth: None,
-        query: None,
-        nodes: nodes.iter().copied().map(node).collect(),
-        edges,
-        boundary_files: Vec::new(),
-        metrics: empty_metrics(),
-    }
-}
+use crate::test_fixtures::{edge, report};
 
 fn commits(lists: &[&[&str]]) -> Vec<Vec<String>> {
     lists
@@ -119,8 +60,8 @@ fn a_pair_joined_by_an_edge_in_either_direction_is_not_hidden() {
     let history =
         commits(&[&["a.rs", "b.rs"], &["a.rs", "b.rs"], &["a.rs", "b.rs"]]);
     for edges in [
-        vec![resolved_edge("a.rs", "b.rs")],
-        vec![resolved_edge("b.rs", "a.rs")],
+        vec![edge("a.rs", "b.rs", "crate::x")],
+        vec![edge("b.rs", "a.rs", "crate::x")],
     ] {
         let measured = measure_coupling(
             &report(&["a.rs", "b.rs"], edges),
