@@ -12,6 +12,15 @@ reaches is compiled, bundled, shipped, and reviewed as if it were
 alive. It is also the code that rots fastest, precisely because no
 change elsewhere can break it loudly.
 
+## Usage
+
+```bash
+sephera dead --path .               # the files no entry point reaches
+sephera dead --path . --format json  # the same list, with the roots it used
+```
+
+Run from inside the repository you want to audit.
+
 ## Basic usage
 
 ```bash
@@ -118,3 +127,9 @@ The JSON carries `total`, `reachable`, the full `roots` list, and
 change to them can hurt; `dead` finds the ones no change can hurt
 because nothing runs them. [`impact`](/commands/impact/) walks the
 same edges in the other direction, from a file to its dependents.
+
+## Haiku
+
+> Code no one reaches
+> compiled, shipped, yet never run
+> quiet rot sets in

@@ -13,6 +13,16 @@ an edit: *if I touch this file, what else stops working?*
 about dependency structure — so the primitive worth having as a command is
 buried behind the one nobody reads the help for.
 
+## Usage
+
+```bash
+sephera impact crates/sephera_core/src/plugins.rs                         # what breaks if this file changes
+sephera impact crates/sephera_core/src/plugins.rs --depth 1               # only its direct importers
+sephera impact crates/sephera_graph/src/symbol_impact.rs --symbol SymbolImpact  # one name, not the whole file
+```
+
+Paths are relative to the repository root.
+
 ## Basic usage
 
 `impact` takes one path or several. Asking about five files costs about the same
@@ -302,3 +312,9 @@ first, building the graph once.
 
 `graph --what-depends-on <FILE>` remains available and produces the same
 answer inside a full dependency report.
+
+## Haiku
+
+> Touch one file, then ask
+> count the files that break downstream
+> before you edit

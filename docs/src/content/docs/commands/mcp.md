@@ -13,6 +13,15 @@ This feature allows seamless integration into AI agents and MCP-compatible edito
 sephera mcp
 ```
 
+## Usage
+
+```bash
+printf '%s\n%s\n' '{"jsonrpc":"2.0","id":1,"method":"initialize","params":{"protocolVersion":"2024-11-05","capabilities":{},"clientInfo":{"name":"demo","version":"1"}}}' '{"jsonrpc":"2.0","method":"notifications/initialized"}' | sephera mcp  # one handshake over stdio
+sephera mcp                                                                                                                                                                # the server itself, until stdin closes
+```
+
+The server speaks strict JSON-RPC over standard input and output, so there is no human-readable output: the piped handshake — an `initialize` request plus the `initialized` notification the protocol requires next — is the smallest session that proves it answers, and it exits cleanly when stdin closes.
+
 ## Sample Interaction
 
 Because MCP runs over strict JSON-RPC over `stdio`, there is no human-readable output by default. However, when an AI agent connects locally, the protocol trace looks like this:
@@ -232,3 +241,9 @@ Add Sephera to your `claude_desktop_config.json`:
 ```
 
 *Note: Ensure the `sephera` executable is on your global `PATH`, or provide the absolute path to the binary in the `"command"` field.*
+
+## Haiku
+
+> Hands for agent tools
+> the server answers JSON
+> no shell needed now

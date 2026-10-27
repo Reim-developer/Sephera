@@ -16,6 +16,15 @@ The skill lives in the repo at
 a project. The workflow itself is the skill's body — this page
 is only the install story.
 
+## Usage
+
+```bash
+sephera skill            # print where the skill would go, without copying anything
+sephera skill --print    # the same summary, explicitly read-only
+```
+
+Installing is covered below; these two forms copy nothing.
+
 ## Install
 
 ```bash
@@ -65,3 +74,9 @@ The workflow, in brief — the skill's own body is the authority:
    removed name.
 5. Before merging, gate on breaking symbols that still have
    consumers, and ask what no test reaches.
+
+## Haiku
+
+> Teach agents judgment
+> when to check and when to stop
+> the workflow, installed

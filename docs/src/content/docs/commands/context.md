@@ -14,6 +14,16 @@ The `context` command prepares a focused context pack from a repository or sub-t
 
 Use `--path` for local analysis or `--url` for direct remote analysis through a temporary checkout.
 
+## Usage
+
+```bash
+sephera context --path . --budget 8k                                  # a bounded pack of this tree
+sephera context --path . --focus crates/sephera_core --budget 8k --format markdown  # one crate, as Markdown
+sephera context --path . --list-profiles                              # profiles this repository defines
+```
+
+Run from inside the repository you want to pack.
+
 ## What the command includes
 
 A context pack currently contains:
@@ -262,3 +272,9 @@ See the dedicated configuration page for details and examples.
 - auto-discovered `.sephera.toml` files inside a remote checkout still apply
 - `--profile` and `--list-profiles` work against remote config discovery
 - explicit `--config <FILE>` always refers to a local file on the machine running Sephera
+
+## Haiku
+
+> Pack just what you need
+> bounded excerpts, ranked with care
+> exactly enough

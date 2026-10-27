@@ -14,6 +14,16 @@ ranking tells you where to look; a symbol ranking tells you which
 test to write next, and that is the only refinement this join buys
 over ranking by file risk alone.
 
+## Usage
+
+```bash
+sephera test-priority --path . --top 10               # the ten most dangerous untested symbols
+sephera test-priority --path . --top 10 --format json  # the same ranking, machine-readable
+sephera test-priority --path . --window 1000 --top 10  # the same ranking over a longer history window
+```
+
+Run from inside the repository whose history you want to read.
+
 ## Basic usage
 
 ```bash
@@ -73,3 +83,9 @@ separate test file names them — the same limit, stated plainly.
   can be ranked.
 - The analysis needs a git history. A tree that is not a git
   repository is an error, not an empty ranking.
+
+## Haiku
+
+> Which test should come first
+> rank gaps by downstream times churn
+> most dangerous first

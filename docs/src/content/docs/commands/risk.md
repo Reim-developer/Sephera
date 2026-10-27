@@ -12,6 +12,16 @@ high on all three is where changes go wrong — and it is the
 intersection no single reading reports. `risk` is that
 intersection, as a ranking.
 
+## Usage
+
+```bash
+sephera risk --path .            # the whole tree, riskiest first
+sephera risk --path . --limit 10  # only the top ten
+sephera risk --path . --format json  # the same ranking, machine-readable
+```
+
+Run from inside the repository whose history you want to read.
+
 ## Basic usage
 
 ```bash
@@ -88,3 +98,9 @@ one change; `risk` asks them about the whole tree, as a standing
 ranking. [`impact`](/commands/impact/) and
 [`coupling`](/commands/coupling/) are two of its three factors as
 commands of their own.
+
+## Haiku
+
+> Where a change hurts most
+> dependents, churn, and partners
+> ranked, riskiest first

@@ -27,6 +27,15 @@ A denied edit also exits **2**, so a harness that honours only exit codes and
 one that only reads JSON both stop the edit. Without `--max-dependents` every
 edit is allowed and the guard is a report only.
 
+## Usage
+
+```bash
+sephera guard --file crates/sephera_graph/src/blast_radius.rs --path . --max-dependents 50  # judge one file by hand
+echo '{"tool_input":{"file_path":"crates/sephera_graph/src/blast_radius.rs"}}' | sephera guard --path . --max-dependents 50  # the same judgement, from a hook payload
+```
+
+The first form skips stdin; the second is what a harness sends. Both allow here, because the file's dependents stay under the limit. Set the limit at or below the dependent count and the same commands deny with exit 2 instead. Without `--max-dependents` every edit is allowed and the guard is a report only.
+
 ## Wiring it up
 
 As a Claude Code `PreToolUse` hook for the edit tools:
@@ -87,3 +96,9 @@ echo $?   # 0 = allowed, 2 = denied
 [`affected-tests`](/commands/affected-tests/) is the follow-up it reports.
 An agent with Sephera's MCP server configured can ask for both itself — the
 guard exists for the moment before it thinks to ask.
+
+## Haiku
+
+> Judge the edit first
+> measure the blast radius
+> allow or deny

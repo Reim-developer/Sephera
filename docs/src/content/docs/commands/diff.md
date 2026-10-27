@@ -10,6 +10,16 @@ changed in the API surface at all, including additions — a new
 symbol breaks nothing, so it never appears in a breaking report,
 but a changelog without additions hides half the release.
 
+## Usage
+
+```bash
+sephera diff --path . --from HEAD~1              # every symbol changed between HEAD~1 and the working tree
+sephera diff --path . --from HEAD~1 --to HEAD    # the same comparison, both sides pinned
+sephera diff --path . --from HEAD~1 --format json  # the same changes, machine-readable
+```
+
+`--from` names the older side and is required; without `--to`, the newer side is the working tree.
+
 ## Basic usage
 
 ```bash
@@ -57,3 +67,9 @@ form — breaks joined to the files that still use them — use
 Only Rust and Python collect declarations today, so only their
 symbols can be reported. The analysis needs a git repository. A
 tree that is not one is an error, not an empty report.
+
+## Haiku
+
+> What changed between refs
+> added, removed, or reshaped
+> a changelog of names
