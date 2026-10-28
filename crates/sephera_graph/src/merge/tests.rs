@@ -10,63 +10,20 @@
 use std::path::PathBuf;
 
 use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames, Signature,
+    DeclarationIndex, DeclarationKind, Signature,
 };
 
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use crate::types::{GraphEdge, GraphNode, GraphReport};
 
 use super::{
     BreakSuggestion, MergeConflictKind, MergeReport, MergeSide,
     MergeSideAnalysis, measure_merge,
 };
 
-fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    edge_items(from, to, path, &[])
-}
-
-fn edge_items(from: &str, to: &str, path: &str, items: &[&str]) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: items.iter().map(|item| (*item).to_owned()).collect(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn namespace_edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Namespace,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-/// An unresolved item half: the shape a Python item import
-/// leaves beside its module edge. The half names the symbol but
-/// never resolves as its own edge.
-fn unresolved(from: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: None,
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: false,
-        kind: ImportKind::Dependency,
-        local_gap: true,
-        cfg_gated: false,
-    }
-}
+use crate::test_fixtures::{
+    edge, edge_items, empty_metrics, index, index_with_signatures,
+    namespace_edge, unresolved_edge,
+};
 
 fn node(path: &str) -> GraphNode {
     GraphNode {
@@ -74,26 +31,6 @@ fn node(path: &str) -> GraphNode {
         language: Some("Python"),
         imports_count: 1,
         imported_by_count: 1,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
     }
 }
 
@@ -110,45 +47,8 @@ fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
     }
 }
 
-fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind) in *names {
-            declared.declare_as(*name, *kind);
-        }
-        index.insert(file, declared);
-    }
-    index
-}
-
 /// One declared name with the call shape the test gives it, when
 /// the test gives one.
-type SignedName<'a> =
-    (&'a str, DeclarationKind, Option<(&'a str, Option<&'a str>)>);
-
-fn index_with_signatures(
-    files: &[(&str, &[SignedName<'_>])],
-) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind, signature) in *names {
-            declared.declare_as(*name, *kind);
-            if let Some((parameters, returns)) = signature {
-                declared.declare_signature(
-                    *name,
-                    Signature {
-                        parameters: (*parameters).to_owned(),
-                        returns: returns.map(str::to_owned),
-                    },
-                );
-            }
-        }
-        index.insert(file, declared);
-    }
-    index
-}
 
 fn measure(
     base_index: &DeclarationIndex,
@@ -479,7 +379,7 @@ fn removed_against_a_python_gap_half_consumer_is_proven() {
         &["lib.py", "new.py"],
         vec![
             edge("new.py", "lib.py", "lib"),
-            unresolved("new.py", "lib.add"),
+            unresolved_edge("new.py", "lib.add", true),
         ],
     );
 
@@ -514,7 +414,7 @@ fn both_sides_removing_plus_a_new_consumer_is_not_a_conflict() {
         &["lib.py", "new.py"],
         vec![
             edge("new.py", "lib.py", "lib"),
-            unresolved("new.py", "lib.add"),
+            unresolved_edge("new.py", "lib.add", true),
         ],
     );
 

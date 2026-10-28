@@ -7,43 +7,16 @@
 //! it used to land). A fixture that kept either shape resolved would
 //! test the easy case and miss the one this module exists for.
 
-use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames, Signature,
-};
+use sephera_core::declarations::{DeclarationKind, Signature};
 
 use super::{BreakChange, BreakSuggestion, measure_breaking};
 
-use crate::test_fixtures::{edge, index, report, unresolved_edge};
+use crate::test_fixtures::{
+    edge, index, index_with_signatures, report, unresolved_edge,
+};
 
 /// One declared name with the call shape the test gives it, when
 /// the test gives one.
-type SignedName<'a> =
-    (&'a str, DeclarationKind, Option<(&'a str, Option<&'a str>)>);
-
-/// Like `index`, but each name may also carry a call shape, for
-/// the tests that compare signatures.
-fn index_with_signatures(
-    files: &[(&str, &[SignedName<'_>])],
-) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind, signature) in *names {
-            declared.declare_as(*name, *kind);
-            if let Some((parameters, returns)) = signature {
-                declared.declare_signature(
-                    *name,
-                    Signature {
-                        parameters: (*parameters).to_owned(),
-                        returns: returns.map(str::to_owned),
-                    },
-                );
-            }
-        }
-        index.insert(file, declared);
-    }
-    index
-}
 
 fn direct_files(broken: &super::BrokenSymbol) -> Vec<&str> {
     broken

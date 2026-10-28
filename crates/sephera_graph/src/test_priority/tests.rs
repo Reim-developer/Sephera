@@ -4,40 +4,14 @@
 
 use std::path::PathBuf;
 
-use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames,
-};
+use sephera_core::declarations::DeclarationKind;
 use sephera_core::types::ImportKind;
 
-use crate::types::{GraphEdge, GraphMetrics, GraphNode, GraphReport};
+use crate::types::{GraphEdge, GraphNode, GraphReport};
 
 use super::{TestPriorityOptions, measure_test_priority};
 
-fn edge(from: &str, to: &str, path: &str, items: &[&str]) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: items.iter().map(|item| (*item).to_owned()).collect(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn namespace_edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Namespace,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
+use crate::test_fixtures::{edge_items, empty_metrics, index, namespace_edge};
 
 /// A Python item half: `from lib import add` leaves the module edge
 /// resolved and the item half unresolved beside it.
@@ -62,7 +36,6 @@ fn node(path: &str) -> GraphNode {
         imported_by_count: 1,
     }
 }
-
 fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
     GraphReport {
         base_path: PathBuf::from("."),
@@ -72,36 +45,8 @@ fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
         nodes: nodes.iter().copied().map(node).collect(),
         edges,
         boundary_files: Vec::new(),
-        metrics: GraphMetrics {
-            total_files: 0,
-            total_internal_edges: 0,
-            self_references: 0,
-            total_external_edges: 0,
-            unresolved_local_edges: 0,
-            unresolved_local_samples: Vec::new(),
-            cfg_gated_edges: 0,
-            dependencies: Vec::new(),
-            declared_dependency_edges: 0,
-            local_crate_edges: 0,
-            builtin_edges: 0,
-            circular_dependencies: 0,
-            most_importing: vec![],
-            most_imported: vec![],
-            cycles: vec![],
-        },
+        metrics: empty_metrics(),
     }
-}
-
-fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind) in *names {
-            declared.declare_as(*name, *kind);
-        }
-        index.insert(file, declared);
-    }
-    index
 }
 
 fn commits(lists: &[&[&str]]) -> Vec<Vec<String>> {
@@ -118,9 +63,9 @@ fn high_downstream_outranks_low_downstream() {
     let report = report(
         &["lib.py", "app.py", "worker.py", "other.py"],
         vec![
-            edge("app.py", "lib.py", "lib", &["add"]),
-            edge("worker.py", "lib.py", "lib", &["add"]),
-            edge("other.py", "lib.py", "lib", &["keep"]),
+            edge_items("app.py", "lib.py", "lib", &["add"]),
+            edge_items("worker.py", "lib.py", "lib", &["add"]),
+            edge_items("other.py", "lib.py", "lib", &["keep"]),
         ],
     );
     let index = index(&[(
@@ -149,7 +94,7 @@ fn high_downstream_outranks_low_downstream() {
 fn zero_downstream_is_listed_last_with_score_zero() {
     let report = report(
         &["lib.py", "app.py"],
-        vec![edge("app.py", "lib.py", "lib", &["used"])],
+        vec![edge_items("app.py", "lib.py", "lib", &["used"])],
     );
     let index = index(&[(
         "lib.py",
@@ -179,9 +124,9 @@ fn tested_symbols_direct_and_indirect_never_appear() {
     let report = report(
         &["lib.py", "tests/test_lib.py", "helper.py"],
         vec![
-            edge("tests/test_lib.py", "lib.py", "lib", &["add"]),
-            edge("tests/test_lib.py", "helper.py", "helper", &[]),
-            edge("helper.py", "lib.py", "lib", &["keep"]),
+            edge_items("tests/test_lib.py", "lib.py", "lib", &["add"]),
+            edge_items("tests/test_lib.py", "helper.py", "helper", &[]),
+            edge_items("helper.py", "lib.py", "lib", &["keep"]),
         ],
     );
     let index = index(&[(
@@ -230,7 +175,7 @@ fn python_item_half_counts_as_one_direct_consumer() {
     let report = report(
         &["lib.py", "consumer.py"],
         vec![
-            edge("consumer.py", "lib.py", "lib", &[]),
+            edge_items("consumer.py", "lib.py", "lib", &[]),
             item_half("consumer.py", "lib.add"),
         ],
     );
@@ -253,8 +198,8 @@ fn churn_multiplies_the_score_across_files() {
     let report = report(
         &["hot.py", "cold.py", "app.py", "other.py"],
         vec![
-            edge("app.py", "hot.py", "hot", &["run"]),
-            edge("other.py", "cold.py", "cold", &["walk"]),
+            edge_items("app.py", "hot.py", "hot", &["run"]),
+            edge_items("other.py", "cold.py", "cold", &["walk"]),
         ],
     );
     let index = index(&[
@@ -325,9 +270,9 @@ fn limit_truncates_from_the_head() {
     let report = report(
         &["lib.py", "app.py", "worker.py", "other.py"],
         vec![
-            edge("app.py", "lib.py", "lib", &["add"]),
-            edge("worker.py", "lib.py", "lib", &["add"]),
-            edge("other.py", "lib.py", "lib", &["keep"]),
+            edge_items("app.py", "lib.py", "lib", &["add"]),
+            edge_items("worker.py", "lib.py", "lib", &["add"]),
+            edge_items("other.py", "lib.py", "lib", &["keep"]),
         ],
     );
     let index = index(&[(

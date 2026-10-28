@@ -2,50 +2,15 @@
 //! two facts, not one claim.
 
 use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames, Signature,
+    DeclarationIndex, DeclarationKind, Signature,
 };
 
 use super::{DiffChange, measure_diff};
 
+use crate::test_fixtures::{index, index_with_signatures};
+
 /// One declared name with the call shape the test gives it, when
 /// the test gives one.
-type SignedName<'a> =
-    (&'a str, DeclarationKind, Option<(&'a str, Option<&'a str>)>);
-
-fn index_with_signatures(
-    files: &[(&str, &[SignedName<'_>])],
-) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind, signature) in *names {
-            declared.declare_as(*name, *kind);
-            if let Some((parameters, returns)) = signature {
-                declared.declare_signature(
-                    *name,
-                    Signature {
-                        parameters: (*parameters).to_owned(),
-                        returns: returns.map(str::to_owned),
-                    },
-                );
-            }
-        }
-        index.insert(file, declared);
-    }
-    index
-}
-
-fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind) in *names {
-            declared.declare_as(*name, *kind);
-        }
-        index.insert(file, declared);
-    }
-    index
-}
 
 fn changes(
     old: &DeclarationIndex,

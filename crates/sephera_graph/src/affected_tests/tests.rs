@@ -7,71 +7,11 @@
 //! test plan that counts differently from the radius it filters is worse
 //! than no plan.
 
-use std::path::PathBuf;
-
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use crate::types::{GraphEdge, GraphReport, ImportKind};
 
 use super::{is_test_file, measure_tests, measure_tests_all};
 
-fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn node(path: &str) -> GraphNode {
-    GraphNode {
-        file_path: path.to_owned(),
-        language: Some("Rust"),
-        imports_count: 1,
-        imported_by_count: 1,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
-
-fn report(nodes: &[&str], edges: &[(&str, &str, &str)]) -> GraphReport {
-    GraphReport {
-        base_path: PathBuf::from("."),
-        focus_paths: vec![],
-        depth: None,
-        query: None,
-        nodes: nodes.iter().copied().map(node).collect(),
-        edges: edges
-            .iter()
-            .map(|(from, to, path)| edge(from, to, path))
-            .collect(),
-        boundary_files: Vec::new(),
-        metrics: empty_metrics(),
-    }
-}
+use crate::test_fixtures::report_from_triples;
 
 fn files(impact: &super::TestImpact) -> Vec<&str> {
     impact.tests.iter().map(|test| test.file.as_str()).collect()
@@ -153,7 +93,7 @@ fn fixtures_never_count_even_under_a_test_directory() {
 /// `tests/direct.rs` imports the target; `tests/deep.rs` imports an
 /// intermediary that imports the target; `plain.rs` is not a test at all.
 fn layered_report() -> GraphReport {
-    report(
+    report_from_triples(
         &[
             "a.rs",
             "mid.rs",
@@ -195,7 +135,7 @@ fn a_changed_test_file_answers_for_itself_at_distance_zero() {
 fn a_diamond_reaches_a_test_once_at_its_shortest_distance() {
     // The test imports both branches. Counting it twice, or at the longer
     // distance, would misstate what running it covers.
-    let diamond = report(
+    let diamond = report_from_triples(
         &["a.rs", "b.rs", "c.rs", "tests/t.rs"],
         &[
             ("b.rs", "a.rs", "crate::a"),
@@ -215,7 +155,7 @@ fn a_diamond_reaches_a_test_once_at_its_shortest_distance() {
 fn a_cycle_neither_hangs_nor_inflates_the_plan() {
     // `a` and `b` import each other. The test imports `b`, so it sits two
     // hops from `a`, and the walk has to terminate to say so.
-    let cyclic = report(
+    let cyclic = report_from_triples(
         &["a.rs", "b.rs", "tests/t.rs"],
         &[
             ("a.rs", "b.rs", "crate::b"),
@@ -235,7 +175,7 @@ fn a_self_import_does_not_make_the_target_its_own_test() {
     // Regression: `use super::*;` inside the target resolves to the target.
     // The radius excludes the target as its own dependent, and a source file
     // must not leak into the test plan through that edge.
-    let selfish = report(
+    let selfish = report_from_triples(
         &["a.rs", "tests/t.rs"],
         &[
             ("a.rs", "a.rs", "crate::a"),
@@ -252,7 +192,7 @@ fn a_self_import_does_not_make_the_target_its_own_test() {
 fn an_unresolved_edge_never_reaches_the_plan() {
     // Only resolved edges count, as in the radius: a path the resolver could
     // not place is not a coupling a test can answer for.
-    let mut fixture = report(&["a.rs", "tests/t.rs"], &[]);
+    let mut fixture = report_from_triples(&["a.rs", "tests/t.rs"], &[]);
     fixture.edges.push(GraphEdge {
         from: "tests/t.rs".to_owned(),
         to: Some("a.rs".to_owned()),
@@ -279,7 +219,7 @@ fn depth_bounds_the_plan_as_it_bounds_the_radius() {
 
 #[test]
 fn focus_scopes_the_plan_as_it_scopes_the_radius() {
-    let scoped = report(
+    let scoped = report_from_triples(
         &["a.rs", "one/tests/t.rs", "two/tests/t.rs"],
         &[
             ("one/tests/t.rs", "a.rs", "crate::a"),
@@ -315,7 +255,7 @@ fn measure_all_reports_every_unknown_path_at_once() {
 
 #[test]
 fn measure_all_orders_targets_most_affected_first() {
-    let fixture = report(
+    let fixture = report_from_triples(
         &["a.rs", "b.rs", "tests/ta.rs", "tests/tb.rs", "tests/tb2.rs"],
         &[
             ("b.rs", "a.rs", "crate::a"),

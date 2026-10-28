@@ -6,81 +6,11 @@
 //! contract this module reads. A fixture that invented a fourth
 //! spelling would test a reader nothing real feeds.
 
-use std::path::PathBuf;
-
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use crate::types::ImportKind;
 
 use super::measure_symbol;
 
-fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn unresolved(from: &str, path: &str, local_gap: bool) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: None,
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: false,
-        kind: ImportKind::Dependency,
-        local_gap,
-        cfg_gated: false,
-    }
-}
-
-fn node(path: &str) -> GraphNode {
-    GraphNode {
-        file_path: path.to_owned(),
-        language: Some("Rust"),
-        imports_count: 1,
-        imported_by_count: 1,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
-
-fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
-    GraphReport {
-        base_path: PathBuf::from("."),
-        focus_paths: vec![],
-        depth: None,
-        query: None,
-        nodes: nodes.iter().copied().map(node).collect(),
-        edges,
-        boundary_files: Vec::new(),
-        metrics: empty_metrics(),
-    }
-}
+use crate::test_fixtures::{edge, report, unresolved_edge};
 
 fn direct_files(impact: &super::SymbolImpact) -> Vec<&str> {
     impact
@@ -172,7 +102,7 @@ fn a_python_item_half_counts_when_its_parent_landed_on_the_target() {
         &["m.py", "u.py"],
         vec![
             edge("u.py", "m.py", "m"),
-            unresolved("u.py", "m.Router", false),
+            unresolved_edge("u.py", "m.Router", false),
         ],
     );
 
@@ -191,7 +121,7 @@ fn a_python_item_half_still_counted_as_a_gap_is_not_evidence() {
         &["m.py", "u.py"],
         vec![
             edge("u.py", "m.py", "m"),
-            unresolved("u.py", "m.Absent", true),
+            unresolved_edge("u.py", "m.Absent", true),
         ],
     );
 
@@ -209,7 +139,7 @@ fn a_python_item_half_whose_parent_landed_elsewhere_is_not_a_use_here() {
         &["m.py", "pkg/__init__.py", "u.py"],
         vec![
             edge("u.py", "pkg/__init__.py", "pkg"),
-            unresolved("u.py", "pkg.Router", false),
+            unresolved_edge("u.py", "pkg.Router", false),
         ],
     );
 
