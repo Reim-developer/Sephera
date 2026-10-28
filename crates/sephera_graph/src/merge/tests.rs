@@ -47,9 +47,6 @@ fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
     }
 }
 
-/// One declared name with the call shape the test gives it, when
-/// the test gives one.
-
 fn measure(
     base_index: &DeclarationIndex,
     base_report: &GraphReport,

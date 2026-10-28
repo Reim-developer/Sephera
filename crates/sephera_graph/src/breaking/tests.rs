@@ -15,9 +15,6 @@ use crate::test_fixtures::{
     edge, index, index_with_signatures, report, unresolved_edge,
 };
 
-/// One declared name with the call shape the test gives it, when
-/// the test gives one.
-
 fn direct_files(broken: &super::BrokenSymbol) -> Vec<&str> {
     broken
         .direct

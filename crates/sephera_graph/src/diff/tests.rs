@@ -9,9 +9,6 @@ use super::{DiffChange, measure_diff};
 
 use crate::test_fixtures::{index, index_with_signatures};
 
-/// One declared name with the call shape the test gives it, when
-/// the test gives one.
-
 fn changes(
     old: &DeclarationIndex,
     new: &DeclarationIndex,
