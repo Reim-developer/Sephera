@@ -1129,11 +1129,9 @@ impl SepheraServer {
                 ref_name: &param.theirs,
             },
         );
-        let built = MergeReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(merge_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(merge_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported merge format `{other}`; expected \
@@ -2311,26 +2309,6 @@ pub struct SignatureReport {
     pub returns: Option<String>,
 }
 
-/// What to do about one break, as the breaking report renders it.
-///
-/// The shape is flat on purpose: an agent reading the JSON should
-/// not have to unwrap a tagged enum to learn where a name went.
-/// `action` says which shape the other fields carry — `moved` fills
-/// `file` and `declaration_kind`, `new_call_shape` fills
-/// `signature` — and the absent fields stay null rather than
-/// disappearing.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SuggestionReport {
-    /// What the suggestion says: `moved` or `new_call_shape`.
-    pub action: String,
-    /// The file that now declares the name, for a move.
-    pub file: Option<String>,
-    /// The kind it is declared as there, for a move.
-    pub declaration_kind: Option<String>,
-    /// The call shape callers must now use, for a signature change.
-    pub signature: Option<SignatureReport>,
-}
-
 impl SignatureReport {
     /// Render the shape the way a reader would write it, the same
     /// spelling the graph type renders.
@@ -2917,218 +2895,37 @@ fn breaking_markdown_body(
     output
 }
 
-/// One predicted merge conflict, as the merge report renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct MergeReport {
-    /// The fork point, as the caller spelled it or the merge base.
-    pub base: String,
-    /// One side of the merge, as the caller spelled it.
-    pub ours: String,
-    /// The other side of the merge, as the caller spelled it.
-    pub theirs: String,
-    /// The predicted conflicts, proven first within a symbol.
-    pub conflicts: Vec<MergeConflictReport>,
-}
-
-/// One predicted conflict, with the evidence on both sides.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct MergeConflictReport {
-    /// The file that used to declare the symbol.
-    pub file: String,
-    /// The symbol's name.
-    pub symbol: String,
-    /// `removed_vs_new_consumer`, `kind_changed_vs_new_consumer`,
-    /// `both_reshaped`, or `signature_vs_new_consumer`.
-    pub kind: String,
-    /// Whether the conflict is proven rather than a warning.
-    pub proven: bool,
-    /// Which side changed the contract: `ours`, `theirs`, or `both`.
-    pub contract_side: String,
-    /// The kind the changing side declares it as, for a kind change.
-    pub new_kind: Option<String>,
-    /// The call shape the old tree declared, for a signature change.
-    pub old_signature: Option<SignatureReport>,
-    /// The call shape the new tree declares, for a signature change.
-    pub new_signature: Option<SignatureReport>,
-    /// The call shape the ours side declares, for a both-reshaped.
-    pub ours_signature: Option<SignatureReport>,
-    /// The call shape the theirs side declares, for a both-reshaped.
-    pub theirs_signature: Option<SignatureReport>,
-    /// What to do about the conflict, when the changing side says
-    /// something actionable.
-    pub suggestion: Option<SuggestionReport>,
-    /// Files on the other side that newly name the symbol.
-    pub consumers: Vec<String>,
-}
-
-impl MergeReport {
-    fn from_measured(measured: &merge::MergeReport) -> Self {
-        Self {
-            base: measured.base_ref.clone(),
-            ours: measured.ours_ref.clone(),
-            theirs: measured.theirs_ref.clone(),
-            conflicts: measured
-                .conflicts
-                .iter()
-                .map(|conflict| {
-                    let (
-                        kind,
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                        ours_signature,
-                        theirs_signature,
-                    ) = match &conflict.kind {
-                        merge::MergeConflictKind::RemovedVsNewConsumer => (
-                            "removed_vs_new_consumer".to_owned(),
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        ),
-                        merge::MergeConflictKind::KindChangedVsNewConsumer {
-                            to,
-                        } => (
-                            "kind_changed_vs_new_consumer".to_owned(),
-                            Some(format!("{to:?}").to_lowercase()),
-                            None,
-                            None,
-                            None,
-                            None,
-                        ),
-                        merge::MergeConflictKind::BothReshaped {
-                            ours,
-                            theirs,
-                        } => (
-                            "both_reshaped".to_owned(),
-                            None,
-                            None,
-                            None,
-                            Some(SignatureReport {
-                                parameters: ours.parameters.clone(),
-                                returns: ours.returns.clone(),
-                            }),
-                            Some(SignatureReport {
-                                parameters: theirs.parameters.clone(),
-                                returns: theirs.returns.clone(),
-                            }),
-                        ),
-                        merge::MergeConflictKind::SignatureVsNewConsumer {
-                            from,
-                            to,
-                        } => (
-                            "signature_vs_new_consumer".to_owned(),
-                            None,
-                            Some(SignatureReport {
-                                parameters: from.parameters.clone(),
-                                returns: from.returns.clone(),
-                            }),
-                            Some(SignatureReport {
-                                parameters: to.parameters.clone(),
-                                returns: to.returns.clone(),
-                            }),
-                            None,
-                            None,
-                        ),
-                    };
-                    let suggestion = conflict
-                        .suggestion
-                        .as_ref()
-                        .map(merge_suggestion_report);
-                    MergeConflictReport {
-                        file: conflict.file.clone(),
-                        symbol: conflict.symbol.clone(),
-                        kind,
-                        proven: conflict.kind.is_proven(),
-                        contract_side: match conflict.contract_side {
-                            merge::MergeSide::Ours => "ours".to_owned(),
-                            merge::MergeSide::Theirs => "theirs".to_owned(),
-                            merge::MergeSide::Both => "both".to_owned(),
-                        },
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                        ours_signature,
-                        theirs_signature,
-                        suggestion,
-                        consumers: conflict.consumers.clone(),
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-/// The flat suggestion shape of one breaking suggestion, shared
-/// with the breaking report: an agent reading the JSON should
-/// not have to unwrap a tagged enum to learn where a name went.
-fn merge_suggestion_report(
-    suggestion: &breaking::BreakSuggestion,
-) -> SuggestionReport {
-    match suggestion {
-        breaking::BreakSuggestion::Moved { file, kind } => SuggestionReport {
-            action: "moved".to_owned(),
-            file: Some(file.clone()),
-            declaration_kind: Some(format!("{kind:?}").to_lowercase()),
-            signature: None,
-        },
-        breaking::BreakSuggestion::NewCallShape { signature } => {
-            SuggestionReport {
-                action: "new_call_shape".to_owned(),
-                file: None,
-                declaration_kind: None,
-                signature: Some(SignatureReport {
-                    parameters: signature.parameters.clone(),
-                    returns: signature.returns.clone(),
-                }),
-            }
-        }
-    }
-}
-
 /// The kind line of one conflict: which side changed the
 /// contract, which side added the consumer, and — for a warning —
 /// why a human look is still needed.
-fn merge_kind_line(conflict: &MergeConflictReport) -> String {
-    let (contract, consumer) = match conflict.contract_side.as_str() {
-        "ours" => ("ours", "theirs"),
-        "theirs" => ("theirs", "ours"),
-        _ => ("both sides", "either side"),
+fn merge_kind_line(conflict: &merge::MergeConflict) -> String {
+    let (contract, consumer) = match conflict.contract_side {
+        merge::MergeSide::Ours => ("ours", "theirs"),
+        merge::MergeSide::Theirs => ("theirs", "ours"),
+        merge::MergeSide::Both => ("both sides", "either side"),
     };
-    match conflict.kind.as_str() {
-        "removed_vs_new_consumer" => {
+    match &conflict.kind {
+        merge::MergeConflictKind::RemovedVsNewConsumer => {
             format!("Removed on {contract}; {consumer} added a consumer.")
         }
-        "kind_changed_vs_new_consumer" => {
-            let new_kind = conflict.new_kind.as_deref().unwrap_or("?");
+        merge::MergeConflictKind::KindChangedVsNewConsumer { to } => {
             format!(
-                "Changed kind to {new_kind} on {contract}; {consumer} added a consumer."
+                "Changed kind to {to:?} on {contract}; {consumer} added a consumer."
             )
         }
-        "both_reshaped" => {
-            let ours = conflict
-                .ours_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            let theirs = conflict
-                .theirs_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            format!("Reshaped differently: ours {ours} vs theirs {theirs}.")
-        }
-        _ => {
-            let from = conflict
-                .old_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            let to = conflict
-                .new_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
+        merge::MergeConflictKind::BothReshaped { ours, theirs } => {
             format!(
-                "Changed signature: {from} → {to} on {contract}; {consumer} added a consumer. \
-                 Warning: the new call's shape is unproven — a human look is needed."
+                "Reshaped differently: ours {} vs theirs {}.",
+                ours.render(),
+                theirs.render()
+            )
+        }
+        merge::MergeConflictKind::SignatureVsNewConsumer { from, to } => {
+            format!(
+                "Changed signature: {} → {} on {contract}; {consumer} added a consumer. \
+                 Warning: the new call's shape is unproven — a human look is needed.",
+                from.render(),
+                to.render()
             )
         }
     }
@@ -3139,29 +2936,19 @@ fn merge_kind_line(conflict: &MergeConflictReport) -> String {
 /// first, before the evidence: it is the one line a reviewer
 /// acts on, and the consumer list below is why it is
 /// trustworthy.
-fn merge_suggestion_lines(conflict: &MergeConflictReport) -> String {
+fn merge_suggestion_lines(conflict: &merge::MergeConflict) -> String {
     match &conflict.suggestion {
-        Some(SuggestionReport {
-            action,
-            file,
-            declaration_kind,
-            signature,
-        }) if action == "moved" => {
+        Some(breaking::BreakSuggestion::Moved { file, kind }) => {
+            format!("Suggestion: moved to `{file}` ({kind:?}).")
+        }
+        Some(breaking::BreakSuggestion::NewCallShape { signature }) => {
             format!(
-                "Suggestion: moved to `{}` ({}).",
-                file.as_deref().unwrap_or("?"),
-                declaration_kind.as_deref().unwrap_or("?")
+                "Suggestion: call `{}{}`.",
+                conflict.symbol,
+                signature.render()
             )
         }
-        Some(SuggestionReport {
-            action, signature, ..
-        }) if action == "new_call_shape" => {
-            let shape = signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            format!("Suggestion: call `{}{}`.", conflict.symbol, shape)
-        }
-        _ => String::new(),
+        None => String::new(),
     }
 }
 
@@ -3173,17 +2960,21 @@ fn merge_suggestion_lines(conflict: &MergeConflictReport) -> String {
 /// side changed the contract and which side added the consumer
 /// before the evidence, and the suggestion sits first, as in
 /// the breaking report.
-fn merge_markdown(report: &MergeReport) -> String {
+fn merge_markdown(report: &merge::MergeReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
     let _ = writeln!(
         output,
         "# Predicted merge conflicts: `{}` vs `{}`\n",
-        report.ours, report.theirs
+        report.ours_ref, report.theirs_ref
     );
-    let _ = writeln!(output, "Base: `{}`.\n", report.base);
-    let proven = report.conflicts.iter().filter(|c| c.proven).count();
+    let _ = writeln!(output, "Base: `{}`.\n", report.base_ref);
+    let proven = report
+        .conflicts
+        .iter()
+        .filter(|c| c.kind.is_proven())
+        .count();
     let _ = writeln!(
         output,
         "{} conflict(s) predicted; {} of them proven.",
@@ -3201,7 +2992,11 @@ fn merge_markdown(report: &MergeReport) -> String {
 
     for conflict in &report.conflicts {
         let _ = writeln!(output);
-        let tier = if conflict.proven { "proven" } else { "warning" };
+        let tier = if conflict.kind.is_proven() {
+            "proven"
+        } else {
+            "warning"
+        };
         let _ = writeln!(
             output,
             "## `{}` — `{}` ({tier})",
@@ -3215,7 +3010,7 @@ fn merge_markdown(report: &MergeReport) -> String {
         if conflict.consumers.is_empty() {
             let _ = writeln!(output, "\nNo consumers on the other side.");
         } else {
-            let heading = if conflict.contract_side == "both" {
+            let heading = if conflict.contract_side == merge::MergeSide::Both {
                 "Consumers:"
             } else {
                 "New consumers:"

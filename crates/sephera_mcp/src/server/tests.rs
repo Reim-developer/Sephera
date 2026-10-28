@@ -1693,8 +1693,13 @@ async fn merge_tool_reports_a_removal_against_a_new_consumer() {
 
     let conflict = &parsed["conflicts"][0];
     assert_eq!(conflict["symbol"], "add", "{output}");
-    assert_eq!(conflict["kind"], "removed_vs_new_consumer", "{output}");
-    assert_eq!(conflict["proven"], true, "{output}");
+    assert_eq!(
+        conflict["kind"]["type"], "removed_vs_new_consumer",
+        "{output}"
+    );
+    // `proven` is gone from the shape: it is the kind tag not
+    // being `signature_vs_new_consumer`, which this removal is not.
+    assert!(conflict.get("proven").is_none(), "{output}");
     assert_eq!(conflict["contract_side"], "ours", "{output}");
     assert_eq!(
         conflict["consumers"],

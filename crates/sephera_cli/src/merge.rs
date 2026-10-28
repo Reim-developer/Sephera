@@ -155,34 +155,9 @@ fn render_body(report: &MergeReport) -> String {
 /// does not parse prose to tell the kinds apart.
 #[must_use]
 pub fn render_json(report: &MergeReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report.
-#[must_use]
-pub fn json_value(report: &MergeReport) -> serde_json::Value {
-    let conflicts: Vec<serde_json::Value> = report
-        .conflicts
-        .iter()
-        .map(|conflict| {
-            serde_json::json!({
-                "file": conflict.file,
-                "symbol": conflict.symbol,
-                "kind": conflict.kind,
-                "contract_side": conflict.contract_side,
-                "consumers": conflict.consumers,
-                "suggestion": conflict.suggestion,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "base": report.base_ref,
-        "ours": report.ours_ref,
-        "theirs": report.theirs_ref,
-        "conflicts": conflicts,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, and the ref fields rename to base/ours/theirs.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 #[cfg(test)]

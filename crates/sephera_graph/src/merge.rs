@@ -121,7 +121,7 @@ impl MergeConflictKind {
 }
 
 /// One predicted semantic merge conflict, with its evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MergeConflict {
     /// The file that declared the symbol in base.
     pub file: String,
@@ -141,13 +141,21 @@ pub struct MergeConflict {
 }
 
 /// The predicted semantic conflicts between two sides.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order, and the ref fields serialize
+/// under the `base`/`ours`/`theirs` keys the CLI and MCP surfaces
+/// already use: the CLI and the MCP tool serialize this struct
+/// directly, so the declaration order is the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MergeReport {
     /// The base ref, as the caller spelled it.
+    #[serde(rename = "base")]
     pub base_ref: String,
     /// The ours ref, as the caller spelled it.
+    #[serde(rename = "ours")]
     pub ours_ref: String,
     /// The theirs ref, as the caller spelled it.
+    #[serde(rename = "theirs")]
     pub theirs_ref: String,
     /// The conflicts, file then symbol, proven before warnings
     /// within a symbol.
