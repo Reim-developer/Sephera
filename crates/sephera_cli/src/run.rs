@@ -862,9 +862,9 @@ async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
     );
 
     let rendered = match arguments.format {
-        WhyOutputFormat::Markdown => {
-            why::render_markdown(path.as_ref(), &from, &to)
-        }
+        WhyOutputFormat::Markdown => why::render_markdown(
+            &why::WhyReport::from_path(path.as_ref(), &from, &to),
+        ),
         WhyOutputFormat::Json => why::render_json(path.as_ref(), &from, &to),
     };
 

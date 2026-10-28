@@ -257,6 +257,70 @@ impl WhyReport {
     }
 }
 
+/// Render the answer as Markdown.
+///
+/// `connected` false is an answer rather than a failure, so it
+/// renders as a statement instead of an empty section. `from` and
+/// `to` are the canonical spellings, used for the heading in both
+/// cases: with a chain they are the path's own endpoints; without
+/// one they are what the caller resolved the request to.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(report: &WhyReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Why `{}` depends on `{}`\n",
+        report.from, report.to
+    )
+    .expect("writing to a String must succeed");
+
+    if !report.connected {
+        writeln!(
+            output,
+            "No dependency path: `{}` does not import `{}`, directly \
+             or through any other file in the analysis.",
+            report.from, report.to
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    if report.hop_count == Some(0) {
+        writeln!(
+            output,
+            "The same file. No import is involved; a file is its own \
+             starting point."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    writeln!(
+        output,
+        "Shortest chain: {} hop(s). Changing `{}` reaches `{}` \
+         through exactly these imports:\n",
+        report.hop_count.unwrap_or_default(),
+        report.to,
+        report.from
+    )
+    .expect("writing to a String must succeed");
+
+    for pair in report.hops.windows(2) {
+        let names: Vec<String> =
+            pair[1].via.iter().map(|name| format!("`{name}`")).collect();
+        writeln!(output, "- `{}` imports {}", pair[0].file, names.join(", "))
+            .expect("writing to a String must succeed");
+    }
+    writeln!(output, "- `{}`", report.to)
+        .expect("writing to a String must succeed");
+    output
+}
+
 /// Explain why `from_requested` depends on `to_requested`.
 ///
 /// Canonicalises both paths against the report the way

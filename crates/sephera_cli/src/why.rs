@@ -6,68 +6,12 @@
 //! command's own: how a chain of imports reads on a terminal and in
 //! JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // dependency-path surface. The search itself lives in core, where the
 // MCP server reaches the same code.
-pub use sephera_graph::dependency_path::{DependencyPath, WhyReport, explain};
-
-/// Render the answer as Markdown.
-///
-/// `path` is `None` when the two files have no chain between them,
-/// which is an answer rather than a failure, so it renders as a
-/// statement instead of an empty section. `from` and `to` are the
-/// canonical spellings, used for the heading in both cases: with a
-/// chain they are the path's own endpoints; without one they are what
-/// the caller resolved the request to.
-#[must_use]
-pub fn render_markdown(
-    path: Option<&DependencyPath>,
-    from: &str,
-    to: &str,
-) -> String {
-    let mut output = String::new();
-    writeln!(output, "# Why `{from}` depends on `{to}`\n")
-        .expect("writing to a String must succeed");
-
-    let Some(path) = path else {
-        writeln!(
-            output,
-            "No dependency path: `{from}` does not import `{to}`, \
-             directly or through any other file in the analysis."
-        )
-        .expect("writing to a String must succeed");
-        return output;
-    };
-
-    if path.hop_count() == 0 {
-        writeln!(
-            output,
-            "The same file. No import is involved; a file is its own \
-             starting point."
-        )
-        .expect("writing to a String must succeed");
-        return output;
-    }
-
-    writeln!(
-        output,
-        "Shortest chain: {} hop(s). Changing `{to}` reaches `{from}` \
-         through exactly these imports:\n",
-        path.hop_count()
-    )
-    .expect("writing to a String must succeed");
-
-    for pair in path.hops.windows(2) {
-        let names: Vec<String> =
-            pair[1].via.iter().map(|name| format!("`{name}`")).collect();
-        writeln!(output, "- `{}` imports {}", pair[0].file, names.join(", "))
-            .expect("writing to a String must succeed");
-    }
-    writeln!(output, "- `{to}`").expect("writing to a String must succeed");
-    output
-}
+pub use sephera_graph::dependency_path::{
+    DependencyPath, WhyReport, explain, render_markdown,
+};
 
 /// Render the answer as JSON.
 ///
@@ -93,7 +37,7 @@ pub fn render_json(
 mod tests {
     use sephera_graph::dependency_path::PathHop;
 
-    use super::{DependencyPath, render_json, render_markdown};
+    use super::{DependencyPath, WhyReport, render_json, render_markdown};
 
     fn chain() -> DependencyPath {
         DependencyPath {
@@ -118,7 +62,11 @@ mod tests {
 
     #[test]
     fn a_chain_names_every_import_it_crosses() {
-        let report = render_markdown(Some(&chain()), "a.rs", "c.rs");
+        let report = render_markdown(&WhyReport::from_path(
+            Some(&chain()),
+            "a.rs",
+            "c.rs",
+        ));
 
         assert!(report.contains("Shortest chain: 2 hop(s)."), "{report}");
         assert!(report.contains("- `a.rs` imports `crate::b`"), "{report}");
@@ -128,7 +76,8 @@ mod tests {
 
     #[test]
     fn no_chain_is_a_statement_not_an_empty_section() {
-        let report = render_markdown(None, "a.rs", "c.rs");
+        let report =
+            render_markdown(&WhyReport::from_path(None, "a.rs", "c.rs"));
 
         assert!(report.contains("No dependency path"), "{report}");
         assert!(!report.contains("Shortest chain"), "{report}");
@@ -144,7 +93,8 @@ mod tests {
                 via: Vec::new(),
             }],
         };
-        let report = render_markdown(Some(&same), "a.rs", "a.rs");
+        let report =
+            render_markdown(&WhyReport::from_path(Some(&same), "a.rs", "a.rs"));
 
         assert!(report.contains("The same file."), "{report}");
     }

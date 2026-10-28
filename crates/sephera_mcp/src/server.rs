@@ -631,7 +631,7 @@ impl SepheraServer {
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(why_markdown(&built)),
+            Some("markdown") => Ok(dependency_path::render_markdown(&built)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported why format `{other}`; expected \
@@ -1983,57 +1983,6 @@ fn schema_impact_markdown(report: &schema::SchemaImpactReport) -> String {
 /// The same rendering the `why` command prints, kept in step with it:
 /// an agent reading the tool's answer and a person reading the
 /// terminal should be looking at the same explanation.
-fn why_markdown(report: &dependency_path::WhyReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Why `{}` depends on `{}`\n",
-        report.from, report.to
-    );
-
-    if !report.connected {
-        let _ = writeln!(
-            output,
-            "No dependency path: `{}` does not import `{}`, directly \
-             or through any other file in the analysis.",
-            report.from, report.to
-        );
-        return output;
-    }
-
-    if report.hop_count == Some(0) {
-        let _ = writeln!(
-            output,
-            "The same file. No import is involved; a file is its own \
-             starting point."
-        );
-        return output;
-    }
-
-    let _ = writeln!(
-        output,
-        "Shortest chain: {} hop(s). Changing `{}` reaches `{}` \
-         through exactly these imports:\n",
-        report.hop_count.unwrap_or_default(),
-        report.to,
-        report.from
-    );
-    for pair in report.hops.windows(2) {
-        let names: Vec<String> =
-            pair[1].via.iter().map(|name| format!("`{name}`")).collect();
-        let _ = writeln!(
-            output,
-            "- `{}` imports {}",
-            pair[0].file,
-            names.join(", ")
-        );
-    }
-    let _ = writeln!(output, "- `{}`", report.to);
-    output
-}
-
 /// Render a coupling report as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools' Markdown
