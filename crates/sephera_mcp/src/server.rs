@@ -707,7 +707,7 @@ impl SepheraServer {
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
             Some("markdown") => {
-                Ok(coupling_markdown(&measured, min_co_changes))
+                Ok(coupling::render_markdown(&measured, min_co_changes))
             }
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
@@ -2037,56 +2037,6 @@ fn why_markdown(report: &dependency_path::WhyReport) -> String {
 /// The wording follows the CLI's report, as the other tools' Markdown
 /// follows its command's: the same measurement should not need two
 /// phrasings learned.
-fn coupling_markdown(
-    report: &coupling::CouplingReport,
-    min_co_changes: u64,
-) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Hidden coupling\n");
-    let _ = writeln!(
-        output,
-        "Scanned {} commits; {} touched files in this tree.",
-        report.commits_scanned, report.commits_counted
-    );
-
-    if report.pairs.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo pair of files changed together at least {min_co_changes} \
-             times without an import between them."
-        );
-        return output;
-    }
-
-    let _ = writeln!(
-        output,
-        "\nPairs that changed together at least {min_co_changes} times with \
-         no import between them. Containment is the share of the quieter \
-         file's commits that also touched the other file: 1.0 means it has \
-         never changed without the other.\n"
-    );
-    for pair in &report.pairs {
-        let _ = writeln!(
-            output,
-            "- `{}` + `{}` — {} co-changes, {}/{} commits, containment {}",
-            pair.first,
-            pair.second,
-            pair.co_changes,
-            pair.first_commits,
-            pair.second_commits,
-            pair.containment
-        );
-    }
-    output
-}
-
-/// The repo-relative path of the analysis directory, the twin of
-/// the CLI's helper of the same name: empty at the repo root, the
-/// subdirectory otherwise, empty again when the analysis directory
-/// is not under the repo root at all. Any failure means no prefix
-/// — today's spelling — never an invented path.
 fn analysis_prefix(source: &ResolvedSource) -> std::path::PathBuf {
     if let Ok(relative) = source.analysis_path.strip_prefix(&source.repo_root)
         && !relative.as_os_str().is_empty()
