@@ -1488,11 +1488,9 @@ impl SepheraServer {
         .map_err(|error| {
             rmcp::ErrorData::invalid_params(error.to_string(), None)
         })?;
-        let built = SimulateReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(simulate_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(simulate_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported simulate format `{other}`; expected \
@@ -2571,91 +2569,12 @@ fn behavior_markdown(report: &BehaviorReport) -> String {
     output
 }
 
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SimulateReport {
-    /// The file that declares the symbol today.
-    pub file: String,
-    /// The symbol's name today.
-    pub symbol: String,
-    /// The name it would take.
-    pub new_name: String,
-    /// The file it would live in: the move target, or the file it
-    /// already lives in for a pure rename.
-    pub new_file: String,
-    /// True when a destination collision blocks the rename.
-    pub blocked: bool,
-    /// Files that name the symbol and so must update their import.
-    pub direct: Vec<SimulatedConsumerReport>,
-    /// Files importing the file's namespace wholesale.
-    pub namespace_users: Vec<String>,
-    /// Files downstream of a direct or namespace user.
-    pub downstream: Vec<String>,
-    /// Name collisions at the destination and in direct consumers.
-    pub collisions: Vec<SimulatedCollisionReport>,
-}
-
-/// One file a rename would have to touch, as the `simulate` tool
-/// renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SimulatedConsumerReport {
-    /// The file that names the symbol from its current file.
-    pub file: String,
-    /// Import paths evidencing the use.
-    pub imports: Vec<String>,
-}
-
-/// One name collision, as the `simulate` tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SimulatedCollisionReport {
-    /// The file where the new name already exists.
-    pub file: String,
-    /// `destination` blocks the rename; `shadowing` only warns.
-    pub kind: String,
-}
-
-impl SimulateReport {
-    fn from_measured(measured: &simulate::SimulateReport) -> Self {
-        Self {
-            file: measured.file.clone(),
-            symbol: measured.symbol.clone(),
-            new_name: measured.new_name.clone(),
-            new_file: measured.new_file.clone(),
-            blocked: measured.blocked,
-            direct: measured
-                .direct
-                .iter()
-                .map(|user| SimulatedConsumerReport {
-                    file: user.file.clone(),
-                    imports: user.imports.clone(),
-                })
-                .collect(),
-            namespace_users: measured.namespace_users.clone(),
-            downstream: measured.downstream.clone(),
-            collisions: measured
-                .collisions
-                .iter()
-                .map(|collision| SimulatedCollisionReport {
-                    file: collision.file.clone(),
-                    kind: match collision.kind {
-                        simulate::CollisionKind::Destination => {
-                            "destination".to_owned()
-                        }
-                        simulate::CollisionKind::Shadowing => {
-                            "shadowing".to_owned()
-                        }
-                    },
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Render a simulate report as Markdown for an agent's context
 /// window.
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn simulate_markdown(report: &SimulateReport) -> String {
+fn simulate_markdown(report: &simulate::SimulateReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
@@ -2664,10 +2583,9 @@ fn simulate_markdown(report: &SimulateReport) -> String {
         "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
         report.symbol, report.file, report.new_name, report.new_file
     );
-    let destination = report
-        .collisions
-        .iter()
-        .find(|collision| collision.kind == "destination");
+    let destination = report.collisions.iter().find(|collision| {
+        collision.kind == simulate::CollisionKind::Destination
+    });
     if let Some(collision) = destination {
         let _ = writeln!(
             output,
@@ -2701,7 +2619,7 @@ fn simulate_markdown(report: &SimulateReport) -> String {
         let _ = writeln!(output, "\n- `{file}` (downstream).");
     }
     for collision in &report.collisions {
-        if collision.kind == "shadowing" {
+        if collision.kind == simulate::CollisionKind::Shadowing {
             let _ = writeln!(
                 output,
                 "\n- `{}` already declares `{}`: the renamed import would rebind a name the file owns.",

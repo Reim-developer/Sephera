@@ -29,13 +29,15 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use serde::Serialize;
+
 use sephera_core::declarations::DeclarationIndex;
 
 use crate::breaking::{ResolutionOracle, consumers, downstream_of};
 use crate::types::GraphReport;
 
 /// One file a rename would have to touch, with the evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SimulatedConsumer {
     /// The file that names the symbol from its current file.
     pub file: String,
@@ -44,7 +46,8 @@ pub struct SimulatedConsumer {
 }
 
 /// How a name at the destination would collide.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum CollisionKind {
     /// The destination file already declares the new name: a
     /// duplicate definition, so the rename cannot happen.
@@ -55,7 +58,7 @@ pub enum CollisionKind {
 }
 
 /// One name collision a rename would run into.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SimulatedCollision {
     /// The file where the new name already exists.
     pub file: String,
@@ -64,7 +67,11 @@ pub struct SimulatedCollision {
 }
 
 /// What a rename or move would touch, and what would block it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct SimulateReport {
     /// The file that declares the symbol today.
     pub file: String,
@@ -75,6 +82,8 @@ pub struct SimulateReport {
     /// The file it would live in: the move target, or the file it
     /// already lives in for a pure rename.
     pub new_file: String,
+    /// True when a destination collision blocks the rename.
+    pub blocked: bool,
     /// Files that name the symbol and so must update their import.
     pub direct: Vec<SimulatedConsumer>,
     /// Files importing the file's namespace wholesale, which may
@@ -85,8 +94,6 @@ pub struct SimulateReport {
     pub downstream: Vec<String>,
     /// Name collisions at the destination and in direct consumers.
     pub collisions: Vec<SimulatedCollision>,
-    /// True when a destination collision blocks the rename.
-    pub blocked: bool,
 }
 
 /// Why a rename cannot even be simulated.
@@ -208,6 +215,7 @@ pub fn measure_simulate(
         symbol: symbol.to_owned(),
         new_name: new_name.to_owned(),
         new_file: destination.to_owned(),
+        blocked,
         direct: direct
             .into_iter()
             .map(|user| SimulatedConsumer {
@@ -218,7 +226,6 @@ pub fn measure_simulate(
         namespace_users,
         downstream,
         collisions,
-        blocked,
     })
 }
 

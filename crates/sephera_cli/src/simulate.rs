@@ -112,49 +112,10 @@ pub fn render_markdown(report: &SimulateReport) -> String {
 /// Render the report as JSON.
 #[must_use]
 pub fn render_json(report: &SimulateReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report.
-#[must_use]
-pub fn json_value(report: &SimulateReport) -> serde_json::Value {
-    let direct: Vec<serde_json::Value> = report
-        .direct
-        .iter()
-        .map(|user| {
-            serde_json::json!({
-                "file": user.file,
-                "imports": user.imports,
-            })
-        })
-        .collect();
-    let collisions: Vec<serde_json::Value> = report
-        .collisions
-        .iter()
-        .map(|collision| {
-            let kind = match collision.kind {
-                CollisionKind::Destination => "destination",
-                CollisionKind::Shadowing => "shadowing",
-            };
-            serde_json::json!({
-                "file": collision.file,
-                "kind": kind,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "file": report.file,
-        "symbol": report.symbol,
-        "new_name": report.new_name,
-        "new_file": report.new_file,
-        "blocked": report.blocked,
-        "direct": direct,
-        "namespace_users": report.namespace_users,
-        "downstream": report.downstream,
-        "collisions": collisions,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, so there is no hand-built document to drift from
+    // the measurement.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 #[cfg(test)]
@@ -163,7 +124,7 @@ mod tests {
         CollisionKind, SimulateReport, SimulatedCollision, SimulatedConsumer,
     };
 
-    use super::{json_value, render_markdown};
+    use super::{render_json, render_markdown};
 
     fn report(
         direct: Vec<SimulatedConsumer>,
@@ -211,13 +172,15 @@ mod tests {
 
     #[test]
     fn json_carries_the_verdict_and_the_collisions() {
-        let payload = json_value(&report(
+        let rendered = render_json(&report(
             vec![],
             vec![SimulatedCollision {
                 file: "user.py".to_owned(),
                 kind: CollisionKind::Shadowing,
             }],
         ));
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("the report serializes");
         assert_eq!(payload["blocked"], false);
         assert_eq!(payload["collisions"][0]["kind"], "shadowing");
     }
