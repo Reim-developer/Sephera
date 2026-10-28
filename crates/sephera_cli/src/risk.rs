@@ -67,27 +67,10 @@ pub fn render_markdown(report: &RiskReport) -> String {
 /// scores.
 #[must_use]
 pub fn render_json(report: &RiskReport) -> String {
-    let files: Vec<serde_json::Value> = report
-        .files
-        .iter()
-        .map(|file| {
-            serde_json::json!({
-                "file": file.file,
-                "score": file.score,
-                "dependents": file.dependents,
-                "churn": file.churn,
-                "coupled_partners": file.coupled_partners,
-            })
-        })
-        .collect();
-
-    let payload = serde_json::json!({
-        "commits_scanned": report.commits_scanned,
-        "commits_counted": report.commits_counted,
-        "files": files,
-    });
-
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    // The graph report serializes directly: its field order is the
+    // JSON order, so there is no hand-built document to drift from
+    // the measurement.
+    serde_json::to_string_pretty(report).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }

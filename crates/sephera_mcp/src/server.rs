@@ -880,11 +880,9 @@ impl SepheraServer {
                 limit: usize::try_from(param.limit.unwrap_or(20)).unwrap_or(20),
             },
         );
-        let built = RiskReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(risk_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(risk_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported risk format `{other}`; expected \
@@ -2515,57 +2513,11 @@ fn dead_markdown(report: &dead::DeadReport) -> String {
     output
 }
 
-/// The JSON shape the `risk` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct RiskReport {
-    /// Commits handed to the measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it.
-    pub commits_counted: u64,
-    /// The riskiest files, highest score first.
-    pub files: Vec<RiskyFile>,
-}
-
-/// One file's risk, with the counts the score is built from.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct RiskyFile {
-    /// Path of the file.
-    pub file: String,
-    /// Files that depend on it at any depth.
-    pub dependents: usize,
-    /// Counted commits in the window that touched it.
-    pub churn: u64,
-    /// Hidden-coupling pairs it takes part in.
-    pub coupled_partners: usize,
-    /// `dependents × churn × (1 + coupled_partners)`.
-    pub score: u64,
-}
-
-impl RiskReport {
-    fn from_measured(measured: &risk::RiskReport) -> Self {
-        Self {
-            commits_scanned: measured.commits_scanned,
-            commits_counted: measured.commits_counted,
-            files: measured
-                .files
-                .iter()
-                .map(|file| RiskyFile {
-                    file: file.file.clone(),
-                    dependents: file.dependents,
-                    churn: file.churn,
-                    coupled_partners: file.coupled_partners,
-                    score: file.score,
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Render a risk ranking as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn risk_markdown(report: &RiskReport) -> String {
+fn risk_markdown(report: &risk::RiskReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();

@@ -32,6 +32,8 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use super::blast_radius::reachable_dependents_with_distance;
 use super::coupling::{CouplingOptions, counted_commits, measure_coupling};
 use super::types::GraphReport;
@@ -55,7 +57,7 @@ impl Default for RiskOptions {
 }
 
 /// One file's risk, with the counts the score is built from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileRisk {
     /// Path of the file, in the graph's spelling.
     pub file: String,
@@ -70,18 +72,22 @@ pub struct FileRisk {
 }
 
 /// The risk ranking for one analysis.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RiskReport {
+    /// Commits handed to the measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it, under coupling's rule.
+    pub commits_counted: u64,
     /// The riskiest files, highest score first, capped at the
     /// requested limit. Files scoring zero -- nothing depends on
     /// them, or they never changed inside the window -- are not
     /// listed: the ranking is of files that are both depended on
     /// and in motion.
     pub files: Vec<FileRisk>,
-    /// Commits handed to the measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it, under coupling's rule.
-    pub commits_counted: u64,
 }
 
 /// Rank the files of `report` by risk over `commits`.
@@ -160,9 +166,9 @@ pub fn measure_risk(
     files.truncate(options.limit);
 
     RiskReport {
-        files,
         commits_scanned: coupling.commits_scanned,
         commits_counted: counted.counted,
+        files,
     }
 }
 
