@@ -1202,11 +1202,9 @@ impl SepheraServer {
         let to_label = param.to.as_deref().unwrap_or("working tree");
         let measured =
             diff::measure_diff(&old_index, &new_index, &param.from, to_label);
-        let built = DiffReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(diff_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(diff_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported diff format `{other}`; expected \
@@ -2296,30 +2294,6 @@ fn risk_markdown(report: &risk::RiskReport) -> String {
     output
 }
 
-/// One call shape, as a report renders it.
-///
-/// Shared by the merge and diff mirrors: both flatten a graph
-/// `Signature` into this rendered pair rather than serializing
-/// the graph type, because their shapes are flat by design.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SignatureReport {
-    /// The comma-joined parameter spellings.
-    pub parameters: String,
-    /// The return annotation, when one is written.
-    pub returns: Option<String>,
-}
-
-impl SignatureReport {
-    /// Render the shape the way a reader would write it, the same
-    /// spelling the graph type renders.
-    fn render(&self) -> String {
-        self.returns.as_ref().map_or_else(
-            || format!("({})", self.parameters),
-            |returns| format!("({}) -> {returns}", self.parameters),
-        )
-    }
-}
-
 /// The trail of one symbol through history, as the `archaeology`
 /// tool renders it.
 #[derive(serde::Serialize, schemars::JsonSchema)]
@@ -3024,99 +2998,14 @@ fn merge_markdown(report: &merge::MergeReport) -> String {
     output
 }
 
-/// The symbol-level diff between two refs, as the `diff` tool
-/// renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DiffReport {
-    /// The older ref, as the caller spelled it.
-    pub from: String,
-    /// The newer ref, as the caller spelled it, or "working tree".
-    pub to: String,
-    /// The changed symbols, file then symbol.
-    pub changes: Vec<DiffSymbolReport>,
-}
-
-/// One changed symbol, as the `diff` tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DiffSymbolReport {
-    /// The file that declares the symbol.
-    pub file: String,
-    /// The symbol's name.
-    pub symbol: String,
-    /// The kind on the side where the symbol exists: the old kind
-    /// for removals and changes, the new kind for additions.
-    pub kind: String,
-    /// `added`, `removed`, `kind_changed`, or `signature_changed`.
-    pub change: String,
-    /// The kind the new tree declares it as, for a kind change.
-    pub new_kind: Option<String>,
-    /// The call shape the old tree declared, for a signature change.
-    pub old_signature: Option<SignatureReport>,
-    /// The call shape the new tree declares, for a signature change.
-    pub new_signature: Option<SignatureReport>,
-}
-
-impl DiffReport {
-    fn from_measured(measured: &diff::DiffReport) -> Self {
-        Self {
-            from: measured.from_ref.clone(),
-            to: measured.to_ref.clone(),
-            changes: measured
-                .changes
-                .iter()
-                .map(|change| {
-                    let (change_label, new_kind, old_signature, new_signature) =
-                        match &change.change {
-                            diff::DiffChange::Added => {
-                                ("added".to_owned(), None, None, None)
-                            }
-                            diff::DiffChange::Removed => {
-                                ("removed".to_owned(), None, None, None)
-                            }
-                            diff::DiffChange::KindChanged { to } => (
-                                "kind_changed".to_owned(),
-                                Some(format!("{to:?}").to_lowercase()),
-                                None,
-                                None,
-                            ),
-                            diff::DiffChange::SignatureChanged { from, to } => {
-                                (
-                                    "signature_changed".to_owned(),
-                                    None,
-                                    Some(SignatureReport {
-                                        parameters: from.parameters.clone(),
-                                        returns: from.returns.clone(),
-                                    }),
-                                    Some(SignatureReport {
-                                        parameters: to.parameters.clone(),
-                                        returns: to.returns.clone(),
-                                    }),
-                                )
-                            }
-                        };
-                    DiffSymbolReport {
-                        file: change.file.clone(),
-                        symbol: change.symbol.clone(),
-                        kind: format!("{:?}", change.kind).to_lowercase(),
-                        change: change_label,
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-fn diff_markdown(report: &DiffReport) -> String {
+fn diff_markdown(report: &diff::DiffReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
     let _ = writeln!(
         output,
         "# Symbol diff: `{}` → `{}`\n",
-        report.from, report.to
+        report.from_ref, report.to_ref
     );
     let _ = writeln!(output, "{} symbol(s) changed.", report.changes.len());
     if report.changes.is_empty() {
@@ -3127,40 +3016,32 @@ fn diff_markdown(report: &DiffReport) -> String {
         return output;
     }
     for change in &report.changes {
-        let line = match change.change.as_str() {
-            "added" => {
+        let line = match &change.change {
+            diff::DiffChange::Added => {
                 format!(
-                    "Added `{}` in `{}` ({}).",
+                    "Added `{}` in `{}` ({:?}).",
                     change.symbol, change.file, change.kind
                 )
             }
-            "removed" => {
+            diff::DiffChange::Removed => {
                 format!(
-                    "Removed `{}` from `{}` ({}).",
+                    "Removed `{}` from `{}` ({:?}).",
                     change.symbol, change.file, change.kind
                 )
             }
-            "kind_changed" => {
+            diff::DiffChange::KindChanged { to } => {
                 format!(
-                    "Changed `{}` in `{}` from {} to {}.",
+                    "Changed `{}` in `{}` from {:?} to {:?}.",
+                    change.symbol, change.file, change.kind, to
+                )
+            }
+            diff::DiffChange::SignatureChanged { from, to } => {
+                format!(
+                    "Changed signature of `{}` in `{}`: {} → {}.",
                     change.symbol,
                     change.file,
-                    change.kind,
-                    change.new_kind.as_deref().unwrap_or("?"),
-                )
-            }
-            _ => {
-                let from = change
-                    .old_signature
-                    .as_ref()
-                    .map_or_else(String::new, SignatureReport::render);
-                let to = change
-                    .new_signature
-                    .as_ref()
-                    .map_or_else(String::new, SignatureReport::render);
-                format!(
-                    "Changed signature of `{}` in `{}`: {from} → {to}.",
-                    change.symbol, change.file
+                    from.render(),
+                    to.render()
                 )
             }
         };
@@ -3180,8 +3061,8 @@ fn diff_markdown(report: &DiffReport) -> String {
 /// The JSON document the `review` tool returns: the graph review
 /// plus the ref it was read against and the breaking report
 /// embedded between the changed files and the warnings, as the
-/// Markdown sections order them. The breaking half still comes
-/// from its mirror until that report serializes directly.
+/// Markdown sections order them. Both halves serialize from the
+/// graph structs directly.
 #[derive(serde::Serialize)]
 struct ReviewDocument<'a> {
     against: &'a str,

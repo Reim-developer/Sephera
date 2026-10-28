@@ -1772,7 +1772,7 @@ async fn diff_tool_reports_added_and_removed_in_json_and_markdown() {
         .map(|change| {
             (
                 change["symbol"].as_str().unwrap(),
-                change["change"].as_str().unwrap(),
+                change["change"]["type"].as_str().unwrap(),
             )
         })
         .collect();

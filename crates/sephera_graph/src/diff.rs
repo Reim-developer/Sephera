@@ -48,7 +48,7 @@ pub enum DiffChange {
 }
 
 /// One symbol that differs between the two trees.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiffSymbol {
     /// The file that declares the symbol.
     pub file: String,
@@ -62,11 +62,18 @@ pub struct DiffSymbol {
 }
 
 /// The symbol-level diff between two refs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order, and the ref fields serialize
+/// under the `from`/`to` keys the CLI and MCP surfaces already
+/// use: the CLI and the MCP tool serialize this struct directly,
+/// so the declaration order is the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiffReport {
     /// The older ref, as the caller spelled it.
+    #[serde(rename = "from")]
     pub from_ref: String,
     /// The newer ref, as the caller spelled it.
+    #[serde(rename = "to")]
     pub to_ref: String,
     /// The changed symbols, file then symbol.
     pub changes: Vec<DiffSymbol>,

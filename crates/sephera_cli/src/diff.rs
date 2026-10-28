@@ -79,31 +79,9 @@ pub fn render_markdown(report: &DiffReport) -> String {
 /// Render the report as JSON.
 #[must_use]
 pub fn render_json(report: &DiffReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report.
-#[must_use]
-pub fn json_value(report: &DiffReport) -> serde_json::Value {
-    let changes: Vec<serde_json::Value> = report
-        .changes
-        .iter()
-        .map(|change| {
-            serde_json::json!({
-                "file": change.file,
-                "symbol": change.symbol,
-                "kind": change.kind,
-                "change": change.change,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "from": report.from_ref,
-        "to": report.to_ref,
-        "changes": changes,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, and the ref fields rename to from/to.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 #[cfg(test)]
