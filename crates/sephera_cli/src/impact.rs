@@ -5,136 +5,23 @@
 //! same question. This module is the part that is genuinely the command's own:
 //! how a blast radius reads on a terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` and the graph-diff path keep one import site for the
 // whole blast-radius surface. The counting itself lives in core, where the MCP
 // server reaches the same code.
 pub use sephera_graph::blast_radius::{
     BlastRadius, dependent_count, match_path, measure, measure_all,
+    render_report, write_dependents,
 };
 pub use sephera_graph::symbol_impact::{
     SymbolImpact, direct_count as symbol_direct_count, measure_symbol_all,
+    render_symbol_report,
 };
 
-/// Render one blast radius as Markdown.
-///
-/// `heading_level` is 1 for a single target and 2 when several targets share
-/// one report, so the first target is the document title and the rest are
-/// sections under it. A single target renders byte-for-byte as it did before
-/// multiple targets existed.
-#[must_use]
-pub fn render_markdown(radius: &BlastRadius, heading_level: usize) -> String {
-    let count = dependent_count(radius);
-    let mut output = String::new();
-
-    if heading_level == 1 {
-        writeln!(output, "# Blast radius for `{}`\n", radius.target)
-            .expect("writing to a String must succeed");
-    } else {
-        writeln!(output, "## Blast radius for `{}`\n", radius.target)
-            .expect("writing to a String must succeed");
-    }
-    writeln!(
-        output,
-        "{}",
-        match count {
-            0 => "No file imports this one.".to_owned(),
-            1 => "1 file depends on this.".to_owned(),
-            other => format!("{other} files depend on this."),
-        }
-    )
-    .expect("writing to a String must succeed");
-    if let Some(depth) = radius.depth {
-        writeln!(output, "\nLimited to {depth} hop(s) away.")
-            .expect("writing to a String must succeed");
-    }
-
-    if radius.dependents.is_empty() {
-        return output;
-    }
-
-    let sub = "#".repeat(heading_level + 1);
-    writeln!(output, "\n{sub} Dependents\n")
-        .expect("writing to a String must succeed");
-    write_dependents(&mut output, radius);
-    output
-}
-
-/// List each dependent with the names it imports from the target.
-///
-/// Shared with `graph --diff`, which renders the same `Dependent` list per
-/// changed file. It carried its own copy of this loop, and the two could have
-/// drifted on what a dependent with no named import looks like: one of them
-/// printing `- `src/a.rs` imports` with nothing after it, which reads as a bug
-/// in the graph rather than as a transitive dependent the resolver never saw an
-/// import from.
-///
-/// `pub` within a private module, which is crate-visible and nothing more.
-pub fn write_dependents(output: &mut String, radius: &BlastRadius) {
-    for dependent in &radius.dependents {
-        if dependent.imports.is_empty() {
-            writeln!(output, "- `{}`", dependent.file)
-                .expect("writing to a String must succeed");
-        } else {
-            let names: Vec<String> = dependent
-                .imports
-                .iter()
-                .map(|name| format!("`{name}`"))
-                .collect();
-            writeln!(
-                output,
-                "- `{}` imports {}",
-                dependent.file,
-                names.join(", ")
-            )
-            .expect("writing to a String must succeed");
-        }
-    }
-}
-
-/// Render every blast radius as one Markdown report.
-///
-/// Sorted widest first, which is the order `measure_all` already applied, and
-/// preceded by a one-line summary so a reader of several targets sees the
-/// ranking before any of the detail.
-#[must_use]
-pub fn render_report(radii: &[BlastRadius]) -> String {
-    match radii.len() {
-        // A header reading "0 files" would be a report about nothing, which is
-        // not a thing a caller asked for. The command rejects an empty target
-        // list outright; this keeps a library caller from getting a fake report.
-        0 => return String::new(),
-        // One target renders exactly as it did before batching existed, so a
-        // consumer diffing output across versions sees no spurious change.
-        1 => return render_markdown(&radii[0], 1),
-        _ => {}
-    }
-
-    let mut output = String::new();
-    writeln!(output, "# Blast radius for {} files\n", radii.len())
-        .expect("writing to a String must succeed");
-    writeln!(output, "Widest first.\n")
-        .expect("writing to a String must succeed");
-    writeln!(output, "| File | Dependents |")
-        .expect("writing to a String must succeed");
-    writeln!(output, "|------|-----------:|")
-        .expect("writing to a String must succeed");
-    for radius in radii {
-        writeln!(
-            output,
-            "| `{}` | {} |",
-            radius.target,
-            dependent_count(radius)
-        )
-        .expect("writing to a String must succeed");
-    }
-
-    for radius in radii {
-        output.push('\n');
-        output.push_str(&render_markdown(radius, 2));
-    }
-    output
+/// The JSON document the impact renders emit: one entry per
+/// target, serialized from the graph measurements directly.
+#[derive(serde::Serialize)]
+struct ImpactDocument<'a, T> {
+    targets: &'a [T],
 }
 
 /// Render every blast radius as one JSON report.
@@ -144,162 +31,11 @@ pub fn render_report(radii: &[BlastRadius]) -> String {
 /// two.
 #[must_use]
 pub fn render_report_json(radii: &[BlastRadius]) -> String {
-    let payload = serde_json::json!({ "targets": radii.iter().map(json_for).collect::<Vec<_>>() });
+    let document = ImpactDocument { targets: radii };
 
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
-}
-
-/// Render one symbol impact as Markdown.
-///
-/// The three lists stay in separate sections because they are three
-/// different strengths of claim: a file that names the symbol, a file
-/// that imports the namespace and so *may* use it, and a file that is
-/// merely downstream of one of those. Merging them into one list
-/// with one count is how a may-use becomes a use in the reader's
-/// head, so the counts are stated separately too.
-#[must_use]
-pub fn render_symbol_markdown(
-    impact: &SymbolImpact,
-    heading_level: usize,
-) -> String {
-    let mut output = String::new();
-    let hashes = "#".repeat(heading_level);
-    writeln!(
-        output,
-        "{hashes} Symbol impact for `{}` in `{}`\n",
-        impact.symbol, impact.target
-    )
-    .expect("writing to a String must succeed");
-
-    let direct = symbol_direct_count(impact);
-    writeln!(
-        output,
-        "{}",
-        match direct {
-            0 => format!("No file imports `{}` from this file.", impact.symbol),
-            1 => format!("1 file imports `{}` from this file.", impact.symbol),
-            other => format!(
-                "{other} files import `{}` from this file.",
-                impact.symbol
-            ),
-        }
-    )
-    .expect("writing to a String must succeed");
-    if !impact.namespace_users.is_empty() {
-        writeln!(
-            output,
-            "{}",
-            match impact.namespace_users.len() {
-                1 => format!(
-                    "1 file imports this file's namespace and may use `{}` without naming it.",
-                    impact.symbol
-                ),
-                other => format!(
-                    "{other} files import this file's namespace and may use `{}` without naming it.",
-                    impact.symbol
-                ),
-            }
-        )
-        .expect("writing to a String must succeed");
-    }
-    if !impact.downstream.is_empty() {
-        writeln!(
-            output,
-            "{}",
-            match impact.downstream.len() {
-                1 => "1 more file is downstream of those.".to_owned(),
-                other => format!("{other} more files are downstream of those."),
-            }
-        )
-        .expect("writing to a String must succeed");
-    }
-    if let Some(depth) = impact.depth {
-        writeln!(output, "\nLimited to {depth} hop(s) away.")
-            .expect("writing to a String must succeed");
-    }
-
-    let sub = "#".repeat(heading_level + 1);
-    if !impact.direct.is_empty() {
-        writeln!(output, "\n{sub} Files that import `{}`\n", impact.symbol)
-            .expect("writing to a String must succeed");
-        for user in &impact.direct {
-            let names: Vec<String> = user
-                .imports
-                .iter()
-                .map(|path| format!("`{path}`"))
-                .collect();
-            writeln!(output, "- `{}` via {}", user.file, names.join(", "))
-                .expect("writing to a String must succeed");
-        }
-    }
-    if !impact.namespace_users.is_empty() {
-        writeln!(output, "\n{sub} Namespace importers\n")
-            .expect("writing to a String must succeed");
-        for file in &impact.namespace_users {
-            writeln!(output, "- `{file}`")
-                .expect("writing to a String must succeed");
-        }
-    }
-    if !impact.downstream.is_empty() {
-        writeln!(output, "\n{sub} Downstream\n")
-            .expect("writing to a String must succeed");
-        for file in &impact.downstream {
-            writeln!(output, "- `{file}`")
-                .expect("writing to a String must succeed");
-        }
-    }
-    output
-}
-
-/// Render every symbol impact as one Markdown report.
-///
-/// A single target renders without the ranking table, as a single
-/// blast radius does, so a consumer diffing output across versions
-/// sees no spurious change when a second target is added elsewhere.
-#[must_use]
-pub fn render_symbol_report(impacts: &[SymbolImpact]) -> String {
-    match impacts.len() {
-        0 => return String::new(),
-        1 => return render_symbol_markdown(&impacts[0], 1),
-        _ => {}
-    }
-
-    let symbol = &impacts[0].symbol;
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# Symbol impact for `{symbol}` in {} files\n",
-        impacts.len()
-    )
-    .expect("writing to a String must succeed");
-    writeln!(output, "Widest first.\n")
-        .expect("writing to a String must succeed");
-    writeln!(
-        output,
-        "| File | Direct importers | Namespace | Downstream |"
-    )
-    .expect("writing to a String must succeed");
-    writeln!(output, "|------|-----------:|-----------:|-----------:|")
-        .expect("writing to a String must succeed");
-    for impact in impacts {
-        writeln!(
-            output,
-            "| `{}` | {} | {} | {} |",
-            impact.target,
-            symbol_direct_count(impact),
-            impact.namespace_users.len(),
-            impact.downstream.len()
-        )
-        .expect("writing to a String must succeed");
-    }
-
-    for impact in impacts {
-        output.push('\n');
-        output.push_str(&render_symbol_markdown(impact, 2));
-    }
-    output
 }
 
 /// Render every symbol impact as one JSON report.
@@ -308,53 +44,10 @@ pub fn render_symbol_report(impacts: &[SymbolImpact]) -> String {
 /// JSON is: `targets` is always the list.
 #[must_use]
 pub fn render_symbol_report_json(impacts: &[SymbolImpact]) -> String {
-    let payload = serde_json::json!({ "targets": impacts.iter().map(symbol_json_for).collect::<Vec<_>>() });
+    let document = ImpactDocument { targets: impacts };
 
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
-    })
-}
-
-fn symbol_json_for(impact: &SymbolImpact) -> serde_json::Value {
-    let direct: Vec<serde_json::Value> = impact
-        .direct
-        .iter()
-        .map(|user| {
-            serde_json::json!({
-                "file": user.file,
-                "imports": user.imports,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "target": impact.target,
-        "symbol": impact.symbol,
-        "direct_count": symbol_direct_count(impact),
-        "depth": impact.depth,
-        "direct": direct,
-        "namespace_users": impact.namespace_users,
-        "downstream": impact.downstream,
-    })
-}
-
-fn json_for(radius: &BlastRadius) -> serde_json::Value {
-    let dependents: Vec<serde_json::Value> = radius
-        .dependents
-        .iter()
-        .map(|dependent| {
-            serde_json::json!({
-                "file": dependent.file,
-                "imports": dependent.imports,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "target": radius.target,
-        "dependent_count": dependent_count(radius),
-        "depth": radius.depth,
-        "dependents": dependents,
     })
 }
 
@@ -363,10 +56,12 @@ mod tests {
     use sephera_graph::blast_radius::Dependent;
     use sephera_graph::symbol_impact::SymbolUser;
 
+    use sephera_graph::blast_radius::render_markdown;
+    use sephera_graph::symbol_impact::render_symbol_markdown;
+
     use super::{
-        BlastRadius, SymbolImpact, render_markdown, render_report,
-        render_report_json, render_symbol_markdown, render_symbol_report,
-        render_symbol_report_json,
+        BlastRadius, SymbolImpact, render_report, render_report_json,
+        render_symbol_report, render_symbol_report_json,
     };
 
     fn one_symbol_impact() -> SymbolImpact {

@@ -26,6 +26,8 @@ pub mod risk;
 pub mod schema;
 pub mod simulate;
 pub mod symbol_impact;
+#[cfg(test)]
+pub mod test_fixtures;
 pub mod test_priority;
 pub mod types;
 pub mod untested;

@@ -2,40 +2,13 @@
 
 use std::path::PathBuf;
 
-use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames,
-};
-use sephera_core::types::ImportKind;
+use sephera_core::declarations::DeclarationKind;
 
-use crate::types::{GraphEdge, GraphMetrics, GraphNode, GraphReport};
+use crate::types::{GraphEdge, GraphNode, GraphReport};
 
 use super::{is_test_file, measure_untested};
 
-fn edge(from: &str, to: &str, path: &str, items: &[&str]) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: items.iter().map(|item| (*item).to_owned()).collect(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn namespace_edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Namespace,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
+use crate::test_fixtures::{edge_items, empty_metrics, index, namespace_edge};
 
 fn node(path: &str) -> GraphNode {
     GraphNode {
@@ -55,36 +28,8 @@ fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
         nodes: nodes.iter().copied().map(node).collect(),
         edges,
         boundary_files: Vec::new(),
-        metrics: GraphMetrics {
-            total_files: 0,
-            total_internal_edges: 0,
-            self_references: 0,
-            total_external_edges: 0,
-            unresolved_local_edges: 0,
-            unresolved_local_samples: Vec::new(),
-            cfg_gated_edges: 0,
-            dependencies: Vec::new(),
-            declared_dependency_edges: 0,
-            local_crate_edges: 0,
-            builtin_edges: 0,
-            circular_dependencies: 0,
-            most_importing: vec![],
-            most_imported: vec![],
-            cycles: vec![],
-        },
+        metrics: empty_metrics(),
     }
-}
-
-fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind) in *names {
-            declared.declare_as(*name, *kind);
-        }
-        index.insert(file, declared);
-    }
-    index
 }
 
 fn untested_names(report: &super::UntestedReport) -> Vec<(&str, &str)> {
@@ -122,10 +67,10 @@ fn direct_indirect_and_untested_are_kept_apart() {
     let report = report(
         &["tests/test_lib.py", "helper.py", "lib.py", "main.py"],
         vec![
-            edge("tests/test_lib.py", "helper.py", "helper", &[]),
-            edge("tests/test_lib.py", "lib.py", "lib.add", &[]),
-            edge("helper.py", "lib.py", "lib.keep", &[]),
-            edge("main.py", "lib.py", "lib.keep", &[]),
+            edge_items("tests/test_lib.py", "helper.py", "helper", &[]),
+            edge_items("tests/test_lib.py", "lib.py", "lib.add", &[]),
+            edge_items("helper.py", "lib.py", "lib.keep", &[]),
+            edge_items("main.py", "lib.py", "lib.keep", &[]),
         ],
     );
 
@@ -169,7 +114,7 @@ fn a_tree_with_no_test_files_reports_everything_untested() {
     let index = index(&[("lib.py", &[("add", DeclarationKind::Function)])]);
     let report = report(
         &["lib.py", "main.py"],
-        vec![edge("main.py", "lib.py", "lib.add", &[])],
+        vec![edge_items("main.py", "lib.py", "lib.add", &[])],
     );
 
     let measured = measure_untested(&report, &index);
@@ -193,8 +138,8 @@ fn test_files_own_symbols_and_values_are_not_code_under_test() {
     let report = report(
         &["tests/test_lib.py", "helper.py", "lib.py"],
         vec![
-            edge("tests/test_lib.py", "lib.py", "lib.add", &[]),
-            edge("tests/test_lib.py", "helper.py", "helper", &[]),
+            edge_items("tests/test_lib.py", "lib.py", "lib.add", &[]),
+            edge_items("tests/test_lib.py", "helper.py", "helper", &[]),
         ],
     );
 

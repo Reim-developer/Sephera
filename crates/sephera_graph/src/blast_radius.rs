@@ -27,11 +27,13 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::resolver::path_matches_focus;
+use serde::Serialize;
+
 use super::types::{GraphQuery, GraphReport};
 use sephera_core::path_utils;
 
 /// One dependent file and what it imports from the target.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Dependent {
     /// Path of the file that imports the target.
     pub file: String,
@@ -48,6 +50,26 @@ pub struct BlastRadius {
     pub dependents: Vec<Dependent>,
     /// The depth limit applied, if any.
     pub depth: Option<u32>,
+}
+
+// Serialization is hand-written rather than derived because the
+// JSON shape carries `dependent_count`, which is derived from
+// `dependents` rather than stored: deriving would either drop the
+// key or force every construction site to fill a redundant field.
+impl Serialize for BlastRadius {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let mut state = serializer.serialize_struct("BlastRadius", 4)?;
+        state.serialize_field("target", &self.target)?;
+        state.serialize_field("dependent_count", &dependent_count(self))?;
+        state.serialize_field("depth", &self.depth)?;
+        state.serialize_field("dependents", &self.dependents)?;
+        state.end()
+    }
 }
 
 /// Count the files that depend on `target`.
@@ -159,6 +181,135 @@ pub(crate) fn direct_imports(
 #[must_use]
 pub fn dependent_count(radius: &BlastRadius) -> u64 {
     u64::try_from(radius.dependents.len()).unwrap_or(u64::MAX)
+}
+
+/// Render one blast radius as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+///
+/// `heading_level` is 1 for a single target and 2 when several targets share
+/// one report, so the first target is the document title and the rest are
+/// sections under it. A single target renders byte-for-byte as it did before
+/// multiple targets existed.
+#[must_use]
+pub fn render_markdown(radius: &BlastRadius, heading_level: usize) -> String {
+    use std::fmt::Write as _;
+
+    let count = dependent_count(radius);
+    let mut output = String::new();
+
+    if heading_level == 1 {
+        writeln!(output, "# Blast radius for `{}`\n", radius.target)
+            .expect("writing to a String must succeed");
+    } else {
+        writeln!(output, "## Blast radius for `{}`\n", radius.target)
+            .expect("writing to a String must succeed");
+    }
+    writeln!(
+        output,
+        "{}",
+        match count {
+            0 => "No file imports this one.".to_owned(),
+            1 => "1 file depends on this.".to_owned(),
+            other => format!("{other} files depend on this."),
+        }
+    )
+    .expect("writing to a String must succeed");
+    if let Some(depth) = radius.depth {
+        writeln!(output, "\nLimited to {depth} hop(s) away.")
+            .expect("writing to a String must succeed");
+    }
+
+    if radius.dependents.is_empty() {
+        return output;
+    }
+
+    let sub = "#".repeat(heading_level + 1);
+    writeln!(output, "\n{sub} Dependents\n")
+        .expect("writing to a String must succeed");
+    write_dependents(&mut output, radius);
+    output
+}
+
+/// List each dependent with the names it imports from the target.
+///
+/// Shared with `graph --diff`, which renders the same `Dependent` list per
+/// changed file. It carried its own copy of this loop, and the two could have
+/// drifted on what a dependent with no named import looks like: one of them
+/// printing `- `src/a.rs` imports` with nothing after it, which reads as a bug
+/// in the graph rather than as a transitive dependent the resolver never saw an
+/// import from.
+///
+/// Public API: the CLI re-exports it and the change-impact path calls it
+/// across the crate boundary.
+pub fn write_dependents(output: &mut String, radius: &BlastRadius) {
+    use std::fmt::Write as _;
+
+    for dependent in &radius.dependents {
+        if dependent.imports.is_empty() {
+            writeln!(output, "- `{}`", dependent.file)
+                .expect("writing to a String must succeed");
+        } else {
+            let names: Vec<String> = dependent
+                .imports
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect();
+            writeln!(
+                output,
+                "- `{}` imports {}",
+                dependent.file,
+                names.join(", ")
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+}
+
+/// Render every blast radius as one Markdown report.
+///
+/// Sorted widest first, which is the order `measure_all` already applied, and
+/// preceded by a one-line summary so a reader of several targets sees the
+/// ranking before any of the detail.
+#[must_use]
+pub fn render_report(radii: &[BlastRadius]) -> String {
+    use std::fmt::Write as _;
+
+    match radii.len() {
+        // A header reading "0 files" would be a report about nothing, which is
+        // not a thing a caller asked for. The command rejects an empty target
+        // list outright; this keeps a library caller from getting a fake report.
+        0 => return String::new(),
+        // One target renders exactly as it did before batching existed, so a
+        // consumer diffing output across versions sees no spurious change.
+        1 => return render_markdown(&radii[0], 1),
+        _ => {}
+    }
+
+    let mut output = String::new();
+    writeln!(output, "# Blast radius for {} files\n", radii.len())
+        .expect("writing to a String must succeed");
+    writeln!(output, "Widest first.\n")
+        .expect("writing to a String must succeed");
+    writeln!(output, "| File | Dependents |")
+        .expect("writing to a String must succeed");
+    writeln!(output, "|------|-----------:|")
+        .expect("writing to a String must succeed");
+    for radius in radii {
+        writeln!(
+            output,
+            "| `{}` | {} |",
+            radius.target,
+            dependent_count(radius)
+        )
+        .expect("writing to a String must succeed");
+    }
+
+    for radius in radii {
+        output.push('\n');
+        output.push_str(&render_markdown(radius, 2));
+    }
+    output
 }
 
 /// Measure every path a caller asked about, widest first.

@@ -5,75 +5,15 @@
 //! against and what the MCP server reports -- so the tests belong next to the
 //! code rather than next to the terminal renderer.
 
-use std::path::PathBuf;
-
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use crate::types::{GraphEdge, GraphReport, ImportKind};
 
 use super::GraphQuery;
 
-fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn node(path: &str) -> GraphNode {
-    GraphNode {
-        file_path: path.to_owned(),
-        language: Some("Rust"),
-        imports_count: 1,
-        imported_by_count: 1,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
-
-fn report(nodes: &[&str], edges: &[(&str, &str, &str)]) -> GraphReport {
-    GraphReport {
-        base_path: PathBuf::from("."),
-        focus_paths: vec![],
-        depth: None,
-        query: None,
-        nodes: nodes.iter().copied().map(node).collect(),
-        edges: edges
-            .iter()
-            .map(|(from, to, path)| edge(from, to, path))
-            .collect(),
-        boundary_files: Vec::new(),
-        metrics: empty_metrics(),
-    }
-}
+use crate::test_fixtures::{edge, node, report_from_triples};
 
 /// `b` and `c` import `a`; `d` imports `b`, so it also reaches `a`.
 fn repo_report() -> GraphReport {
-    report(
+    report_from_triples(
         &["a.rs", "b.rs", "c.rs", "d.rs"],
         &[
             ("b.rs", "a.rs", "crate::a"),
@@ -86,7 +26,7 @@ fn repo_report() -> GraphReport {
 /// A file to report on, with dependents spread over two packages plus a
 /// near-miss package whose name shares a prefix.
 fn scoped_report() -> GraphReport {
-    report(
+    report_from_triples(
         &[
             "target.rs",
             "crates/one/a.rs",
@@ -146,7 +86,7 @@ fn the_target_is_never_a_dependent_of_itself() {
     // The graph always contains the target node. Counting it would inflate every
     // radius by exactly one and make a threshold fire on a file nothing depends
     // on.
-    let with_self_edge = report(
+    let with_self_edge = report_from_triples(
         &["a.rs", "b.rs"],
         &[("a.rs", "a.rs", "crate::a"), ("b.rs", "a.rs", "crate::a")],
     );
@@ -161,7 +101,7 @@ fn a_file_depending_by_two_names_is_counted_once() {
     // `b` reaches `a` under two import paths. Counting paths instead of files
     // would report three dependents where there are two, and the two answers
     // mean different things to a reviewer.
-    let report = report(
+    let report = report_from_triples(
         &["a.rs", "b.rs", "c.rs"],
         &[
             ("b.rs", "a.rs", "crate::a"),
@@ -217,7 +157,7 @@ fn an_unresolved_edge_does_not_create_a_dependent() {
             local_gap: true,
             cfg_gated: false,
         }],
-        ..report(&["a.rs", "b.rs"], &[])
+        ..report_from_triples(&["a.rs", "b.rs"], &[])
     };
 
     // `b` is in the node list but no *resolved* edge joins it to `a`. Treating
@@ -245,7 +185,7 @@ fn an_unresolved_edge_is_ignored_alongside_a_real_one() {
                 cfg_gated: false,
             },
         ],
-        ..report(&["a.rs", "b.rs", "c.rs"], &[])
+        ..report_from_triples(&["a.rs", "b.rs", "c.rs"], &[])
     };
 
     let radius = measure(&report, "a.rs", None);
@@ -259,7 +199,7 @@ fn an_unresolved_edge_is_ignored_alongside_a_real_one() {
 fn a_cycle_back_to_the_target_still_terminates() {
     // A ring-shaped dependency graph is the pathological input for a
     // reachability walk. If it terminates here it terminates everywhere.
-    let ring = report(
+    let ring = report_from_triples(
         &["a.rs", "b.rs", "c.rs"],
         &[
             ("b.rs", "a.rs", "crate::a"),
@@ -470,7 +410,7 @@ fn a_windows_style_git_path_matches_the_graph() {
     // Per platform, because a backslash is a separator on one and a legal
     // file-name character on the other. On Unix the two are different files, and
     // matching them would report the radius of a file git never named.
-    let report = report(
+    let report = report_from_triples(
         &["src/a.rs", "src/b.rs"],
         &[("src/b.rs", "src/a.rs", "crate::a")],
     );
@@ -492,7 +432,8 @@ fn a_path_relative_to_the_repository_root_matches_when_analysing_a_subdirectory(
  {
     // `--path crates/demo --diff origin/master` reports `crates/demo/a.rs`
     // while the graph spells it `a.rs`.
-    let report = report(&["a.rs", "b.rs"], &[("b.rs", "a.rs", "crate::a")]);
+    let report =
+        report_from_triples(&["a.rs", "b.rs"], &[("b.rs", "a.rs", "crate::a")]);
 
     assert_eq!(
         match_path(&report, "crates/demo/a.rs", "crates/demo").as_deref(),

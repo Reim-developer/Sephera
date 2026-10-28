@@ -1580,13 +1580,10 @@ async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
 
     let broken = &parsed["broken"][0];
     assert_eq!(broken["symbol"], "add", "{output}");
-    assert_eq!(broken["change"], "removed", "{output}");
-    assert_eq!(broken["suggestion"]["action"], "moved", "{output}");
+    assert_eq!(broken["change"]["type"], "removed", "{output}");
+    assert_eq!(broken["suggestion"]["type"], "moved", "{output}");
     assert_eq!(broken["suggestion"]["file"], "other.py", "{output}");
-    assert_eq!(
-        broken["suggestion"]["declaration_kind"], "function",
-        "{output}"
-    );
+    assert_eq!(broken["suggestion"]["kind"], "function", "{output}");
 
     let markdown = server
         .breaking(param_for(breaking_input(
@@ -1596,7 +1593,7 @@ async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
         .await
         .expect("breaking tool should succeed for a temp repo");
     assert!(
-        markdown.contains("Suggestion: moved to `other.py` (function)."),
+        markdown.contains("Suggestion: moved to `other.py` (Function)."),
         "{markdown}"
     );
 }
@@ -1639,7 +1636,7 @@ async fn regression_breaking_tool_subdir_without_to_finds_consumers() {
 
     let broken = &parsed["broken"][0];
     assert_eq!(broken["symbol"], "add", "{output}");
-    assert_eq!(broken["change"], "removed", "{output}");
+    assert_eq!(broken["change"]["type"], "removed", "{output}");
     assert_eq!(broken["direct"][0]["file"], "user.py", "{output}");
 }
 
@@ -1696,8 +1693,13 @@ async fn merge_tool_reports_a_removal_against_a_new_consumer() {
 
     let conflict = &parsed["conflicts"][0];
     assert_eq!(conflict["symbol"], "add", "{output}");
-    assert_eq!(conflict["kind"], "removed_vs_new_consumer", "{output}");
-    assert_eq!(conflict["proven"], true, "{output}");
+    assert_eq!(
+        conflict["kind"]["type"], "removed_vs_new_consumer",
+        "{output}"
+    );
+    // `proven` is gone from the shape: it is the kind tag not
+    // being `signature_vs_new_consumer`, which this removal is not.
+    assert!(conflict.get("proven").is_none(), "{output}");
     assert_eq!(conflict["contract_side"], "ours", "{output}");
     assert_eq!(
         conflict["consumers"],
@@ -1770,7 +1772,7 @@ async fn diff_tool_reports_added_and_removed_in_json_and_markdown() {
         .map(|change| {
             (
                 change["symbol"].as_str().unwrap(),
-                change["change"].as_str().unwrap(),
+                change["change"]["type"].as_str().unwrap(),
             )
         })
         .collect();

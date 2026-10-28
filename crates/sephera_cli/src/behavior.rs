@@ -5,123 +5,28 @@
 //! the same question. This module is how a behaviour report reads
 //! on a terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // behavior surface.
 pub use sephera_graph::behavior::{
-    BehaviorChange, BehaviorReport, collect_facts, measure_behavior,
+    BehaviorReport, collect_facts, measure_behavior, render_markdown,
 };
-
-/// Render the report as Markdown.
-///
-/// The count line comes first, because a behaviour scan is read
-/// for its size before its entries, and an empty scan says so
-/// plainly rather than printing a bare heading: no silent change
-/// is the answer, not an absence of one.
-#[must_use]
-pub fn render_markdown(report: &BehaviorReport) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# Silent behaviour changes: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    )
-    .expect("writing to a String must succeed");
-    writeln!(output, "{} change(s) found.", report.changes.len())
-        .expect("writing to a String must succeed");
-
-    if report.changes.is_empty() {
-        writeln!(output, "\nNo silent behaviour change was found.")
-            .expect("writing to a String must succeed");
-        return output;
-    }
-
-    for change in &report.changes {
-        let line = match change {
-            BehaviorChange::ArgOrderSwap {
-                file,
-                callee,
-                old_args,
-                new_args,
-            } => {
-                format!(
-                    "Swapped arguments at a call to `{callee}` in `{file}`: ({}) → ({}).",
-                    old_args.join(", "),
-                    new_args.join(", ")
-                )
-            }
-            BehaviorChange::ConstantChanged {
-                file,
-                name,
-                old_value,
-                new_value,
-            } => {
-                format!(
-                    "Changed `{name}` in `{file}`: {old_value} → {new_value}."
-                )
-            }
-        };
-        writeln!(output, "\n- {line}")
-            .expect("writing to a String must succeed");
-    }
-    output
-}
 
 /// Render the report as JSON.
 #[must_use]
 pub fn render_json(report: &BehaviorReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report.
-#[must_use]
-pub fn json_value(report: &BehaviorReport) -> serde_json::Value {
-    let changes: Vec<serde_json::Value> = report
-        .changes
-        .iter()
-        .map(|change| match change {
-            BehaviorChange::ArgOrderSwap {
-                file,
-                callee,
-                old_args,
-                new_args,
-            } => serde_json::json!({
-                "kind": "arg_order_swap",
-                "file": file,
-                "callee": callee,
-                "old_args": old_args,
-                "new_args": new_args,
-            }),
-            BehaviorChange::ConstantChanged {
-                file,
-                name,
-                old_value,
-                new_value,
-            } => serde_json::json!({
-                "kind": "constant_changed",
-                "file": file,
-                "name": name,
-                "old_value": old_value,
-                "new_value": new_value,
-            }),
-        })
-        .collect();
-
-    serde_json::json!({
-        "from": report.from_ref,
-        "to": report.to_ref,
-        "changes": changes,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, the ref fields rename to from/to, and the change
+    // enum tags itself with the "kind" key the old builder spelled
+    // by hand.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 #[cfg(test)]
 mod tests {
     use sephera_graph::behavior::BehaviorReport;
 
-    use super::{json_value, render_markdown};
-    use crate::behavior::BehaviorChange;
+    use super::{render_json, render_markdown};
+    use sephera_graph::behavior::BehaviorChange;
 
     fn report(changes: Vec<BehaviorChange>) -> BehaviorReport {
         BehaviorReport {
@@ -160,13 +65,15 @@ mod tests {
 
     #[test]
     fn json_tags_each_change() {
-        let payload =
-            json_value(&report(vec![BehaviorChange::ConstantChanged {
+        let rendered =
+            render_json(&report(vec![BehaviorChange::ConstantChanged {
                 file: "cfg.py".to_owned(),
                 name: "LIMIT".to_owned(),
                 old_value: "100".to_owned(),
                 new_value: "200".to_owned(),
             }]));
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("the report serializes");
         assert_eq!(payload["changes"][0]["kind"], "constant_changed");
         assert_eq!(payload["changes"][0]["new_value"], "200");
     }

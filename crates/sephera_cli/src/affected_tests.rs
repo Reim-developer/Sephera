@@ -19,14 +19,11 @@
 //!   test framework, and a guessed command that fails reads as a broken
 //!   plan rather than as an honest limit.
 
-use std::fmt::Write as _;
 use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
-use sephera_graph::affected_tests::{
-    AffectedTest, TestImpact, affected_test_count,
-};
+use sephera_graph::affected_tests::TestImpact;
 
 /// One command a runner can execute, as a program and its arguments.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -221,129 +218,32 @@ pub fn execute_plan(plan: &RunnerPlan, base: &Path) -> Result<()> {
 
 /// Render every target's test plan as one Markdown report.
 ///
-/// Mirrors `impact`'s report: a ranking first when there are several
-/// targets, then one section per target, so a reader switching between the
-/// two commands learns one layout.
+/// The wording lives in `sephera_graph::affected_tests`, beside the
+/// measurement, so both surfaces print one text; this adapter only
+/// turns the CLI-owned run plan into the display lines the graph
+/// renderer prints.
 #[must_use]
 pub fn render_report(impacts: &[TestImpact], plan: &RunnerPlan) -> String {
-    match impacts.len() {
-        0 => return String::new(),
-        1 => return render_markdown(&impacts[0], 1, plan),
-        _ => {}
-    }
-
-    let mut output = String::new();
-    writeln!(output, "# Affected tests for {} files\n", impacts.len())
-        .expect("writing to a String must succeed");
-    writeln!(output, "Most affected first.\n")
-        .expect("writing to a String must succeed");
-    writeln!(output, "| File | Affected tests |")
-        .expect("writing to a String must succeed");
-    writeln!(output, "|------|---------------:|")
-        .expect("writing to a String must succeed");
-    for impact in impacts {
-        writeln!(
-            output,
-            "| `{}` | {} |",
-            impact.target,
-            affected_test_count(impact)
-        )
-        .expect("writing to a String must succeed");
-    }
-
-    // The plan belongs to the whole change, so it is rendered once, under
-    // the final section. Passing it to every section would print the same
-    // commands once per target.
-    let empty = RunnerPlan::default();
-    let last = impacts.len() - 1;
-    for (index, impact) in impacts.iter().enumerate() {
-        output.push('\n');
-        let section_plan = if index == last { plan } else { &empty };
-        output.push_str(&render_markdown(impact, 2, section_plan));
-    }
-    output
-}
-
-/// Render one target's test plan as Markdown.
-#[must_use]
-pub fn render_markdown(
-    impact: &TestImpact,
-    heading_level: usize,
-    plan: &RunnerPlan,
-) -> String {
-    let count = affected_test_count(impact);
-    let mut output = String::new();
-    let heading = "#".repeat(heading_level);
-
-    writeln!(output, "{heading} Affected tests for `{}`\n", impact.target)
-        .expect("writing to a String must succeed");
-    writeln!(
-        output,
-        "{}",
-        match count {
-            0 => "No test file reaches this one.".to_owned(),
-            1 => "1 test file would notice a change here.".to_owned(),
-            other => format!("{other} test files would notice a change here."),
-        }
+    let commands: Vec<String> =
+        plan.commands.iter().map(RunnerCommand::display).collect();
+    sephera_graph::affected_tests::render_report(
+        impacts,
+        &commands,
+        &plan.manual,
     )
-    .expect("writing to a String must succeed");
-    if let Some(depth) = impact.depth {
-        writeln!(output, "\nLimited to {depth} hop(s) away.")
-            .expect("writing to a String must succeed");
-    }
-
-    if !impact.tests.is_empty() {
-        let sub = "#".repeat(heading_level + 1);
-        writeln!(output, "\n{sub} Test files\n")
-            .expect("writing to a String must succeed");
-        write_tests(&mut output, &impact.tests);
-    }
-
-    // The plan is over every target at once, so the caller passes it only
-    // for the section that should carry it: the single section, or the last
-    // of several. An empty plan renders no section at all.
-    if !plan.commands.is_empty() || !plan.manual.is_empty() {
-        let sub = "#".repeat(heading_level + 1);
-        writeln!(output, "\n{sub} Run them\n")
-            .expect("writing to a String must succeed");
-        for command in &plan.commands {
-            writeln!(output, "- `{}`", command.display())
-                .expect("writing to a String must succeed");
-        }
-        for file in &plan.manual {
-            writeln!(
-                output,
-                "- `{file}` -- no automatic runner mapping; run its project's test command"
-            )
-            .expect("writing to a String must succeed");
-        }
-    }
-
-    output
 }
 
-fn write_tests(output: &mut String, tests: &[AffectedTest]) {
-    for test in tests {
-        if test.distance == 0 {
-            writeln!(output, "- `{}` (the changed file itself)", test.file)
-                .expect("writing to a String must succeed");
-        } else if test.imports.is_empty() {
-            writeln!(
-                output,
-                "- `{}` ({} hop(s) away)",
-                test.file, test.distance
-            )
-            .expect("writing to a String must succeed");
-        } else {
-            let names: Vec<String> = test
-                .imports
-                .iter()
-                .map(|name| format!("`{name}`"))
-                .collect();
-            writeln!(output, "- `{}` imports {}", test.file, names.join(", "))
-                .expect("writing to a String must succeed");
-        }
-    }
+/// The JSON document `render_report_json` emits: one entry per
+/// target, serialized from the graph impacts, with the run plan
+/// attached once at the top level, because the plan belongs to
+/// the whole change rather than to any one file in it. The plan
+/// itself stays CLI-owned: mapping files to runner commands is
+/// the command's own presentation, not analysis.
+#[derive(serde::Serialize)]
+struct AffectedTestsDocument<'a> {
+    targets: &'a [TestImpact],
+    run_plan: Vec<String>,
+    manual: &'a [String],
 }
 
 /// Render every target's test plan as one JSON report.
@@ -353,35 +253,14 @@ fn write_tests(output: &mut String, tests: &[AffectedTest]) {
 /// belongs to the whole change rather than to any one file in it.
 #[must_use]
 pub fn render_report_json(impacts: &[TestImpact], plan: &RunnerPlan) -> String {
-    let payload = serde_json::json!({
-        "targets": impacts.iter().map(json_for).collect::<Vec<_>>(),
-        "run_plan": plan.commands.iter().map(RunnerCommand::display).collect::<Vec<_>>(),
-        "manual": plan.manual,
-    });
+    let document = AffectedTestsDocument {
+        targets: impacts,
+        run_plan: plan.commands.iter().map(RunnerCommand::display).collect(),
+        manual: &plan.manual,
+    };
 
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
-    })
-}
-
-fn json_for(impact: &TestImpact) -> serde_json::Value {
-    let tests: Vec<serde_json::Value> = impact
-        .tests
-        .iter()
-        .map(|test| {
-            serde_json::json!({
-                "file": test.file,
-                "distance": test.distance,
-                "imports": test.imports,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "target": impact.target,
-        "affected_test_count": affected_test_count(impact),
-        "depth": impact.depth,
-        "tests": tests,
     })
 }
 

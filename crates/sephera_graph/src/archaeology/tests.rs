@@ -7,34 +7,14 @@ use sephera_core::declarations::{
     DeclarationIndex, DeclarationKind, DeclaredNames,
 };
 
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use crate::types::{GraphEdge, GraphNode, GraphReport, ImportKind};
 
 use super::{
     ArchaeologyError, ArchaeologyKind, HistoryCommit, HistorySnapshot,
     trace_symbol,
 };
 
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
+use crate::test_fixtures::empty_metrics;
 
 fn commit(hash: &str) -> HistoryCommit {
     HistoryCommit {

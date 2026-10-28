@@ -33,10 +33,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use super::types::GraphReport;
 
 /// One pair of files that change together with no edge between them.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CoupledPair {
     /// The lexicographically first file of the pair.
     pub first: String,
@@ -54,10 +56,12 @@ pub struct CoupledPair {
 }
 
 /// The hidden-coupling report for one analysis.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CouplingReport {
-    /// The pairs found, strongest first.
-    pub pairs: Vec<CoupledPair>,
     /// Commits handed to the measurement.
     pub commits_scanned: u64,
     /// Commits that touched at least one tracked file and were small
@@ -65,6 +69,8 @@ pub struct CouplingReport {
     /// merges, the commits about other trees, and the oversized ones
     /// the module documentation describes skipping.
     pub commits_counted: u64,
+    /// The pairs found, strongest first.
+    pub pairs: Vec<CoupledPair>,
 }
 
 /// Thresholds for one coupling measurement.
@@ -95,27 +101,149 @@ impl Default for CouplingOptions {
 /// belongs to the analysis with the prefix removed. A file outside
 /// it belongs to a different tree and is dropped here rather than
 /// left for the node intersection to miss by a spelling.
+/// Rebase one git-spelled path onto the graph's spelling.
+///
+/// This is the single home of the prefix rule both rebase helpers
+/// share: a path under the analysis base loses the prefix, a path
+/// outside it is dropped (`None`), and an empty prefix means the
+/// base is the repository root, so every path is kept as-is.
+#[must_use]
+pub fn rebase_path(path: &str, base_prefix: &str) -> Option<String> {
+    let prefix = base_prefix.trim_matches('/');
+    if prefix.is_empty() {
+        return Some(path.to_owned());
+    }
+    path.strip_prefix(&format!("{prefix}/"))
+        .map(ToOwned::to_owned)
+}
+
 #[must_use]
 pub fn rebase_commit_paths(
     commits: &[Vec<String>],
     base_prefix: &str,
 ) -> Vec<Vec<String>> {
-    let prefix = base_prefix.trim_matches('/');
-    if prefix.is_empty() {
-        return commits.to_vec();
-    }
-    let with_slash = format!("{prefix}/");
     commits
         .iter()
         .map(|commit| {
             commit
                 .iter()
-                .filter_map(|path| {
-                    path.strip_prefix(&with_slash).map(ToOwned::to_owned)
-                })
+                .filter_map(|path| rebase_path(path, base_prefix))
                 .collect()
         })
         .collect()
+}
+
+/// The commits a history window counts, with their per-file counts.
+///
+/// One home for the counting rule `measure_coupling` and
+/// `measure_risk` share: a commit counts only when it touches at
+/// least one tracked file and at most `max_commit_files` of them,
+/// and each counted commit's files are sorted and deduplicated
+/// first, so a file one commit touches twice still counts once.
+/// Both reports read the same window off this one pass, so their
+/// commit counts agree by construction rather than by two loops
+/// kept in step by hand.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct CountedCommits<'a> {
+    /// One deduplicated, sorted file list per counted commit.
+    pub files: Vec<Vec<&'a str>>,
+    /// Counted commits per tracked file.
+    pub file_counts: BTreeMap<&'a str, u64>,
+    /// Commits that passed the rule.
+    pub counted: u64,
+}
+
+/// Count a history window under coupling's rule.
+///
+/// `tracked` is the graph's file set, in the graph's spelling;
+/// rebasing git's spelling onto it is the caller's job, done once
+/// before this call.
+#[must_use]
+pub fn counted_commits<'a>(
+    tracked: &BTreeSet<&'a str>,
+    commits: &'a [Vec<String>],
+    max_commit_files: usize,
+) -> CountedCommits<'a> {
+    let mut files: Vec<Vec<&'a str>> = Vec::new();
+    let mut file_counts: BTreeMap<&'a str, u64> = BTreeMap::new();
+    let mut counted = 0_u64;
+    for commit in commits {
+        let mut commit_files: Vec<&'a str> = commit
+            .iter()
+            .map(String::as_str)
+            .filter(|path| tracked.contains(path))
+            .collect();
+        commit_files.sort_unstable();
+        commit_files.dedup();
+        if commit_files.is_empty() || commit_files.len() > max_commit_files {
+            continue;
+        }
+        counted += 1;
+        for file in &commit_files {
+            *file_counts.entry(file).or_default() += 1;
+        }
+        files.push(commit_files);
+    }
+    CountedCommits {
+        files,
+        file_counts,
+        counted,
+    }
+}
+
+/// Render the report as Markdown.
+///
+/// The header states the window before any pair, because a pair's
+/// counts mean nothing without it: "changed together 12 times" out
+/// of 500 commits read is a different claim from the same 12 out of
+/// 20. Containment is defined in the header rather than at each pair
+/// for the same reason a unit is stated once.
+#[must_use]
+pub fn render_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "# Hidden coupling\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "Scanned {} commits; {} touched files in this tree.",
+        report.commits_scanned, report.commits_counted
+    )
+    .expect("writing to a String must succeed");
+
+    if report.pairs.is_empty() {
+        writeln!(
+            output,
+            "\nNo pair of files changed together at least {min_co_changes} \
+             times without an import between them."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    writeln!(
+        output,
+        "\nPairs that changed together at least {min_co_changes} times with \
+         no import between them. Containment is the share of the quieter \
+         file's commits that also touched the other file: 1.0 means it has \
+         never changed without the other.\n"
+    )
+    .expect("writing to a String must succeed");
+    for pair in &report.pairs {
+        writeln!(
+            output,
+            "- `{}` + `{}` — {} co-changes, {}/{} commits, containment {}",
+            pair.first,
+            pair.second,
+            pair.co_changes,
+            pair.first_commits,
+            pair.second_commits,
+            pair.containment
+        )
+        .expect("writing to a String must succeed");
+    }
+    output
 }
 
 /// Measure hidden coupling over `commits`, in the graph's spelling.
@@ -145,25 +273,10 @@ pub fn measure_coupling(
         }
     }
 
-    let mut file_commits: BTreeMap<&str, u64> = BTreeMap::new();
+    let counted = counted_commits(&tracked, commits, options.max_commit_files);
+    let file_commits = counted.file_counts;
     let mut pair_commits: BTreeMap<(&str, &str), u64> = BTreeMap::new();
-    let mut counted = 0_u64;
-
-    for commit in commits {
-        let mut files: Vec<&str> = commit
-            .iter()
-            .map(String::as_str)
-            .filter(|path| tracked.contains(path))
-            .collect();
-        files.sort_unstable();
-        files.dedup();
-        if files.is_empty() || files.len() > options.max_commit_files {
-            continue;
-        }
-        counted += 1;
-        for file in &files {
-            *file_commits.entry(file).or_default() += 1;
-        }
+    for files in &counted.files {
         for (index, first) in files.iter().enumerate() {
             for second in &files[index + 1..] {
                 *pair_commits.entry((first, second)).or_default() += 1;
@@ -208,9 +321,9 @@ pub fn measure_coupling(
     });
 
     CouplingReport {
-        pairs,
         commits_scanned: u64::try_from(commits.len()).unwrap_or(u64::MAX),
-        commits_counted: counted,
+        commits_counted: counted.counted,
+        pairs,
     }
 }
 

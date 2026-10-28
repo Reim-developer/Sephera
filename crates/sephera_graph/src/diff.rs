@@ -48,7 +48,7 @@ pub enum DiffChange {
 }
 
 /// One symbol that differs between the two trees.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiffSymbol {
     /// The file that declares the symbol.
     pub file: String,
@@ -62,14 +62,90 @@ pub struct DiffSymbol {
 }
 
 /// The symbol-level diff between two refs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order, and the ref fields serialize
+/// under the `from`/`to` keys the CLI and MCP surfaces already
+/// use: the CLI and the MCP tool serialize this struct directly,
+/// so the declaration order is the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DiffReport {
     /// The older ref, as the caller spelled it.
+    #[serde(rename = "from")]
     pub from_ref: String,
     /// The newer ref, as the caller spelled it.
+    #[serde(rename = "to")]
     pub to_ref: String,
     /// The changed symbols, file then symbol.
     pub changes: Vec<DiffSymbol>,
+}
+
+/// Render the report as Markdown.
+///
+/// One line per changed symbol, in file then symbol order. The
+/// count line comes first, because a changelog is read for its
+/// size before its entries, and an empty diff says so plainly
+/// rather than printing a bare heading: no changes is the answer,
+/// not an absence of one.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(report: &DiffReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Symbol diff: `{}` → `{}`\n",
+        report.from_ref, report.to_ref
+    )
+    .expect("writing to a String must succeed");
+    writeln!(output, "{} symbol(s) changed.", report.changes.len())
+        .expect("writing to a String must succeed");
+
+    if report.changes.is_empty() {
+        writeln!(
+            output,
+            "\nNo declared symbol was added, removed, or reshaped."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    for change in &report.changes {
+        let line = match &change.change {
+            DiffChange::Added => {
+                format!(
+                    "Added `{}` in `{}` ({:?}).",
+                    change.symbol, change.file, change.kind
+                )
+            }
+            DiffChange::Removed => {
+                format!(
+                    "Removed `{}` from `{}` ({:?}).",
+                    change.symbol, change.file, change.kind
+                )
+            }
+            DiffChange::KindChanged { to } => {
+                format!(
+                    "Changed `{}` in `{}` from {:?} to {:?}.",
+                    change.symbol, change.file, change.kind, to
+                )
+            }
+            DiffChange::SignatureChanged { from, to } => {
+                format!(
+                    "Changed signature of `{}` in `{}`: {} → {}.",
+                    change.symbol,
+                    change.file,
+                    from.render(),
+                    to.render()
+                )
+            }
+        };
+        writeln!(output, "\n- {line}")
+            .expect("writing to a String must succeed");
+    }
+    output
 }
 
 /// Compare two declaration indexes and list every symbol that was

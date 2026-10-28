@@ -26,12 +26,13 @@
 //! guess at coverage.
 
 use anyhow::{Result, bail};
+use serde::Serialize;
 
 use super::blast_radius;
 use super::types::GraphReport;
 
 /// One test file a change reaches, and how far away it sits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AffectedTest {
     /// Path of the test file.
     pub file: String,
@@ -52,6 +53,29 @@ pub struct TestImpact {
     pub tests: Vec<AffectedTest>,
     /// The depth limit applied, if any.
     pub depth: Option<u32>,
+}
+
+// Serialization is hand-written rather than derived because the
+// JSON shape carries `affected_test_count`, which is derived from
+// `tests` rather than stored: deriving would either drop the key
+// or force every construction site to fill a redundant field.
+impl Serialize for TestImpact {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let mut state = serializer.serialize_struct("TestImpact", 4)?;
+        state.serialize_field("target", &self.target)?;
+        state.serialize_field(
+            "affected_test_count",
+            &affected_test_count(self),
+        )?;
+        state.serialize_field("depth", &self.depth)?;
+        state.serialize_field("tests", &self.tests)?;
+        state.end()
+    }
 }
 
 /// Directory names whose contents are fixtures or support code, never test
@@ -238,6 +262,161 @@ pub fn measure_tests(
 #[must_use]
 pub fn affected_test_count(impact: &TestImpact) -> u64 {
     u64::try_from(impact.tests.len()).unwrap_or(u64::MAX)
+}
+
+/// Render every target's test plan as one Markdown report.
+///
+/// Mirrors `impact`'s report: a ranking first when there are several
+/// targets, then one section per target, so a reader switching between the
+/// two commands learns one layout.
+///
+/// `commands` and `manual` are the run plan in display form: the
+/// mapping from files to runner commands stays the caller's job
+/// (the CLI owns it), and the renderer only prints the lines it is
+/// given. An empty plan renders no run section at all, so the MCP
+/// tool passes empty slices and gets the same sections without one.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_report(
+    impacts: &[TestImpact],
+    commands: &[String],
+    manual: &[String],
+) -> String {
+    use std::fmt::Write as _;
+
+    match impacts.len() {
+        0 => return String::new(),
+        1 => return render_markdown(&impacts[0], 1, commands, manual),
+        _ => {}
+    }
+
+    let mut output = String::new();
+    writeln!(output, "# Affected tests for {} files\n", impacts.len())
+        .expect("writing to a String must succeed");
+    writeln!(output, "Most affected first.\n")
+        .expect("writing to a String must succeed");
+    writeln!(output, "| File | Affected tests |")
+        .expect("writing to a String must succeed");
+    writeln!(output, "|------|---------------:|")
+        .expect("writing to a String must succeed");
+    for impact in impacts {
+        writeln!(
+            output,
+            "| `{}` | {} |",
+            impact.target,
+            affected_test_count(impact)
+        )
+        .expect("writing to a String must succeed");
+    }
+
+    // The plan belongs to the whole change, so it is rendered once, under
+    // the final section. Passing it to every section would print the same
+    // commands once per target.
+    let last = impacts.len() - 1;
+    for (index, impact) in impacts.iter().enumerate() {
+        output.push('\n');
+        let (section_commands, section_manual) = if index == last {
+            (commands, manual)
+        } else {
+            (&[][..], &[][..])
+        };
+        output.push_str(&render_markdown(
+            impact,
+            2,
+            section_commands,
+            section_manual,
+        ));
+    }
+    output
+}
+
+/// Render one target's test plan as Markdown.
+#[must_use]
+pub fn render_markdown(
+    impact: &TestImpact,
+    heading_level: usize,
+    commands: &[String],
+    manual: &[String],
+) -> String {
+    use std::fmt::Write as _;
+
+    let count = affected_test_count(impact);
+    let mut output = String::new();
+    let heading = "#".repeat(heading_level);
+
+    writeln!(output, "{heading} Affected tests for `{}`\n", impact.target)
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "{}",
+        match count {
+            0 => "No test file reaches this one.".to_owned(),
+            1 => "1 test file would notice a change here.".to_owned(),
+            other => format!("{other} test files would notice a change here."),
+        }
+    )
+    .expect("writing to a String must succeed");
+    if let Some(depth) = impact.depth {
+        writeln!(output, "\nLimited to {depth} hop(s) away.")
+            .expect("writing to a String must succeed");
+    }
+
+    if !impact.tests.is_empty() {
+        let sub = "#".repeat(heading_level + 1);
+        writeln!(output, "\n{sub} Test files\n")
+            .expect("writing to a String must succeed");
+        write_tests(&mut output, &impact.tests);
+    }
+
+    // The plan is over every target at once, so the caller passes it only
+    // for the section that should carry it: the single section, or the last
+    // of several. An empty plan renders no section at all.
+    if !commands.is_empty() || !manual.is_empty() {
+        let sub = "#".repeat(heading_level + 1);
+        writeln!(output, "\n{sub} Run them\n")
+            .expect("writing to a String must succeed");
+        for command in commands {
+            writeln!(output, "- `{command}`")
+                .expect("writing to a String must succeed");
+        }
+        for file in manual {
+            writeln!(
+                output,
+                "- `{file}` -- no automatic runner mapping; run its project's test command"
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+
+    output
+}
+
+fn write_tests(output: &mut String, tests: &[AffectedTest]) {
+    use std::fmt::Write as _;
+
+    for test in tests {
+        if test.distance == 0 {
+            writeln!(output, "- `{}` (the changed file itself)", test.file)
+                .expect("writing to a String must succeed");
+        } else if test.imports.is_empty() {
+            writeln!(
+                output,
+                "- `{}` ({} hop(s) away)",
+                test.file, test.distance
+            )
+            .expect("writing to a String must succeed");
+        } else {
+            let names: Vec<String> = test
+                .imports
+                .iter()
+                .map(|name| format!("`{name}`"))
+                .collect();
+            writeln!(output, "- `{}` imports {}", test.file, names.join(", "))
+                .expect("writing to a String must succeed");
+        }
+    }
 }
 
 /// Measure every path a caller asked about, most affected first.

@@ -31,6 +31,7 @@
 //!   a mistyped path because a path that matches no file *is* an error.
 
 use anyhow::{Result, bail};
+use serde::Serialize;
 
 use super::blast_radius::match_path;
 use super::types::GraphReport;
@@ -162,7 +163,7 @@ impl Successors for ReportEdges<'_> {
 }
 
 /// One file on a dependency chain, and how the chain arrives at it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PathHop {
     /// The file this hop lands on.
     pub file: String,
@@ -195,6 +196,129 @@ impl DependencyPath {
     pub fn is_direct(&self) -> bool {
         self.hops.len() == 2
     }
+}
+
+/// Why one file depends on another, as one shape.
+///
+/// Whether or not a chain exists, `connected` carries the
+/// distinction, so a consumer parses one shape, with `hop_count`
+/// null and `hops` empty when there is no chain.
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WhyReport {
+    /// The dependent file, spelled as the graph spells it.
+    pub from: String,
+    /// The dependency, spelled as the graph spells it.
+    pub to: String,
+    /// Whether a chain connects them. `false` is an answer, not a
+    /// failure: the two files never touch.
+    pub connected: bool,
+    /// How many edges the chain crosses. `None` when there is no
+    /// chain.
+    pub hop_count: Option<usize>,
+    /// Whether `from` imports `to` with no file in between.
+    pub direct: bool,
+    /// Every file on the chain, `from` first and `to` last. Empty
+    /// when there is no chain.
+    pub hops: Vec<PathHop>,
+}
+
+impl WhyReport {
+    /// Build the report from the search result: the chain's own
+    /// spelling when one exists, the caller's spelling when none
+    /// does.
+    #[must_use]
+    pub fn from_path(
+        path: Option<&DependencyPath>,
+        from: &str,
+        to: &str,
+    ) -> Self {
+        path.map_or_else(
+            || Self {
+                from: from.to_owned(),
+                to: to.to_owned(),
+                connected: false,
+                hop_count: None,
+                direct: false,
+                hops: Vec::new(),
+            },
+            |path| Self {
+                from: path.from.clone(),
+                to: path.to.clone(),
+                connected: true,
+                hop_count: Some(path.hop_count()),
+                direct: path.is_direct(),
+                hops: path.hops.clone(),
+            },
+        )
+    }
+}
+
+/// Render the answer as Markdown.
+///
+/// `connected` false is an answer rather than a failure, so it
+/// renders as a statement instead of an empty section. `from` and
+/// `to` are the canonical spellings, used for the heading in both
+/// cases: with a chain they are the path's own endpoints; without
+/// one they are what the caller resolved the request to.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(report: &WhyReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Why `{}` depends on `{}`\n",
+        report.from, report.to
+    )
+    .expect("writing to a String must succeed");
+
+    if !report.connected {
+        writeln!(
+            output,
+            "No dependency path: `{}` does not import `{}`, directly \
+             or through any other file in the analysis.",
+            report.from, report.to
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    if report.hop_count == Some(0) {
+        writeln!(
+            output,
+            "The same file. No import is involved; a file is its own \
+             starting point."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    writeln!(
+        output,
+        "Shortest chain: {} hop(s). Changing `{}` reaches `{}` \
+         through exactly these imports:\n",
+        report.hop_count.unwrap_or_default(),
+        report.to,
+        report.from
+    )
+    .expect("writing to a String must succeed");
+
+    for pair in report.hops.windows(2) {
+        let names: Vec<String> =
+            pair[1].via.iter().map(|name| format!("`{name}`")).collect();
+        writeln!(output, "- `{}` imports {}", pair[0].file, names.join(", "))
+            .expect("writing to a String must succeed");
+    }
+    writeln!(output, "- `{}`", report.to)
+        .expect("writing to a String must succeed");
+    output
 }
 
 /// Explain why `from_requested` depends on `to_requested`.

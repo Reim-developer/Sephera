@@ -257,6 +257,71 @@ fn report_gates(gates: &[Gate]) {
 }
 
 /// Run one analysis pass for the watch target.
+/// The shared opening of a tree command: where it reads from, its
+/// progress line, and the ignore matcher built from the same settings.
+///
+/// Every tree command's arguments carry the same four flattened groups
+/// (`source`, `settings`, `ignore_args`, `output_args`), so this one
+/// opening serves all of them; the commands that read two histories
+/// (breaking, diff, behavior, schema-impact) or no ignore set at all
+/// (merge, archaeology, guard) keep their own openings deliberately.
+/// `full_clone` is the depth question for URL runs: history commands
+/// pass true, because a depth-1 clone would cap every window at one
+/// commit; local paths ignore the flag.
+struct PreparedRun {
+    source: ResolvedSource,
+    progress: CliProgress,
+    ignore: IgnoreMatcher,
+}
+
+async fn prepare_run(
+    source_args: &SourceArgs,
+    settings: &SettingsArgs,
+    ignore_args: &IgnoreArgs,
+    message: &str,
+    full_clone: bool,
+) -> Result<PreparedRun> {
+    let source = resolve_source(
+        &SourceRequest {
+            path: source_args.path.clone(),
+            url: source_args.url.clone(),
+            git_ref: source_args.git_ref.clone(),
+        },
+        full_clone,
+    )
+    .await?;
+    let progress = CliProgress::start(message);
+    let ignore = build_ignore_matcher(
+        &source.analysis_path,
+        settings,
+        &ignore_args.ignore,
+        ignore_args.no_gitignore,
+    )?;
+    Ok(PreparedRun {
+        source,
+        progress,
+        ignore,
+    })
+}
+
+/// The shared ending of a report command: finish the progress line and
+/// write the rendered report to stdout or to the file the user named.
+/// The gates a command computes stay its own: they are computed after
+/// this returns, from the measured report. The commands whose ending
+/// genuinely differs -- `symbols` (conditional render), `context` and
+/// `graph` (stdout decides when the line finishes) -- keep theirs.
+fn finish_output(
+    progress: CliProgress,
+    output: Option<&Path>,
+    rendered: &str,
+) -> Result<()> {
+    if output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(output, rendered)
+}
+
 async fn run_watch_target(
     target: WatchTarget,
     on: Option<&str>,
@@ -431,22 +496,18 @@ fn check_focus_paths_exist(
 }
 
 async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Analyzing line counts...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Analyzing line counts...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
     let mut report = CodeLoc::new(&source.analysis_path, ignore)
         .analyze_with(&CliReporter(&progress))?;
     if let Some(display_path) = source.display_path {
@@ -468,31 +529,27 @@ async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
 
     // Same rule as `graph`: a report going to a file keeps the spinner alive
     // to say so, and a report going to a terminal stops it first.
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(no_gates())
 }
 
 async fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Counting declarations...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Counting declarations...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     let analyzer = SymbolAnalyzer::new(&source.analysis_path, ignore);
 
@@ -653,22 +710,18 @@ fn report_unresolved_symbols(names: &[String]) {
 /// five targets cost 2,874 ms that way against 663 ms for the single build that
 /// answers all five questions.
 async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Computing blast radius...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Computing blast radius...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
     check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     progress.set_message("Extracting imports...");
@@ -695,11 +748,11 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
 
     let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(gates)
 }
 
@@ -812,22 +865,18 @@ fn impact_outcome(
 /// any file at all, so a narrowed report could report "no path" for a
 /// coupling that exists outside the narrowing.
 async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Finding the dependency chain...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Finding the dependency chain...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     progress.set_message("Extracting imports...");
     let report = build_graph_with_progress(
@@ -862,17 +911,17 @@ async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
     );
 
     let rendered = match arguments.format {
-        WhyOutputFormat::Markdown => {
-            why::render_markdown(path.as_ref(), &from, &to)
-        }
+        WhyOutputFormat::Markdown => why::render_markdown(
+            &why::WhyReport::from_path(path.as_ref(), &from, &to),
+        ),
         WhyOutputFormat::Json => why::render_json(path.as_ref(), &from, &to),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -890,25 +939,21 @@ async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
 /// root, where git spells paths from, and rebased onto the analysis
 /// base's spelling before the two are compared.
 async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Reading history...",
         // History commands read the history: a depth-1 clone would
         // cap every window at one commit, so URL runs need the full
         // clone. Local paths ignore this flag.
         true,
     )
     .await?;
-    let progress = CliProgress::start("Reading history...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     // History first: a tree with no readable history is an error this
     // command exists to state plainly, and it should arrive before the
@@ -952,33 +997,29 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
         CouplingOutputFormat::Json => coupling::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
 async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Reviewing the change...",
         // As coupling's: the coupling warnings read the history, so
         // URL runs need the full clone, not a depth-1 one.
         true,
     )
     .await?;
-    let progress = CliProgress::start("Reviewing the change...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     // The change and the history first, for the reason `coupling`
     // reads its history first: both errors are about git, and they
@@ -1054,33 +1095,29 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
         }
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
 async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Ranking risk...",
         // As coupling's: churn and coupling read the history, so
         // URL runs need the full clone, not a depth-1 one.
         true,
     )
     .await?;
-    let progress = CliProgress::start("Ranking risk...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     // History first, as `coupling` reads it: a tree with no readable
     // history is an error this command exists to state, and it
@@ -1125,31 +1162,27 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
         RiskOutputFormat::Json => risk::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
 async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Finding dead files...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Finding dead files...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     let report = build_graph_with_progress(
         &source.analysis_path,
@@ -1182,11 +1215,11 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
         DeadOutputFormat::Json => dead::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -1483,11 +1516,11 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
         ),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A break nobody uses does not fail the run: it is the clean kind
     // of breaking, and a gate that fired on it would train a pipeline
@@ -1605,11 +1638,11 @@ async fn run_merge(arguments: &MergeArgs) -> Result<Vec<Gate>> {
         MergeOutputFormat::Json => merge::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // Only proven conflicts fail the run: a warning is
     // suspicious, not proven, and a gate that fired on it would
@@ -1721,11 +1754,11 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
         DiffOutputFormat::Json => diff::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A diff is a report, not a gate: additions are the normal shape
     // of a release, so no count of changes fails the run.
@@ -1891,11 +1924,11 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
         ArchaeologyOutputFormat::Json => archaeology::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A trail is a report, not a gate.
     Ok(Vec::new())
@@ -2006,11 +2039,11 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
         BehaviorOutputFormat::Json => behavior::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A behaviour scan is a report, not a gate: its precision is
     // measured by its corpus, and a gate on an unproven detector
@@ -2022,22 +2055,18 @@ async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
     // One tree, not two refs, and no git requirement: the rename is
     // simulated against the tree as it stands, so a remote source
     // is as good a tree as a local one.
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Simulating the rename...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Simulating the rename...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     progress.set_message("Extracting the tree...");
     let (report, index) =
@@ -2067,11 +2096,11 @@ async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
         SimulateOutputFormat::Json => simulate::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A simulation is a report, not a gate: even a blocked rename
     // is an answer, and failing the run on it would punish asking.
@@ -2079,22 +2108,18 @@ async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
 }
 
 async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Finding untested symbols...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Finding untested symbols...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     let (report, index) =
         build_graph_with_declarations(&source.analysis_path, &ignore)?;
@@ -2113,11 +2138,11 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
         }
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
         let count = u64::try_from(measured.untested.len()).unwrap_or(u64::MAX);
@@ -2131,24 +2156,20 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
 }
 
 async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Ranking untested symbols...",
         // As coupling's: churn and coupling read the history, so
         // URL runs need the full clone, not a depth-1 one.
         true,
     )
     .await?;
-    let progress = CliProgress::start("Ranking untested symbols...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
 
     // History first, as `risk` reads it: a tree with no readable
     // history is an error this command exists to state, and it
@@ -2185,11 +2206,11 @@ async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
         TestPriorityOutputFormat::Json => test_priority::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -2468,11 +2489,11 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         SchemaImpactOutputFormat::Json => schema_impact::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     let gates = schema_impact_gates(&measured, arguments.fail_on);
     Ok(gates)
@@ -2517,22 +2538,18 @@ fn build_new_side(
 async fn run_affected_tests(
     arguments: &AffectedTestsArgs,
 ) -> Result<Vec<Gate>> {
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Finding affected tests...",
         false,
     )
     .await?;
-    let progress = CliProgress::start("Finding affected tests...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
     check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     progress.set_message("Extracting imports...");
@@ -2570,11 +2587,11 @@ async fn run_affected_tests(
         }
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     if arguments.run {
         // Said out loud rather than folded into the plan's success: a file
@@ -2852,11 +2869,11 @@ fn run_graph_diff(
         ));
     }
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(gates)
 }
 
@@ -2865,22 +2882,18 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
     // clone could not answer `HEAD~1`. Naming a base ref is the same request as
     // naming a ref to check out: both mean "something other than where the branch
     // points".
-    let source = resolve_source(
-        &SourceRequest {
-            path: arguments.source.path.clone(),
-            url: arguments.source.url.clone(),
-            git_ref: arguments.source.git_ref.clone(),
-        },
+    let PreparedRun {
+        source,
+        progress,
+        ignore,
+    } = prepare_run(
+        &arguments.source,
+        &arguments.settings,
+        &arguments.ignore_args,
+        "Analyzing dependency graph...",
         arguments.diff.is_some(),
     )
     .await?;
-    let progress = CliProgress::start("Analyzing dependency graph...");
-    let ignore = build_ignore_matcher(
-        &source.analysis_path,
-        &arguments.settings,
-        &arguments.ignore_args.ignore,
-        arguments.ignore_args.no_gitignore,
-    )?;
     check_focus_paths_exist(&source.analysis_path, &arguments.focus)?;
 
     if let Some(spec) = arguments.diff.as_deref() {

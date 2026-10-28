@@ -8,97 +8,11 @@
 //! would test the easy case and miss the one this module exists
 //! for.
 
-use std::path::PathBuf;
-
-use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames,
-};
-
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use sephera_core::declarations::DeclarationKind;
 
 use super::{CollisionKind, SimulateError, measure_simulate};
 
-fn edge(from: &str, to: &str, path: &str, items: &[&str]) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: items.iter().map(|item| (*item).to_owned()).collect(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn unresolved(from: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: None,
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: false,
-        kind: ImportKind::Dependency,
-        local_gap: true,
-        cfg_gated: false,
-    }
-}
-
-fn node(path: &str) -> GraphNode {
-    GraphNode {
-        file_path: path.to_owned(),
-        language: Some("Rust"),
-        imports_count: 1,
-        imported_by_count: 1,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
-
-fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
-    GraphReport {
-        base_path: PathBuf::from("."),
-        focus_paths: vec![],
-        depth: None,
-        query: None,
-        nodes: nodes.iter().copied().map(node).collect(),
-        edges,
-        boundary_files: Vec::new(),
-        metrics: empty_metrics(),
-    }
-}
-
-fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind) in *names {
-            declared.declare_as(*name, *kind);
-        }
-        index.insert(file, declared);
-    }
-    index
-}
+use crate::test_fixtures::{edge_items, index, report, unresolved_edge};
 
 #[test]
 fn rename_lists_the_resolved_consumers_and_their_imports() {
@@ -108,7 +22,7 @@ fn rename_lists_the_resolved_consumers_and_their_imports() {
     ]);
     let report = report(
         &["lib.py", "user.py"],
-        vec![edge("user.py", "lib.py", "lib", &["add"])],
+        vec![edge_items("user.py", "lib.py", "lib", &["add"])],
     );
     let report =
         measure_simulate(&index, &report, "lib.py", "add", "sum", None)
@@ -132,8 +46,8 @@ fn python_item_half_counts_as_a_consumer_while_the_symbol_exists() {
     let report = report(
         &["lib.py", "new.py"],
         vec![
-            edge("new.py", "lib.py", "lib", &[]),
-            unresolved("new.py", "lib.add"),
+            edge_items("new.py", "lib.py", "lib", &[]),
+            unresolved_edge("new.py", "lib.add", true),
         ],
     );
     let report =
@@ -164,7 +78,7 @@ fn destination_collision_blocks_and_shadowing_only_warns() {
     ]);
     let report = report(
         &["lib.py", "user.py"],
-        vec![edge("user.py", "lib.py", "lib", &["add"])],
+        vec![edge_items("user.py", "lib.py", "lib", &["add"])],
     );
     let report =
         measure_simulate(&index, &report, "lib.py", "add", "sum", None)
@@ -195,7 +109,7 @@ fn move_reports_the_target_and_its_collision() {
     ]);
     let report = report(
         &["lib.py", "other.py"],
-        vec![edge("other.py", "lib.py", "lib", &["add"])],
+        vec![edge_items("other.py", "lib.py", "lib", &["add"])],
     );
     let report = measure_simulate(
         &index,

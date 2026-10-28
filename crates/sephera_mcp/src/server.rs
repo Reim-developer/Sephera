@@ -23,9 +23,10 @@ use rmcp::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
+use sephera_context::render_context_markdown;
 use sephera_graph::{
-    archaeology, behavior, blast_radius, breaking, coupling, dead,
-    dependency_path, diff, merge,
+    affected_tests, archaeology, behavior, blast_radius, breaking, coupling,
+    dead, dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, schema, simulate, symbol_impact, test_priority,
@@ -51,7 +52,6 @@ use crate::{
         SchemaImpactInput, SimulateInput, SymbolsInput, TestPriorityInput,
         UntestedInput, WhyInput,
     },
-    render::render_context_markdown,
 };
 
 /// The MCP server handler for Sephera.
@@ -420,8 +420,11 @@ impl SepheraServer {
         // One build, two questions: the file's whole radius, or the
         // radius of one name inside it when `symbol` is set. The symbol
         // answer is built by the same code the CLI renders, so the two
-        // entry points cannot disagree about who uses a name.
-        let built = if let Some(symbol) = &param.symbol {
+        // entry points cannot disagree about who uses a name. The
+        // Markdown sections come from the graph renderers, the same
+        // text the CLI prints; only the threshold verdict stays here,
+        // because the gate is the tool's own verdict, not the CLI's.
+        let (built, markdown) = if let Some(symbol) = &param.symbol {
             let impacts = symbol_impact::measure_symbol_all(
                 &report,
                 &param.files,
@@ -431,7 +434,10 @@ impl SepheraServer {
                 &focus,
             )
             .map_err(map_internal_error("symbol impact measurement failed"))?;
-            ImpactReport::from_symbol_impacts(&impacts, param.fail_on)
+            let built =
+                ImpactReport::from_symbol_impacts(&impacts, param.fail_on);
+            let markdown = symbol_impact::render_symbol_report(&impacts);
+            (built, markdown)
         } else {
             let radii = blast_radius::measure_all(
                 &report,
@@ -441,22 +447,19 @@ impl SepheraServer {
                 &focus,
             )
             .map_err(map_internal_error("blast radius measurement failed"))?;
-            ImpactReport::new(&radii, param.fail_on)
+            let built = ImpactReport::new(&radii, param.fail_on);
+            let markdown = blast_radius::render_report(&radii);
+            (built, markdown)
         };
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(impact_markdown(&built)),
-            // Rejected rather than silently returning JSON, matching
-            // `parse_graph_format`. An agent that asked for Markdown and got JSON
-            // back would parse the wrong shape and not know.
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported impact format `{other}`; expected json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "impact")?.render(
+            &built,
+            || {
+                let mut output = markdown;
+                write_impact_gate(&mut output, &built);
+                output
+            },
+        )
     }
 
     /// Report which tests one or more files have to answer for.
@@ -534,19 +537,10 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("affected test measurement failed"))?;
 
-        let built = AffectedTestsReport::new(&impacts);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(affected_tests_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported affected_tests format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "affected_tests")?
+            .render(&AffectedTestsDocument { targets: &impacts }, || {
+                affected_tests::render_report(&impacts, &[], &[])
+            })
     }
 
     /// Explain why one file depends on another.
@@ -626,19 +620,11 @@ impl SepheraServer {
             None => (canonical(&param.from), canonical(&param.to)),
         };
 
-        let built = WhyReport::new(path.as_ref(), &from, &to);
+        let built =
+            dependency_path::WhyReport::from_path(path.as_ref(), &from, &to);
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(why_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported why format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "why")?
+            .render(&built, || dependency_path::render_markdown(&built))
     }
 
     /// Find hidden coupling in a repository.
@@ -703,19 +689,10 @@ impl SepheraServer {
                 ..coupling::CouplingOptions::default()
             },
         );
-        let built = CouplingReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(coupling_markdown(&built, min_co_changes)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported coupling format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "coupling")?
+            .render(&measured, || {
+                coupling::render_markdown(&measured, min_co_changes)
+            })
     }
 
     /// The review of a change in progress: for every file the change
@@ -805,19 +782,19 @@ impl SepheraServer {
         // computes it with `to` absent, so the two cannot disagree.
         let breaking =
             measure_review_breaking(&source, &ignore_matcher, against)?;
-        let built = ReviewReport::from_measured(&measured, against, &breaking);
+        let document = ReviewDocument {
+            against,
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            changed: &measured.changed,
+            breaking: &breaking,
+            warnings: &measured.warnings,
+        };
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(review_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported review format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "review")?
+            .render(&document, || {
+                review::render_markdown(&measured, against, document.breaking)
+            })
     }
 
     /// The files where a change is most likely to hurt, ranked by
@@ -880,19 +857,8 @@ impl SepheraServer {
                 limit: usize::try_from(param.limit.unwrap_or(20)).unwrap_or(20),
             },
         );
-        let built = RiskReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(risk_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported risk format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "risk")?
+            .render(&measured, || risk::render_markdown(&measured))
     }
 
     /// The files no entry point reaches. The measurement is
@@ -950,19 +916,9 @@ impl SepheraServer {
         }
 
         let measured = dead::measure_dead(&report, &extra_roots);
-        let built = DeadReport::from_measured(&measured);
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(dead_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported dead format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "dead")?
+            .render(&measured, || dead::render_markdown(&measured))
     }
 
     /// Compare two refs and report which declared symbols broke,
@@ -1032,19 +988,8 @@ impl SepheraServer {
             &param.from,
             to_label,
         );
-        let built = BreakingReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(breaking_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported breaking format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "breaking")?
+            .render(&measured, || breaking::render_markdown(&measured))
     }
 
     /// Predict the merges git completes cleanly but that break
@@ -1124,19 +1069,8 @@ impl SepheraServer {
                 ref_name: &param.theirs,
             },
         );
-        let built = MergeReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(merge_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported merge format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "merge")?
+            .render(&measured, || merge::render_markdown(&measured))
     }
 
     /// Compare two refs and report every declared symbol that was
@@ -1199,19 +1133,8 @@ impl SepheraServer {
         let to_label = param.to.as_deref().unwrap_or("working tree");
         let measured =
             diff::measure_diff(&old_index, &new_index, &param.from, to_label);
-        let built = DiffReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(diff_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported diff format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "diff")?
+            .render(&measured, || diff::render_markdown(&measured))
     }
 
     /// Compare two refs and report the changes that still compile
@@ -1289,19 +1212,8 @@ impl SepheraServer {
             &param.from,
             to_label,
         );
-        let built = BehaviorReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(behavior_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported behavior format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "behavior")?
+            .render(&measured, || behavior::render_markdown(&measured))
     }
 
     /// Trace one symbol through history: every rename and move,
@@ -1422,19 +1334,8 @@ impl SepheraServer {
                 None,
             ),
         })?;
-        let built = ArchaeologyReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(archaeology_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported archaeology format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "archaeology")?
+            .render(&measured, || archaeology::render_markdown(&measured))
     }
 
     /// Dry-run a rename or move: what a real rename would have
@@ -1487,19 +1388,8 @@ impl SepheraServer {
         .map_err(|error| {
             rmcp::ErrorData::invalid_params(error.to_string(), None)
         })?;
-        let built = SimulateReport::from_measured(&measured);
-
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(simulate_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported simulate format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "simulate")?
+            .render(&measured, || simulate::render_markdown(&measured))
     }
 
     /// Report the declared symbols no test exercises, measured
@@ -1539,17 +1429,8 @@ impl SepheraServer {
         .map_err(map_internal_error("graph build failed"))?;
         let measured = untested::measure_untested(&report, &index);
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(untested_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported untested format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "untested")?
+            .render(&measured, || untested_markdown(&measured))
     }
 
     /// Rank the tree's untested symbols by what hurts most. The
@@ -1608,17 +1489,8 @@ impl SepheraServer {
             },
         );
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(test_priority_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported test_priority format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "test_priority")?
+            .render(&measured, || test_priority_markdown(&measured))
     }
 
     /// Compare two refs and report which schema elements changed,
@@ -1781,17 +1653,8 @@ impl SepheraServer {
             to_label,
         );
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(schema_impact_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported schema_impact format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "schema_impact")?
+            .render(&measured, || schema_impact_markdown(&measured))
     }
 }
 
@@ -1981,295 +1844,16 @@ fn schema_impact_markdown(report: &schema::SchemaImpactReport) -> String {
     output
 }
 
-/// The JSON shape the `affected_tests` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct AffectedTestsReport {
-    /// One entry per file asked about, most affected first.
-    pub targets: Vec<TestImpactEntry>,
-}
-
-/// One file's affected tests.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct TestImpactEntry {
-    /// The file the impact is measured from, spelled as the graph spells it.
-    pub target: String,
-    /// How many test files would notice a change. The number worth acting
-    /// on without walking the list -- and the one that is zero for an
-    /// unwitnessed change.
-    pub affected_test_count: u64,
-    /// The depth limit applied, if any.
-    pub depth: Option<u32>,
-    /// The affected test files, closest first.
-    pub tests: Vec<AffectedTestEntry>,
-}
-
-/// One affected test file.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct AffectedTestEntry {
-    /// Path of the test file.
-    pub file: String,
-    /// Hops from the target along the shortest resolved path. 0 when the
-    /// test file is the target itself.
-    pub distance: u32,
-    /// Import paths naming the target. Empty for a test that reaches the
-    /// target transitively and for the target itself.
-    pub imports: Vec<String>,
-}
-
-impl AffectedTestsReport {
-    fn new(impacts: &[sephera_graph::affected_tests::TestImpact]) -> Self {
-        Self {
-            targets: impacts
-                .iter()
-                .map(|impact| TestImpactEntry {
-                    target: impact.target.clone(),
-                    affected_test_count:
-                        sephera_graph::affected_tests::affected_test_count(
-                            impact,
-                        ),
-                    depth: impact.depth,
-                    tests: impact
-                        .tests
-                        .iter()
-                        .map(|test| AffectedTestEntry {
-                            file: test.file.clone(),
-                            distance: test.distance,
-                            imports: test.imports.clone(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        }
-    }
-}
-
-/// The JSON shape the `why` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct WhyReport {
-    /// The dependent file, spelled as the graph spells it.
-    pub from: String,
-    /// The dependency, spelled as the graph spells it.
-    pub to: String,
-    /// Whether a chain connects them. `false` is an answer, not a
-    /// failure: the two files never touch.
-    pub connected: bool,
-    /// How many edges the chain crosses. `null` when there is no
-    /// chain, matching how absence is spelled elsewhere in these
-    /// reports rather than inventing a second convention.
-    pub hop_count: Option<usize>,
-    /// Whether `from` imports `to` with no file in between.
-    pub direct: bool,
-    /// Every file on the chain, `from` first and `to` last. Empty
-    /// when there is no chain.
-    pub hops: Vec<WhyHopEntry>,
-}
-
-/// One file on a dependency chain.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct WhyHopEntry {
-    /// The file this hop lands on.
-    pub file: String,
-    /// Import paths written in the previous file that name this one.
-    /// Empty on the first hop, which has no predecessor.
-    pub via: Vec<String>,
-}
-
-impl WhyReport {
-    fn new(
-        path: Option<&dependency_path::DependencyPath>,
-        from: &str,
-        to: &str,
-    ) -> Self {
-        path.map_or_else(
-            || Self {
-                from: from.to_owned(),
-                to: to.to_owned(),
-                connected: false,
-                hop_count: None,
-                direct: false,
-                hops: Vec::new(),
-            },
-            |path| Self {
-                from: path.from.clone(),
-                to: path.to.clone(),
-                connected: true,
-                hop_count: Some(path.hop_count()),
-                direct: path.is_direct(),
-                hops: path
-                    .hops
-                    .iter()
-                    .map(|hop| WhyHopEntry {
-                        file: hop.file.clone(),
-                        via: hop.via.clone(),
-                    })
-                    .collect(),
-            },
-        )
-    }
-}
-
 /// Render a dependency chain as Markdown for an agent's context window.
 ///
 /// The same rendering the `why` command prints, kept in step with it:
 /// an agent reading the tool's answer and a person reading the
 /// terminal should be looking at the same explanation.
-fn why_markdown(report: &WhyReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Why `{}` depends on `{}`\n",
-        report.from, report.to
-    );
-
-    if !report.connected {
-        let _ = writeln!(
-            output,
-            "No dependency path: `{}` does not import `{}`, directly \
-             or through any other file in the analysis.",
-            report.from, report.to
-        );
-        return output;
-    }
-
-    if report.hop_count == Some(0) {
-        let _ = writeln!(
-            output,
-            "The same file. No import is involved; a file is its own \
-             starting point."
-        );
-        return output;
-    }
-
-    let _ = writeln!(
-        output,
-        "Shortest chain: {} hop(s). Changing `{}` reaches `{}` \
-         through exactly these imports:\n",
-        report.hop_count.unwrap_or_default(),
-        report.to,
-        report.from
-    );
-    for pair in report.hops.windows(2) {
-        let names: Vec<String> =
-            pair[1].via.iter().map(|name| format!("`{name}`")).collect();
-        let _ = writeln!(
-            output,
-            "- `{}` imports {}",
-            pair[0].file,
-            names.join(", ")
-        );
-    }
-    let _ = writeln!(output, "- `{}`", report.to);
-    output
-}
-
-/// The JSON shape the `coupling` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct CouplingReport {
-    /// Commits handed to the measurement.
-    pub commits_scanned: u64,
-    /// Commits that touched at least one file in the tree and were
-    /// small enough to count. A pair's counts mean nothing without
-    /// the window behind them, so the window is part of the answer
-    /// rather than a parameter the caller has to remember sending.
-    pub commits_counted: u64,
-    /// The pairs found, strongest first.
-    pub pairs: Vec<CouplingPair>,
-}
-
-/// One pair of files that change together with no import between them.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct CouplingPair {
-    /// The lexicographically first file of the pair.
-    pub first: String,
-    /// The other file.
-    pub second: String,
-    /// Commits in the window that touched both files.
-    pub co_changes: u64,
-    /// Commits in the window that touched `first`.
-    pub first_commits: u64,
-    /// Commits in the window that touched `second`.
-    pub second_commits: u64,
-    /// `co_changes` over the smaller of the two commit counts: the
-    /// share of the quieter file's commits that also touched the
-    /// other file.
-    pub containment: f64,
-}
-
-impl CouplingReport {
-    fn from_measured(measured: &coupling::CouplingReport) -> Self {
-        Self {
-            commits_scanned: measured.commits_scanned,
-            commits_counted: measured.commits_counted,
-            pairs: measured
-                .pairs
-                .iter()
-                .map(|pair| CouplingPair {
-                    first: pair.first.clone(),
-                    second: pair.second.clone(),
-                    co_changes: pair.co_changes,
-                    first_commits: pair.first_commits,
-                    second_commits: pair.second_commits,
-                    containment: pair.containment,
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Render a coupling report as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools' Markdown
 /// follows its command's: the same measurement should not need two
 /// phrasings learned.
-fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Hidden coupling\n");
-    let _ = writeln!(
-        output,
-        "Scanned {} commits; {} touched files in this tree.",
-        report.commits_scanned, report.commits_counted
-    );
-
-    if report.pairs.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo pair of files changed together at least {min_co_changes} \
-             times without an import between them."
-        );
-        return output;
-    }
-
-    let _ = writeln!(
-        output,
-        "\nPairs that changed together at least {min_co_changes} times with \
-         no import between them. Containment is the share of the quieter \
-         file's commits that also touched the other file: 1.0 means it has \
-         never changed without the other.\n"
-    );
-    for pair in &report.pairs {
-        let _ = writeln!(
-            output,
-            "- `{}` + `{}` — {} co-changes, {}/{} commits, containment {}",
-            pair.first,
-            pair.second,
-            pair.co_changes,
-            pair.first_commits,
-            pair.second_commits,
-            pair.containment
-        );
-    }
-    output
-}
-
-/// The repo-relative path of the analysis directory, the twin of
-/// the CLI's helper of the same name: empty at the repo root, the
-/// subdirectory otherwise, empty again when the analysis directory
-/// is not under the repo root at all. Any failure means no prefix
-/// — today's spelling — never an invented path.
 fn analysis_prefix(source: &ResolvedSource) -> std::path::PathBuf {
     if let Ok(relative) = source.analysis_path.strip_prefix(&source.repo_root)
         && !relative.as_os_str().is_empty()
@@ -2373,92 +1957,6 @@ fn measure_review_breaking(
     ))
 }
 
-/// The JSON shape the `review` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ReviewReport {
-    /// The reference the change was read against.
-    pub against: String,
-    /// Commits handed to the coupling measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it.
-    pub commits_counted: u64,
-    /// One entry per changed file, sorted by path.
-    pub changed: Vec<ReviewedFile>,
-    /// What broke by name between the ref and the working tree,
-    /// joined to the files that still name it — the `breaking`
-    /// tool's report, embedded rather than recomputed.
-    pub breaking: BreakingReport,
-    /// Coupling warnings, strongest first.
-    pub warnings: Vec<ReviewWarning>,
-}
-
-/// One changed file and what the change to it puts at risk.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ReviewedFile {
-    /// Path of the changed file.
-    pub file: String,
-    /// Whether the file is a node in the graph. A deleted file is
-    /// not; it is reported rather than dropped, with empty
-    /// measurements.
-    pub present: bool,
-    /// Files that import the changed file directly, sorted.
-    pub direct_dependents: Vec<String>,
-    /// Files that depend on it at any depth, direct ones included.
-    pub dependent_count: usize,
-    /// Test files that reach it, closest first.
-    pub tests: Vec<String>,
-}
-
-/// One hidden-coupling warning: a file in the change whose historic
-/// partner is not.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ReviewWarning {
-    /// The file in the change.
-    pub changed: String,
-    /// The file history keeps changing with it, untouched here.
-    pub partner: String,
-    /// Commits in the window that touched both files.
-    pub co_changes: u64,
-    /// The pair's containment, as the `coupling` tool defines it.
-    pub containment: f64,
-}
-
-impl ReviewReport {
-    fn from_measured(
-        measured: &review::ReviewReport,
-        against: &str,
-        measured_breaking: &breaking::BreakingReport,
-    ) -> Self {
-        Self {
-            against: against.to_owned(),
-            commits_scanned: measured.commits_scanned,
-            commits_counted: measured.commits_counted,
-            changed: measured
-                .changed
-                .iter()
-                .map(|entry| ReviewedFile {
-                    file: entry.file.clone(),
-                    present: entry.present,
-                    direct_dependents: entry.direct_dependents.clone(),
-                    dependent_count: entry.dependent_count,
-                    tests: entry.tests.clone(),
-                })
-                .collect(),
-            breaking: BreakingReport::from_measured(measured_breaking),
-            warnings: measured
-                .warnings
-                .iter()
-                .map(|warning| ReviewWarning {
-                    changed: warning.changed.clone(),
-                    partner: warning.partner.clone(),
-                    co_changes: warning.co_changes,
-                    containment: warning.containment,
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Build the import graph over the same file set the context build
 /// uses and store its forward edges on the options as the closure
 /// map. The CLI's `--closure` does the same through the same graph
@@ -2478,1561 +1976,26 @@ fn inject_dependency_closure(
     Ok(())
 }
 
-/// The JSON shape the `dead` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DeadReport {
-    /// Files in the graph.
-    pub total: usize,
-    /// Files the walk reached, roots included.
-    pub reachable: usize,
-    /// The entry points the walk started from.
-    pub roots: Vec<String>,
-    /// The unreachable files.
-    pub dead: Vec<DeadFileReport>,
+/// The JSON document the `review` tool returns: the graph review
+/// plus the ref it was read against and the breaking report
+/// embedded between the changed files and the warnings, as the
+/// Markdown sections order them. Both halves serialize from the
+/// graph structs directly.
+#[derive(serde::Serialize)]
+struct ReviewDocument<'a> {
+    against: &'a str,
+    commits_scanned: u64,
+    commits_counted: u64,
+    changed: &'a [review::ChangedFileReview],
+    breaking: &'a breaking::BreakingReport,
+    warnings: &'a [review::CouplingWarning],
 }
 
-/// One unreachable file, with the counts that say what kind of dead
-/// it is.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DeadFileReport {
-    /// Path of the file.
-    pub file: String,
-    /// Files that import it.
-    pub imported_by: usize,
-    /// Resolved files it imports.
-    pub imports: usize,
-}
-
-impl DeadReport {
-    fn from_measured(measured: &dead::DeadReport) -> Self {
-        Self {
-            total: measured.total,
-            reachable: measured.reachable,
-            roots: measured.roots.clone(),
-            dead: measured
-                .dead
-                .iter()
-                .map(|file| DeadFileReport {
-                    file: file.file.clone(),
-                    imported_by: file.imported_by,
-                    imports: file.imports,
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Render a dead-file report as Markdown for an agent's context
-/// window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn dead_markdown(report: &DeadReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Dead files\n");
-    let _ = writeln!(
-        output,
-        "{} of {} files reached from {} entry point(s); {} dead.",
-        report.reachable,
-        report.total,
-        report.roots.len(),
-        report.dead.len()
-    );
-
-    if report.dead.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nEvery file in the tree is reached from an entry point."
-        );
-        return output;
-    }
-
-    let _ = writeln!(output);
-    for file in &report.dead {
-        let _ = writeln!(
-            output,
-            "- `{}` — imported by {}, imports {}",
-            file.file, file.imported_by, file.imports
-        );
-    }
-    output
-}
-
-/// The JSON shape the `risk` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct RiskReport {
-    /// Commits handed to the measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it.
-    pub commits_counted: u64,
-    /// The riskiest files, highest score first.
-    pub files: Vec<RiskyFile>,
-}
-
-/// One file's risk, with the counts the score is built from.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct RiskyFile {
-    /// Path of the file.
-    pub file: String,
-    /// Files that depend on it at any depth.
-    pub dependents: usize,
-    /// Counted commits in the window that touched it.
-    pub churn: u64,
-    /// Hidden-coupling pairs it takes part in.
-    pub coupled_partners: usize,
-    /// `dependents × churn × (1 + coupled_partners)`.
-    pub score: u64,
-}
-
-impl RiskReport {
-    fn from_measured(measured: &risk::RiskReport) -> Self {
-        Self {
-            commits_scanned: measured.commits_scanned,
-            commits_counted: measured.commits_counted,
-            files: measured
-                .files
-                .iter()
-                .map(|file| RiskyFile {
-                    file: file.file.clone(),
-                    dependents: file.dependents,
-                    churn: file.churn,
-                    coupled_partners: file.coupled_partners,
-                    score: file.score,
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Render a risk ranking as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn risk_markdown(report: &RiskReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Risk ranking\n");
-    let _ = writeln!(
-        output,
-        "History: {} commits scanned, {} counted. Score is dependents \
-         × churn × (1 + coupled partners); only files both depended on \
-         and in motion are listed.",
-        report.commits_scanned, report.commits_counted
-    );
-
-    if report.files.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo file in this tree is both depended on and changing \
-             inside the window."
-        );
-        return output;
-    }
-
-    let _ = writeln!(output);
-    for file in &report.files {
-        let _ = writeln!(
-            output,
-            "- `{}` — score {}, {} dependents, {} changes, {} coupled partner(s)",
-            file.file,
-            file.score,
-            file.dependents,
-            file.churn,
-            file.coupled_partners
-        );
-    }
-    output
-}
-
-/// The JSON shape the `breaking` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BreakingReport {
-    /// The older ref, as the caller spelled it.
-    pub from: String,
-    /// The newer ref, as the caller spelled it, or "working tree".
-    pub to: String,
-    /// The broken symbols, widest consumer count first.
-    pub broken: Vec<BrokenSymbolReport>,
-}
-
-/// One broken symbol, with the files that still use it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BrokenSymbolReport {
-    /// The file that used to declare the symbol.
-    pub file: String,
-    /// The symbol's name.
-    pub symbol: String,
-    /// The kind it was declared as in the old tree.
-    pub kind: String,
-    /// `removed`, `kind_changed`, or `signature_changed`.
-    pub change: String,
-    /// The kind the new tree declares it as, for a kind change.
-    pub new_kind: Option<String>,
-    /// The call shape the old tree declared, for a signature change.
-    pub old_signature: Option<SignatureReport>,
-    /// The call shape the new tree declares, for a signature change.
-    pub new_signature: Option<SignatureReport>,
-    /// What to do about the break, when the new tree says
-    /// something actionable.
-    pub suggestion: Option<SuggestionReport>,
-    /// Files in the new tree that name the symbol from that file.
-    pub direct: Vec<DirectConsumerReport>,
-    /// Files importing the file's namespace wholesale.
-    pub namespace_users: Vec<String>,
-    /// Files downstream of a direct or namespace user.
-    pub downstream: Vec<String>,
-}
-
-/// One call shape, as the breaking report renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SignatureReport {
-    /// The comma-joined parameter spellings.
-    pub parameters: String,
-    /// The return annotation, when one is written.
-    pub returns: Option<String>,
-}
-
-/// What to do about one break, as the breaking report renders it.
-///
-/// The shape is flat on purpose: an agent reading the JSON should
-/// not have to unwrap a tagged enum to learn where a name went.
-/// `action` says which shape the other fields carry — `moved` fills
-/// `file` and `declaration_kind`, `new_call_shape` fills
-/// `signature` — and the absent fields stay null rather than
-/// disappearing.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SuggestionReport {
-    /// What the suggestion says: `moved` or `new_call_shape`.
-    pub action: String,
-    /// The file that now declares the name, for a move.
-    pub file: Option<String>,
-    /// The kind it is declared as there, for a move.
-    pub declaration_kind: Option<String>,
-    /// The call shape callers must now use, for a signature change.
-    pub signature: Option<SignatureReport>,
-}
-
-impl SignatureReport {
-    /// Render the shape the way a reader would write it, the same
-    /// spelling the graph type renders.
-    fn render(&self) -> String {
-        self.returns.as_ref().map_or_else(
-            || format!("({})", self.parameters),
-            |returns| format!("({}) -> {returns}", self.parameters),
-        )
-    }
-}
-
-/// One file that names a broken symbol, with the evidence.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DirectConsumerReport {
-    /// Path of the file.
-    pub file: String,
-    /// Import paths evidencing the use.
-    pub imports: Vec<String>,
-}
-
-impl BreakingReport {
-    fn from_measured(measured: &breaking::BreakingReport) -> Self {
-        Self {
-            from: measured.from_ref.clone(),
-            to: measured.to_ref.clone(),
-            broken: measured
-                .broken
-                .iter()
-                .map(|broken| {
-                    let (change, new_kind, old_signature, new_signature) =
-                        match &broken.change {
-                            breaking::BreakChange::Removed => {
-                                ("removed".to_owned(), None, None, None)
-                            }
-                            breaking::BreakChange::KindChanged { to } => (
-                                "kind_changed".to_owned(),
-                                Some(format!("{to:?}").to_lowercase()),
-                                None,
-                                None,
-                            ),
-                            breaking::BreakChange::SignatureChanged {
-                                from,
-                                to,
-                            } => (
-                                "signature_changed".to_owned(),
-                                None,
-                                Some(SignatureReport {
-                                    parameters: from.parameters.clone(),
-                                    returns: from.returns.clone(),
-                                }),
-                                Some(SignatureReport {
-                                    parameters: to.parameters.clone(),
-                                    returns: to.returns.clone(),
-                                }),
-                            ),
-                        };
-                    let suggestion = match &broken.suggestion {
-                        Some(breaking::BreakSuggestion::Moved {
-                            file,
-                            kind,
-                        }) => Some(SuggestionReport {
-                            action: "moved".to_owned(),
-                            file: Some(file.clone()),
-                            declaration_kind: Some(
-                                format!("{kind:?}").to_lowercase(),
-                            ),
-                            signature: None,
-                        }),
-                        Some(breaking::BreakSuggestion::NewCallShape {
-                            signature,
-                        }) => Some(SuggestionReport {
-                            action: "new_call_shape".to_owned(),
-                            file: None,
-                            declaration_kind: None,
-                            signature: Some(SignatureReport {
-                                parameters: signature.parameters.clone(),
-                                returns: signature.returns.clone(),
-                            }),
-                        }),
-                        None => None,
-                    };
-                    BrokenSymbolReport {
-                        file: broken.file.clone(),
-                        symbol: broken.symbol.clone(),
-                        kind: format!("{:?}", broken.kind).to_lowercase(),
-                        change,
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                        suggestion,
-                        direct: broken
-                            .direct
-                            .iter()
-                            .map(|user| DirectConsumerReport {
-                                file: user.file.clone(),
-                                imports: user.imports.clone(),
-                            })
-                            .collect(),
-                        namespace_users: broken.namespace_users.clone(),
-                        downstream: broken.downstream.clone(),
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-/// The trail of one symbol through history, as the `archaeology`
-/// tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ArchaeologyReport {
-    /// The file the symbol was queried in.
-    pub file: String,
-    /// The name the symbol was queried by.
-    pub symbol: String,
-    /// The steps, oldest first.
-    pub steps: Vec<ArchaeologyStepReport>,
-    /// True when the trail reached a birth.
-    pub origin_found: bool,
-    /// Why the trail ends without a birth, when it does.
-    pub note: Option<String>,
-}
-
-/// One step of the trail, as the `archaeology` tool renders it.
-///
-/// The shape is flat on purpose: `kind` says which shape the
-/// other fields carry — `born` fills neither `from_*` field, the
-/// other kinds fill both — and the absent fields stay null rather
-/// than disappearing.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ArchaeologyStepReport {
-    /// `born`, `renamed`, `moved`, or `moved_and_renamed`.
-    pub kind: String,
-    /// The commit that introduced the `to` identity.
-    pub commit: String,
-    /// The commit's author.
-    pub author: String,
-    /// The commit's date.
-    pub date: String,
-    /// The commit's subject line.
-    pub message: String,
-    /// The file the symbol lived in before this step, absent for
-    /// a birth.
-    pub from_file: Option<String>,
-    /// The name the symbol had before this step, absent for a
-    /// birth.
-    pub from_name: Option<String>,
-    /// The file the symbol lives in from this step on.
-    pub to_file: String,
-    /// The name the symbol has from this step on.
-    pub to_name: String,
-}
-
-impl ArchaeologyReport {
-    fn from_measured(measured: &archaeology::ArchaeologyReport) -> Self {
-        Self {
-            file: measured.file.clone(),
-            symbol: measured.symbol.clone(),
-            steps: measured
-                .steps
-                .iter()
-                .map(|step| {
-                    let kind = match step.kind {
-                        archaeology::ArchaeologyKind::Born => "born",
-                        archaeology::ArchaeologyKind::Renamed => "renamed",
-                        archaeology::ArchaeologyKind::Moved => "moved",
-                        archaeology::ArchaeologyKind::MovedAndRenamed => {
-                            "moved_and_renamed"
-                        }
-                    };
-                    ArchaeologyStepReport {
-                        kind: kind.to_owned(),
-                        commit: step.commit.clone(),
-                        author: step.author.clone(),
-                        date: step.date.clone(),
-                        message: step.message.clone(),
-                        from_file: step.from_file.clone(),
-                        from_name: step.from_name.clone(),
-                        to_file: step.to_file.clone(),
-                        to_name: step.to_name.clone(),
-                    }
-                })
-                .collect(),
-            origin_found: measured.origin_found,
-            note: measured.note.clone(),
-        }
-    }
-}
-
-/// Render an archaeology report as Markdown for an agent's
-/// context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn archaeology_markdown(report: &ArchaeologyReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# History of `{}` in `{}`\n",
-        report.symbol, report.file
-    );
-    if report.steps.is_empty() {
-        let _ = writeln!(output, "No step of the trail could be proven.");
-    }
-    for step in &report.steps {
-        let detail = match step.kind.as_str() {
-            "born" => {
-                format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
-            }
-            "renamed" => {
-                format!(
-                    "Renamed `{}` → `{}` in `{}`.",
-                    step.from_name.as_deref().unwrap_or("?"),
-                    step.to_name,
-                    step.to_file
-                )
-            }
-            "moved" => {
-                format!(
-                    "Moved `{}` from `{}` to `{}`.",
-                    step.to_name,
-                    step.from_file.as_deref().unwrap_or("?"),
-                    step.to_file
-                )
-            }
-            _ => {
-                format!(
-                    "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
-                    step.from_name.as_deref().unwrap_or("?"),
-                    step.from_file.as_deref().unwrap_or("?"),
-                    step.to_name,
-                    step.to_file
-                )
-            }
-        };
-        let _ = writeln!(
-            output,
-            "- {detail} — {} by {} ({}): {}",
-            step.commit, step.author, step.date, step.message
-        );
-    }
-    if report.origin_found {
-        let _ = writeln!(output, "\nThe trail reaches the symbol's birth.");
-    } else if let Some(note) = &report.note {
-        let _ = writeln!(output, "\nNote: {note}");
-    }
-    output
-}
-
-/// The silent behaviour changes between two refs, as the
-/// `behavior` tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BehaviorReport {
-    /// The older ref, as the caller spelled it.
-    pub from: String,
-    /// The newer ref, as the caller spelled it, or "working tree".
-    pub to: String,
-    /// The changes, file then callee or name.
-    pub changes: Vec<BehaviorChangeReport>,
-}
-
-/// One silent behaviour change, as the `behavior` tool renders
-/// it.
-///
-/// The shape is flat on purpose: an agent reading the JSON should
-/// not have to unwrap a tagged enum. `kind` says which shape the
-/// other fields carry — `arg_order_swap` fills `callee`,
-/// `old_args`, and `new_args`; `constant_changed` fills `name`,
-/// `old_value`, and `new_value` — and the absent fields stay null
-/// rather than disappearing.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BehaviorChangeReport {
-    /// `arg_order_swap` or `constant_changed`.
-    pub kind: String,
-    /// The file containing the change.
-    pub file: String,
-    /// The called name, for an argument swap.
-    pub callee: Option<String>,
-    /// Arguments as the older tree wrote them, for a swap.
-    pub old_args: Option<Vec<String>>,
-    /// Arguments as the newer tree writes them, for a swap.
-    pub new_args: Option<Vec<String>>,
-    /// The constant's name, for a constant change.
-    pub name: Option<String>,
-    /// The older value text, for a constant change.
-    pub old_value: Option<String>,
-    /// The newer value text, for a constant change.
-    pub new_value: Option<String>,
-}
-
-impl BehaviorReport {
-    fn from_measured(measured: &behavior::BehaviorReport) -> Self {
-        Self {
-            from: measured.from_ref.clone(),
-            to: measured.to_ref.clone(),
-            changes: measured
-                .changes
-                .iter()
-                .map(|change| match change {
-                    behavior::BehaviorChange::ArgOrderSwap {
-                        file,
-                        callee,
-                        old_args,
-                        new_args,
-                    } => BehaviorChangeReport {
-                        kind: "arg_order_swap".to_owned(),
-                        file: file.clone(),
-                        callee: Some(callee.clone()),
-                        old_args: Some(old_args.clone()),
-                        new_args: Some(new_args.clone()),
-                        name: None,
-                        old_value: None,
-                        new_value: None,
-                    },
-                    behavior::BehaviorChange::ConstantChanged {
-                        file,
-                        name,
-                        old_value,
-                        new_value,
-                    } => BehaviorChangeReport {
-                        kind: "constant_changed".to_owned(),
-                        file: file.clone(),
-                        callee: None,
-                        old_args: None,
-                        new_args: None,
-                        name: Some(name.clone()),
-                        old_value: Some(old_value.clone()),
-                        new_value: Some(new_value.clone()),
-                    },
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Render a behavior report as Markdown for an agent's context
-/// window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn behavior_markdown(report: &BehaviorReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Silent behaviour changes: `{}` → `{}`\n",
-        report.from, report.to
-    );
-    let _ = writeln!(output, "{} change(s) found.", report.changes.len());
-    if report.changes.is_empty() {
-        let _ = writeln!(output, "\nNo silent behaviour change was found.");
-        return output;
-    }
-    for change in &report.changes {
-        let line = match change.kind.as_str() {
-            "arg_order_swap" => {
-                let old = change.old_args.as_deref().unwrap_or(&[]).join(", ");
-                let new = change.new_args.as_deref().unwrap_or(&[]).join(", ");
-                format!(
-                    "Swapped arguments at a call to `{}` in `{}`: ({}) → ({}).",
-                    change.callee.as_deref().unwrap_or("?"),
-                    change.file,
-                    old,
-                    new
-                )
-            }
-            _ => {
-                format!(
-                    "Changed `{}` in `{}`: {} → {}.",
-                    change.name.as_deref().unwrap_or("?"),
-                    change.file,
-                    change.old_value.as_deref().unwrap_or("?"),
-                    change.new_value.as_deref().unwrap_or("?"),
-                )
-            }
-        };
-        let _ = writeln!(output, "\n- {line}");
-    }
-    output
-}
-
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SimulateReport {
-    /// The file that declares the symbol today.
-    pub file: String,
-    /// The symbol's name today.
-    pub symbol: String,
-    /// The name it would take.
-    pub new_name: String,
-    /// The file it would live in: the move target, or the file it
-    /// already lives in for a pure rename.
-    pub new_file: String,
-    /// True when a destination collision blocks the rename.
-    pub blocked: bool,
-    /// Files that name the symbol and so must update their import.
-    pub direct: Vec<SimulatedConsumerReport>,
-    /// Files importing the file's namespace wholesale.
-    pub namespace_users: Vec<String>,
-    /// Files downstream of a direct or namespace user.
-    pub downstream: Vec<String>,
-    /// Name collisions at the destination and in direct consumers.
-    pub collisions: Vec<SimulatedCollisionReport>,
-}
-
-/// One file a rename would have to touch, as the `simulate` tool
-/// renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SimulatedConsumerReport {
-    /// The file that names the symbol from its current file.
-    pub file: String,
-    /// Import paths evidencing the use.
-    pub imports: Vec<String>,
-}
-
-/// One name collision, as the `simulate` tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct SimulatedCollisionReport {
-    /// The file where the new name already exists.
-    pub file: String,
-    /// `destination` blocks the rename; `shadowing` only warns.
-    pub kind: String,
-}
-
-impl SimulateReport {
-    fn from_measured(measured: &simulate::SimulateReport) -> Self {
-        Self {
-            file: measured.file.clone(),
-            symbol: measured.symbol.clone(),
-            new_name: measured.new_name.clone(),
-            new_file: measured.new_file.clone(),
-            blocked: measured.blocked,
-            direct: measured
-                .direct
-                .iter()
-                .map(|user| SimulatedConsumerReport {
-                    file: user.file.clone(),
-                    imports: user.imports.clone(),
-                })
-                .collect(),
-            namespace_users: measured.namespace_users.clone(),
-            downstream: measured.downstream.clone(),
-            collisions: measured
-                .collisions
-                .iter()
-                .map(|collision| SimulatedCollisionReport {
-                    file: collision.file.clone(),
-                    kind: match collision.kind {
-                        simulate::CollisionKind::Destination => {
-                            "destination".to_owned()
-                        }
-                        simulate::CollisionKind::Shadowing => {
-                            "shadowing".to_owned()
-                        }
-                    },
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Render a simulate report as Markdown for an agent's context
-/// window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn simulate_markdown(report: &SimulateReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
-        report.symbol, report.file, report.new_name, report.new_file
-    );
-    let destination = report
-        .collisions
-        .iter()
-        .find(|collision| collision.kind == "destination");
-    if let Some(collision) = destination {
-        let _ = writeln!(
-            output,
-            "Blocked: `{}` already declares `{}`.",
-            collision.file, report.new_name
-        );
-    } else if report.direct.is_empty() {
-        let _ = writeln!(
-            output,
-            "Safe to rename: no file names this symbol, so the rename touches only its declaration."
-        );
-    } else {
-        let _ = writeln!(
-            output,
-            "Safe to rename: {} file(s) must update their import.",
-            report.direct.len()
-        );
-    }
-    for user in &report.direct {
-        let _ = writeln!(
-            output,
-            "\n- `{}` ({}).",
-            user.file,
-            user.imports.join(", ")
-        );
-    }
-    for file in &report.namespace_users {
-        let _ = writeln!(output, "\n- `{file}` (namespace).");
-    }
-    for file in &report.downstream {
-        let _ = writeln!(output, "\n- `{file}` (downstream).");
-    }
-    for collision in &report.collisions {
-        if collision.kind == "shadowing" {
-            let _ = writeln!(
-                output,
-                "\n- `{}` already declares `{}`: the renamed import would rebind a name the file owns.",
-                collision.file, report.new_name
-            );
-        }
-    }
-    output
-}
-/// Render a breaking report as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn breaking_markdown(report: &BreakingReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Breaking changes: `{}` → `{}`\n",
-        report.from, report.to
-    );
-    output.push_str(&breaking_markdown_body(report, "##"));
-    output
-}
-
-/// Render the breaking report as a section of a larger document, at
-/// the heading level a section takes.
-///
-/// `review` embeds exactly this: the same count line, the same
-/// empty-state line, the same per-symbol entries, only nested one
-/// level deeper, so the two tools cannot disagree about what broke.
-fn breaking_markdown_section(report: &BreakingReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "## Breaking changes: `{}` → `{}`\n",
-        report.from, report.to
-    );
-    output.push_str(&breaking_markdown_body(report, "###"));
-    output
-}
-
-/// The body shared by the standalone document and the embedded
-/// section: the count line, then the empty-state line or one entry
-/// per broken symbol, widest exposure first.
-/// The suggestion line for one broken symbol, when one exists.
-///
-/// The shape is read from which fields are filled, not from the
-/// action string — a move fills file and kind, a new call shape
-/// fills the signature. Extracted from `breaking_markdown_body`,
-/// which the suggestion block pushed past clippy's line limit.
-fn suggestion_markdown(broken: &BrokenSymbolReport) -> String {
-    use std::fmt::Write as _;
-
-    let Some(suggestion) = broken.suggestion.as_ref() else {
-        return String::new();
-    };
-    let mut output = String::new();
-    match (
-        suggestion.file.as_deref(),
-        suggestion.declaration_kind.as_deref(),
-        suggestion.signature.as_ref(),
-    ) {
-        (Some(file), Some(kind), _) => {
-            let _ =
-                writeln!(output, "\nSuggestion: moved to `{file}` ({kind}).");
-        }
-        (_, _, Some(signature)) => {
-            let _ = writeln!(
-                output,
-                "\nSuggestion: call `{}{}`.",
-                broken.symbol,
-                signature.render()
-            );
-        }
-        _ => {}
-    }
-    output
-}
-
-fn breaking_markdown_body(
-    report: &BreakingReport,
-    symbol_heading: &str,
-) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let with_consumers = report
-        .broken
-        .iter()
-        .filter(|broken| !broken.direct.is_empty())
-        .count();
-    let _ = writeln!(
-        output,
-        "{} symbol(s) broke; {} of them still have direct consumers.",
-        report.broken.len(),
-        with_consumers
-    );
-
-    if report.broken.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNothing any consumer names was removed or changed shape."
-        );
-        return output;
-    }
-
-    for broken in &report.broken {
-        let _ = writeln!(output);
-        let change = match (
-            &broken.change,
-            &broken.new_kind,
-            &broken.old_signature,
-            &broken.new_signature,
-        ) {
-            (_, _, Some(from), Some(to)) => {
-                format!(
-                    "changed signature: {} → {}",
-                    from.render(),
-                    to.render()
-                )
-            }
-            (_, Some(to), _, _) => {
-                format!("changed kind: {} → {to}", broken.kind)
-            }
-            (change, None, _, _) => change.clone(),
-        };
-        let _ = writeln!(
-            output,
-            "{symbol_heading} `{}` — `{}` ({}, {change})",
-            broken.file, broken.symbol, broken.kind
-        );
-        // The suggestion first, as in the CLI: the line an agent
-        // acts on, with the consumer lists below as its evidence.
-        output.push_str(&suggestion_markdown(broken));
-        if broken.direct.is_empty() && broken.namespace_users.is_empty() {
-            let _ = writeln!(output, "\nNo consumers in the new tree.");
-        }
-        if !broken.direct.is_empty() {
-            let _ = writeln!(output, "\nDirect consumers:");
-            for user in &broken.direct {
-                let _ = writeln!(
-                    output,
-                    "- `{}` via {}",
-                    user.file,
-                    user.imports
-                        .iter()
-                        .map(|import| format!("`{import}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-        }
-        if !broken.namespace_users.is_empty() {
-            let _ = writeln!(
-                output,
-                "\nNamespace users (may use it without naming it):"
-            );
-            for file in &broken.namespace_users {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-        if !broken.downstream.is_empty() {
-            let _ = writeln!(output, "\nDownstream of those consumers:");
-            for file in &broken.downstream {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-    }
-    output
-}
-
-/// One predicted merge conflict, as the merge report renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct MergeReport {
-    /// The fork point, as the caller spelled it or the merge base.
-    pub base: String,
-    /// One side of the merge, as the caller spelled it.
-    pub ours: String,
-    /// The other side of the merge, as the caller spelled it.
-    pub theirs: String,
-    /// The predicted conflicts, proven first within a symbol.
-    pub conflicts: Vec<MergeConflictReport>,
-}
-
-/// One predicted conflict, with the evidence on both sides.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct MergeConflictReport {
-    /// The file that used to declare the symbol.
-    pub file: String,
-    /// The symbol's name.
-    pub symbol: String,
-    /// `removed_vs_new_consumer`, `kind_changed_vs_new_consumer`,
-    /// `both_reshaped`, or `signature_vs_new_consumer`.
-    pub kind: String,
-    /// Whether the conflict is proven rather than a warning.
-    pub proven: bool,
-    /// Which side changed the contract: `ours`, `theirs`, or `both`.
-    pub contract_side: String,
-    /// The kind the changing side declares it as, for a kind change.
-    pub new_kind: Option<String>,
-    /// The call shape the old tree declared, for a signature change.
-    pub old_signature: Option<SignatureReport>,
-    /// The call shape the new tree declares, for a signature change.
-    pub new_signature: Option<SignatureReport>,
-    /// The call shape the ours side declares, for a both-reshaped.
-    pub ours_signature: Option<SignatureReport>,
-    /// The call shape the theirs side declares, for a both-reshaped.
-    pub theirs_signature: Option<SignatureReport>,
-    /// What to do about the conflict, when the changing side says
-    /// something actionable.
-    pub suggestion: Option<SuggestionReport>,
-    /// Files on the other side that newly name the symbol.
-    pub consumers: Vec<String>,
-}
-
-impl MergeReport {
-    fn from_measured(measured: &merge::MergeReport) -> Self {
-        Self {
-            base: measured.base_ref.clone(),
-            ours: measured.ours_ref.clone(),
-            theirs: measured.theirs_ref.clone(),
-            conflicts: measured
-                .conflicts
-                .iter()
-                .map(|conflict| {
-                    let (
-                        kind,
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                        ours_signature,
-                        theirs_signature,
-                    ) = match &conflict.kind {
-                        merge::MergeConflictKind::RemovedVsNewConsumer => (
-                            "removed_vs_new_consumer".to_owned(),
-                            None,
-                            None,
-                            None,
-                            None,
-                            None,
-                        ),
-                        merge::MergeConflictKind::KindChangedVsNewConsumer {
-                            to,
-                        } => (
-                            "kind_changed_vs_new_consumer".to_owned(),
-                            Some(format!("{to:?}").to_lowercase()),
-                            None,
-                            None,
-                            None,
-                            None,
-                        ),
-                        merge::MergeConflictKind::BothReshaped {
-                            ours,
-                            theirs,
-                        } => (
-                            "both_reshaped".to_owned(),
-                            None,
-                            None,
-                            None,
-                            Some(SignatureReport {
-                                parameters: ours.parameters.clone(),
-                                returns: ours.returns.clone(),
-                            }),
-                            Some(SignatureReport {
-                                parameters: theirs.parameters.clone(),
-                                returns: theirs.returns.clone(),
-                            }),
-                        ),
-                        merge::MergeConflictKind::SignatureVsNewConsumer {
-                            from,
-                            to,
-                        } => (
-                            "signature_vs_new_consumer".to_owned(),
-                            None,
-                            Some(SignatureReport {
-                                parameters: from.parameters.clone(),
-                                returns: from.returns.clone(),
-                            }),
-                            Some(SignatureReport {
-                                parameters: to.parameters.clone(),
-                                returns: to.returns.clone(),
-                            }),
-                            None,
-                            None,
-                        ),
-                    };
-                    let suggestion = conflict
-                        .suggestion
-                        .as_ref()
-                        .map(merge_suggestion_report);
-                    MergeConflictReport {
-                        file: conflict.file.clone(),
-                        symbol: conflict.symbol.clone(),
-                        kind,
-                        proven: conflict.kind.is_proven(),
-                        contract_side: match conflict.contract_side {
-                            merge::MergeSide::Ours => "ours".to_owned(),
-                            merge::MergeSide::Theirs => "theirs".to_owned(),
-                            merge::MergeSide::Both => "both".to_owned(),
-                        },
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                        ours_signature,
-                        theirs_signature,
-                        suggestion,
-                        consumers: conflict.consumers.clone(),
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-/// The flat suggestion shape of one breaking suggestion, shared
-/// with the breaking report: an agent reading the JSON should
-/// not have to unwrap a tagged enum to learn where a name went.
-fn merge_suggestion_report(
-    suggestion: &breaking::BreakSuggestion,
-) -> SuggestionReport {
-    match suggestion {
-        breaking::BreakSuggestion::Moved { file, kind } => SuggestionReport {
-            action: "moved".to_owned(),
-            file: Some(file.clone()),
-            declaration_kind: Some(format!("{kind:?}").to_lowercase()),
-            signature: None,
-        },
-        breaking::BreakSuggestion::NewCallShape { signature } => {
-            SuggestionReport {
-                action: "new_call_shape".to_owned(),
-                file: None,
-                declaration_kind: None,
-                signature: Some(SignatureReport {
-                    parameters: signature.parameters.clone(),
-                    returns: signature.returns.clone(),
-                }),
-            }
-        }
-    }
-}
-
-/// The kind line of one conflict: which side changed the
-/// contract, which side added the consumer, and — for a warning —
-/// why a human look is still needed.
-fn merge_kind_line(conflict: &MergeConflictReport) -> String {
-    let (contract, consumer) = match conflict.contract_side.as_str() {
-        "ours" => ("ours", "theirs"),
-        "theirs" => ("theirs", "ours"),
-        _ => ("both sides", "either side"),
-    };
-    match conflict.kind.as_str() {
-        "removed_vs_new_consumer" => {
-            format!("Removed on {contract}; {consumer} added a consumer.")
-        }
-        "kind_changed_vs_new_consumer" => {
-            let new_kind = conflict.new_kind.as_deref().unwrap_or("?");
-            format!(
-                "Changed kind to {new_kind} on {contract}; {consumer} added a consumer."
-            )
-        }
-        "both_reshaped" => {
-            let ours = conflict
-                .ours_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            let theirs = conflict
-                .theirs_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            format!("Reshaped differently: ours {ours} vs theirs {theirs}.")
-        }
-        _ => {
-            let from = conflict
-                .old_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            let to = conflict
-                .new_signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            format!(
-                "Changed signature: {from} → {to} on {contract}; {consumer} added a consumer. \
-                 Warning: the new call's shape is unproven — a human look is needed."
-            )
-        }
-    }
-}
-
-/// The suggestion lines of one conflict, empty when the
-/// changing side says nothing actionable. The suggestion sits
-/// first, before the evidence: it is the one line a reviewer
-/// acts on, and the consumer list below is why it is
-/// trustworthy.
-fn merge_suggestion_lines(conflict: &MergeConflictReport) -> String {
-    match &conflict.suggestion {
-        Some(SuggestionReport {
-            action,
-            file,
-            declaration_kind,
-            signature,
-        }) if action == "moved" => {
-            format!(
-                "Suggestion: moved to `{}` ({}).",
-                file.as_deref().unwrap_or("?"),
-                declaration_kind.as_deref().unwrap_or("?")
-            )
-        }
-        Some(SuggestionReport {
-            action, signature, ..
-        }) if action == "new_call_shape" => {
-            let shape = signature
-                .as_ref()
-                .map_or_else(String::new, SignatureReport::render);
-            format!("Suggestion: call `{}{}`.", conflict.symbol, shape)
-        }
-        _ => String::new(),
-    }
-}
-
-/// Render a merge report as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's: the same measurement should
-/// not need two phrasings learned. The kind line states which
-/// side changed the contract and which side added the consumer
-/// before the evidence, and the suggestion sits first, as in
-/// the breaking report.
-fn merge_markdown(report: &MergeReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Predicted merge conflicts: `{}` vs `{}`\n",
-        report.ours, report.theirs
-    );
-    let _ = writeln!(output, "Base: `{}`.\n", report.base);
-    let proven = report.conflicts.iter().filter(|c| c.proven).count();
-    let _ = writeln!(
-        output,
-        "{} conflict(s) predicted; {} of them proven.",
-        report.conflicts.len(),
-        proven
-    );
-
-    if report.conflicts.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo contradiction between the two sides: nothing one side changed is newly used by the other."
-        );
-        return output;
-    }
-
-    for conflict in &report.conflicts {
-        let _ = writeln!(output);
-        let tier = if conflict.proven { "proven" } else { "warning" };
-        let _ = writeln!(
-            output,
-            "## `{}` — `{}` ({tier})",
-            conflict.file, conflict.symbol
-        );
-        let _ = writeln!(output, "\n{}", merge_kind_line(conflict));
-        let suggestion = merge_suggestion_lines(conflict);
-        if !suggestion.is_empty() {
-            let _ = writeln!(output, "\n{suggestion}");
-        }
-        if conflict.consumers.is_empty() {
-            let _ = writeln!(output, "\nNo consumers on the other side.");
-        } else {
-            let heading = if conflict.contract_side == "both" {
-                "Consumers:"
-            } else {
-                "New consumers:"
-            };
-            let _ = writeln!(output, "\n{heading}");
-            for file in &conflict.consumers {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-    }
-    output
-}
-
-/// The symbol-level diff between two refs, as the `diff` tool
-/// renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DiffReport {
-    /// The older ref, as the caller spelled it.
-    pub from: String,
-    /// The newer ref, as the caller spelled it, or "working tree".
-    pub to: String,
-    /// The changed symbols, file then symbol.
-    pub changes: Vec<DiffSymbolReport>,
-}
-
-/// One changed symbol, as the `diff` tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DiffSymbolReport {
-    /// The file that declares the symbol.
-    pub file: String,
-    /// The symbol's name.
-    pub symbol: String,
-    /// The kind on the side where the symbol exists: the old kind
-    /// for removals and changes, the new kind for additions.
-    pub kind: String,
-    /// `added`, `removed`, `kind_changed`, or `signature_changed`.
-    pub change: String,
-    /// The kind the new tree declares it as, for a kind change.
-    pub new_kind: Option<String>,
-    /// The call shape the old tree declared, for a signature change.
-    pub old_signature: Option<SignatureReport>,
-    /// The call shape the new tree declares, for a signature change.
-    pub new_signature: Option<SignatureReport>,
-}
-
-impl DiffReport {
-    fn from_measured(measured: &diff::DiffReport) -> Self {
-        Self {
-            from: measured.from_ref.clone(),
-            to: measured.to_ref.clone(),
-            changes: measured
-                .changes
-                .iter()
-                .map(|change| {
-                    let (change_label, new_kind, old_signature, new_signature) =
-                        match &change.change {
-                            diff::DiffChange::Added => {
-                                ("added".to_owned(), None, None, None)
-                            }
-                            diff::DiffChange::Removed => {
-                                ("removed".to_owned(), None, None, None)
-                            }
-                            diff::DiffChange::KindChanged { to } => (
-                                "kind_changed".to_owned(),
-                                Some(format!("{to:?}").to_lowercase()),
-                                None,
-                                None,
-                            ),
-                            diff::DiffChange::SignatureChanged { from, to } => {
-                                (
-                                    "signature_changed".to_owned(),
-                                    None,
-                                    Some(SignatureReport {
-                                        parameters: from.parameters.clone(),
-                                        returns: from.returns.clone(),
-                                    }),
-                                    Some(SignatureReport {
-                                        parameters: to.parameters.clone(),
-                                        returns: to.returns.clone(),
-                                    }),
-                                )
-                            }
-                        };
-                    DiffSymbolReport {
-                        file: change.file.clone(),
-                        symbol: change.symbol.clone(),
-                        kind: format!("{:?}", change.kind).to_lowercase(),
-                        change: change_label,
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                    }
-                })
-                .collect(),
-        }
-    }
-}
-
-fn diff_markdown(report: &DiffReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Symbol diff: `{}` → `{}`\n",
-        report.from, report.to
-    );
-    let _ = writeln!(output, "{} symbol(s) changed.", report.changes.len());
-    if report.changes.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo declared symbol was added, removed, or reshaped."
-        );
-        return output;
-    }
-    for change in &report.changes {
-        let line = match change.change.as_str() {
-            "added" => {
-                format!(
-                    "Added `{}` in `{}` ({}).",
-                    change.symbol, change.file, change.kind
-                )
-            }
-            "removed" => {
-                format!(
-                    "Removed `{}` from `{}` ({}).",
-                    change.symbol, change.file, change.kind
-                )
-            }
-            "kind_changed" => {
-                format!(
-                    "Changed `{}` in `{}` from {} to {}.",
-                    change.symbol,
-                    change.file,
-                    change.kind,
-                    change.new_kind.as_deref().unwrap_or("?"),
-                )
-            }
-            _ => {
-                let from = change
-                    .old_signature
-                    .as_ref()
-                    .map_or_else(String::new, SignatureReport::render);
-                let to = change
-                    .new_signature
-                    .as_ref()
-                    .map_or_else(String::new, SignatureReport::render);
-                format!(
-                    "Changed signature of `{}` in `{}`: {from} → {to}.",
-                    change.symbol, change.file
-                )
-            }
-        };
-        let _ = writeln!(output, "\n- {line}");
-    }
-    output
-}
-
-/// Render a review as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's: the same measurement should not
-/// need two phrasings learned. The sections run in order of
-/// certainty — changed files, then what broke by name, then the
-/// heuristic coupling warnings last — and the breaking section is
-/// never omitted: when nothing broke it is one line saying so.
-fn review_markdown(report: &ReviewReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Change review\n");
-    let _ = writeln!(
-        output,
-        "{} changed file(s) against `{}`. History: {} commits \
-         scanned, {} counted.",
-        report.changed.len(),
-        report.against,
-        report.commits_scanned,
-        report.commits_counted
-    );
-
-    if report.changed.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNothing to review: the working tree matches `{}`, and \
-             no untracked files were found.",
-            report.against
-        );
-        output.push('\n');
-        output.push_str(&breaking_markdown_section(&report.breaking));
-        return output;
-    }
-
-    for entry in &report.changed {
-        let _ = writeln!(output, "\n## `{}`", entry.file);
-        if !entry.present {
-            let _ = writeln!(
-                output,
-                "- Not in the analysed tree -- deleted by the change, \
-                 or outside the analysis base. The graph cannot name \
-                 its dependents, which is not the same as there being \
-                 none."
-            );
-            continue;
-        }
-        let _ = writeln!(
-            output,
-            "- {} direct dependent(s), {} in total.",
-            entry.direct_dependents.len(),
-            entry.dependent_count
-        );
-        if entry.tests.is_empty() {
-            let _ = writeln!(output, "- No affected tests reach this file.");
-        } else {
-            let _ = writeln!(
-                output,
-                "- Affected tests ({}): {}",
-                entry.tests.len(),
-                entry
-                    .tests
-                    .iter()
-                    .map(|test| format!("`{test}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-    }
-
-    output.push('\n');
-    output.push_str(&breaking_markdown_section(&report.breaking));
-
-    if !report.warnings.is_empty() {
-        let _ = writeln!(output, "\n## Coupling warnings");
-        for warning in &report.warnings {
-            let _ = writeln!(
-                output,
-                "- Warning: `{}` changed with `{}` {} times \
-                 (containment {}) and is not in this change.",
-                warning.partner,
-                warning.changed,
-                warning.co_changes,
-                warning.containment
-            );
-        }
-    }
-    output
-}
-
-/// Render affected tests as Markdown for an agent's context window.
-///
-/// One `#` title for the document and `##` per target when there are
-/// several, matching the `impact` tool's Markdown.
-fn affected_tests_markdown(report: &AffectedTestsReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let several = report.targets.len() > 1;
-
-    if several {
-        let _ = writeln!(
-            output,
-            "# Affected tests for {} files\n",
-            report.targets.len()
-        );
-        let _ = writeln!(output, "Most affected first.");
-    }
-
-    for entry in &report.targets {
-        let count = entry.affected_test_count;
-        if several {
-            let _ = writeln!(
-                output,
-                "\n## Affected tests for `{}`\n",
-                entry.target
-            );
-        } else {
-            let _ =
-                writeln!(output, "# Affected tests for `{}`\n", entry.target);
-        }
-        let _ = writeln!(
-            output,
-            "{}",
-            match count {
-                0 => "No test file reaches this one.".to_owned(),
-                1 => "1 test file would notice a change here.".to_owned(),
-                other => {
-                    format!("{other} test files would notice a change here.")
-                }
-            }
-        );
-        if let Some(depth) = entry.depth {
-            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-        }
-        if entry.tests.is_empty() {
-            continue;
-        }
-        let sub = if several { "###" } else { "##" };
-        let _ = writeln!(output, "\n{sub} Test files\n");
-        for test in &entry.tests {
-            if test.distance == 0 {
-                let _ = writeln!(
-                    output,
-                    "- `{}` (the changed file itself)",
-                    test.file
-                );
-            } else if test.imports.is_empty() {
-                let _ = writeln!(
-                    output,
-                    "- `{}` ({} hop(s) away)",
-                    test.file, test.distance
-                );
-            } else {
-                let names: Vec<String> = test
-                    .imports
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect();
-                let _ = writeln!(
-                    output,
-                    "- `{}` imports {}",
-                    test.file,
-                    names.join(", ")
-                );
-            }
-        }
-        output.push('\n');
-    }
-
-    output
+/// The JSON document the `affected_tests` tool returns: one entry
+/// per file asked about, serialized from the graph impacts.
+#[derive(serde::Serialize)]
+struct AffectedTestsDocument<'a> {
+    targets: &'a [affected_tests::TestImpact],
 }
 
 /// The JSON shape the `impact` tool returns.
@@ -4225,84 +2188,6 @@ fn impact_gate(targets: &[ImpactEntry], fail_on: u64) -> ImpactGate {
 /// Takes the built report rather than the raw radii so the threshold verdict can
 /// be stated. An agent asking for a compact summary needs the verdict as much as
 /// the numbers -- the numbers alone are what it already had before asking for a
-/// gate, and acting on them is the reason for the gate.
-fn impact_markdown(report: &ImpactReport) -> String {
-    use std::fmt::Write as _;
-
-    // A symbol-narrowed report renders by its own wording, as the CLI's
-    // does. Decided from the first entry because a run is narrowed for
-    // every target or for none -- the parameter is the run's, not a
-    // target's.
-    if report
-        .targets
-        .first()
-        .is_some_and(|entry| entry.symbol.is_some())
-    {
-        return symbol_impact_markdown(report);
-    }
-
-    let mut output = String::new();
-    let several = report.targets.len() > 1;
-
-    if several {
-        let _ = writeln!(
-            output,
-            "# Blast radius for {} files\n",
-            report.targets.len()
-        );
-        let _ = writeln!(output, "Widest first.");
-    }
-
-    for entry in &report.targets {
-        let count = entry.dependent_count;
-        if several {
-            let _ =
-                writeln!(output, "\n## Blast radius for `{}`\n", entry.target);
-        } else {
-            let _ = writeln!(output, "# Blast radius for `{}`\n", entry.target);
-        }
-        let _ = writeln!(
-            output,
-            "{}",
-            match count {
-                0 => "No file imports this one.".to_owned(),
-                1 => "1 file depends on this.".to_owned(),
-                other => format!("{other} files depend on this."),
-            }
-        );
-        if let Some(depth) = entry.depth {
-            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-        }
-        if entry.dependents.is_empty() {
-            continue;
-        }
-        let sub = if several { "###" } else { "##" };
-        let _ = writeln!(output, "\n{sub} Dependents\n");
-        for dependent in &entry.dependents {
-            if dependent.imports.is_empty() {
-                let _ = writeln!(output, "- `{}`", dependent.file);
-            } else {
-                let names: Vec<String> = dependent
-                    .imports
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect();
-                let _ = writeln!(
-                    output,
-                    "- `{}` imports {}",
-                    dependent.file,
-                    names.join(", ")
-                );
-            }
-        }
-        output.push('\n');
-    }
-
-    write_impact_gate(&mut output, report);
-
-    output
-}
-
 /// Append the threshold verdict to an impact report's Markdown.
 ///
 /// Shared by the file-level and symbol-level renderers: the verdict's
@@ -4346,145 +2231,6 @@ fn write_impact_gate(output: &mut String, report: &ImpactReport) {
 /// reading the tool's answer and a person reading the terminal's are
 /// reading the same measurement and should not have to learn two
 /// phrasings of it. The three lists stay apart for the CLI's reason:
-/// a namespace importer is a may-use, not a use.
-fn symbol_impact_markdown(report: &ImpactReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let several = report.targets.len() > 1;
-    let symbol = report
-        .targets
-        .first()
-        .and_then(|entry| entry.symbol.as_deref())
-        .unwrap_or_default();
-
-    if several {
-        let _ = writeln!(
-            output,
-            "# Symbol impact for `{symbol}` in {} files\n",
-            report.targets.len()
-        );
-        let _ = writeln!(output, "Widest first.");
-    }
-
-    for entry in &report.targets {
-        write_symbol_entry(&mut output, entry, symbol, several);
-    }
-
-    write_impact_gate(&mut output, report);
-
-    output
-}
-
-/// Write one target's section of a symbol impact report.
-///
-/// Split out of `symbol_impact_markdown` for length; the three
-/// lists and their order are the per-target content, while the
-/// document title and the threshold verdict belong to the report.
-fn write_symbol_entry(
-    output: &mut String,
-    entry: &ImpactEntry,
-    symbol: &str,
-    several: bool,
-) {
-    use std::fmt::Write as _;
-
-    if several {
-        let _ = writeln!(
-            output,
-            "\n## Symbol impact for `{symbol}` in `{}`\n",
-            entry.target
-        );
-    } else {
-        let _ = writeln!(
-            output,
-            "# Symbol impact for `{symbol}` in `{}`\n",
-            entry.target
-        );
-    }
-    let _ = writeln!(
-        output,
-        "{}",
-        match entry.dependent_count {
-            0 => format!("No file imports `{symbol}` from this file."),
-            1 => format!("1 file imports `{symbol}` from this file."),
-            other => {
-                format!("{other} files import `{symbol}` from this file.")
-            }
-        }
-    );
-    if let Some(namespace) = &entry.namespace_users
-        && !namespace.is_empty()
-    {
-        let _ = writeln!(
-            output,
-            "{}",
-            match namespace.len() {
-                1 => format!(
-                    "1 file imports this file's namespace and may use \
-                     `{symbol}` without naming it."
-                ),
-                other => format!(
-                    "{other} files import this file's namespace and may \
-                     use `{symbol}` without naming it."
-                ),
-            }
-        );
-    }
-    if let Some(downstream) = &entry.downstream
-        && !downstream.is_empty()
-    {
-        let _ = writeln!(
-            output,
-            "{}",
-            match downstream.len() {
-                1 => "1 more file is downstream of those.".to_owned(),
-                other => {
-                    format!("{other} more files are downstream of those.")
-                }
-            }
-        );
-    }
-    if let Some(depth) = entry.depth {
-        let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-    }
-
-    let sub = if several { "###" } else { "##" };
-    if !entry.dependents.is_empty() {
-        let _ = writeln!(output, "\n{sub} Files that import `{symbol}`\n");
-        for dependent in &entry.dependents {
-            let names: Vec<String> = dependent
-                .imports
-                .iter()
-                .map(|path| format!("`{path}`"))
-                .collect();
-            let _ = writeln!(
-                output,
-                "- `{}` via {}",
-                dependent.file,
-                names.join(", ")
-            );
-        }
-    }
-    if let Some(namespace) = &entry.namespace_users
-        && !namespace.is_empty()
-    {
-        let _ = writeln!(output, "\n{sub} Namespace importers\n");
-        for file in namespace {
-            let _ = writeln!(output, "- `{file}`");
-        }
-    }
-    if let Some(downstream) = &entry.downstream
-        && !downstream.is_empty()
-    {
-        let _ = writeln!(output, "\n{sub} Downstream\n");
-        for file in downstream {
-            let _ = writeln!(output, "- `{file}`");
-        }
-    }
-    output.push('\n');
-}
-
 /// Server identity advertised during MCP initialization.
 ///
 /// `get_info` cannot await anything, but the trait signature is `async`, so the
@@ -4557,6 +2303,50 @@ fn check_focus_paths_exist(
         }
     }
     Ok(())
+}
+
+/// The output shape a tool caller asked for: JSON unless the format
+/// says markdown. One parser for every tool, so a mistyped format is
+/// rejected the same way everywhere instead of each handler spelling
+/// the match -- the graph tool keeps its own parser because it also
+/// accepts xml and dot. An unrecognised value is rejected rather than
+/// silently falling back, so a caller that asked for Markdown and got
+/// JSON back would parse the wrong shape and not know.
+enum OutputKind {
+    Json,
+    Markdown,
+}
+
+impl OutputKind {
+    fn parse(
+        requested: Option<&str>,
+        tool: &str,
+    ) -> Result<Self, rmcp::ErrorData> {
+        match requested {
+            None | Some("json") => Ok(Self::Json),
+            Some("markdown") => Ok(Self::Markdown),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported {tool} format `{other}`; expected json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Render the tool's answer in the requested shape: the JSON value
+    /// serialized, or the Markdown the caller builds. The Markdown is
+    /// a closure so a JSON answer never pays for rendering it.
+    fn render<T: serde::Serialize>(
+        self,
+        json: &T,
+        markdown: impl FnOnce() -> String,
+    ) -> Result<String, rmcp::ErrorData> {
+        match self {
+            Self::Json => serialize_json(json),
+            Self::Markdown => Ok(markdown()),
+        }
+    }
 }
 
 /// Map a requested graph output format onto [`GraphFormat`].

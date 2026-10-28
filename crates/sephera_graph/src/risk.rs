@@ -32,8 +32,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use super::blast_radius::reachable_dependents_with_distance;
-use super::coupling::{CouplingOptions, measure_coupling};
+use super::coupling::{CouplingOptions, counted_commits, measure_coupling};
 use super::types::GraphReport;
 
 /// Thresholds for one risk ranking.
@@ -55,7 +57,7 @@ impl Default for RiskOptions {
 }
 
 /// One file's risk, with the counts the score is built from.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct FileRisk {
     /// Path of the file, in the graph's spelling.
     pub file: String,
@@ -70,18 +72,75 @@ pub struct FileRisk {
 }
 
 /// The risk ranking for one analysis.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct RiskReport {
+    /// Commits handed to the measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it, under coupling's rule.
+    pub commits_counted: u64,
     /// The riskiest files, highest score first, capped at the
     /// requested limit. Files scoring zero -- nothing depends on
     /// them, or they never changed inside the window -- are not
     /// listed: the ranking is of files that are both depended on
     /// and in motion.
     pub files: Vec<FileRisk>,
-    /// Commits handed to the measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it, under coupling's rule.
-    pub commits_counted: u64,
+}
+
+/// Render the ranking as Markdown.
+///
+/// The header states the window and the score's definition before
+/// any row, because a score is meaningless without both: the same
+/// file is a different risk over fifty commits than over five
+/// hundred, and a product cannot be audited from its result alone.
+/// Each row then prints the score's factors beside it, so the row
+/// can be checked rather than believed.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(report: &RiskReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "# Risk ranking\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "History: {} commits scanned, {} counted. Score is dependents \
+         × churn × (1 + coupled partners); only files both depended on \
+         and in motion are listed.",
+        report.commits_scanned, report.commits_counted
+    )
+    .expect("writing to a String must succeed");
+
+    if report.files.is_empty() {
+        writeln!(
+            output,
+            "\nNo file in this tree is both depended on and changing \
+             inside the window."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    writeln!(output).expect("writing to a String must succeed");
+    for file in &report.files {
+        writeln!(
+            output,
+            "- `{}` — score {}, {} dependents, {} changes, {} coupled partner(s)",
+            file.file,
+            file.score,
+            file.dependents,
+            file.churn,
+            file.coupled_partners
+        )
+        .expect("writing to a String must succeed");
+    }
+    output
 }
 
 /// Rank the files of `report` by risk over `commits`.
@@ -101,29 +160,12 @@ pub fn measure_risk(
         .map(|node| node.file_path.as_str())
         .collect();
 
-    // Churn, counted under coupling's rule: the same pass over the
-    // same window, so the two reports' commit counts agree by
-    // construction rather than by two loops kept in step by hand --
-    // the rule is small, and it is restated here because coupling
-    // does not publish its per-file counts.
-    let mut churn: BTreeMap<&str, u64> = BTreeMap::new();
-    let mut counted = 0_u64;
-    for commit in commits {
-        let mut files: Vec<&str> = commit
-            .iter()
-            .map(String::as_str)
-            .filter(|path| tracked.contains(path))
-            .collect();
-        files.sort_unstable();
-        files.dedup();
-        if files.is_empty() || files.len() > options.coupling.max_commit_files {
-            continue;
-        }
-        counted += 1;
-        for file in &files {
-            *churn.entry(file).or_default() += 1;
-        }
-    }
+    // Churn is coupling's own count, read off the same pass over
+    // the same window, so the two reports' commit counts agree by
+    // construction rather than by two loops kept in step by hand.
+    let counted =
+        counted_commits(&tracked, commits, options.coupling.max_commit_files);
+    let churn = counted.file_counts;
 
     let coupling = measure_coupling(report, commits, options.coupling);
     let mut partners: BTreeMap<&str, usize> = BTreeMap::new();
@@ -177,9 +219,9 @@ pub fn measure_risk(
     files.truncate(options.limit);
 
     RiskReport {
-        files,
         commits_scanned: coupling.commits_scanned,
-        commits_counted: counted,
+        commits_counted: counted.counted,
+        files,
     }
 }
 
@@ -187,11 +229,11 @@ pub fn measure_risk(
 mod tests {
     use std::path::PathBuf;
 
-    use crate::types::{
-        GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-    };
+    use crate::types::{GraphEdge, GraphNode, GraphReport};
 
     use super::{RiskOptions, measure_risk};
+
+    use crate::test_fixtures::{edge, empty_metrics};
 
     fn node(path: &str) -> GraphNode {
         GraphNode {
@@ -199,19 +241,6 @@ mod tests {
             language: Some("Python"),
             imports_count: 1,
             imported_by_count: 1,
-        }
-    }
-
-    fn resolved_edge(from: &str, to: &str) -> GraphEdge {
-        GraphEdge {
-            from: from.to_owned(),
-            to: Some(to.to_owned()),
-            import_path: "pkg.mod".to_owned(),
-            items: Vec::new(),
-            resolved: true,
-            kind: ImportKind::Dependency,
-            local_gap: false,
-            cfg_gated: false,
         }
     }
 
@@ -224,23 +253,7 @@ mod tests {
             nodes: nodes.iter().copied().map(node).collect(),
             edges,
             boundary_files: Vec::new(),
-            metrics: GraphMetrics {
-                total_files: 0,
-                total_internal_edges: 0,
-                self_references: 0,
-                total_external_edges: 0,
-                unresolved_local_edges: 0,
-                unresolved_local_samples: Vec::new(),
-                cfg_gated_edges: 0,
-                dependencies: Vec::new(),
-                declared_dependency_edges: 0,
-                local_crate_edges: 0,
-                builtin_edges: 0,
-                circular_dependencies: 0,
-                most_importing: vec![],
-                most_imported: vec![],
-                cycles: vec![],
-            },
+            metrics: empty_metrics(),
         }
     }
 
@@ -260,8 +273,8 @@ mod tests {
         let graph = report(
             &["core.py", "app.py", "cli.py", "docs.py"],
             vec![
-                resolved_edge("app.py", "core.py"),
-                resolved_edge("cli.py", "core.py"),
+                edge("app.py", "core.py", "pkg.mod"),
+                edge("cli.py", "core.py", "pkg.mod"),
             ],
         );
         let history = commits(&[
@@ -293,7 +306,7 @@ mod tests {
         // happen.
         let graph = report(
             &["leaf.py", "anchor.py", "user.py"],
-            vec![resolved_edge("user.py", "anchor.py")],
+            vec![edge("user.py", "anchor.py", "pkg.mod")],
         );
         let history = commits(&[&["leaf.py"], &["leaf.py"], &["leaf.py"]]);
 
@@ -310,9 +323,9 @@ mod tests {
         let graph = report(
             &["a.py", "b.py", "c.py", "x.py", "y.py", "z.py"],
             vec![
-                resolved_edge("x.py", "a.py"),
-                resolved_edge("y.py", "b.py"),
-                resolved_edge("z.py", "c.py"),
+                edge("x.py", "a.py", "pkg.mod"),
+                edge("y.py", "b.py", "pkg.mod"),
+                edge("z.py", "c.py", "pkg.mod"),
             ],
         );
         let history = commits(&[

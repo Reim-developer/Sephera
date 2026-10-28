@@ -37,7 +37,6 @@ pub mod declarations;
 pub mod language_data;
 pub mod line_slices;
 pub mod path_utils;
-pub mod paths;
 pub mod plugins;
 pub mod progress;
 pub mod types;

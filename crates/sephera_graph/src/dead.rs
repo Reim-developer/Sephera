@@ -46,6 +46,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use serde::Serialize;
+
 use super::affected_tests::is_test_file;
 use super::types::GraphReport;
 
@@ -80,7 +82,7 @@ pub fn is_entry_point(path: &str) -> bool {
 }
 
 /// One file the entry points do not reach.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeadFile {
     /// Path of the file, in the graph's spelling.
     pub file: String,
@@ -96,17 +98,70 @@ pub struct DeadFile {
 }
 
 /// The dead-file report for one analysis.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeadReport {
-    /// The unreachable files, sorted by path.
-    pub dead: Vec<DeadFile>,
+    /// Files in the graph.
+    pub total: usize,
+    /// Files the walk reached, roots included.
+    pub reachable: usize,
     /// The entry points the walk started from, sorted: the
     /// conventional ones the tree offered, plus the caller's.
     pub roots: Vec<String>,
-    /// Files the walk reached, roots included.
-    pub reachable: usize,
-    /// Files in the graph.
-    pub total: usize,
+    /// The unreachable files, sorted by path.
+    pub dead: Vec<DeadFile>,
+}
+
+/// Render the report as Markdown.
+///
+/// The header states how much of the tree the walk reached and how
+/// many roots it started from, because a dead verdict is only as
+/// good as its roots: "3 dead of 400" measured from twelve entry
+/// points is a finding; the same line measured from one is a
+/// suspicion about the root set. The roots themselves are listed in
+/// the JSON; the header carries their count.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(report: &DeadReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "# Dead files\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "{} of {} files reached from {} entry point(s); {} dead.",
+        report.reachable,
+        report.total,
+        report.roots.len(),
+        report.dead.len()
+    )
+    .expect("writing to a String must succeed");
+
+    if report.dead.is_empty() {
+        writeln!(
+            output,
+            "\nEvery file in the tree is reached from an entry point."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    writeln!(output).expect("writing to a String must succeed");
+    for file in &report.dead {
+        writeln!(
+            output,
+            "- `{}` — imported by {}, imports {}",
+            file.file, file.imported_by, file.imports
+        )
+        .expect("writing to a String must succeed");
+    }
+    output
 }
 
 /// Find the files no entry point reaches.
@@ -201,73 +256,19 @@ pub fn measure_dead(
         .collect();
 
     DeadReport {
-        dead,
-        roots,
-        reachable: reached.len(),
         total: report.nodes.len(),
+        reachable: reached.len(),
+        roots,
+        dead,
     }
 }
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use crate::types::{
-        GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-    };
 
     use super::{is_entry_point, measure_dead};
 
-    fn node(path: &str) -> GraphNode {
-        GraphNode {
-            file_path: path.to_owned(),
-            language: Some("Rust"),
-            imports_count: 1,
-            imported_by_count: 1,
-        }
-    }
-
-    fn resolved_edge(from: &str, to: &str) -> GraphEdge {
-        GraphEdge {
-            from: from.to_owned(),
-            to: Some(to.to_owned()),
-            import_path: "crate::x".to_owned(),
-            items: Vec::new(),
-            resolved: true,
-            kind: ImportKind::Dependency,
-            local_gap: false,
-            cfg_gated: false,
-        }
-    }
-
-    fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
-        GraphReport {
-            base_path: PathBuf::from("."),
-            focus_paths: vec![],
-            depth: None,
-            query: None,
-            nodes: nodes.iter().copied().map(node).collect(),
-            edges,
-            boundary_files: Vec::new(),
-            metrics: GraphMetrics {
-                total_files: 0,
-                total_internal_edges: 0,
-                self_references: 0,
-                total_external_edges: 0,
-                unresolved_local_edges: 0,
-                unresolved_local_samples: Vec::new(),
-                cfg_gated_edges: 0,
-                dependencies: Vec::new(),
-                declared_dependency_edges: 0,
-                local_crate_edges: 0,
-                builtin_edges: 0,
-                circular_dependencies: 0,
-                most_importing: vec![],
-                most_imported: vec![],
-                cycles: vec![],
-            },
-        }
-    }
+    use crate::test_fixtures::{edge, report};
 
     #[test]
     fn a_boundary_file_is_a_root_by_evidence_not_convention() {
@@ -304,9 +305,9 @@ mod tests {
         let graph = report(
             &["src/main.rs", "src/used.rs", "src/a.rs", "src/b.rs"],
             vec![
-                resolved_edge("src/main.rs", "src/used.rs"),
-                resolved_edge("src/a.rs", "src/b.rs"),
-                resolved_edge("src/b.rs", "src/a.rs"),
+                edge("src/main.rs", "src/used.rs", "crate::x"),
+                edge("src/a.rs", "src/b.rs", "crate::x"),
+                edge("src/b.rs", "src/a.rs", "crate::x"),
             ],
         );
 
@@ -347,7 +348,7 @@ mod tests {
         // all three are dead.
         let graph = report(
             &["src/main.rs", "src/worker.rs", "src/job.rs"],
-            vec![resolved_edge("src/worker.rs", "src/job.rs")],
+            vec![edge("src/worker.rs", "src/job.rs", "crate::x")],
         );
 
         let unnamed = measure_dead(&graph, &[]);
@@ -364,8 +365,8 @@ mod tests {
         let graph = report(
             &["src/main.rs", "src/a.rs", "src/b.rs", "src/side.rs"],
             vec![
-                resolved_edge("src/main.rs", "src/a.rs"),
-                resolved_edge("src/a.rs", "src/b.rs"),
+                edge("src/main.rs", "src/a.rs", "crate::x"),
+                edge("src/a.rs", "src/b.rs", "crate::x"),
             ],
         );
 

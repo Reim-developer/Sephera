@@ -7,127 +7,13 @@
 //! it used to land). A fixture that kept either shape resolved would
 //! test the easy case and miss the one this module exists for.
 
-use std::path::PathBuf;
-
-use sephera_core::declarations::{
-    DeclarationIndex, DeclarationKind, DeclaredNames, Signature,
-};
-
-use crate::types::{
-    GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-};
+use sephera_core::declarations::{DeclarationKind, Signature};
 
 use super::{BreakChange, BreakSuggestion, measure_breaking};
 
-fn edge(from: &str, to: &str, path: &str) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: Some(to.to_owned()),
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: true,
-        kind: ImportKind::Dependency,
-        local_gap: false,
-        cfg_gated: false,
-    }
-}
-
-fn unresolved(from: &str, path: &str, local_gap: bool) -> GraphEdge {
-    GraphEdge {
-        from: from.to_owned(),
-        to: None,
-        import_path: path.to_owned(),
-        items: Vec::new(),
-        resolved: false,
-        kind: ImportKind::Dependency,
-        local_gap,
-        cfg_gated: false,
-    }
-}
-
-fn node(path: &str) -> GraphNode {
-    GraphNode {
-        file_path: path.to_owned(),
-        language: Some("Rust"),
-        imports_count: 1,
-        imported_by_count: 1,
-    }
-}
-
-fn empty_metrics() -> GraphMetrics {
-    GraphMetrics {
-        total_files: 0,
-        total_internal_edges: 0,
-        self_references: 0,
-        total_external_edges: 0,
-        unresolved_local_edges: 0,
-        unresolved_local_samples: Vec::new(),
-        cfg_gated_edges: 0,
-        dependencies: Vec::new(),
-        declared_dependency_edges: 0,
-        local_crate_edges: 0,
-        builtin_edges: 0,
-        circular_dependencies: 0,
-        most_importing: vec![],
-        most_imported: vec![],
-        cycles: vec![],
-    }
-}
-
-fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
-    GraphReport {
-        base_path: PathBuf::from("."),
-        focus_paths: vec![],
-        depth: None,
-        query: None,
-        nodes: nodes.iter().copied().map(node).collect(),
-        edges,
-        boundary_files: Vec::new(),
-        metrics: empty_metrics(),
-    }
-}
-
-fn index(files: &[(&str, &[(&str, DeclarationKind)])]) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind) in *names {
-            declared.declare_as(*name, *kind);
-        }
-        index.insert(file, declared);
-    }
-    index
-}
-
-/// One declared name with the call shape the test gives it, when
-/// the test gives one.
-type SignedName<'a> =
-    (&'a str, DeclarationKind, Option<(&'a str, Option<&'a str>)>);
-
-/// Like `index`, but each name may also carry a call shape, for
-/// the tests that compare signatures.
-fn index_with_signatures(
-    files: &[(&str, &[SignedName<'_>])],
-) -> DeclarationIndex {
-    let mut index = DeclarationIndex::default();
-    for (file, names) in files {
-        let mut declared = DeclaredNames::default();
-        for (name, kind, signature) in *names {
-            declared.declare_as(*name, *kind);
-            if let Some((parameters, returns)) = signature {
-                declared.declare_signature(
-                    *name,
-                    Signature {
-                        parameters: (*parameters).to_owned(),
-                        returns: returns.map(str::to_owned),
-                    },
-                );
-            }
-        }
-        index.insert(file, declared);
-    }
-    index
-}
+use crate::test_fixtures::{
+    edge, index, index_with_signatures, report, unresolved_edge,
+};
 
 fn direct_files(broken: &super::BrokenSymbol) -> Vec<&str> {
     broken
@@ -157,15 +43,15 @@ fn a_removed_symbol_lists_the_files_that_still_name_it() {
         vec![
             edge("consumer_rs.rs", "lib.py", "crate::lib::add"),
             edge("consumer_py.py", "lib.py", "lib"),
-            unresolved("consumer_py.py", "lib.add", false),
+            unresolved_edge("consumer_py.py", "lib.add", false),
         ],
     );
     let new_report = report(
         &["lib.py", "consumer_rs.rs", "consumer_py.py"],
         vec![
-            unresolved("consumer_rs.rs", "crate::lib::add", true),
+            unresolved_edge("consumer_rs.rs", "crate::lib::add", true),
             edge("consumer_py.py", "lib.py", "lib"),
-            unresolved("consumer_py.py", "lib.add", true),
+            unresolved_edge("consumer_py.py", "lib.add", true),
         ],
     );
 
@@ -459,7 +345,7 @@ fn a_consumer_import_binding_is_not_a_new_home() {
             &["lib.py", "consumer.py", "other.py"],
             vec![
                 edge("consumer.py", "lib.py", "lib"),
-                unresolved("consumer.py", "lib.add", true),
+                unresolved_edge("consumer.py", "lib.add", true),
             ],
         ),
         "v1",
@@ -521,7 +407,7 @@ fn a_new_file_consuming_a_removed_symbol_is_reported() {
     );
     let new_report = report(
         &["lib.rs", "new_file.rs"],
-        vec![unresolved("new_file.rs", "crate::lib::add", true)],
+        vec![unresolved_edge("new_file.rs", "crate::lib::add", true)],
     );
 
     let measured = measure_breaking(
@@ -551,7 +437,7 @@ fn an_old_file_importing_a_removed_symbol_for_the_first_time_is_reported() {
     );
     let new_report = report(
         &["lib.rs", "user.rs"],
-        vec![unresolved("user.rs", "crate::lib::add", true)],
+        vec![unresolved_edge("user.rs", "crate::lib::add", true)],
     );
 
     let measured = measure_breaking(
@@ -590,7 +476,7 @@ fn an_ambiguous_path_is_never_guessed() {
     );
     let new_report = report(
         &["a.rs", "b.rs", "new_file.rs"],
-        vec![unresolved("new_file.rs", "crate::add", true)],
+        vec![unresolved_edge("new_file.rs", "crate::add", true)],
     );
 
     let measured = measure_breaking(
@@ -633,7 +519,7 @@ fn a_parent_landing_elsewhere_vetoes_the_path_fallback() {
         &["lib.rs", "other.rs", "new_file.rs"],
         vec![
             edge("new_file.rs", "other.rs", "crate::lib"),
-            unresolved("new_file.rs", "crate::lib::add", true),
+            unresolved_edge("new_file.rs", "crate::lib::add", true),
         ],
     );
 

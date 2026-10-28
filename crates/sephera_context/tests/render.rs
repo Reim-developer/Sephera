@@ -1,3 +1,7 @@
+//! Rendering tests for the unified context-pack Markdown renderer.
+//! Moved from the MCP crate when the renderer moved into
+//! `sephera_context`, so both surfaces keep one pinned text.
+
 //! Tests for the Markdown context-pack renderer.
 //!
 //! These build reports directly rather than running analysis, so each test
@@ -12,7 +16,7 @@ use sephera_context::{
     ContextReport, SelectionClass,
 };
 
-use super::render_context_markdown;
+use sephera_context::render_context_markdown;
 
 fn metadata() -> ContextMetadata {
     ContextMetadata {

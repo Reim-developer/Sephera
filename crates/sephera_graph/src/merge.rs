@@ -121,7 +121,7 @@ impl MergeConflictKind {
 }
 
 /// One predicted semantic merge conflict, with its evidence.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MergeConflict {
     /// The file that declared the symbol in base.
     pub file: String,
@@ -141,17 +141,181 @@ pub struct MergeConflict {
 }
 
 /// The predicted semantic conflicts between two sides.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order, and the ref fields serialize
+/// under the `base`/`ours`/`theirs` keys the CLI and MCP surfaces
+/// already use: the CLI and the MCP tool serialize this struct
+/// directly, so the declaration order is the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct MergeReport {
     /// The base ref, as the caller spelled it.
+    #[serde(rename = "base")]
     pub base_ref: String,
     /// The ours ref, as the caller spelled it.
+    #[serde(rename = "ours")]
     pub ours_ref: String,
     /// The theirs ref, as the caller spelled it.
+    #[serde(rename = "theirs")]
     pub theirs_ref: String,
     /// The conflicts, file then symbol, proven before warnings
     /// within a symbol.
     pub conflicts: Vec<MergeConflict>,
+}
+
+/// Render the report as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+///
+/// One section per predicted conflict, proven first within a
+/// symbol. The kind line states which side changed the contract
+/// and which side added the consumer before the evidence: a
+/// reader deciding whether to merge reads "removed on ours, new
+/// consumer on theirs" differently from a warning, and the
+/// consumer list that follows is the evidence for either.
+#[must_use]
+pub fn render_markdown(report: &MergeReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Predicted merge conflicts: `{}` vs `{}`\n",
+        report.ours_ref, report.theirs_ref
+    )
+    .expect("writing to a String must succeed");
+    writeln!(output, "Base: `{}`.\n", report.base_ref)
+        .expect("writing to a String must succeed");
+    output.push_str(&render_body(report));
+    output
+}
+
+/// The body shared by the document: the count line, then the
+/// empty-state line or one entry per predicted conflict.
+fn render_body(report: &MergeReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let proven = report
+        .conflicts
+        .iter()
+        .filter(|conflict| conflict.kind.is_proven())
+        .count();
+    writeln!(
+        output,
+        "{} conflict(s) predicted; {} of them proven.",
+        report.conflicts.len(),
+        proven
+    )
+    .expect("writing to a String must succeed");
+
+    if report.conflicts.is_empty() {
+        writeln!(
+            output,
+            "\nNo contradiction between the two sides: nothing one side changed is newly used by the other."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    for conflict in &report.conflicts {
+        writeln!(output).expect("writing to a String must succeed");
+        let tier = if conflict.kind.is_proven() {
+            "proven"
+        } else {
+            "warning"
+        };
+        writeln!(
+            output,
+            "## `{}` — `{}` ({tier})",
+            conflict.file, conflict.symbol
+        )
+        .expect("writing to a String must succeed");
+        writeln!(output, "\n{}", render_kind_line(conflict))
+            .expect("writing to a String must succeed");
+        // The suggestion sits first, before the evidence: it is
+        // the one line a reviewer acts on, and the consumer list
+        // below is why it is trustworthy.
+        let suggestion = render_suggestion(conflict);
+        if !suggestion.is_empty() {
+            writeln!(output, "\n{suggestion}")
+                .expect("writing to a String must succeed");
+        }
+        if conflict.consumers.is_empty() {
+            writeln!(output, "\nNo consumers on the other side.")
+                .expect("writing to a String must succeed");
+        } else {
+            let heading = if conflict.contract_side == MergeSide::Both {
+                "Consumers:"
+            } else {
+                "New consumers:"
+            };
+            writeln!(output, "\n{heading}")
+                .expect("writing to a String must succeed");
+            for file in &conflict.consumers {
+                writeln!(output, "- `{file}`")
+                    .expect("writing to a String must succeed");
+            }
+        }
+    }
+    output
+}
+
+/// The kind line of one conflict: which side changed the contract
+/// and which side added the consumer.
+///
+/// Split out of `render_body`, which the kind and suggestion blocks
+/// pushed past clippy's line limit.
+fn render_kind_line(conflict: &MergeConflict) -> String {
+    let (contract, consumer) = match conflict.contract_side {
+        MergeSide::Ours => ("ours", "theirs"),
+        MergeSide::Theirs => ("theirs", "ours"),
+        MergeSide::Both => ("both sides", "either side"),
+    };
+    match &conflict.kind {
+        MergeConflictKind::RemovedVsNewConsumer => {
+            format!("Removed on {contract}; {consumer} added a consumer.")
+        }
+        MergeConflictKind::KindChangedVsNewConsumer { to } => {
+            format!(
+                "Changed kind to {to:?} on {contract}; {consumer} added a consumer."
+            )
+        }
+        MergeConflictKind::BothReshaped { ours, theirs } => {
+            format!(
+                "Reshaped differently: ours {} vs theirs {}.",
+                ours.render(),
+                theirs.render()
+            )
+        }
+        MergeConflictKind::SignatureVsNewConsumer { from, to } => {
+            format!(
+                "Changed signature: {} → {} on {contract}; {consumer} added a consumer. \
+                 Warning: the new call's shape is unproven — a human look is needed.",
+                from.render(),
+                to.render()
+            )
+        }
+    }
+}
+
+/// The suggestion line of one conflict, empty when the changing
+/// side says nothing actionable.
+///
+/// Split out of `render_body` for the same line-limit reason.
+fn render_suggestion(conflict: &MergeConflict) -> String {
+    match &conflict.suggestion {
+        Some(crate::breaking::BreakSuggestion::Moved { file, kind }) => {
+            format!("Suggestion: moved to `{file}` ({kind:?}).")
+        }
+        Some(crate::breaking::BreakSuggestion::NewCallShape { signature }) => {
+            format!(
+                "Suggestion: call `{}{}`.",
+                conflict.symbol,
+                signature.render()
+            )
+        }
+        None => String::new(),
+    }
 }
 
 /// Predict the semantic conflicts between two sides of a merge.

@@ -138,13 +138,13 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | Metric | Value |
 |--------|-------|
-| Files analyzed | 43 |
-| Internal edges | 250 |
-| External edges | 140 |
+| Files analyzed | 39 |
+| Internal edges | 233 |
+| External edges | 118 |
 | Self-references (excluded above) | 16 |
 | Declared dependencies | 45 |
 | Local crate edges | 0 |
-| Standard library edges | 85 |
+| Standard library edges | 63 |
 | Circular dependencies | 0 |
 
 ## Blast radius for `crates/sephera_context/src/types.rs`
@@ -161,18 +161,19 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 | `crates/sephera_context/src/lib.rs` | `self::types`, `types::ContextDiffMetadata`, `types::ContextDiffSelection`, `types::ContextExcerpt`, `types::ContextFile`, `types::ContextGroupKind`, `types::ContextGroupSummary`, `types::ContextLanguageSummary`, `types::ContextMetadata`, `types::ContextReport`, `types::SelectionClass` |
 | `crates/sephera_context/src/ranker.rs` | `super::types::SelectionClass` |
 
-**35 further files reach them indirectly**, through the files above.
+**31 further files reach them indirectly**, through the files above.
 
 ## Dependencies
 
 | Package | Kind | Version | Import paths |
 |---------|------|---------|--------------|
-| `std` | stdlib | unknown | 81 |
+| `std` | stdlib | unknown | 63 |
 | `anyhow` | declared | 1.0.102 | 19 |
+| `rmcp` | declared | 1.3.0 | 12 |
 | `tempfile` | declared | 3.27.0 | 10 |
-| `rmcp` | declared | 1.3.0 | 9 |
 | `arbitrary` | undeclared | unknown | 4 |
 | `libfuzzersys` | undeclared | unknown | 3 |
+| `tokio` | declared | 1.51.0 | 2 |
 | `clap` | declared | 4.6.0 | 1 |
 | `serde` | declared | 1.0.228 | 1 |
 
@@ -180,31 +181,31 @@ sephera graph --path . --what-depends-on crates/sephera_context/src/types.rs --f
 
 | File | Imported by |
 |------|-------------|
-| `crates/sephera_runtime/src/lib.rs` | 44 |
-| `crates/sephera_context/src/lib.rs` | 40 |
+| `crates/sephera_runtime/src/lib.rs` | 46 |
+| `crates/sephera_context/src/lib.rs` | 38 |
 | `crates/sephera_context/src/types.rs` | 27 |
 | `crates/sephera_symbols/src/lib.rs` | 24 |
-| `crates/sephera_cli/src/output.rs` | 17 |
+| `crates/sephera_cli/src/output.rs` | 18 |
 | `crates/sephera_runtime/src/context.rs` | 10 |
 | `crates/sephera_cli/src/context_config.rs` | 6 |
+| `crates/sephera_cli/src/output/symbols.rs` | 6 |
 | `crates/sephera_context/src/candidate.rs` | 6 |
 | `crates/sephera_gui/src/loc.rs` | 6 |
-| `crates/sephera_cli/src/output/symbols.rs` | 5 |
 
 ## Most Importing Files
 
 | File | Imports |
 |------|---------|
-| `crates/sephera_cli/src/run.rs` | 36 |
-| `crates/sephera_mcp/src/server.rs` | 19 |
+| `crates/sephera_cli/src/run.rs` | 38 |
+| `crates/sephera_context/src/lib.rs` | 20 |
+| `crates/sephera_mcp/src/server.rs` | 20 |
 | `crates/sephera_context/src/builder.rs` | 18 |
-| `crates/sephera_context/src/lib.rs` | 18 |
 | `crates/sephera_cli/src/output.rs` | 11 |
-| `crates/sephera_mcp/src/render/tests.rs` | 10 |
+| `crates/sephera_context/tests/render.rs` | 10 |
 | `crates/sephera_runtime/src/lib.rs` | 10 |
 | `crates/sephera_cli/src/lib.rs` | 9 |
 | `crates/sephera_cli/src/output/symbols.rs` | 9 |
-| `crates/sephera_mcp/src/render.rs` | 9 |
+| `fuzz/fuzz_targets/render_context_markdown.rs` | 9 |
 
 ## Dependency Diagram
 
@@ -215,96 +216,93 @@ graph LR
     n2["lib.rs"]
     n3["output.rs"]
     n4["context_json.rs"]
-    n5["context_markdown.rs"]
-    n6["profiles.rs"]
-    n7["symbols.rs"]
-    n8["run.rs"]
-    n9["loc_table.rs"]
-    n10["merge_corpus.rs"]
-    n11["builder.rs"]
-    n12["candidate.rs"]
-    n13["excerpt.rs"]
-    n14["focus.rs"]
-    n15["grouping.rs"]
-    n16["lib.rs"]
-    n17["ranker.rs"]
+    n5["profiles.rs"]
+    n6["symbols.rs"]
+    n7["run.rs"]
+    n8["loc_table.rs"]
+    n9["merge_corpus.rs"]
+    n10["builder.rs"]
+    n11["candidate.rs"]
+    n12["excerpt.rs"]
+    n13["focus.rs"]
+    n14["grouping.rs"]
+    n15["lib.rs"]
+    n16["ranker.rs"]
+    n17["render.rs"]
     n18["types.rs"]
     n19["context_builder.rs"]
     n20["context_line_range.rs"]
-    n21["lib.rs"]
-    n22["loc.rs"]
-    n23["lib.rs"]
-    n24["render.rs"]
-    n25["excerpt.rs"]
-    n26["groups.rs"]
-    n27["metadata.rs"]
-    n28["tests.rs"]
-    n29["server.rs"]
-    n30["tests.rs"]
-    n31["context.rs"]
-    n32["lib.rs"]
-    n33["lib.rs"]
-    n34["lookup.rs"]
-    n35["tests.rs"]
-    n36["build_context_report.rs"]
-    n37["render_context_markdown.rs"]
-    n38["render_loc_table.rs"]
-    n39["loc.rs"]
-    n40["mod.rs"]
-    n41["symbols.rs"]
-    n42["main.rs"]
-    n0 --> n32
-    n1 --> n32
+    n21["render.rs"]
+    n22["lib.rs"]
+    n23["loc.rs"]
+    n24["lib.rs"]
+    n25["server.rs"]
+    n26["tests.rs"]
+    n27["context.rs"]
+    n28["lib.rs"]
+    n29["lib.rs"]
+    n30["lookup.rs"]
+    n31["tests.rs"]
+    n32["build_context_report.rs"]
+    n33["render_context_markdown.rs"]
+    n34["render_loc_table.rs"]
+    n35["loc.rs"]
+    n36["mod.rs"]
+    n37["symbols.rs"]
+    n38["main.rs"]
+    n0 --> n28
+    n1 --> n28
     n2 --> n0
     n2 --> n1
     n2 --> n3
-    n2 --> n8
+    n2 --> n7
     n3 --> n4
     n3 --> n5
     n3 --> n6
-    n3 --> n7
-    n4 --> n16
-    n5 --> n16
-    n6 --> n1
-    n7 --> n33
-    n8 --> n32
-    n8 --> n33
-    n8 --> n0
-    n8 --> n1
-    n8 --> n3
-    n9 --> n2
-    n10 --> n32
-    n11 --> n12
+    n3 --> n15
+    n4 --> n15
+    n5 --> n1
+    n6 --> n29
+    n7 --> n28
+    n7 --> n29
+    n7 --> n0
+    n7 --> n1
+    n7 --> n3
+    n8 --> n2
+    n9 --> n28
+    n10 --> n11
+    n10 --> n12
+    n10 --> n13
+    n10 --> n14
+    n10 --> n16
+    n10 --> n18
     n11 --> n13
-    n11 --> n14
-    n11 --> n15
-    n11 --> n17
     n11 --> n18
-    n12 --> n14
+    n12 --> n11
     n12 --> n18
-    n13 --> n12
     n13 --> n18
     n14 --> n18
+    n15 --> n10
+    n15 --> n11
+    n15 --> n12
+    n15 --> n13
+    n15 --> n14
+    n15 --> n16
+    n15 --> n17
     n15 --> n18
     n16 --> n11
-    n16 --> n12
-    n16 --> n13
-    n16 --> n14
-    n16 --> n15
-    n16 --> n17
     n16 --> n18
-    n17 --> n12
-    n17 --> n18
-    n19 --> n16
-    n20 --> n16
-    n21 --> n22
-    n22 --> n32
-    n23 --> n24
-    n23 --> n29
-    n24 --> n16
+    n17 --> n15
+    n19 --> n15
+    n20 --> n15
+    n21 --> n15
+    n22 --> n23
+    n23 --> n28
     n24 --> n25
-    %% ... and 35 more edges
+    n25 --> n15
+    %% ... and 22 more edges
 ```
+
 ````
 
 **Nine files reach `code_loc.rs`, five of them importing it directly.** You now know your blast radius before opening the file - not after CI turns red.

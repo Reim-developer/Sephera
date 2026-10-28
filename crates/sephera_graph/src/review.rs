@@ -34,6 +34,8 @@ use std::collections::BTreeSet;
 
 use super::affected_tests::measure_tests;
 use super::blast_radius::reachable_dependents_with_distance;
+use serde::Serialize;
+
 use super::coupling::{CouplingOptions, measure_coupling};
 use super::types::GraphReport;
 
@@ -49,7 +51,7 @@ pub struct ReviewOptions {
 }
 
 /// One changed file and what the change to it puts at risk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChangedFileReview {
     /// Path of the changed file, in the graph's spelling.
     pub file: String,
@@ -70,7 +72,7 @@ pub struct ChangedFileReview {
 
 /// One hidden-coupling warning: a file in the change whose historic
 /// partner is not.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CouplingWarning {
     /// The file in the change.
     pub changed: String,
@@ -84,17 +86,138 @@ pub struct CouplingWarning {
 }
 
 /// The review of one change.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReviewReport {
+    /// Commits handed to the coupling measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it.
+    pub commits_counted: u64,
     /// One entry per changed file, sorted by path.
     pub changed: Vec<ChangedFileReview>,
     /// Coupling warnings, strongest first, as `coupling` orders its
     /// pairs.
     pub warnings: Vec<CouplingWarning>,
-    /// Commits handed to the coupling measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it.
-    pub commits_counted: u64,
+}
+
+/// Render the review as Markdown.
+///
+/// The header states what the change was read against and the
+/// history window behind the warnings, because both bound every
+/// number that follows: a warning's co-changes mean nothing without
+/// the window they were counted in, and a review against HEAD is a
+/// different claim from the same files reviewed against a branch
+/// point.
+///
+/// The sections run in order of certainty: the changed files first,
+/// then what broke by name, then the heuristic coupling warnings
+/// last. The breaking section is never omitted: when nothing broke
+/// it is one line saying so, because an omitted section reads as
+/// "not measured", and a review must not leave the reader guessing
+/// whether breaking was checked.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(
+    report: &ReviewReport,
+    against: &str,
+    breaking: &crate::breaking::BreakingReport,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "# Change review\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "{} changed file(s) against `{against}`. History: {} commits \
+         scanned, {} counted.",
+        report.changed.len(),
+        report.commits_scanned,
+        report.commits_counted
+    )
+    .expect("writing to a String must succeed");
+
+    if report.changed.is_empty() {
+        writeln!(output, "\nNothing to review: the working tree matches `{against}`, and no untracked files were found.")
+            .expect("writing to a String must succeed");
+        output.push('\n');
+        output.push_str(&crate::breaking::render_markdown_section(breaking));
+        return output;
+    }
+
+    for entry in &report.changed {
+        writeln!(output, "\n## `{}`", entry.file)
+            .expect("writing to a String must succeed");
+        if !entry.present {
+            writeln!(
+                output,
+                "- Not in the analysed tree -- deleted by the change, or \
+                 outside the analysis base. The graph cannot name its \
+                 dependents, which is not the same as there being none."
+            )
+            .expect("writing to a String must succeed");
+            continue;
+        }
+        writeln!(
+            output,
+            "- {} direct dependent(s), {} in total.",
+            entry.direct_dependents.len(),
+            entry.dependent_count
+        )
+        .expect("writing to a String must succeed");
+        if !entry.direct_dependents.is_empty() {
+            writeln!(
+                output,
+                "- Directly imported by: {}",
+                entry
+                    .direct_dependents
+                    .iter()
+                    .map(|dependent| format!("`{dependent}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .expect("writing to a String must succeed");
+        }
+        if entry.tests.is_empty() {
+            writeln!(output, "- No affected tests reach this file.")
+                .expect("writing to a String must succeed");
+        } else {
+            writeln!(
+                output,
+                "- Affected tests ({}): {}",
+                entry.tests.len(),
+                entry
+                    .tests
+                    .iter()
+                    .map(|test| format!("`{test}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+
+    output.push('\n');
+    output.push_str(&crate::breaking::render_markdown_section(breaking));
+
+    if !report.warnings.is_empty() {
+        writeln!(output, "\n## Coupling warnings")
+            .expect("writing to a String must succeed");
+        for warning in &report.warnings {
+            writeln!(
+                output,
+                "- Warning: `{}` changed with `{}` {} times \
+                 (containment {}) and is not in this change.",
+                warning.partner,
+                warning.changed,
+                warning.co_changes,
+                warning.containment
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+    output
 }
 
 /// Review `changed` against the graph and the history.
@@ -182,10 +305,10 @@ pub fn measure_review(
         .collect();
 
     ReviewReport {
-        changed: changed_reviews,
-        warnings,
         commits_scanned: coupling.commits_scanned,
         commits_counted: coupling.commits_counted,
+        changed: changed_reviews,
+        warnings,
     }
 }
 
@@ -193,11 +316,11 @@ pub fn measure_review(
 mod tests {
     use std::path::PathBuf;
 
-    use crate::types::{
-        GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-    };
+    use crate::types::{GraphEdge, GraphNode, GraphReport};
 
     use super::{ReviewOptions, measure_review};
+
+    use crate::test_fixtures::{edge, empty_metrics};
 
     fn node(path: &str) -> GraphNode {
         GraphNode {
@@ -205,19 +328,6 @@ mod tests {
             language: Some("Python"),
             imports_count: 1,
             imported_by_count: 1,
-        }
-    }
-
-    fn resolved_edge(from: &str, to: &str) -> GraphEdge {
-        GraphEdge {
-            from: from.to_owned(),
-            to: Some(to.to_owned()),
-            import_path: "pkg.mod".to_owned(),
-            items: Vec::new(),
-            resolved: true,
-            kind: ImportKind::Dependency,
-            local_gap: false,
-            cfg_gated: false,
         }
     }
 
@@ -230,23 +340,7 @@ mod tests {
             nodes: nodes.iter().copied().map(node).collect(),
             edges,
             boundary_files: Vec::new(),
-            metrics: GraphMetrics {
-                total_files: 0,
-                total_internal_edges: 0,
-                self_references: 0,
-                total_external_edges: 0,
-                unresolved_local_edges: 0,
-                unresolved_local_samples: Vec::new(),
-                cfg_gated_edges: 0,
-                dependencies: Vec::new(),
-                declared_dependency_edges: 0,
-                local_crate_edges: 0,
-                builtin_edges: 0,
-                circular_dependencies: 0,
-                most_importing: vec![],
-                most_imported: vec![],
-                cycles: vec![],
-            },
+            metrics: empty_metrics(),
         }
     }
 
@@ -269,8 +363,8 @@ mod tests {
         let graph = report(
             &["core.py", "app.py", "tests/test_app.py"],
             vec![
-                resolved_edge("app.py", "core.py"),
-                resolved_edge("tests/test_app.py", "app.py"),
+                edge("app.py", "core.py", "pkg.mod"),
+                edge("tests/test_app.py", "app.py", "pkg.mod"),
             ],
         );
 
@@ -344,7 +438,7 @@ mod tests {
         // risk already stands in core's dependents.
         let graph = report(
             &["core.py", "app.py"],
-            vec![resolved_edge("app.py", "core.py")],
+            vec![edge("app.py", "core.py", "pkg.mod")],
         );
         let history = commits(&[
             &["core.py", "app.py"],
