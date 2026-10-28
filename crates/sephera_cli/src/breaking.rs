@@ -176,42 +176,9 @@ fn render_body(report: &BreakingReport, symbol_heading: &str) -> String {
 /// this output does not parse prose to tell the two apart.
 #[must_use]
 pub fn render_json(report: &BreakingReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report, shared by the standalone document
-/// and by `review`, which embeds it under its `"breaking"` key
-/// rather than concatenating two documents.
-#[must_use]
-pub fn json_value(report: &BreakingReport) -> serde_json::Value {
-    let broken: Vec<serde_json::Value> = report
-        .broken
-        .iter()
-        .map(|broken| {
-            serde_json::json!({
-                "file": broken.file,
-                "symbol": broken.symbol,
-                "kind": broken.kind,
-                "change": broken.change,
-                "suggestion": broken.suggestion,
-                "direct": broken.direct.iter().map(|user| {
-                    serde_json::json!({
-                        "file": user.file,
-                        "imports": user.imports,
-                    })
-                }).collect::<Vec<_>>(),
-                "namespace_users": broken.namespace_users,
-                "downstream": broken.downstream,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "from": report.from_ref,
-        "to": report.to_ref,
-        "broken": broken,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, and the ref fields rename to `from`/`to`.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 /// The result message for one broken symbol: the change, the

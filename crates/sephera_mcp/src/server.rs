@@ -811,14 +811,14 @@ impl SepheraServer {
             commits_scanned: measured.commits_scanned,
             commits_counted: measured.commits_counted,
             changed: &measured.changed,
-            breaking: BreakingReport::from_measured(&breaking),
+            breaking: &breaking,
             warnings: &measured.warnings,
         };
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&document),
             Some("markdown") => {
-                Ok(review_markdown(&measured, against, &document.breaking))
+                Ok(review_markdown(&measured, against, document.breaking))
             }
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
@@ -1039,11 +1039,9 @@ impl SepheraServer {
             &param.from,
             to_label,
         );
-        let built = BreakingReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(breaking_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(breaking_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported breaking format `{other}`; expected \
@@ -2300,46 +2298,11 @@ fn risk_markdown(report: &risk::RiskReport) -> String {
     output
 }
 
-/// The JSON shape the `breaking` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BreakingReport {
-    /// The older ref, as the caller spelled it.
-    pub from: String,
-    /// The newer ref, as the caller spelled it, or "working tree".
-    pub to: String,
-    /// The broken symbols, widest consumer count first.
-    pub broken: Vec<BrokenSymbolReport>,
-}
-
-/// One broken symbol, with the files that still use it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BrokenSymbolReport {
-    /// The file that used to declare the symbol.
-    pub file: String,
-    /// The symbol's name.
-    pub symbol: String,
-    /// The kind it was declared as in the old tree.
-    pub kind: String,
-    /// `removed`, `kind_changed`, or `signature_changed`.
-    pub change: String,
-    /// The kind the new tree declares it as, for a kind change.
-    pub new_kind: Option<String>,
-    /// The call shape the old tree declared, for a signature change.
-    pub old_signature: Option<SignatureReport>,
-    /// The call shape the new tree declares, for a signature change.
-    pub new_signature: Option<SignatureReport>,
-    /// What to do about the break, when the new tree says
-    /// something actionable.
-    pub suggestion: Option<SuggestionReport>,
-    /// Files in the new tree that name the symbol from that file.
-    pub direct: Vec<DirectConsumerReport>,
-    /// Files importing the file's namespace wholesale.
-    pub namespace_users: Vec<String>,
-    /// Files downstream of a direct or namespace user.
-    pub downstream: Vec<String>,
-}
-
-/// One call shape, as the breaking report renders it.
+/// One call shape, as a report renders it.
+///
+/// Shared by the merge and diff mirrors: both flatten a graph
+/// `Signature` into this rendered pair rather than serializing
+/// the graph type, because their shapes are flat by design.
 #[derive(serde::Serialize, schemars::JsonSchema)]
 pub struct SignatureReport {
     /// The comma-joined parameter spellings.
@@ -2376,102 +2339,6 @@ impl SignatureReport {
             || format!("({})", self.parameters),
             |returns| format!("({}) -> {returns}", self.parameters),
         )
-    }
-}
-
-/// One file that names a broken symbol, with the evidence.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DirectConsumerReport {
-    /// Path of the file.
-    pub file: String,
-    /// Import paths evidencing the use.
-    pub imports: Vec<String>,
-}
-
-impl BreakingReport {
-    fn from_measured(measured: &breaking::BreakingReport) -> Self {
-        Self {
-            from: measured.from_ref.clone(),
-            to: measured.to_ref.clone(),
-            broken: measured
-                .broken
-                .iter()
-                .map(|broken| {
-                    let (change, new_kind, old_signature, new_signature) =
-                        match &broken.change {
-                            breaking::BreakChange::Removed => {
-                                ("removed".to_owned(), None, None, None)
-                            }
-                            breaking::BreakChange::KindChanged { to } => (
-                                "kind_changed".to_owned(),
-                                Some(format!("{to:?}").to_lowercase()),
-                                None,
-                                None,
-                            ),
-                            breaking::BreakChange::SignatureChanged {
-                                from,
-                                to,
-                            } => (
-                                "signature_changed".to_owned(),
-                                None,
-                                Some(SignatureReport {
-                                    parameters: from.parameters.clone(),
-                                    returns: from.returns.clone(),
-                                }),
-                                Some(SignatureReport {
-                                    parameters: to.parameters.clone(),
-                                    returns: to.returns.clone(),
-                                }),
-                            ),
-                        };
-                    let suggestion = match &broken.suggestion {
-                        Some(breaking::BreakSuggestion::Moved {
-                            file,
-                            kind,
-                        }) => Some(SuggestionReport {
-                            action: "moved".to_owned(),
-                            file: Some(file.clone()),
-                            declaration_kind: Some(
-                                format!("{kind:?}").to_lowercase(),
-                            ),
-                            signature: None,
-                        }),
-                        Some(breaking::BreakSuggestion::NewCallShape {
-                            signature,
-                        }) => Some(SuggestionReport {
-                            action: "new_call_shape".to_owned(),
-                            file: None,
-                            declaration_kind: None,
-                            signature: Some(SignatureReport {
-                                parameters: signature.parameters.clone(),
-                                returns: signature.returns.clone(),
-                            }),
-                        }),
-                        None => None,
-                    };
-                    BrokenSymbolReport {
-                        file: broken.file.clone(),
-                        symbol: broken.symbol.clone(),
-                        kind: format!("{:?}", broken.kind).to_lowercase(),
-                        change,
-                        new_kind,
-                        old_signature,
-                        new_signature,
-                        suggestion,
-                        direct: broken
-                            .direct
-                            .iter()
-                            .map(|user| DirectConsumerReport {
-                                file: user.file.clone(),
-                                imports: user.imports.clone(),
-                            })
-                            .collect(),
-                        namespace_users: broken.namespace_users.clone(),
-                        downstream: broken.downstream.clone(),
-                    }
-                })
-                .collect(),
-        }
     }
 }
 
@@ -2896,14 +2763,14 @@ fn simulate_markdown(report: &SimulateReport) -> String {
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn breaking_markdown(report: &BreakingReport) -> String {
+fn breaking_markdown(report: &breaking::BreakingReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
     let _ = writeln!(
         output,
         "# Breaking changes: `{}` → `{}`\n",
-        report.from, report.to
+        report.from_ref, report.to_ref
     );
     output.push_str(&breaking_markdown_body(report, "##"));
     output
@@ -2915,14 +2782,14 @@ fn breaking_markdown(report: &BreakingReport) -> String {
 /// `review` embeds exactly this: the same count line, the same
 /// empty-state line, the same per-symbol entries, only nested one
 /// level deeper, so the two tools cannot disagree about what broke.
-fn breaking_markdown_section(report: &BreakingReport) -> String {
+fn breaking_markdown_section(report: &breaking::BreakingReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
     let _ = writeln!(
         output,
         "## Breaking changes: `{}` → `{}`\n",
-        report.from, report.to
+        report.from_ref, report.to_ref
     );
     output.push_str(&breaking_markdown_body(report, "###"));
     output
@@ -2937,23 +2804,21 @@ fn breaking_markdown_section(report: &BreakingReport) -> String {
 /// action string — a move fills file and kind, a new call shape
 /// fills the signature. Extracted from `breaking_markdown_body`,
 /// which the suggestion block pushed past clippy's line limit.
-fn suggestion_markdown(broken: &BrokenSymbolReport) -> String {
+fn suggestion_markdown(broken: &breaking::BrokenSymbol) -> String {
     use std::fmt::Write as _;
 
     let Some(suggestion) = broken.suggestion.as_ref() else {
         return String::new();
     };
     let mut output = String::new();
-    match (
-        suggestion.file.as_deref(),
-        suggestion.declaration_kind.as_deref(),
-        suggestion.signature.as_ref(),
-    ) {
-        (Some(file), Some(kind), _) => {
+    // Kinds print Debug here, as the CLI spells them; the JSON
+    // spelling stays the lowercase one.
+    match suggestion {
+        breaking::BreakSuggestion::Moved { file, kind } => {
             let _ =
-                writeln!(output, "\nSuggestion: moved to `{file}` ({kind}).");
+                writeln!(output, "\nSuggestion: moved to `{file}` ({kind:?}).");
         }
-        (_, _, Some(signature)) => {
+        breaking::BreakSuggestion::NewCallShape { signature } => {
             let _ = writeln!(
                 output,
                 "\nSuggestion: call `{}{}`.",
@@ -2961,13 +2826,12 @@ fn suggestion_markdown(broken: &BrokenSymbolReport) -> String {
                 signature.render()
             );
         }
-        _ => {}
     }
     output
 }
 
 fn breaking_markdown_body(
-    report: &BreakingReport,
+    report: &breaking::BreakingReport,
     symbol_heading: &str,
 ) -> String {
     use std::fmt::Write as _;
@@ -2995,27 +2859,22 @@ fn breaking_markdown_body(
 
     for broken in &report.broken {
         let _ = writeln!(output);
-        let change = match (
-            &broken.change,
-            &broken.new_kind,
-            &broken.old_signature,
-            &broken.new_signature,
-        ) {
-            (_, _, Some(from), Some(to)) => {
+        let change = match &broken.change {
+            breaking::BreakChange::Removed => "removed".to_owned(),
+            breaking::BreakChange::KindChanged { to } => {
+                format!("changed kind: {:?} → {to:?}", broken.kind)
+            }
+            breaking::BreakChange::SignatureChanged { from, to } => {
                 format!(
                     "changed signature: {} → {}",
                     from.render(),
                     to.render()
                 )
             }
-            (_, Some(to), _, _) => {
-                format!("changed kind: {} → {to}", broken.kind)
-            }
-            (change, None, _, _) => change.clone(),
         };
         let _ = writeln!(
             output,
-            "{symbol_heading} `{}` — `{}` ({}, {change})",
+            "{symbol_heading} `{}` — `{}` ({:?}, {change})",
             broken.file, broken.symbol, broken.kind
         );
         // The suggestion first, as in the CLI: the line an agent
@@ -3534,14 +3393,14 @@ struct ReviewDocument<'a> {
     commits_scanned: u64,
     commits_counted: u64,
     changed: &'a [review::ChangedFileReview],
-    breaking: BreakingReport,
+    breaking: &'a breaking::BreakingReport,
     warnings: &'a [review::CouplingWarning],
 }
 
 fn review_markdown(
     report: &review::ReviewReport,
     against: &str,
-    breaking: &BreakingReport,
+    breaking: &breaking::BreakingReport,
 ) -> String {
     use std::fmt::Write as _;
 

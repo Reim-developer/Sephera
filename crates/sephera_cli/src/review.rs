@@ -164,16 +164,15 @@ pub fn render_markdown(
 /// The JSON document `render_json` emits: the graph review plus
 /// the ref it was read against and the breaking report embedded
 /// between the changed files and the warnings, as the Markdown
-/// sections order them. The breaking value still comes from
-/// `breaking::json_value` until that module serializes directly;
-/// the review half already serializes from the graph struct.
+/// sections order them. Both halves serialize from the graph
+/// structs directly.
 #[derive(serde::Serialize)]
 struct ReviewDocument<'a> {
     against: &'a str,
     commits_scanned: u64,
     commits_counted: u64,
     changed: &'a [ChangedFileReview],
-    breaking: serde_json::Value,
+    breaking: &'a sephera_graph::breaking::BreakingReport,
     warnings: &'a [CouplingWarning],
 }
 
@@ -188,7 +187,7 @@ pub fn render_json(
         commits_scanned: report.commits_scanned,
         commits_counted: report.commits_counted,
         changed: &report.changed,
-        breaking: crate::breaking::json_value(breaking),
+        breaking,
         warnings: &report.warnings,
     };
 

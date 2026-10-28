@@ -1580,13 +1580,10 @@ async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
 
     let broken = &parsed["broken"][0];
     assert_eq!(broken["symbol"], "add", "{output}");
-    assert_eq!(broken["change"], "removed", "{output}");
-    assert_eq!(broken["suggestion"]["action"], "moved", "{output}");
+    assert_eq!(broken["change"]["type"], "removed", "{output}");
+    assert_eq!(broken["suggestion"]["type"], "moved", "{output}");
     assert_eq!(broken["suggestion"]["file"], "other.py", "{output}");
-    assert_eq!(
-        broken["suggestion"]["declaration_kind"], "function",
-        "{output}"
-    );
+    assert_eq!(broken["suggestion"]["kind"], "function", "{output}");
 
     let markdown = server
         .breaking(param_for(breaking_input(
@@ -1596,7 +1593,7 @@ async fn breaking_tool_suggests_the_move_in_json_and_markdown() {
         .await
         .expect("breaking tool should succeed for a temp repo");
     assert!(
-        markdown.contains("Suggestion: moved to `other.py` (function)."),
+        markdown.contains("Suggestion: moved to `other.py` (Function)."),
         "{markdown}"
     );
 }
@@ -1639,7 +1636,7 @@ async fn regression_breaking_tool_subdir_without_to_finds_consumers() {
 
     let broken = &parsed["broken"][0];
     assert_eq!(broken["symbol"], "add", "{output}");
-    assert_eq!(broken["change"], "removed", "{output}");
+    assert_eq!(broken["change"]["type"], "removed", "{output}");
     assert_eq!(broken["direct"][0]["file"], "user.py", "{output}");
 }
 
