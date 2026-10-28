@@ -99,6 +99,127 @@ pub struct ReviewReport {
     pub warnings: Vec<CouplingWarning>,
 }
 
+/// Render the review as Markdown.
+///
+/// The header states what the change was read against and the
+/// history window behind the warnings, because both bound every
+/// number that follows: a warning's co-changes mean nothing without
+/// the window they were counted in, and a review against HEAD is a
+/// different claim from the same files reviewed against a branch
+/// point.
+///
+/// The sections run in order of certainty: the changed files first,
+/// then what broke by name, then the heuristic coupling warnings
+/// last. The breaking section is never omitted: when nothing broke
+/// it is one line saying so, because an omitted section reads as
+/// "not measured", and a review must not leave the reader guessing
+/// whether breaking was checked.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(
+    report: &ReviewReport,
+    against: &str,
+    breaking: &crate::breaking::BreakingReport,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "# Change review\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "{} changed file(s) against `{against}`. History: {} commits \
+         scanned, {} counted.",
+        report.changed.len(),
+        report.commits_scanned,
+        report.commits_counted
+    )
+    .expect("writing to a String must succeed");
+
+    if report.changed.is_empty() {
+        writeln!(output, "\nNothing to review: the working tree matches `{against}`, and no untracked files were found.")
+            .expect("writing to a String must succeed");
+        output.push('\n');
+        output.push_str(&crate::breaking::render_markdown_section(breaking));
+        return output;
+    }
+
+    for entry in &report.changed {
+        writeln!(output, "\n## `{}`", entry.file)
+            .expect("writing to a String must succeed");
+        if !entry.present {
+            writeln!(
+                output,
+                "- Not in the analysed tree -- deleted by the change, or \
+                 outside the analysis base. The graph cannot name its \
+                 dependents, which is not the same as there being none."
+            )
+            .expect("writing to a String must succeed");
+            continue;
+        }
+        writeln!(
+            output,
+            "- {} direct dependent(s), {} in total.",
+            entry.direct_dependents.len(),
+            entry.dependent_count
+        )
+        .expect("writing to a String must succeed");
+        if !entry.direct_dependents.is_empty() {
+            writeln!(
+                output,
+                "- Directly imported by: {}",
+                entry
+                    .direct_dependents
+                    .iter()
+                    .map(|dependent| format!("`{dependent}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .expect("writing to a String must succeed");
+        }
+        if entry.tests.is_empty() {
+            writeln!(output, "- No affected tests reach this file.")
+                .expect("writing to a String must succeed");
+        } else {
+            writeln!(
+                output,
+                "- Affected tests ({}): {}",
+                entry.tests.len(),
+                entry
+                    .tests
+                    .iter()
+                    .map(|test| format!("`{test}`"))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+
+    output.push('\n');
+    output.push_str(&crate::breaking::render_markdown_section(breaking));
+
+    if !report.warnings.is_empty() {
+        writeln!(output, "\n## Coupling warnings")
+            .expect("writing to a String must succeed");
+        for warning in &report.warnings {
+            writeln!(
+                output,
+                "- Warning: `{}` changed with `{}` {} times \
+                 (containment {}) and is not in this change.",
+                warning.partner,
+                warning.changed,
+                warning.co_changes,
+                warning.containment
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+    output
+}
+
 /// Review `changed` against the graph and the history.
 ///
 /// `changed` and `commits` are in the graph's spelling, as

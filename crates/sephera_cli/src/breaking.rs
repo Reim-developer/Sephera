@@ -13,7 +13,7 @@ use sephera_graph::breaking::BreakChange as Change;
 use sephera_graph::breaking::BreakSuggestion as Suggestion;
 use sephera_graph::breaking::BrokenSymbol;
 pub use sephera_graph::breaking::{
-    BreakingReport, measure_breaking, render_markdown, render_markdown_section,
+    BreakingReport, measure_breaking, render_markdown,
 };
 
 use crate::sarif;
@@ -190,7 +190,9 @@ mod tests {
     use sephera_core::declarations::{DeclarationKind, Signature};
     use sephera_graph::breaking::{BreakChange, BrokenSymbol};
 
-    use super::{render_json, render_markdown, render_markdown_section};
+    use sephera_graph::breaking::render_markdown_section;
+
+    use super::{render_json, render_markdown};
 
     fn broken(
         change: BreakChange,

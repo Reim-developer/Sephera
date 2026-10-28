@@ -817,9 +817,11 @@ impl SepheraServer {
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&document),
-            Some("markdown") => {
-                Ok(review_markdown(&measured, against, document.breaking))
-            }
+            Some("markdown") => Ok(review::render_markdown(
+                &measured,
+                against,
+                document.breaking,
+            )),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported review format `{other}`; expected \
@@ -2527,91 +2529,6 @@ struct ReviewDocument<'a> {
     changed: &'a [review::ChangedFileReview],
     breaking: &'a breaking::BreakingReport,
     warnings: &'a [review::CouplingWarning],
-}
-
-fn review_markdown(
-    report: &review::ReviewReport,
-    against: &str,
-    breaking: &breaking::BreakingReport,
-) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Change review\n");
-    let _ = writeln!(
-        output,
-        "{} changed file(s) against `{}`. History: {} commits \
-         scanned, {} counted.",
-        report.changed.len(),
-        against,
-        report.commits_scanned,
-        report.commits_counted
-    );
-
-    if report.changed.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNothing to review: the working tree matches `{against}`, and \
-             no untracked files were found."
-        );
-        output.push('\n');
-        output.push_str(&breaking::render_markdown_section(breaking));
-        return output;
-    }
-
-    for entry in &report.changed {
-        let _ = writeln!(output, "\n## `{}`", entry.file);
-        if !entry.present {
-            let _ = writeln!(
-                output,
-                "- Not in the analysed tree -- deleted by the change, \
-                 or outside the analysis base. The graph cannot name \
-                 its dependents, which is not the same as there being \
-                 none."
-            );
-            continue;
-        }
-        let _ = writeln!(
-            output,
-            "- {} direct dependent(s), {} in total.",
-            entry.direct_dependents.len(),
-            entry.dependent_count
-        );
-        if entry.tests.is_empty() {
-            let _ = writeln!(output, "- No affected tests reach this file.");
-        } else {
-            let _ = writeln!(
-                output,
-                "- Affected tests ({}): {}",
-                entry.tests.len(),
-                entry
-                    .tests
-                    .iter()
-                    .map(|test| format!("`{test}`"))
-                    .collect::<Vec<_>>()
-                    .join(", ")
-            );
-        }
-    }
-
-    output.push('\n');
-    output.push_str(&breaking::render_markdown_section(breaking));
-
-    if !report.warnings.is_empty() {
-        let _ = writeln!(output, "\n## Coupling warnings");
-        for warning in &report.warnings {
-            let _ = writeln!(
-                output,
-                "- Warning: `{}` changed with `{}` {} times \
-                 (containment {}) and is not in this change.",
-                warning.partner,
-                warning.changed,
-                warning.co_changes,
-                warning.containment
-            );
-        }
-    }
-    output
 }
 
 /// Render affected tests as Markdown for an agent's context window.
