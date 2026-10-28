@@ -1041,7 +1041,7 @@ impl SepheraServer {
         );
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(breaking_markdown(&measured)),
+            Some("markdown") => Ok(breaking::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported breaking format `{other}`; expected \
@@ -2325,164 +2325,6 @@ fn simulate_markdown(report: &simulate::SimulateReport) -> String {
     }
     output
 }
-/// Render a breaking report as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn breaking_markdown(report: &breaking::BreakingReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Breaking changes: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    );
-    output.push_str(&breaking_markdown_body(report, "##"));
-    output
-}
-
-/// Render the breaking report as a section of a larger document, at
-/// the heading level a section takes.
-///
-/// `review` embeds exactly this: the same count line, the same
-/// empty-state line, the same per-symbol entries, only nested one
-/// level deeper, so the two tools cannot disagree about what broke.
-fn breaking_markdown_section(report: &breaking::BreakingReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "## Breaking changes: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    );
-    output.push_str(&breaking_markdown_body(report, "###"));
-    output
-}
-
-/// The body shared by the standalone document and the embedded
-/// section: the count line, then the empty-state line or one entry
-/// per broken symbol, widest exposure first.
-/// The suggestion line for one broken symbol, when one exists.
-///
-/// The shape is read from which fields are filled, not from the
-/// action string — a move fills file and kind, a new call shape
-/// fills the signature. Extracted from `breaking_markdown_body`,
-/// which the suggestion block pushed past clippy's line limit.
-fn suggestion_markdown(broken: &breaking::BrokenSymbol) -> String {
-    use std::fmt::Write as _;
-
-    let Some(suggestion) = broken.suggestion.as_ref() else {
-        return String::new();
-    };
-    let mut output = String::new();
-    // Kinds print Debug here, as the CLI spells them; the JSON
-    // spelling stays the lowercase one.
-    match suggestion {
-        breaking::BreakSuggestion::Moved { file, kind } => {
-            let _ =
-                writeln!(output, "\nSuggestion: moved to `{file}` ({kind:?}).");
-        }
-        breaking::BreakSuggestion::NewCallShape { signature } => {
-            let _ = writeln!(
-                output,
-                "\nSuggestion: call `{}{}`.",
-                broken.symbol,
-                signature.render()
-            );
-        }
-    }
-    output
-}
-
-fn breaking_markdown_body(
-    report: &breaking::BreakingReport,
-    symbol_heading: &str,
-) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let with_consumers = report
-        .broken
-        .iter()
-        .filter(|broken| !broken.direct.is_empty())
-        .count();
-    let _ = writeln!(
-        output,
-        "{} symbol(s) broke; {} of them still have direct consumers.",
-        report.broken.len(),
-        with_consumers
-    );
-
-    if report.broken.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNothing any consumer names was removed or changed shape."
-        );
-        return output;
-    }
-
-    for broken in &report.broken {
-        let _ = writeln!(output);
-        let change = match &broken.change {
-            breaking::BreakChange::Removed => "removed".to_owned(),
-            breaking::BreakChange::KindChanged { to } => {
-                format!("changed kind: {:?} → {to:?}", broken.kind)
-            }
-            breaking::BreakChange::SignatureChanged { from, to } => {
-                format!(
-                    "changed signature: {} → {}",
-                    from.render(),
-                    to.render()
-                )
-            }
-        };
-        let _ = writeln!(
-            output,
-            "{symbol_heading} `{}` — `{}` ({:?}, {change})",
-            broken.file, broken.symbol, broken.kind
-        );
-        // The suggestion first, as in the CLI: the line an agent
-        // acts on, with the consumer lists below as its evidence.
-        output.push_str(&suggestion_markdown(broken));
-        if broken.direct.is_empty() && broken.namespace_users.is_empty() {
-            let _ = writeln!(output, "\nNo consumers in the new tree.");
-        }
-        if !broken.direct.is_empty() {
-            let _ = writeln!(output, "\nDirect consumers:");
-            for user in &broken.direct {
-                let _ = writeln!(
-                    output,
-                    "- `{}` via {}",
-                    user.file,
-                    user.imports
-                        .iter()
-                        .map(|import| format!("`{import}`"))
-                        .collect::<Vec<_>>()
-                        .join(", ")
-                );
-            }
-        }
-        if !broken.namespace_users.is_empty() {
-            let _ = writeln!(
-                output,
-                "\nNamespace users (may use it without naming it):"
-            );
-            for file in &broken.namespace_users {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-        if !broken.downstream.is_empty() {
-            let _ = writeln!(output, "\nDownstream of those consumers:");
-            for file in &broken.downstream {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-    }
-    output
-}
-
 /// The kind line of one conflict: which side changed the
 /// contract, which side added the consumer, and — for a warning —
 /// why a human look is still needed.
@@ -2713,7 +2555,7 @@ fn review_markdown(
              no untracked files were found."
         );
         output.push('\n');
-        output.push_str(&breaking_markdown_section(breaking));
+        output.push_str(&breaking::render_markdown_section(breaking));
         return output;
     }
 
@@ -2753,7 +2595,7 @@ fn review_markdown(
     }
 
     output.push('\n');
-    output.push_str(&breaking_markdown_section(breaking));
+    output.push_str(&breaking::render_markdown_section(breaking));
 
     if !report.warnings.is_empty() {
         let _ = writeln!(output, "\n## Coupling warnings");

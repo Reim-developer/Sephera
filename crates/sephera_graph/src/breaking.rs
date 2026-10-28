@@ -149,6 +149,179 @@ pub struct BreakingReport {
     pub broken: Vec<BrokenSymbol>,
 }
 
+/// Render the report as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+///
+/// One section per broken symbol, widest exposure first. The change
+/// is stated before the consumers: a reader deciding whether to
+/// merge reads "removed" differently from "became a function", and
+/// the consumer lists that follow are the evidence for either. A
+/// symbol nobody uses is still listed — a removal with no consumers
+/// is the clean kind of breaking, and it reads differently from a
+/// symbol that never broke at all.
+#[must_use]
+pub fn render_markdown(report: &BreakingReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Breaking changes: `{}` → `{}`\n",
+        report.from_ref, report.to_ref
+    )
+    .expect("writing to a String must succeed");
+    output.push_str(&render_body(report, "##"));
+    output
+}
+
+/// Render the report as a section of a larger document, at the
+/// heading level a section takes.
+///
+/// `review` embeds exactly this: the same count line, the same
+/// empty-state line, the same per-symbol entries, only nested one
+/// level deeper, so the two commands can never disagree about what
+/// broke.
+#[must_use]
+pub fn render_markdown_section(report: &BreakingReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "## Breaking changes: `{}` → `{}`\n",
+        report.from_ref, report.to_ref
+    )
+    .expect("writing to a String must succeed");
+    output.push_str(&render_body(report, "###"));
+    output
+}
+
+/// The body shared by the standalone document and the embedded
+/// section: the count line, then the empty-state line or one entry
+/// per broken symbol, widest exposure first.
+fn render_body(report: &BreakingReport, symbol_heading: &str) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let with_consumers = report
+        .broken
+        .iter()
+        .filter(|broken| !broken.direct.is_empty())
+        .count();
+    writeln!(
+        output,
+        "{} symbol(s) broke; {} of them still have direct consumers.",
+        report.broken.len(),
+        with_consumers
+    )
+    .expect("writing to a String must succeed");
+
+    if report.broken.is_empty() {
+        writeln!(
+            output,
+            "\nNothing any consumer names was removed or changed shape."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    for broken in &report.broken {
+        writeln!(output).expect("writing to a String must succeed");
+        let change = match &broken.change {
+            BreakChange::Removed => "removed".to_owned(),
+            BreakChange::KindChanged { to } => {
+                format!("changed kind: {:?} → {:?}", broken.kind, to)
+            }
+            BreakChange::SignatureChanged { from, to } => {
+                format!(
+                    "changed signature: {} → {}",
+                    from.render(),
+                    to.render()
+                )
+            }
+        };
+        writeln!(
+            output,
+            "{symbol_heading} `{}` — `{}` ({:?}, {change})",
+            broken.file, broken.symbol, broken.kind
+        )
+        .expect("writing to a String must succeed");
+        // The suggestion sits first, before the evidence: it is the
+        // one line a reviewer acts on, and the consumer lists below
+        // are why it is trustworthy.
+        output.push_str(&render_suggestion(broken));
+        if broken.direct.is_empty() && broken.namespace_users.is_empty() {
+            writeln!(output, "\nNo consumers in the new tree.")
+                .expect("writing to a String must succeed");
+        }
+        if !broken.direct.is_empty() {
+            writeln!(output, "\nDirect consumers:")
+                .expect("writing to a String must succeed");
+            for user in &broken.direct {
+                writeln!(
+                    output,
+                    "- `{}` via {}",
+                    user.file,
+                    user.imports
+                        .iter()
+                        .map(|import| format!("`{import}`"))
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                )
+                .expect("writing to a String must succeed");
+            }
+        }
+        if !broken.namespace_users.is_empty() {
+            writeln!(
+                output,
+                "\nNamespace users (may use it without naming it):"
+            )
+            .expect("writing to a String must succeed");
+            for file in &broken.namespace_users {
+                writeln!(output, "- `{file}`")
+                    .expect("writing to a String must succeed");
+            }
+        }
+        if !broken.downstream.is_empty() {
+            writeln!(output, "\nDownstream of those consumers:")
+                .expect("writing to a String must succeed");
+            for file in &broken.downstream {
+                writeln!(output, "- `{file}`")
+                    .expect("writing to a String must succeed");
+            }
+        }
+    }
+    output
+}
+
+/// The suggestion line for one broken symbol, when one exists.
+///
+/// Split out of `render_body`, which the suggestion block pushed
+/// past clippy's line limit.
+fn render_suggestion(broken: &BrokenSymbol) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    match &broken.suggestion {
+        Some(BreakSuggestion::Moved { file, kind }) => {
+            writeln!(output, "\nSuggestion: moved to `{file}` ({kind:?}).")
+                .expect("writing to a String must succeed");
+        }
+        Some(BreakSuggestion::NewCallShape { signature }) => {
+            writeln!(
+                output,
+                "\nSuggestion: call `{}{}`.",
+                broken.symbol,
+                signature.render()
+            )
+            .expect("writing to a String must succeed");
+        }
+        None => {}
+    }
+    output
+}
+
 /// Compare two declaration indexes and join each break to its
 /// consumers in the new tree.
 ///
