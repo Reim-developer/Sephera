@@ -2,58 +2,13 @@
 //!
 //! The measurement lives in `sephera_graph::dead`, because it is
 //! analysis rather than presentation and the MCP server answers the
-//! same question. This module is how a dead-file report reads on a
-//! terminal and in JSON.
-
-use std::fmt::Write as _;
+//! same question. The Markdown rendering lives there too, beside
+//! the measurement, so both surfaces print one text; this module
+//! keeps the JSON shape and the re-export `run.rs` uses.
 
 // Re-exported so `run.rs` keeps one import site for the whole dead
 // surface.
-pub use sephera_graph::dead::{DeadReport, measure_dead};
-
-/// Render the report as Markdown.
-///
-/// The header states how much of the tree the walk reached and how
-/// many roots it started from, because a dead verdict is only as
-/// good as its roots: "3 dead of 400" measured from twelve entry
-/// points is a finding; the same line measured from one is a
-/// suspicion about the root set. The roots themselves are listed in
-/// the JSON; the header carries their count.
-#[must_use]
-pub fn render_markdown(report: &DeadReport) -> String {
-    let mut output = String::new();
-    writeln!(output, "# Dead files\n")
-        .expect("writing to a String must succeed");
-    writeln!(
-        output,
-        "{} of {} files reached from {} entry point(s); {} dead.",
-        report.reachable,
-        report.total,
-        report.roots.len(),
-        report.dead.len()
-    )
-    .expect("writing to a String must succeed");
-
-    if report.dead.is_empty() {
-        writeln!(
-            output,
-            "\nEvery file in the tree is reached from an entry point."
-        )
-        .expect("writing to a String must succeed");
-        return output;
-    }
-
-    writeln!(output).expect("writing to a String must succeed");
-    for file in &report.dead {
-        writeln!(
-            output,
-            "- `{}` — imported by {}, imports {}",
-            file.file, file.imported_by, file.imports
-        )
-        .expect("writing to a String must succeed");
-    }
-    output
-}
+pub use sephera_graph::dead::{DeadReport, measure_dead, render_markdown};
 
 /// Render the report as JSON.
 ///

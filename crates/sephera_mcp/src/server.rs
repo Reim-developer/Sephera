@@ -961,7 +961,7 @@ impl SepheraServer {
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(dead_markdown(&measured)),
+            Some("markdown") => Ok(dead::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported dead format `{other}`; expected \
@@ -2214,39 +2214,6 @@ fn inject_dependency_closure(
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn dead_markdown(report: &dead::DeadReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Dead files\n");
-    let _ = writeln!(
-        output,
-        "{} of {} files reached from {} entry point(s); {} dead.",
-        report.reachable,
-        report.total,
-        report.roots.len(),
-        report.dead.len()
-    );
-
-    if report.dead.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nEvery file in the tree is reached from an entry point."
-        );
-        return output;
-    }
-
-    let _ = writeln!(output);
-    for file in &report.dead {
-        let _ = writeln!(
-            output,
-            "- `{}` — imported by {}, imports {}",
-            file.file, file.imported_by, file.imports
-        );
-    }
-    output
-}
-
 /// Render a risk ranking as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools'

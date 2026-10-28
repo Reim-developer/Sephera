@@ -115,6 +115,55 @@ pub struct DeadReport {
     pub dead: Vec<DeadFile>,
 }
 
+/// Render the report as Markdown.
+///
+/// The header states how much of the tree the walk reached and how
+/// many roots it started from, because a dead verdict is only as
+/// good as its roots: "3 dead of 400" measured from twelve entry
+/// points is a finding; the same line measured from one is a
+/// suspicion about the root set. The roots themselves are listed in
+/// the JSON; the header carries their count.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
+#[must_use]
+pub fn render_markdown(report: &DeadReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(output, "# Dead files\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "{} of {} files reached from {} entry point(s); {} dead.",
+        report.reachable,
+        report.total,
+        report.roots.len(),
+        report.dead.len()
+    )
+    .expect("writing to a String must succeed");
+
+    if report.dead.is_empty() {
+        writeln!(
+            output,
+            "\nEvery file in the tree is reached from an entry point."
+        )
+        .expect("writing to a String must succeed");
+        return output;
+    }
+
+    writeln!(output).expect("writing to a String must succeed");
+    for file in &report.dead {
+        writeln!(
+            output,
+            "- `{}` — imported by {}, imports {}",
+            file.file, file.imported_by, file.imports
+        )
+        .expect("writing to a String must succeed");
+    }
+    output
+}
+
 /// Find the files no entry point reaches.
 ///
 /// `extra_roots` names entry points the conventions cannot see, in
