@@ -4,7 +4,7 @@ use std::path::PathBuf;
 
 use arbitrary::{Arbitrary, Unstructured};
 use libfuzzer_sys::fuzz_target;
-use sephera::render_context_markdown;
+use sephera_context::render_context_markdown;
 use sephera_compression::CompressionMode;
 use sephera_context::{
     ContextExcerpt, ContextFile, ContextGroupKind, ContextGroupSummary,

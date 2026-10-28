@@ -8,11 +8,13 @@ mod focus;
 mod grouping;
 mod line_range;
 mod ranker;
+mod render;
 mod source;
 mod types;
 
 pub use builder::ContextBuilder;
 pub use line_range::LineRange;
+pub use render::render_context_markdown;
 pub use types::{
     ContextDiffMetadata, ContextDiffSelection, ContextExcerpt, ContextFile,
     ContextGroupKind, ContextGroupSummary, ContextLanguageSummary,

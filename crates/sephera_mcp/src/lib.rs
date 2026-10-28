@@ -62,7 +62,6 @@
 
 mod error;
 mod input;
-mod render;
 mod server;
 
 pub use server::{SepheraServer, run_mcp_server};

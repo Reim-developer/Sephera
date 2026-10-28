@@ -23,6 +23,7 @@ use rmcp::{
 };
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
+use sephera_context::render_context_markdown;
 use sephera_graph::{
     affected_tests, archaeology, behavior, blast_radius, breaking, coupling,
     dead, dependency_path, diff, merge,
@@ -51,7 +52,6 @@ use crate::{
         SchemaImpactInput, SimulateInput, SymbolsInput, TestPriorityInput,
         UntestedInput, WhyInput,
     },
-    render::render_context_markdown,
 };
 
 /// The MCP server handler for Sephera.
