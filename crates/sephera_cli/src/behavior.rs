@@ -71,56 +71,18 @@ pub fn render_markdown(report: &BehaviorReport) -> String {
 /// Render the report as JSON.
 #[must_use]
 pub fn render_json(report: &BehaviorReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report.
-#[must_use]
-pub fn json_value(report: &BehaviorReport) -> serde_json::Value {
-    let changes: Vec<serde_json::Value> = report
-        .changes
-        .iter()
-        .map(|change| match change {
-            BehaviorChange::ArgOrderSwap {
-                file,
-                callee,
-                old_args,
-                new_args,
-            } => serde_json::json!({
-                "kind": "arg_order_swap",
-                "file": file,
-                "callee": callee,
-                "old_args": old_args,
-                "new_args": new_args,
-            }),
-            BehaviorChange::ConstantChanged {
-                file,
-                name,
-                old_value,
-                new_value,
-            } => serde_json::json!({
-                "kind": "constant_changed",
-                "file": file,
-                "name": name,
-                "old_value": old_value,
-                "new_value": new_value,
-            }),
-        })
-        .collect();
-
-    serde_json::json!({
-        "from": report.from_ref,
-        "to": report.to_ref,
-        "changes": changes,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, the ref fields rename to from/to, and the change
+    // enum tags itself with the "kind" key the old builder spelled
+    // by hand.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 #[cfg(test)]
 mod tests {
     use sephera_graph::behavior::BehaviorReport;
 
-    use super::{json_value, render_markdown};
+    use super::{render_json, render_markdown};
     use crate::behavior::BehaviorChange;
 
     fn report(changes: Vec<BehaviorChange>) -> BehaviorReport {
@@ -160,13 +122,15 @@ mod tests {
 
     #[test]
     fn json_tags_each_change() {
-        let payload =
-            json_value(&report(vec![BehaviorChange::ConstantChanged {
+        let rendered =
+            render_json(&report(vec![BehaviorChange::ConstantChanged {
                 file: "cfg.py".to_owned(),
                 name: "LIMIT".to_owned(),
                 old_value: "100".to_owned(),
                 new_value: "200".to_owned(),
             }]));
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("the report serializes");
         assert_eq!(payload["changes"][0]["kind"], "constant_changed");
         assert_eq!(payload["changes"][0]["new_value"], "200");
     }

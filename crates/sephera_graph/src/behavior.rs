@@ -31,6 +31,8 @@
 //! module's optimism: if the constructed corpus measures below
 //! 0.8, the detector that missed is cut.
 
+use serde::Serialize;
+
 use std::collections::BTreeMap;
 use std::path::Path;
 
@@ -93,7 +95,8 @@ pub struct TreeFacts {
 }
 
 /// One silent behaviour change.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case", tag = "kind")]
 pub enum BehaviorChange {
     /// A call site's arguments swapped order, same multiset.
     ArgOrderSwap {
@@ -120,11 +123,18 @@ pub enum BehaviorChange {
 }
 
 /// The silent behaviour changes between two refs.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order, and the ref fields serialize
+/// under the `from`/`to` keys the CLI and MCP surfaces already
+/// use: the CLI and the MCP tool serialize this struct directly,
+/// so the declaration order is the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct BehaviorReport {
     /// The older ref, as the caller spelled it.
+    #[serde(rename = "from")]
     pub from_ref: String,
     /// The newer ref, as the caller spelled it, or "working tree".
+    #[serde(rename = "to")]
     pub to_ref: String,
     /// The changes, file then callee or name.
     pub changes: Vec<BehaviorChange>,

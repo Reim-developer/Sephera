@@ -1290,11 +1290,9 @@ impl SepheraServer {
             &param.from,
             to_label,
         );
-        let built = BehaviorReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(behavior_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(behavior_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported behavior format `{other}`; expected \
@@ -2436,105 +2434,14 @@ fn archaeology_markdown(report: &ArchaeologyReport) -> String {
     output
 }
 
-/// The silent behaviour changes between two refs, as the
-/// `behavior` tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BehaviorReport {
-    /// The older ref, as the caller spelled it.
-    pub from: String,
-    /// The newer ref, as the caller spelled it, or "working tree".
-    pub to: String,
-    /// The changes, file then callee or name.
-    pub changes: Vec<BehaviorChangeReport>,
-}
-
-/// One silent behaviour change, as the `behavior` tool renders
-/// it.
-///
-/// The shape is flat on purpose: an agent reading the JSON should
-/// not have to unwrap a tagged enum. `kind` says which shape the
-/// other fields carry — `arg_order_swap` fills `callee`,
-/// `old_args`, and `new_args`; `constant_changed` fills `name`,
-/// `old_value`, and `new_value` — and the absent fields stay null
-/// rather than disappearing.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct BehaviorChangeReport {
-    /// `arg_order_swap` or `constant_changed`.
-    pub kind: String,
-    /// The file containing the change.
-    pub file: String,
-    /// The called name, for an argument swap.
-    pub callee: Option<String>,
-    /// Arguments as the older tree wrote them, for a swap.
-    pub old_args: Option<Vec<String>>,
-    /// Arguments as the newer tree writes them, for a swap.
-    pub new_args: Option<Vec<String>>,
-    /// The constant's name, for a constant change.
-    pub name: Option<String>,
-    /// The older value text, for a constant change.
-    pub old_value: Option<String>,
-    /// The newer value text, for a constant change.
-    pub new_value: Option<String>,
-}
-
-impl BehaviorReport {
-    fn from_measured(measured: &behavior::BehaviorReport) -> Self {
-        Self {
-            from: measured.from_ref.clone(),
-            to: measured.to_ref.clone(),
-            changes: measured
-                .changes
-                .iter()
-                .map(|change| match change {
-                    behavior::BehaviorChange::ArgOrderSwap {
-                        file,
-                        callee,
-                        old_args,
-                        new_args,
-                    } => BehaviorChangeReport {
-                        kind: "arg_order_swap".to_owned(),
-                        file: file.clone(),
-                        callee: Some(callee.clone()),
-                        old_args: Some(old_args.clone()),
-                        new_args: Some(new_args.clone()),
-                        name: None,
-                        old_value: None,
-                        new_value: None,
-                    },
-                    behavior::BehaviorChange::ConstantChanged {
-                        file,
-                        name,
-                        old_value,
-                        new_value,
-                    } => BehaviorChangeReport {
-                        kind: "constant_changed".to_owned(),
-                        file: file.clone(),
-                        callee: None,
-                        old_args: None,
-                        new_args: None,
-                        name: Some(name.clone()),
-                        old_value: Some(old_value.clone()),
-                        new_value: Some(new_value.clone()),
-                    },
-                })
-                .collect(),
-        }
-    }
-}
-
-/// Render a behavior report as Markdown for an agent's context
-/// window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn behavior_markdown(report: &BehaviorReport) -> String {
+fn behavior_markdown(report: &behavior::BehaviorReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
     let _ = writeln!(
         output,
         "# Silent behaviour changes: `{}` → `{}`\n",
-        report.from, report.to
+        report.from_ref, report.to_ref
     );
     let _ = writeln!(output, "{} change(s) found.", report.changes.len());
     if report.changes.is_empty() {
@@ -2542,25 +2449,27 @@ fn behavior_markdown(report: &BehaviorReport) -> String {
         return output;
     }
     for change in &report.changes {
-        let line = match change.kind.as_str() {
-            "arg_order_swap" => {
-                let old = change.old_args.as_deref().unwrap_or(&[]).join(", ");
-                let new = change.new_args.as_deref().unwrap_or(&[]).join(", ");
+        let line = match change {
+            behavior::BehaviorChange::ArgOrderSwap {
+                file,
+                callee,
+                old_args,
+                new_args,
+            } => {
                 format!(
-                    "Swapped arguments at a call to `{}` in `{}`: ({}) → ({}).",
-                    change.callee.as_deref().unwrap_or("?"),
-                    change.file,
-                    old,
-                    new
+                    "Swapped arguments at a call to `{callee}` in `{file}`: ({}) → ({}).",
+                    old_args.join(", "),
+                    new_args.join(", ")
                 )
             }
-            _ => {
+            behavior::BehaviorChange::ConstantChanged {
+                file,
+                name,
+                old_value,
+                new_value,
+            } => {
                 format!(
-                    "Changed `{}` in `{}`: {} → {}.",
-                    change.name.as_deref().unwrap_or("?"),
-                    change.file,
-                    change.old_value.as_deref().unwrap_or("?"),
-                    change.new_value.as_deref().unwrap_or("?"),
+                    "Changed `{name}` in `{file}`: {old_value} → {new_value}."
                 )
             }
         };
