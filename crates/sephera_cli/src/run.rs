@@ -304,6 +304,24 @@ async fn prepare_run(
     })
 }
 
+/// The shared ending of a report command: finish the progress line and
+/// write the rendered report to stdout or to the file the user named.
+/// The gates a command computes stay its own: they are computed after
+/// this returns, from the measured report. The commands whose ending
+/// genuinely differs -- `symbols` (conditional render), `context` and
+/// `graph` (stdout decides when the line finishes) -- keep theirs.
+fn finish_output(
+    progress: CliProgress,
+    output: Option<&Path>,
+    rendered: &str,
+) -> Result<()> {
+    if output.is_some() {
+        progress.set_message("Writing output...");
+    }
+    progress.finish();
+    emit_rendered_output(output, rendered)
+}
+
 async fn run_watch_target(
     target: WatchTarget,
     on: Option<&str>,
@@ -511,11 +529,11 @@ async fn run_loc(arguments: &LocArgs) -> Result<Vec<Gate>> {
 
     // Same rule as `graph`: a report going to a file keeps the spinner alive
     // to say so, and a report going to a terminal stops it first.
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(no_gates())
 }
 
@@ -730,11 +748,11 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
 
     let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(gates)
 }
 
@@ -899,11 +917,11 @@ async fn run_why(arguments: &WhyArgs) -> Result<Vec<Gate>> {
         WhyOutputFormat::Json => why::render_json(path.as_ref(), &from, &to),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -979,11 +997,11 @@ async fn run_coupling(arguments: &CouplingArgs) -> Result<Vec<Gate>> {
         CouplingOutputFormat::Json => coupling::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -1077,11 +1095,11 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
         }
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -1144,11 +1162,11 @@ async fn run_risk(arguments: &RiskArgs) -> Result<Vec<Gate>> {
         RiskOutputFormat::Json => risk::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -1197,11 +1215,11 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
         DeadOutputFormat::Json => dead::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -1498,11 +1516,11 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
         ),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A break nobody uses does not fail the run: it is the clean kind
     // of breaking, and a gate that fired on it would train a pipeline
@@ -1620,11 +1638,11 @@ async fn run_merge(arguments: &MergeArgs) -> Result<Vec<Gate>> {
         MergeOutputFormat::Json => merge::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // Only proven conflicts fail the run: a warning is
     // suspicious, not proven, and a gate that fired on it would
@@ -1736,11 +1754,11 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
         DiffOutputFormat::Json => diff::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A diff is a report, not a gate: additions are the normal shape
     // of a release, so no count of changes fails the run.
@@ -1906,11 +1924,11 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
         ArchaeologyOutputFormat::Json => archaeology::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A trail is a report, not a gate.
     Ok(Vec::new())
@@ -2021,11 +2039,11 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
         BehaviorOutputFormat::Json => behavior::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A behaviour scan is a report, not a gate: its precision is
     // measured by its corpus, and a gate on an unproven detector
@@ -2078,11 +2096,11 @@ async fn run_simulate(arguments: &SimulateArgs) -> Result<Vec<Gate>> {
         SimulateOutputFormat::Json => simulate::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     // A simulation is a report, not a gate: even a blocked rename
     // is an answer, and failing the run on it would punish asking.
@@ -2120,11 +2138,11 @@ async fn run_untested(arguments: &UntestedArgs) -> Result<Vec<Gate>> {
         }
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
         let count = u64::try_from(measured.untested.len()).unwrap_or(u64::MAX);
@@ -2188,11 +2206,11 @@ async fn run_test_priority(arguments: &TestPriorityArgs) -> Result<Vec<Gate>> {
         TestPriorityOutputFormat::Json => test_priority::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(Vec::new())
 }
 
@@ -2471,11 +2489,11 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         SchemaImpactOutputFormat::Json => schema_impact::render_json(&measured),
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     let gates = schema_impact_gates(&measured, arguments.fail_on);
     Ok(gates)
@@ -2569,11 +2587,11 @@ async fn run_affected_tests(
         }
     };
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
 
     if arguments.run {
         // Said out loud rather than folded into the plan's success: a file
@@ -2851,11 +2869,11 @@ fn run_graph_diff(
         ));
     }
 
-    if arguments.output_args.output.is_some() {
-        progress.set_message("Writing output...");
-    }
-    progress.finish();
-    emit_rendered_output(arguments.output_args.output.as_deref(), &rendered)?;
+    finish_output(
+        progress,
+        arguments.output_args.output.as_deref(),
+        &rendered,
+    )?;
     Ok(gates)
 }
 
