@@ -805,11 +805,20 @@ impl SepheraServer {
         // computes it with `to` absent, so the two cannot disagree.
         let breaking =
             measure_review_breaking(&source, &ignore_matcher, against)?;
-        let built = ReviewReport::from_measured(&measured, against, &breaking);
+        let document = ReviewDocument {
+            against,
+            commits_scanned: measured.commits_scanned,
+            commits_counted: measured.commits_counted,
+            changed: &measured.changed,
+            breaking: BreakingReport::from_measured(&breaking),
+            warnings: &measured.warnings,
+        };
 
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(review_markdown(&built)),
+            None | Some("json") => serialize_json(&document),
+            Some("markdown") => {
+                Ok(review_markdown(&measured, against, &document.breaking))
+            }
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported review format `{other}`; expected \
@@ -2319,92 +2328,6 @@ fn measure_review_breaking(
     ))
 }
 
-/// The JSON shape the `review` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ReviewReport {
-    /// The reference the change was read against.
-    pub against: String,
-    /// Commits handed to the coupling measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it.
-    pub commits_counted: u64,
-    /// One entry per changed file, sorted by path.
-    pub changed: Vec<ReviewedFile>,
-    /// What broke by name between the ref and the working tree,
-    /// joined to the files that still name it — the `breaking`
-    /// tool's report, embedded rather than recomputed.
-    pub breaking: BreakingReport,
-    /// Coupling warnings, strongest first.
-    pub warnings: Vec<ReviewWarning>,
-}
-
-/// One changed file and what the change to it puts at risk.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ReviewedFile {
-    /// Path of the changed file.
-    pub file: String,
-    /// Whether the file is a node in the graph. A deleted file is
-    /// not; it is reported rather than dropped, with empty
-    /// measurements.
-    pub present: bool,
-    /// Files that import the changed file directly, sorted.
-    pub direct_dependents: Vec<String>,
-    /// Files that depend on it at any depth, direct ones included.
-    pub dependent_count: usize,
-    /// Test files that reach it, closest first.
-    pub tests: Vec<String>,
-}
-
-/// One hidden-coupling warning: a file in the change whose historic
-/// partner is not.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ReviewWarning {
-    /// The file in the change.
-    pub changed: String,
-    /// The file history keeps changing with it, untouched here.
-    pub partner: String,
-    /// Commits in the window that touched both files.
-    pub co_changes: u64,
-    /// The pair's containment, as the `coupling` tool defines it.
-    pub containment: f64,
-}
-
-impl ReviewReport {
-    fn from_measured(
-        measured: &review::ReviewReport,
-        against: &str,
-        measured_breaking: &breaking::BreakingReport,
-    ) -> Self {
-        Self {
-            against: against.to_owned(),
-            commits_scanned: measured.commits_scanned,
-            commits_counted: measured.commits_counted,
-            changed: measured
-                .changed
-                .iter()
-                .map(|entry| ReviewedFile {
-                    file: entry.file.clone(),
-                    present: entry.present,
-                    direct_dependents: entry.direct_dependents.clone(),
-                    dependent_count: entry.dependent_count,
-                    tests: entry.tests.clone(),
-                })
-                .collect(),
-            breaking: BreakingReport::from_measured(measured_breaking),
-            warnings: measured
-                .warnings
-                .iter()
-                .map(|warning| ReviewWarning {
-                    changed: warning.changed.clone(),
-                    partner: warning.partner.clone(),
-                    co_changes: warning.co_changes,
-                    containment: warning.containment,
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Build the import graph over the same file set the context build
 /// uses and store its forward edges on the options as the closure
 /// map. The CLI's `--closure` does the same through the same graph
@@ -3726,7 +3649,26 @@ fn diff_markdown(report: &DiffReport) -> String {
 /// certainty — changed files, then what broke by name, then the
 /// heuristic coupling warnings last — and the breaking section is
 /// never omitted: when nothing broke it is one line saying so.
-fn review_markdown(report: &ReviewReport) -> String {
+/// The JSON document the `review` tool returns: the graph review
+/// plus the ref it was read against and the breaking report
+/// embedded between the changed files and the warnings, as the
+/// Markdown sections order them. The breaking half still comes
+/// from its mirror until that report serializes directly.
+#[derive(serde::Serialize)]
+struct ReviewDocument<'a> {
+    against: &'a str,
+    commits_scanned: u64,
+    commits_counted: u64,
+    changed: &'a [review::ChangedFileReview],
+    breaking: BreakingReport,
+    warnings: &'a [review::CouplingWarning],
+}
+
+fn review_markdown(
+    report: &review::ReviewReport,
+    against: &str,
+    breaking: &BreakingReport,
+) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
@@ -3736,7 +3678,7 @@ fn review_markdown(report: &ReviewReport) -> String {
         "{} changed file(s) against `{}`. History: {} commits \
          scanned, {} counted.",
         report.changed.len(),
-        report.against,
+        against,
         report.commits_scanned,
         report.commits_counted
     );
@@ -3744,12 +3686,11 @@ fn review_markdown(report: &ReviewReport) -> String {
     if report.changed.is_empty() {
         let _ = writeln!(
             output,
-            "\nNothing to review: the working tree matches `{}`, and \
-             no untracked files were found.",
-            report.against
+            "\nNothing to review: the working tree matches `{against}`, and \
+             no untracked files were found."
         );
         output.push('\n');
-        output.push_str(&breaking_markdown_section(&report.breaking));
+        output.push_str(&breaking_markdown_section(breaking));
         return output;
     }
 
@@ -3789,7 +3730,7 @@ fn review_markdown(report: &ReviewReport) -> String {
     }
 
     output.push('\n');
-    output.push_str(&breaking_markdown_section(&report.breaking));
+    output.push_str(&breaking_markdown_section(breaking));
 
     if !report.warnings.is_empty() {
         let _ = writeln!(output, "\n## Coupling warnings");

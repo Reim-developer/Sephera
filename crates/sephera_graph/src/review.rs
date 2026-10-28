@@ -34,6 +34,8 @@ use std::collections::BTreeSet;
 
 use super::affected_tests::measure_tests;
 use super::blast_radius::reachable_dependents_with_distance;
+use serde::Serialize;
+
 use super::coupling::{CouplingOptions, measure_coupling};
 use super::types::GraphReport;
 
@@ -49,7 +51,7 @@ pub struct ReviewOptions {
 }
 
 /// One changed file and what the change to it puts at risk.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ChangedFileReview {
     /// Path of the changed file, in the graph's spelling.
     pub file: String,
@@ -70,7 +72,7 @@ pub struct ChangedFileReview {
 
 /// One hidden-coupling warning: a file in the change whose historic
 /// partner is not.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CouplingWarning {
     /// The file in the change.
     pub changed: String,
@@ -84,17 +86,17 @@ pub struct CouplingWarning {
 }
 
 /// The review of one change.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct ReviewReport {
+    /// Commits handed to the coupling measurement.
+    pub commits_scanned: u64,
+    /// Commits that counted toward it.
+    pub commits_counted: u64,
     /// One entry per changed file, sorted by path.
     pub changed: Vec<ChangedFileReview>,
     /// Coupling warnings, strongest first, as `coupling` orders its
     /// pairs.
     pub warnings: Vec<CouplingWarning>,
-    /// Commits handed to the coupling measurement.
-    pub commits_scanned: u64,
-    /// Commits that counted toward it.
-    pub commits_counted: u64,
 }
 
 /// Review `changed` against the graph and the history.
@@ -182,10 +184,10 @@ pub fn measure_review(
         .collect();
 
     ReviewReport {
-        changed: changed_reviews,
-        warnings,
         commits_scanned: coupling.commits_scanned,
         commits_counted: coupling.commits_counted,
+        changed: changed_reviews,
+        warnings,
     }
 }
 

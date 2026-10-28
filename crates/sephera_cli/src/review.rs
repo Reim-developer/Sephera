@@ -9,7 +9,10 @@ use std::fmt::Write as _;
 
 // Re-exported so `run.rs` keeps one import site for the whole review
 // surface.
-pub use sephera_graph::review::{ReviewOptions, ReviewReport, measure_review};
+pub use sephera_graph::review::{
+    ChangedFileReview, CouplingWarning, ReviewOptions, ReviewReport,
+    measure_review,
+};
 
 /// Rebase git's repo-root spelling of the changed files onto the
 /// graph's spelling.
@@ -158,48 +161,38 @@ pub fn render_markdown(
 /// rides as a `"breaking"` key in the same order as the Markdown
 /// sections — changed, breaking, warnings — not as a second
 /// document concatenated onto the first.
+/// The JSON document `render_json` emits: the graph review plus
+/// the ref it was read against and the breaking report embedded
+/// between the changed files and the warnings, as the Markdown
+/// sections order them. The breaking value still comes from
+/// `breaking::json_value` until that module serializes directly;
+/// the review half already serializes from the graph struct.
+#[derive(serde::Serialize)]
+struct ReviewDocument<'a> {
+    against: &'a str,
+    commits_scanned: u64,
+    commits_counted: u64,
+    changed: &'a [ChangedFileReview],
+    breaking: serde_json::Value,
+    warnings: &'a [CouplingWarning],
+}
+
 #[must_use]
 pub fn render_json(
     report: &ReviewReport,
     against: &str,
     breaking: &sephera_graph::breaking::BreakingReport,
 ) -> String {
-    let changed: Vec<serde_json::Value> = report
-        .changed
-        .iter()
-        .map(|entry| {
-            serde_json::json!({
-                "file": entry.file,
-                "present": entry.present,
-                "direct_dependents": entry.direct_dependents,
-                "dependent_count": entry.dependent_count,
-                "tests": entry.tests,
-            })
-        })
-        .collect();
-    let warnings: Vec<serde_json::Value> = report
-        .warnings
-        .iter()
-        .map(|warning| {
-            serde_json::json!({
-                "changed": warning.changed,
-                "partner": warning.partner,
-                "co_changes": warning.co_changes,
-                "containment": warning.containment,
-            })
-        })
-        .collect();
+    let document = ReviewDocument {
+        against,
+        commits_scanned: report.commits_scanned,
+        commits_counted: report.commits_counted,
+        changed: &report.changed,
+        breaking: crate::breaking::json_value(breaking),
+        warnings: &report.warnings,
+    };
 
-    let payload = serde_json::json!({
-        "against": against,
-        "commits_scanned": report.commits_scanned,
-        "commits_counted": report.commits_counted,
-        "changed": changed,
-        "breaking": crate::breaking::json_value(breaking),
-        "warnings": warnings,
-    });
-
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }
