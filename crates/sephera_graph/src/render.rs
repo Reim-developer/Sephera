@@ -701,19 +701,7 @@ mod tests {
             metrics: GraphMetrics {
                 total_files: 2,
                 total_internal_edges: 1,
-                self_references: 0,
-                total_external_edges: 0,
-                unresolved_local_edges: 0,
-                unresolved_local_samples: Vec::new(),
-                cfg_gated_edges: 0,
-                dependencies: Vec::new(),
-                declared_dependency_edges: 0,
-                local_crate_edges: 0,
-                builtin_edges: 0,
-                circular_dependencies: 0,
-                most_importing: vec![],
-                most_imported: vec![],
-                cycles: vec![],
+                ..GraphMetrics::default()
             },
         }
     }

@@ -193,11 +193,11 @@ pub fn measure_review(
 mod tests {
     use std::path::PathBuf;
 
-    use crate::types::{
-        GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-    };
+    use crate::types::{GraphEdge, GraphNode, GraphReport};
 
     use super::{ReviewOptions, measure_review};
+
+    use crate::test_fixtures::{edge, empty_metrics};
 
     fn node(path: &str) -> GraphNode {
         GraphNode {
@@ -205,19 +205,6 @@ mod tests {
             language: Some("Python"),
             imports_count: 1,
             imported_by_count: 1,
-        }
-    }
-
-    fn resolved_edge(from: &str, to: &str) -> GraphEdge {
-        GraphEdge {
-            from: from.to_owned(),
-            to: Some(to.to_owned()),
-            import_path: "pkg.mod".to_owned(),
-            items: Vec::new(),
-            resolved: true,
-            kind: ImportKind::Dependency,
-            local_gap: false,
-            cfg_gated: false,
         }
     }
 
@@ -230,23 +217,7 @@ mod tests {
             nodes: nodes.iter().copied().map(node).collect(),
             edges,
             boundary_files: Vec::new(),
-            metrics: GraphMetrics {
-                total_files: 0,
-                total_internal_edges: 0,
-                self_references: 0,
-                total_external_edges: 0,
-                unresolved_local_edges: 0,
-                unresolved_local_samples: Vec::new(),
-                cfg_gated_edges: 0,
-                dependencies: Vec::new(),
-                declared_dependency_edges: 0,
-                local_crate_edges: 0,
-                builtin_edges: 0,
-                circular_dependencies: 0,
-                most_importing: vec![],
-                most_imported: vec![],
-                cycles: vec![],
-            },
+            metrics: empty_metrics(),
         }
     }
 
@@ -269,8 +240,8 @@ mod tests {
         let graph = report(
             &["core.py", "app.py", "tests/test_app.py"],
             vec![
-                resolved_edge("app.py", "core.py"),
-                resolved_edge("tests/test_app.py", "app.py"),
+                edge("app.py", "core.py", "pkg.mod"),
+                edge("tests/test_app.py", "app.py", "pkg.mod"),
             ],
         );
 
@@ -344,7 +315,7 @@ mod tests {
         // risk already stands in core's dependents.
         let graph = report(
             &["core.py", "app.py"],
-            vec![resolved_edge("app.py", "core.py")],
+            vec![edge("app.py", "core.py", "pkg.mod")],
         );
         let history = commits(&[
             &["core.py", "app.py"],

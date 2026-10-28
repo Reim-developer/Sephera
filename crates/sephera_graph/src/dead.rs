@@ -210,64 +210,10 @@ pub fn measure_dead(
 
 #[cfg(test)]
 mod tests {
-    use std::path::PathBuf;
-
-    use crate::types::{
-        GraphEdge, GraphMetrics, GraphNode, GraphReport, ImportKind,
-    };
 
     use super::{is_entry_point, measure_dead};
 
-    fn node(path: &str) -> GraphNode {
-        GraphNode {
-            file_path: path.to_owned(),
-            language: Some("Rust"),
-            imports_count: 1,
-            imported_by_count: 1,
-        }
-    }
-
-    fn resolved_edge(from: &str, to: &str) -> GraphEdge {
-        GraphEdge {
-            from: from.to_owned(),
-            to: Some(to.to_owned()),
-            import_path: "crate::x".to_owned(),
-            items: Vec::new(),
-            resolved: true,
-            kind: ImportKind::Dependency,
-            local_gap: false,
-            cfg_gated: false,
-        }
-    }
-
-    fn report(nodes: &[&str], edges: Vec<GraphEdge>) -> GraphReport {
-        GraphReport {
-            base_path: PathBuf::from("."),
-            focus_paths: vec![],
-            depth: None,
-            query: None,
-            nodes: nodes.iter().copied().map(node).collect(),
-            edges,
-            boundary_files: Vec::new(),
-            metrics: GraphMetrics {
-                total_files: 0,
-                total_internal_edges: 0,
-                self_references: 0,
-                total_external_edges: 0,
-                unresolved_local_edges: 0,
-                unresolved_local_samples: Vec::new(),
-                cfg_gated_edges: 0,
-                dependencies: Vec::new(),
-                declared_dependency_edges: 0,
-                local_crate_edges: 0,
-                builtin_edges: 0,
-                circular_dependencies: 0,
-                most_importing: vec![],
-                most_imported: vec![],
-                cycles: vec![],
-            },
-        }
-    }
+    use crate::test_fixtures::{edge, report};
 
     #[test]
     fn a_boundary_file_is_a_root_by_evidence_not_convention() {
@@ -304,9 +250,9 @@ mod tests {
         let graph = report(
             &["src/main.rs", "src/used.rs", "src/a.rs", "src/b.rs"],
             vec![
-                resolved_edge("src/main.rs", "src/used.rs"),
-                resolved_edge("src/a.rs", "src/b.rs"),
-                resolved_edge("src/b.rs", "src/a.rs"),
+                edge("src/main.rs", "src/used.rs", "crate::x"),
+                edge("src/a.rs", "src/b.rs", "crate::x"),
+                edge("src/b.rs", "src/a.rs", "crate::x"),
             ],
         );
 
@@ -347,7 +293,7 @@ mod tests {
         // all three are dead.
         let graph = report(
             &["src/main.rs", "src/worker.rs", "src/job.rs"],
-            vec![resolved_edge("src/worker.rs", "src/job.rs")],
+            vec![edge("src/worker.rs", "src/job.rs", "crate::x")],
         );
 
         let unnamed = measure_dead(&graph, &[]);
@@ -364,8 +310,8 @@ mod tests {
         let graph = report(
             &["src/main.rs", "src/a.rs", "src/b.rs", "src/side.rs"],
             vec![
-                resolved_edge("src/main.rs", "src/a.rs"),
-                resolved_edge("src/a.rs", "src/b.rs"),
+                edge("src/main.rs", "src/a.rs", "crate::x"),
+                edge("src/a.rs", "src/b.rs", "crate::x"),
             ],
         );
 
