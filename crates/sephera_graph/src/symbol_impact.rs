@@ -186,6 +186,164 @@ pub fn measure_symbol_scoped(
     })
 }
 
+/// Render a symbol impact as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+/// Render one symbol impact as Markdown.
+///
+/// The three lists stay in separate sections because they are three
+/// different strengths of claim: a file that names the symbol, a file
+/// that imports the namespace and so *may* use it, and a file that is
+/// merely downstream of one of those. Merging them into one list
+/// with one count is how a may-use becomes a use in the reader's
+/// head, so the counts are stated separately too.
+#[must_use]
+pub fn render_symbol_markdown(
+    impact: &SymbolImpact,
+    heading_level: usize,
+) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    let hashes = "#".repeat(heading_level);
+    writeln!(
+        output,
+        "{hashes} Symbol impact for `{}` in `{}`\n",
+        impact.symbol, impact.target
+    )
+    .expect("writing to a String must succeed");
+
+    let direct = direct_count(impact);
+    writeln!(
+        output,
+        "{}",
+        match direct {
+            0 => format!("No file imports `{}` from this file.", impact.symbol),
+            1 => format!("1 file imports `{}` from this file.", impact.symbol),
+            other => format!(
+                "{other} files import `{}` from this file.",
+                impact.symbol
+            ),
+        }
+    )
+    .expect("writing to a String must succeed");
+    if !impact.namespace_users.is_empty() {
+        writeln!(
+            output,
+            "{}",
+            match impact.namespace_users.len() {
+                1 => format!(
+                    "1 file imports this file's namespace and may use `{}` without naming it.",
+                    impact.symbol
+                ),
+                other => format!(
+                    "{other} files import this file's namespace and may use `{}` without naming it.",
+                    impact.symbol
+                ),
+            }
+        )
+        .expect("writing to a String must succeed");
+    }
+    if !impact.downstream.is_empty() {
+        writeln!(
+            output,
+            "{}",
+            match impact.downstream.len() {
+                1 => "1 more file is downstream of those.".to_owned(),
+                other => format!("{other} more files are downstream of those."),
+            }
+        )
+        .expect("writing to a String must succeed");
+    }
+    if let Some(depth) = impact.depth {
+        writeln!(output, "\nLimited to {depth} hop(s) away.")
+            .expect("writing to a String must succeed");
+    }
+
+    let sub = "#".repeat(heading_level + 1);
+    if !impact.direct.is_empty() {
+        writeln!(output, "\n{sub} Files that import `{}`\n", impact.symbol)
+            .expect("writing to a String must succeed");
+        for user in &impact.direct {
+            let names: Vec<String> = user
+                .imports
+                .iter()
+                .map(|path| format!("`{path}`"))
+                .collect();
+            writeln!(output, "- `{}` via {}", user.file, names.join(", "))
+                .expect("writing to a String must succeed");
+        }
+    }
+    if !impact.namespace_users.is_empty() {
+        writeln!(output, "\n{sub} Namespace importers\n")
+            .expect("writing to a String must succeed");
+        for file in &impact.namespace_users {
+            writeln!(output, "- `{file}`")
+                .expect("writing to a String must succeed");
+        }
+    }
+    if !impact.downstream.is_empty() {
+        writeln!(output, "\n{sub} Downstream\n")
+            .expect("writing to a String must succeed");
+        for file in &impact.downstream {
+            writeln!(output, "- `{file}`")
+                .expect("writing to a String must succeed");
+        }
+    }
+    output
+}
+
+/// Render every symbol impact as one Markdown report.
+///
+/// A single target renders without the ranking table, as a single
+/// blast radius does, so a consumer diffing output across versions
+/// sees no spurious change when a second target is added elsewhere.
+#[must_use]
+pub fn render_symbol_report(impacts: &[SymbolImpact]) -> String {
+    use std::fmt::Write as _;
+
+    match impacts.len() {
+        0 => return String::new(),
+        1 => return render_symbol_markdown(&impacts[0], 1),
+        _ => {}
+    }
+
+    let symbol = &impacts[0].symbol;
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Symbol impact for `{symbol}` in {} files\n",
+        impacts.len()
+    )
+    .expect("writing to a String must succeed");
+    writeln!(output, "Widest first.\n")
+        .expect("writing to a String must succeed");
+    writeln!(
+        output,
+        "| File | Direct importers | Namespace | Downstream |"
+    )
+    .expect("writing to a String must succeed");
+    writeln!(output, "|------|-----------:|-----------:|-----------:|")
+        .expect("writing to a String must succeed");
+    for impact in impacts {
+        writeln!(
+            output,
+            "| `{}` | {} | {} | {} |",
+            impact.target,
+            direct_count(impact),
+            impact.namespace_users.len(),
+            impact.downstream.len()
+        )
+        .expect("writing to a String must succeed");
+    }
+
+    for impact in impacts {
+        output.push('\n');
+        output.push_str(&render_symbol_markdown(impact, 2));
+    }
+    output
+}
+
 /// Measure the impact of `symbol` in every file a caller asked
 /// about, widest first.
 ///

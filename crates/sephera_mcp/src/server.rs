@@ -420,8 +420,11 @@ impl SepheraServer {
         // One build, two questions: the file's whole radius, or the
         // radius of one name inside it when `symbol` is set. The symbol
         // answer is built by the same code the CLI renders, so the two
-        // entry points cannot disagree about who uses a name.
-        let built = if let Some(symbol) = &param.symbol {
+        // entry points cannot disagree about who uses a name. The
+        // Markdown sections come from the graph renderers, the same
+        // text the CLI prints; only the threshold verdict stays here,
+        // because the gate is the tool's own verdict, not the CLI's.
+        let (built, markdown) = if let Some(symbol) = &param.symbol {
             let impacts = symbol_impact::measure_symbol_all(
                 &report,
                 &param.files,
@@ -431,7 +434,10 @@ impl SepheraServer {
                 &focus,
             )
             .map_err(map_internal_error("symbol impact measurement failed"))?;
-            ImpactReport::from_symbol_impacts(&impacts, param.fail_on)
+            let built =
+                ImpactReport::from_symbol_impacts(&impacts, param.fail_on);
+            let markdown = symbol_impact::render_symbol_report(&impacts);
+            (built, markdown)
         } else {
             let radii = blast_radius::measure_all(
                 &report,
@@ -441,12 +447,18 @@ impl SepheraServer {
                 &focus,
             )
             .map_err(map_internal_error("blast radius measurement failed"))?;
-            ImpactReport::new(&radii, param.fail_on)
+            let built = ImpactReport::new(&radii, param.fail_on);
+            let markdown = blast_radius::render_report(&radii);
+            (built, markdown)
         };
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(impact_markdown(&built)),
+            Some("markdown") => {
+                let mut output = markdown;
+                write_impact_gate(&mut output, &built);
+                Ok(output)
+            }
             // Rejected rather than silently returning JSON, matching
             // `parse_graph_format`. An agent that asked for Markdown and got JSON
             // back would parse the wrong shape and not know.
@@ -2683,84 +2695,6 @@ fn impact_gate(targets: &[ImpactEntry], fail_on: u64) -> ImpactGate {
 /// Takes the built report rather than the raw radii so the threshold verdict can
 /// be stated. An agent asking for a compact summary needs the verdict as much as
 /// the numbers -- the numbers alone are what it already had before asking for a
-/// gate, and acting on them is the reason for the gate.
-fn impact_markdown(report: &ImpactReport) -> String {
-    use std::fmt::Write as _;
-
-    // A symbol-narrowed report renders by its own wording, as the CLI's
-    // does. Decided from the first entry because a run is narrowed for
-    // every target or for none -- the parameter is the run's, not a
-    // target's.
-    if report
-        .targets
-        .first()
-        .is_some_and(|entry| entry.symbol.is_some())
-    {
-        return symbol_impact_markdown(report);
-    }
-
-    let mut output = String::new();
-    let several = report.targets.len() > 1;
-
-    if several {
-        let _ = writeln!(
-            output,
-            "# Blast radius for {} files\n",
-            report.targets.len()
-        );
-        let _ = writeln!(output, "Widest first.");
-    }
-
-    for entry in &report.targets {
-        let count = entry.dependent_count;
-        if several {
-            let _ =
-                writeln!(output, "\n## Blast radius for `{}`\n", entry.target);
-        } else {
-            let _ = writeln!(output, "# Blast radius for `{}`\n", entry.target);
-        }
-        let _ = writeln!(
-            output,
-            "{}",
-            match count {
-                0 => "No file imports this one.".to_owned(),
-                1 => "1 file depends on this.".to_owned(),
-                other => format!("{other} files depend on this."),
-            }
-        );
-        if let Some(depth) = entry.depth {
-            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-        }
-        if entry.dependents.is_empty() {
-            continue;
-        }
-        let sub = if several { "###" } else { "##" };
-        let _ = writeln!(output, "\n{sub} Dependents\n");
-        for dependent in &entry.dependents {
-            if dependent.imports.is_empty() {
-                let _ = writeln!(output, "- `{}`", dependent.file);
-            } else {
-                let names: Vec<String> = dependent
-                    .imports
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect();
-                let _ = writeln!(
-                    output,
-                    "- `{}` imports {}",
-                    dependent.file,
-                    names.join(", ")
-                );
-            }
-        }
-        output.push('\n');
-    }
-
-    write_impact_gate(&mut output, report);
-
-    output
-}
-
 /// Append the threshold verdict to an impact report's Markdown.
 ///
 /// Shared by the file-level and symbol-level renderers: the verdict's
@@ -2804,145 +2738,6 @@ fn write_impact_gate(output: &mut String, report: &ImpactReport) {
 /// reading the tool's answer and a person reading the terminal's are
 /// reading the same measurement and should not have to learn two
 /// phrasings of it. The three lists stay apart for the CLI's reason:
-/// a namespace importer is a may-use, not a use.
-fn symbol_impact_markdown(report: &ImpactReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let several = report.targets.len() > 1;
-    let symbol = report
-        .targets
-        .first()
-        .and_then(|entry| entry.symbol.as_deref())
-        .unwrap_or_default();
-
-    if several {
-        let _ = writeln!(
-            output,
-            "# Symbol impact for `{symbol}` in {} files\n",
-            report.targets.len()
-        );
-        let _ = writeln!(output, "Widest first.");
-    }
-
-    for entry in &report.targets {
-        write_symbol_entry(&mut output, entry, symbol, several);
-    }
-
-    write_impact_gate(&mut output, report);
-
-    output
-}
-
-/// Write one target's section of a symbol impact report.
-///
-/// Split out of `symbol_impact_markdown` for length; the three
-/// lists and their order are the per-target content, while the
-/// document title and the threshold verdict belong to the report.
-fn write_symbol_entry(
-    output: &mut String,
-    entry: &ImpactEntry,
-    symbol: &str,
-    several: bool,
-) {
-    use std::fmt::Write as _;
-
-    if several {
-        let _ = writeln!(
-            output,
-            "\n## Symbol impact for `{symbol}` in `{}`\n",
-            entry.target
-        );
-    } else {
-        let _ = writeln!(
-            output,
-            "# Symbol impact for `{symbol}` in `{}`\n",
-            entry.target
-        );
-    }
-    let _ = writeln!(
-        output,
-        "{}",
-        match entry.dependent_count {
-            0 => format!("No file imports `{symbol}` from this file."),
-            1 => format!("1 file imports `{symbol}` from this file."),
-            other => {
-                format!("{other} files import `{symbol}` from this file.")
-            }
-        }
-    );
-    if let Some(namespace) = &entry.namespace_users
-        && !namespace.is_empty()
-    {
-        let _ = writeln!(
-            output,
-            "{}",
-            match namespace.len() {
-                1 => format!(
-                    "1 file imports this file's namespace and may use \
-                     `{symbol}` without naming it."
-                ),
-                other => format!(
-                    "{other} files import this file's namespace and may \
-                     use `{symbol}` without naming it."
-                ),
-            }
-        );
-    }
-    if let Some(downstream) = &entry.downstream
-        && !downstream.is_empty()
-    {
-        let _ = writeln!(
-            output,
-            "{}",
-            match downstream.len() {
-                1 => "1 more file is downstream of those.".to_owned(),
-                other => {
-                    format!("{other} more files are downstream of those.")
-                }
-            }
-        );
-    }
-    if let Some(depth) = entry.depth {
-        let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-    }
-
-    let sub = if several { "###" } else { "##" };
-    if !entry.dependents.is_empty() {
-        let _ = writeln!(output, "\n{sub} Files that import `{symbol}`\n");
-        for dependent in &entry.dependents {
-            let names: Vec<String> = dependent
-                .imports
-                .iter()
-                .map(|path| format!("`{path}`"))
-                .collect();
-            let _ = writeln!(
-                output,
-                "- `{}` via {}",
-                dependent.file,
-                names.join(", ")
-            );
-        }
-    }
-    if let Some(namespace) = &entry.namespace_users
-        && !namespace.is_empty()
-    {
-        let _ = writeln!(output, "\n{sub} Namespace importers\n");
-        for file in namespace {
-            let _ = writeln!(output, "- `{file}`");
-        }
-    }
-    if let Some(downstream) = &entry.downstream
-        && !downstream.is_empty()
-    {
-        let _ = writeln!(output, "\n{sub} Downstream\n");
-        for file in downstream {
-            let _ = writeln!(output, "- `{file}`");
-        }
-    }
-    output.push('\n');
-}
-
 /// Server identity advertised during MCP initialization.
 ///
 /// `get_info` cannot await anything, but the trait signature is `async`, so the
