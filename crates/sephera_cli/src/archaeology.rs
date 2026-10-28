@@ -5,83 +5,12 @@
 //! answers the same question. This module is how a trail reads on
 //! a terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // archaeology surface.
 pub use sephera_graph::archaeology::{
-    ArchaeologyError, ArchaeologyKind, ArchaeologyReport, HistoryCommit,
-    HistorySnapshot, trace_symbol,
+    ArchaeologyError, ArchaeologyReport, HistoryCommit, HistorySnapshot,
+    render_markdown, trace_symbol,
 };
-
-/// Render the report as Markdown.
-///
-/// Steps read oldest first, because a trail is a biography: born
-/// as one name, renamed, moved. A trail that stops early says so
-/// plainly, with the reason, rather than implying the oldest
-/// step it found is the birth.
-#[must_use]
-pub fn render_markdown(report: &ArchaeologyReport) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# History of `{}` in `{}`\n",
-        report.symbol, report.file
-    )
-    .expect("writing to a String must succeed");
-
-    if report.steps.is_empty() {
-        writeln!(output, "No step of the trail could be proven.")
-            .expect("writing to a String must succeed");
-    }
-    for step in &report.steps {
-        let detail = match step.kind {
-            ArchaeologyKind::Born => {
-                format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
-            }
-            ArchaeologyKind::Renamed => {
-                format!(
-                    "Renamed `{}` → `{}` in `{}`.",
-                    step.from_name.as_deref().unwrap_or("?"),
-                    step.to_name,
-                    step.to_file
-                )
-            }
-            ArchaeologyKind::Moved => {
-                format!(
-                    "Moved `{}` from `{}` to `{}`.",
-                    step.to_name,
-                    step.from_file.as_deref().unwrap_or("?"),
-                    step.to_file
-                )
-            }
-            ArchaeologyKind::MovedAndRenamed => {
-                format!(
-                    "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
-                    step.from_name.as_deref().unwrap_or("?"),
-                    step.from_file.as_deref().unwrap_or("?"),
-                    step.to_name,
-                    step.to_file
-                )
-            }
-        };
-        writeln!(
-            output,
-            "- {detail} — {} by {} ({}): {}",
-            step.commit, step.author, step.date, step.message
-        )
-        .expect("writing to a String must succeed");
-    }
-
-    if report.origin_found {
-        writeln!(output, "\nThe trail reaches the symbol's birth.")
-            .expect("writing to a String must succeed");
-    } else if let Some(note) = &report.note {
-        writeln!(output, "\nNote: {note}")
-            .expect("writing to a String must succeed");
-    }
-    output
-}
 
 /// Render the report as JSON.
 #[must_use]
@@ -96,9 +25,9 @@ pub fn render_json(report: &ArchaeologyReport) -> String {
 mod tests {
     use sephera_graph::archaeology::ArchaeologyStep;
 
-    use super::{
-        ArchaeologyKind, ArchaeologyReport, render_json, render_markdown,
-    };
+    use sephera_graph::archaeology::ArchaeologyKind;
+
+    use super::{ArchaeologyReport, render_json, render_markdown};
 
     fn step(
         kind: ArchaeologyKind,

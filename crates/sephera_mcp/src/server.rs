@@ -1439,7 +1439,7 @@ impl SepheraServer {
         })?;
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(archaeology_markdown(&measured)),
+            Some("markdown") => Ok(archaeology::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported archaeology format `{other}`; expected \
@@ -2129,63 +2129,6 @@ fn inject_dependency_closure(
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn archaeology_markdown(report: &archaeology::ArchaeologyReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# History of `{}` in `{}`\n",
-        report.symbol, report.file
-    );
-    if report.steps.is_empty() {
-        let _ = writeln!(output, "No step of the trail could be proven.");
-    }
-    for step in &report.steps {
-        let detail = match step.kind {
-            archaeology::ArchaeologyKind::Born => {
-                format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
-            }
-            archaeology::ArchaeologyKind::Renamed => {
-                format!(
-                    "Renamed `{}` → `{}` in `{}`.",
-                    step.from_name.as_deref().unwrap_or("?"),
-                    step.to_name,
-                    step.to_file
-                )
-            }
-            archaeology::ArchaeologyKind::Moved => {
-                format!(
-                    "Moved `{}` from `{}` to `{}`.",
-                    step.to_name,
-                    step.from_file.as_deref().unwrap_or("?"),
-                    step.to_file
-                )
-            }
-            archaeology::ArchaeologyKind::MovedAndRenamed => {
-                format!(
-                    "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
-                    step.from_name.as_deref().unwrap_or("?"),
-                    step.from_file.as_deref().unwrap_or("?"),
-                    step.to_name,
-                    step.to_file
-                )
-            }
-        };
-        let _ = writeln!(
-            output,
-            "- {detail} — {} by {} ({}): {}",
-            step.commit, step.author, step.date, step.message
-        );
-    }
-    if report.origin_found {
-        let _ = writeln!(output, "\nThe trail reaches the symbol's birth.");
-    } else if let Some(note) = &report.note {
-        let _ = writeln!(output, "\nNote: {note}");
-    }
-    output
-}
-
 /// The JSON document the `review` tool returns: the graph review
 /// plus the ref it was read against and the breaking report
 /// embedded between the changed files and the warnings, as the

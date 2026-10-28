@@ -344,6 +344,80 @@ fn next_older(
     }
 }
 
+/// Render the report as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+/// Render the report as Markdown.
+///
+/// Steps read oldest first, because a trail is a biography: born
+/// as one name, renamed, moved. A trail that stops early says so
+/// plainly, with the reason, rather than implying the oldest
+/// step it found is the birth.
+#[must_use]
+pub fn render_markdown(report: &ArchaeologyReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# History of `{}` in `{}`\n",
+        report.symbol, report.file
+    )
+    .expect("writing to a String must succeed");
+
+    if report.steps.is_empty() {
+        writeln!(output, "No step of the trail could be proven.")
+            .expect("writing to a String must succeed");
+    }
+    for step in &report.steps {
+        let detail = match step.kind {
+            ArchaeologyKind::Born => {
+                format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
+            }
+            ArchaeologyKind::Renamed => {
+                format!(
+                    "Renamed `{}` → `{}` in `{}`.",
+                    step.from_name.as_deref().unwrap_or("?"),
+                    step.to_name,
+                    step.to_file
+                )
+            }
+            ArchaeologyKind::Moved => {
+                format!(
+                    "Moved `{}` from `{}` to `{}`.",
+                    step.to_name,
+                    step.from_file.as_deref().unwrap_or("?"),
+                    step.to_file
+                )
+            }
+            ArchaeologyKind::MovedAndRenamed => {
+                format!(
+                    "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
+                    step.from_name.as_deref().unwrap_or("?"),
+                    step.from_file.as_deref().unwrap_or("?"),
+                    step.to_name,
+                    step.to_file
+                )
+            }
+        };
+        writeln!(
+            output,
+            "- {detail} — {} by {} ({}): {}",
+            step.commit, step.author, step.date, step.message
+        )
+        .expect("writing to a String must succeed");
+    }
+
+    if report.origin_found {
+        writeln!(output, "\nThe trail reaches the symbol's birth.")
+            .expect("writing to a String must succeed");
+    } else if let Some(note) = &report.note {
+        writeln!(output, "\nNote: {note}")
+            .expect("writing to a String must succeed");
+    }
+    output
+}
+
 /// Trace one symbol from `start` backwards.
 ///
 /// `log` lists the commits touching a file from a ref, newest
