@@ -452,23 +452,14 @@ impl SepheraServer {
             (built, markdown)
         };
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => {
+        OutputKind::parse(param.format.as_deref(), "impact")?.render(
+            &built,
+            || {
                 let mut output = markdown;
                 write_impact_gate(&mut output, &built);
-                Ok(output)
-            }
-            // Rejected rather than silently returning JSON, matching
-            // `parse_graph_format`. An agent that asked for Markdown and got JSON
-            // back would parse the wrong shape and not know.
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported impact format `{other}`; expected json or markdown"
-                ),
-                None,
-            )),
-        }
+                output
+            },
+        )
     }
 
     /// Report which tests one or more files have to answer for.
@@ -546,21 +537,10 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("affected test measurement failed"))?;
 
-        match param.format.as_deref() {
-            None | Some("json") => {
-                serialize_json(&AffectedTestsDocument { targets: &impacts })
-            }
-            Some("markdown") => {
-                Ok(affected_tests::render_report(&impacts, &[], &[]))
-            }
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported affected_tests format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "affected_tests")?
+            .render(&AffectedTestsDocument { targets: &impacts }, || {
+                affected_tests::render_report(&impacts, &[], &[])
+            })
     }
 
     /// Explain why one file depends on another.
@@ -643,17 +623,8 @@ impl SepheraServer {
         let built =
             dependency_path::WhyReport::from_path(path.as_ref(), &from, &to);
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(dependency_path::render_markdown(&built)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported why format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "why")?
+            .render(&built, || dependency_path::render_markdown(&built))
     }
 
     /// Find hidden coupling in a repository.
@@ -718,19 +689,10 @@ impl SepheraServer {
                 ..coupling::CouplingOptions::default()
             },
         );
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => {
-                Ok(coupling::render_markdown(&measured, min_co_changes))
-            }
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported coupling format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "coupling")?
+            .render(&measured, || {
+                coupling::render_markdown(&measured, min_co_changes)
+            })
     }
 
     /// The review of a change in progress: for every file the change
@@ -829,21 +791,10 @@ impl SepheraServer {
             warnings: &measured.warnings,
         };
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&document),
-            Some("markdown") => Ok(review::render_markdown(
-                &measured,
-                against,
-                document.breaking,
-            )),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported review format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "review")?
+            .render(&document, || {
+                review::render_markdown(&measured, against, document.breaking)
+            })
     }
 
     /// The files where a change is most likely to hurt, ranked by
@@ -906,17 +857,8 @@ impl SepheraServer {
                 limit: usize::try_from(param.limit.unwrap_or(20)).unwrap_or(20),
             },
         );
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(risk::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported risk format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "risk")?
+            .render(&measured, || risk::render_markdown(&measured))
     }
 
     /// The files no entry point reaches. The measurement is
@@ -975,17 +917,8 @@ impl SepheraServer {
 
         let measured = dead::measure_dead(&report, &extra_roots);
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(dead::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported dead format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "dead")?
+            .render(&measured, || dead::render_markdown(&measured))
     }
 
     /// Compare two refs and report which declared symbols broke,
@@ -1055,17 +988,8 @@ impl SepheraServer {
             &param.from,
             to_label,
         );
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(breaking::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported breaking format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "breaking")?
+            .render(&measured, || breaking::render_markdown(&measured))
     }
 
     /// Predict the merges git completes cleanly but that break
@@ -1145,17 +1069,8 @@ impl SepheraServer {
                 ref_name: &param.theirs,
             },
         );
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(merge::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported merge format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "merge")?
+            .render(&measured, || merge::render_markdown(&measured))
     }
 
     /// Compare two refs and report every declared symbol that was
@@ -1218,17 +1133,8 @@ impl SepheraServer {
         let to_label = param.to.as_deref().unwrap_or("working tree");
         let measured =
             diff::measure_diff(&old_index, &new_index, &param.from, to_label);
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(diff::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported diff format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "diff")?
+            .render(&measured, || diff::render_markdown(&measured))
     }
 
     /// Compare two refs and report the changes that still compile
@@ -1306,17 +1212,8 @@ impl SepheraServer {
             &param.from,
             to_label,
         );
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(behavior::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported behavior format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "behavior")?
+            .render(&measured, || behavior::render_markdown(&measured))
     }
 
     /// Trace one symbol through history: every rename and move,
@@ -1437,17 +1334,8 @@ impl SepheraServer {
                 None,
             ),
         })?;
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(archaeology::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported archaeology format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "archaeology")?
+            .render(&measured, || archaeology::render_markdown(&measured))
     }
 
     /// Dry-run a rename or move: what a real rename would have
@@ -1500,17 +1388,8 @@ impl SepheraServer {
         .map_err(|error| {
             rmcp::ErrorData::invalid_params(error.to_string(), None)
         })?;
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(simulate::render_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported simulate format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "simulate")?
+            .render(&measured, || simulate::render_markdown(&measured))
     }
 
     /// Report the declared symbols no test exercises, measured
@@ -1550,17 +1429,8 @@ impl SepheraServer {
         .map_err(map_internal_error("graph build failed"))?;
         let measured = untested::measure_untested(&report, &index);
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(untested_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported untested format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "untested")?
+            .render(&measured, || untested_markdown(&measured))
     }
 
     /// Rank the tree's untested symbols by what hurts most. The
@@ -1619,17 +1489,8 @@ impl SepheraServer {
             },
         );
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(test_priority_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported test_priority format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "test_priority")?
+            .render(&measured, || test_priority_markdown(&measured))
     }
 
     /// Compare two refs and report which schema elements changed,
@@ -1792,17 +1653,8 @@ impl SepheraServer {
             to_label,
         );
 
-        match param.format.as_deref() {
-            None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(schema_impact_markdown(&measured)),
-            Some(other) => Err(rmcp::ErrorData::invalid_params(
-                format!(
-                    "unsupported schema_impact format `{other}`; expected \
-                     json or markdown"
-                ),
-                None,
-            )),
-        }
+        OutputKind::parse(param.format.as_deref(), "schema_impact")?
+            .render(&measured, || schema_impact_markdown(&measured))
     }
 }
 
@@ -2456,6 +2308,50 @@ fn check_focus_paths_exist(
         }
     }
     Ok(())
+}
+
+/// The output shape a tool caller asked for: JSON unless the format
+/// says markdown. One parser for every tool, so a mistyped format is
+/// rejected the same way everywhere instead of each handler spelling
+/// the match -- the graph tool keeps its own parser because it also
+/// accepts xml and dot. An unrecognised value is rejected rather than
+/// silently falling back, so a caller that asked for Markdown and got
+/// JSON back would parse the wrong shape and not know.
+enum OutputKind {
+    Json,
+    Markdown,
+}
+
+impl OutputKind {
+    fn parse(
+        requested: Option<&str>,
+        tool: &str,
+    ) -> Result<Self, rmcp::ErrorData> {
+        match requested {
+            None | Some("json") => Ok(Self::Json),
+            Some("markdown") => Ok(Self::Markdown),
+            Some(other) => Err(rmcp::ErrorData::invalid_params(
+                format!(
+                    "unsupported {tool} format `{other}`; expected json or markdown"
+                ),
+                None,
+            )),
+        }
+    }
+
+    /// Render the tool's answer in the requested shape: the JSON value
+    /// serialized, or the Markdown the caller builds. The Markdown is
+    /// a closure so a JSON answer never pays for rendering it.
+    fn render<T: serde::Serialize>(
+        self,
+        json: &T,
+        markdown: impl FnOnce() -> String,
+    ) -> Result<String, rmcp::ErrorData> {
+        match self {
+            Self::Json => serialize_json(json),
+            Self::Markdown => Ok(markdown()),
+        }
+    }
 }
 
 /// Map a requested graph output format onto [`GraphFormat`].
