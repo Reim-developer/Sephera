@@ -5,12 +5,9 @@
 //! same question. This module is how a diff report reads on a
 //! terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // diff surface.
-use sephera_graph::diff::DiffChange as Change;
-pub use sephera_graph::diff::{DiffReport, measure_diff};
+pub use sephera_graph::diff::{DiffReport, measure_diff, render_markdown};
 
 /// Render the report as Markdown.
 ///
@@ -18,64 +15,6 @@ pub use sephera_graph::diff::{DiffReport, measure_diff};
 /// count line comes first, because a changelog is read for its
 /// size before its entries, and an empty diff says so plainly
 /// rather than printing a bare heading: no changes is the answer,
-/// not an absence of one.
-#[must_use]
-pub fn render_markdown(report: &DiffReport) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# Symbol diff: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    )
-    .expect("writing to a String must succeed");
-    writeln!(output, "{} symbol(s) changed.", report.changes.len())
-        .expect("writing to a String must succeed");
-
-    if report.changes.is_empty() {
-        writeln!(
-            output,
-            "\nNo declared symbol was added, removed, or reshaped."
-        )
-        .expect("writing to a String must succeed");
-        return output;
-    }
-
-    for change in &report.changes {
-        let line = match &change.change {
-            Change::Added => {
-                format!(
-                    "Added `{}` in `{}` ({:?}).",
-                    change.symbol, change.file, change.kind
-                )
-            }
-            Change::Removed => {
-                format!(
-                    "Removed `{}` from `{}` ({:?}).",
-                    change.symbol, change.file, change.kind
-                )
-            }
-            Change::KindChanged { to } => {
-                format!(
-                    "Changed `{}` in `{}` from {:?} to {:?}.",
-                    change.symbol, change.file, change.kind, to
-                )
-            }
-            Change::SignatureChanged { from, to } => {
-                format!(
-                    "Changed signature of `{}` in `{}`: {} → {}.",
-                    change.symbol,
-                    change.file,
-                    from.render(),
-                    to.render()
-                )
-            }
-        };
-        writeln!(output, "\n- {line}")
-            .expect("writing to a String must succeed");
-    }
-    output
-}
-
 /// Render the report as JSON.
 #[must_use]
 pub fn render_json(report: &DiffReport) -> String {

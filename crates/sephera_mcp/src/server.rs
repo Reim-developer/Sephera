@@ -1220,7 +1220,7 @@ impl SepheraServer {
             diff::measure_diff(&old_index, &new_index, &param.from, to_label);
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(diff_markdown(&measured)),
+            Some("markdown") => Ok(diff::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported diff format `{other}`; expected \
@@ -2290,66 +2290,6 @@ fn simulate_markdown(report: &simulate::SimulateReport) -> String {
     }
     output
 }
-fn diff_markdown(report: &diff::DiffReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Symbol diff: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    );
-    let _ = writeln!(output, "{} symbol(s) changed.", report.changes.len());
-    if report.changes.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo declared symbol was added, removed, or reshaped."
-        );
-        return output;
-    }
-    for change in &report.changes {
-        let line = match &change.change {
-            diff::DiffChange::Added => {
-                format!(
-                    "Added `{}` in `{}` ({:?}).",
-                    change.symbol, change.file, change.kind
-                )
-            }
-            diff::DiffChange::Removed => {
-                format!(
-                    "Removed `{}` from `{}` ({:?}).",
-                    change.symbol, change.file, change.kind
-                )
-            }
-            diff::DiffChange::KindChanged { to } => {
-                format!(
-                    "Changed `{}` in `{}` from {:?} to {:?}.",
-                    change.symbol, change.file, change.kind, to
-                )
-            }
-            diff::DiffChange::SignatureChanged { from, to } => {
-                format!(
-                    "Changed signature of `{}` in `{}`: {} → {}.",
-                    change.symbol,
-                    change.file,
-                    from.render(),
-                    to.render()
-                )
-            }
-        };
-        let _ = writeln!(output, "\n- {line}");
-    }
-    output
-}
-
-/// Render a review as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's: the same measurement should not
-/// need two phrasings learned. The sections run in order of
-/// certainty — changed files, then what broke by name, then the
-/// heuristic coupling warnings last — and the breaking section is
-/// never omitted: when nothing broke it is one line saying so.
 /// The JSON document the `review` tool returns: the graph review
 /// plus the ref it was read against and the breaking report
 /// embedded between the changed files and the warnings, as the
@@ -2365,10 +2305,6 @@ struct ReviewDocument<'a> {
     warnings: &'a [review::CouplingWarning],
 }
 
-/// Render affected tests as Markdown for an agent's context window.
-///
-/// One `#` title for the document and `##` per target when there are
-/// several, matching the `impact` tool's Markdown.
 /// The JSON document the `affected_tests` tool returns: one entry
 /// per file asked about, serialized from the graph impacts.
 #[derive(serde::Serialize)]
