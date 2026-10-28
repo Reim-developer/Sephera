@@ -24,8 +24,8 @@ use rmcp::{
 use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
 
 use sephera_graph::{
-    archaeology, behavior, blast_radius, breaking, coupling, dead,
-    dependency_path, diff, merge,
+    affected_tests, archaeology, behavior, blast_radius, breaking, coupling,
+    dead, dependency_path, diff, merge,
     render::render_graph,
     resolver::{build_focus_set, build_graph, build_graph_with_declarations},
     review, risk, schema, simulate, symbol_impact, test_priority,
@@ -534,11 +534,11 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("affected test measurement failed"))?;
 
-        let built = AffectedTestsReport::new(&impacts);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(affected_tests_markdown(&built)),
+            None | Some("json") => {
+                serialize_json(&AffectedTestsDocument { targets: &impacts })
+            }
+            Some("markdown") => Ok(affected_tests_markdown(&impacts)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported affected_tests format `{other}`; expected \
@@ -1986,68 +1986,6 @@ fn schema_impact_markdown(report: &schema::SchemaImpactReport) -> String {
         let _ = writeln!(output, "Coverage note: {note}");
     }
     output
-}
-
-/// The JSON shape the `affected_tests` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct AffectedTestsReport {
-    /// One entry per file asked about, most affected first.
-    pub targets: Vec<TestImpactEntry>,
-}
-
-/// One file's affected tests.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct TestImpactEntry {
-    /// The file the impact is measured from, spelled as the graph spells it.
-    pub target: String,
-    /// How many test files would notice a change. The number worth acting
-    /// on without walking the list -- and the one that is zero for an
-    /// unwitnessed change.
-    pub affected_test_count: u64,
-    /// The depth limit applied, if any.
-    pub depth: Option<u32>,
-    /// The affected test files, closest first.
-    pub tests: Vec<AffectedTestEntry>,
-}
-
-/// One affected test file.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct AffectedTestEntry {
-    /// Path of the test file.
-    pub file: String,
-    /// Hops from the target along the shortest resolved path. 0 when the
-    /// test file is the target itself.
-    pub distance: u32,
-    /// Import paths naming the target. Empty for a test that reaches the
-    /// target transitively and for the target itself.
-    pub imports: Vec<String>,
-}
-
-impl AffectedTestsReport {
-    fn new(impacts: &[sephera_graph::affected_tests::TestImpact]) -> Self {
-        Self {
-            targets: impacts
-                .iter()
-                .map(|impact| TestImpactEntry {
-                    target: impact.target.clone(),
-                    affected_test_count:
-                        sephera_graph::affected_tests::affected_test_count(
-                            impact,
-                        ),
-                    depth: impact.depth,
-                    tests: impact
-                        .tests
-                        .iter()
-                        .map(|test| AffectedTestEntry {
-                            file: test.file.clone(),
-                            distance: test.distance,
-                            imports: test.imports.clone(),
-                        })
-                        .collect(),
-                })
-                .collect(),
-        }
-    }
 }
 
 /// Render a dependency chain as Markdown for an agent's context window.
@@ -3689,23 +3627,27 @@ fn review_markdown(
 ///
 /// One `#` title for the document and `##` per target when there are
 /// several, matching the `impact` tool's Markdown.
-fn affected_tests_markdown(report: &AffectedTestsReport) -> String {
+/// The JSON document the `affected_tests` tool returns: one entry
+/// per file asked about, serialized from the graph impacts.
+#[derive(serde::Serialize)]
+struct AffectedTestsDocument<'a> {
+    targets: &'a [affected_tests::TestImpact],
+}
+
+fn affected_tests_markdown(targets: &[affected_tests::TestImpact]) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
-    let several = report.targets.len() > 1;
+    let several = targets.len() > 1;
 
     if several {
-        let _ = writeln!(
-            output,
-            "# Affected tests for {} files\n",
-            report.targets.len()
-        );
+        let _ =
+            writeln!(output, "# Affected tests for {} files\n", targets.len());
         let _ = writeln!(output, "Most affected first.");
     }
 
-    for entry in &report.targets {
-        let count = entry.affected_test_count;
+    for entry in targets {
+        let count = affected_tests::affected_test_count(entry);
         if several {
             let _ = writeln!(
                 output,

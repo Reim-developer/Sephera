@@ -351,37 +351,29 @@ fn write_tests(output: &mut String, tests: &[AffectedTest]) {
 /// The shape mirrors `impact`'s JSON -- a `targets` list with a count per
 /// target -- with the plan attached once at the top level, because the plan
 /// belongs to the whole change rather than to any one file in it.
-#[must_use]
-pub fn render_report_json(impacts: &[TestImpact], plan: &RunnerPlan) -> String {
-    let payload = serde_json::json!({
-        "targets": impacts.iter().map(json_for).collect::<Vec<_>>(),
-        "run_plan": plan.commands.iter().map(RunnerCommand::display).collect::<Vec<_>>(),
-        "manual": plan.manual,
-    });
-
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
-        format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
-    })
+/// The JSON document `render_report_json` emits: one entry per
+/// target, serialized from the graph impacts, with the run plan
+/// attached once at the top level, because the plan belongs to
+/// the whole change rather than to any one file in it. The plan
+/// itself stays CLI-owned: mapping files to runner commands is
+/// the command's own presentation, not analysis.
+#[derive(serde::Serialize)]
+struct AffectedTestsDocument<'a> {
+    targets: &'a [TestImpact],
+    run_plan: Vec<String>,
+    manual: &'a [String],
 }
 
-fn json_for(impact: &TestImpact) -> serde_json::Value {
-    let tests: Vec<serde_json::Value> = impact
-        .tests
-        .iter()
-        .map(|test| {
-            serde_json::json!({
-                "file": test.file,
-                "distance": test.distance,
-                "imports": test.imports,
-            })
-        })
-        .collect();
+#[must_use]
+pub fn render_report_json(impacts: &[TestImpact], plan: &RunnerPlan) -> String {
+    let document = AffectedTestsDocument {
+        targets: impacts,
+        run_plan: plan.commands.iter().map(RunnerCommand::display).collect(),
+        manual: &plan.manual,
+    };
 
-    serde_json::json!({
-        "target": impact.target,
-        "affected_test_count": affected_test_count(impact),
-        "depth": impact.depth,
-        "tests": tests,
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
+        format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }
 

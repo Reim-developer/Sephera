@@ -26,12 +26,13 @@
 //! guess at coverage.
 
 use anyhow::{Result, bail};
+use serde::Serialize;
 
 use super::blast_radius;
 use super::types::GraphReport;
 
 /// One test file a change reaches, and how far away it sits.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct AffectedTest {
     /// Path of the test file.
     pub file: String,
@@ -52,6 +53,29 @@ pub struct TestImpact {
     pub tests: Vec<AffectedTest>,
     /// The depth limit applied, if any.
     pub depth: Option<u32>,
+}
+
+// Serialization is hand-written rather than derived because the
+// JSON shape carries `affected_test_count`, which is derived from
+// `tests` rather than stored: deriving would either drop the key
+// or force every construction site to fill a redundant field.
+impl Serialize for TestImpact {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let mut state = serializer.serialize_struct("TestImpact", 4)?;
+        state.serialize_field("target", &self.target)?;
+        state.serialize_field(
+            "affected_test_count",
+            &affected_test_count(self),
+        )?;
+        state.serialize_field("depth", &self.depth)?;
+        state.serialize_field("tests", &self.tests)?;
+        state.end()
+    }
 }
 
 /// Directory names whose contents are fixtures or support code, never test
