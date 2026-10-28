@@ -46,6 +46,8 @@
 
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
+use serde::Serialize;
+
 use super::affected_tests::is_test_file;
 use super::types::GraphReport;
 
@@ -80,7 +82,7 @@ pub fn is_entry_point(path: &str) -> bool {
 }
 
 /// One file the entry points do not reach.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeadFile {
     /// Path of the file, in the graph's spelling.
     pub file: String,
@@ -96,17 +98,21 @@ pub struct DeadFile {
 }
 
 /// The dead-file report for one analysis.
-#[derive(Debug, Clone, PartialEq, Eq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct DeadReport {
-    /// The unreachable files, sorted by path.
-    pub dead: Vec<DeadFile>,
+    /// Files in the graph.
+    pub total: usize,
+    /// Files the walk reached, roots included.
+    pub reachable: usize,
     /// The entry points the walk started from, sorted: the
     /// conventional ones the tree offered, plus the caller's.
     pub roots: Vec<String>,
-    /// Files the walk reached, roots included.
-    pub reachable: usize,
-    /// Files in the graph.
-    pub total: usize,
+    /// The unreachable files, sorted by path.
+    pub dead: Vec<DeadFile>,
 }
 
 /// Find the files no entry point reaches.
@@ -201,10 +207,10 @@ pub fn measure_dead(
         .collect();
 
     DeadReport {
-        dead,
-        roots,
-        reachable: reached.len(),
         total: report.nodes.len(),
+        reachable: reached.len(),
+        roots,
+        dead,
     }
 }
 

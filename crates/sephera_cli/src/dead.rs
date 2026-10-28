@@ -63,26 +63,10 @@ pub fn render_markdown(report: &DeadReport) -> String {
 /// the conventions could not see.
 #[must_use]
 pub fn render_json(report: &DeadReport) -> String {
-    let dead: Vec<serde_json::Value> = report
-        .dead
-        .iter()
-        .map(|file| {
-            serde_json::json!({
-                "file": file.file,
-                "imported_by": file.imported_by,
-                "imports": file.imports,
-            })
-        })
-        .collect();
-
-    let payload = serde_json::json!({
-        "total": report.total,
-        "reachable": report.reachable,
-        "roots": report.roots,
-        "dead": dead,
-    });
-
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    // The graph report serializes directly: its field order is the
+    // JSON order, so there is no hand-built document to drift from
+    // the measurement.
+    serde_json::to_string_pretty(report).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }

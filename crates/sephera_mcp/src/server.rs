@@ -950,11 +950,10 @@ impl SepheraServer {
         }
 
         let measured = dead::measure_dead(&report, &extra_roots);
-        let built = DeadReport::from_measured(&measured);
 
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(dead_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(dead_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported dead format `{other}`; expected \
@@ -2478,56 +2477,12 @@ fn inject_dependency_closure(
     Ok(())
 }
 
-/// The JSON shape the `dead` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DeadReport {
-    /// Files in the graph.
-    pub total: usize,
-    /// Files the walk reached, roots included.
-    pub reachable: usize,
-    /// The entry points the walk started from.
-    pub roots: Vec<String>,
-    /// The unreachable files.
-    pub dead: Vec<DeadFileReport>,
-}
-
-/// One unreachable file, with the counts that say what kind of dead
-/// it is.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct DeadFileReport {
-    /// Path of the file.
-    pub file: String,
-    /// Files that import it.
-    pub imported_by: usize,
-    /// Resolved files it imports.
-    pub imports: usize,
-}
-
-impl DeadReport {
-    fn from_measured(measured: &dead::DeadReport) -> Self {
-        Self {
-            total: measured.total,
-            reachable: measured.reachable,
-            roots: measured.roots.clone(),
-            dead: measured
-                .dead
-                .iter()
-                .map(|file| DeadFileReport {
-                    file: file.file.clone(),
-                    imported_by: file.imported_by,
-                    imports: file.imports,
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Render a dead-file report as Markdown for an agent's context
 /// window.
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn dead_markdown(report: &DeadReport) -> String {
+fn dead_markdown(report: &dead::DeadReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
