@@ -133,16 +133,15 @@ fn package_entry_point(
     // Read the manifest rather than checking the known-files set first: that set
     // holds source files, and a manifest is not one. A missing file is the
     // common case and the read is what discovers it. The read goes through
-    // the analysis' cache: a tree asks this question per directory import,
+    // the analysis' parsed cache: a tree asks this question per directory import,
     // and the manifest's answer cannot change mid-analysis.
     let manifest = if directory.is_empty() {
         "package.json".to_owned()
     } else {
         format!("{directory}/package.json")
     };
-    let contents = context.read_project_file(&manifest)?;
-    let value: serde_json::Value = serde_json::from_str(&contents).ok()?;
-    let main = value.get("main")?.as_str()?.trim();
+    let contents = context.read_json_project_file(&manifest)?;
+    let main = contents.get("main")?.as_str()?.trim();
     if main.is_empty() {
         return None;
     }
@@ -234,20 +233,18 @@ impl TsconfigPaths {
 
     /// Read one config and its `extends` chain, nearest first.
     fn load_chain(context: &ResolveContext<'_>, config: &str) -> Option<Self> {
-        let mut chain: Vec<(String, serde_json::Value)> = Vec::new();
+        let mut chain: Vec<(String, std::sync::Arc<serde_json::Value>)> =
+            Vec::new();
         let mut current = Some(config.to_owned());
         for _ in 0..8 {
             let Some(relative) = current.take() else {
                 break;
             };
-            // Through the analysis' cache, as every project-file
+            // Through the analysis' parsed cache, as every project-file
             // read: a monorepo's bare imports all climb to the same
-            // few tsconfigs, and re-reading them per import was the
+            // few tsconfigs, and re-parsing them per import was the
             // cost the PR #41 review flagged.
-            let Some(text) = context.read_project_file(&relative) else {
-                break;
-            };
-            let Some(value) = parse_jsonc(&text) else {
+            let Some(value) = context.read_jsonc_project_file(&relative) else {
                 break;
             };
             let dir = paths::parent(&relative);
@@ -400,91 +397,6 @@ fn extends_target(value: &serde_json::Value, dir: &str) -> Option<String> {
 /// commas, and `serde_json` wants neither. Both are removed here, with
 /// string contents left alone -- a `//` inside a quoted path is text,
 /// not a comment.
-fn parse_jsonc(text: &str) -> Option<serde_json::Value> {
-    let uncommented = strip_comments(text);
-    let mut cleaned = String::with_capacity(uncommented.len());
-    let chars: Vec<char> = uncommented.chars().collect();
-    let mut in_string = false;
-    let mut escaped = false;
-    for (index, &ch) in chars.iter().enumerate() {
-        if in_string {
-            cleaned.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => {
-                in_string = true;
-                cleaned.push(ch);
-            }
-            ',' => {
-                // A comma whose next meaningful character closes the
-                // object or array is a trailing comma; drop it.
-                let next =
-                    chars[index + 1..].iter().find(|c| !c.is_whitespace());
-                if !matches!(next, Some('}' | ']')) {
-                    cleaned.push(ch);
-                }
-            }
-            _ => cleaned.push(ch),
-        }
-    }
-    serde_json::from_str(&cleaned).ok()
-}
-
-/// Remove `//` and `/* */` comments, leaving string contents untouched.
-fn strip_comments(text: &str) -> String {
-    let mut cleaned = String::with_capacity(text.len());
-    let mut chars = text.chars().peekable();
-    let mut in_string = false;
-    let mut escaped = false;
-    while let Some(ch) = chars.next() {
-        if in_string {
-            cleaned.push(ch);
-            if escaped {
-                escaped = false;
-            } else if ch == '\\' {
-                escaped = true;
-            } else if ch == '"' {
-                in_string = false;
-            }
-            continue;
-        }
-        match ch {
-            '"' => {
-                in_string = true;
-                cleaned.push(ch);
-            }
-            '/' if chars.peek() == Some(&'/') => {
-                for next in chars.by_ref() {
-                    if next == '\n' {
-                        cleaned.push('\n');
-                        break;
-                    }
-                }
-            }
-            '/' if chars.peek() == Some(&'*') => {
-                chars.next();
-                let mut previous = '\0';
-                for next in chars.by_ref() {
-                    if previous == '*' && next == '/' {
-                        break;
-                    }
-                    previous = next;
-                }
-            }
-            _ => cleaned.push(ch),
-        }
-    }
-    cleaned
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;

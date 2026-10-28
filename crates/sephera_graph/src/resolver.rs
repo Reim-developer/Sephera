@@ -7,7 +7,7 @@
 use std::{
     collections::{BTreeMap, BTreeSet, VecDeque},
     path::{Component, Path, PathBuf},
-    sync::Mutex,
+    sync::{Arc, Mutex},
 };
 
 use anyhow::{Context, Result, bail};
@@ -884,6 +884,19 @@ struct ResolutionInputs {
 struct FileTextCache {
     base_path: PathBuf,
     entries: Mutex<BTreeMap<String, Option<String>>>,
+    /// Parsed forms beside the text, one map per shape, so a JSON
+    /// answer and a JSONC answer for one path are different entries
+    /// by construction -- a tsconfig's comment-stripping parse must
+    /// never be a plain JSON parse's answer, or the reverse. Only
+    /// successful parses are stored: a failure re-parses on the
+    /// next call, exactly as before, so no failure can be mistaken
+    /// for a cached answer. The entries live and die with one
+    /// analysis, as the text entries do: files cannot change
+    /// mid-analysis, which is what makes any memoization here
+    /// sound at all.
+    json: Mutex<BTreeMap<String, Arc<serde_json::Value>>>,
+    jsonc: Mutex<BTreeMap<String, Arc<serde_json::Value>>>,
+    toml: Mutex<BTreeMap<String, Arc<toml::Value>>>,
 }
 
 impl FileTextCache {
@@ -891,6 +904,9 @@ impl FileTextCache {
         Self {
             base_path,
             entries: Mutex::new(BTreeMap::new()),
+            json: Mutex::new(BTreeMap::new()),
+            jsonc: Mutex::new(BTreeMap::new()),
+            toml: Mutex::new(BTreeMap::new()),
         }
     }
 }
@@ -909,6 +925,63 @@ impl sephera_core::plugins::FileTextLookup for FileTextCache {
             std::fs::read_to_string(self.base_path.join(relative_path)).ok();
         entries.insert(relative_path.to_owned(), text.clone());
         text
+    }
+
+    fn read_json(&self, relative_path: &str) -> Option<Arc<serde_json::Value>> {
+        if let Ok(json) = self.json.lock() {
+            if let Some(memo) = json.get(relative_path) {
+                return Some(Arc::clone(memo));
+            }
+        }
+        let answer = self
+            .read_text(relative_path)
+            .and_then(|text| serde_json::from_str(&text).ok())
+            .map(Arc::new);
+        if let Some(answer) = &answer {
+            if let Ok(mut json) = self.json.lock() {
+                json.insert(relative_path.to_owned(), Arc::clone(answer));
+            }
+        }
+        answer
+    }
+
+    fn read_jsonc(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<serde_json::Value>> {
+        if let Ok(jsonc) = self.jsonc.lock() {
+            if let Some(memo) = jsonc.get(relative_path) {
+                return Some(Arc::clone(memo));
+            }
+        }
+        let answer = self
+            .read_text(relative_path)
+            .and_then(|text| sephera_core::jsonc::parse(&text))
+            .map(Arc::new);
+        if let Some(answer) = &answer {
+            if let Ok(mut jsonc) = self.jsonc.lock() {
+                jsonc.insert(relative_path.to_owned(), Arc::clone(answer));
+            }
+        }
+        answer
+    }
+
+    fn read_toml(&self, relative_path: &str) -> Option<Arc<toml::Value>> {
+        if let Ok(toml_map) = self.toml.lock() {
+            if let Some(memo) = toml_map.get(relative_path) {
+                return Some(Arc::clone(memo));
+            }
+        }
+        let answer = self
+            .read_text(relative_path)
+            .and_then(|text| toml::from_str(&text).ok())
+            .map(Arc::new);
+        if let Some(answer) = &answer {
+            if let Ok(mut toml_map) = self.toml.lock() {
+                toml_map.insert(relative_path.to_owned(), Arc::clone(answer));
+            }
+        }
+        answer
     }
 }
 
@@ -2194,6 +2267,88 @@ mod tests {
         assert_eq!(cache.read_text("absent.txt"), None);
         fs::write(temp_dir.path().join("absent.txt"), "late").unwrap();
         assert_eq!(cache.read_text("absent.txt"), None);
+    }
+
+    #[test]
+    fn the_parsed_cache_parses_each_file_once_and_shares_the_answer() {
+        use sephera_core::plugins::FileTextLookup as _;
+
+        let temp_dir = tempdir().unwrap();
+        let cache = FileTextCache::new(temp_dir.path().to_path_buf());
+        fs::write(temp_dir.path().join("cfg.json"), "{\"a\": 1}").unwrap();
+
+        let first = cache.read_json("cfg.json").unwrap();
+        let second = cache.read_json("cfg.json").unwrap();
+        assert_eq!(first.get("a").and_then(serde_json::Value::as_i64), Some(1));
+        // The same allocation, not a second parse with an equal
+        // answer: the sharing is the point. A re-parse would hand
+        // back a different allocation here.
+        assert!(Arc::ptr_eq(&first, &second));
+
+        // The file changes on disk; within one analysis the cache's
+        // first answer stands, as the text cache's does.
+        fs::write(temp_dir.path().join("cfg.json"), "{\"a\": 2}").unwrap();
+        assert_eq!(
+            cache
+                .read_json("cfg.json")
+                .unwrap()
+                .get("a")
+                .and_then(serde_json::Value::as_i64),
+            Some(1)
+        );
+    }
+
+    #[test]
+    fn the_parsed_cache_keeps_json_and_jsonc_answers_apart() {
+        use sephera_core::plugins::FileTextLookup as _;
+
+        let temp_dir = tempdir().unwrap();
+        let cache = FileTextCache::new(temp_dir.path().to_path_buf());
+        // Comments and a trailing comma: JSONC parses, plain JSON
+        // does not -- and neither answer may leak into the other.
+        fs::write(
+            temp_dir.path().join("cfg.json"),
+            "{\"a\": 1, // a comment\n}",
+        )
+        .unwrap();
+
+        assert_eq!(cache.read_json("cfg.json"), None);
+        assert_eq!(
+            cache
+                .read_jsonc("cfg.json")
+                .unwrap()
+                .get("a")
+                .and_then(serde_json::Value::as_i64),
+            Some(1)
+        );
+        assert_eq!(cache.read_json("cfg.json"), None);
+    }
+
+    #[test]
+    fn the_parsed_cache_failure_is_an_answer_not_corruption() {
+        use sephera_core::plugins::FileTextLookup as _;
+
+        let temp_dir = tempdir().unwrap();
+        let cache = FileTextCache::new(temp_dir.path().to_path_buf());
+        fs::write(temp_dir.path().join("broken.json"), "not json").unwrap();
+        fs::write(temp_dir.path().join("good.json"), "{\"a\": 1}").unwrap();
+
+        // A failure is `None` on every call, never a panic or a
+        // poisoned entry: whether the failure itself is re-parsed
+        // or memoized is unobservable through this API, because
+        // the text cache underneath already pins the input for the
+        // whole analysis -- so this test pins only what callers
+        // can see.
+        assert_eq!(cache.read_json("broken.json"), None);
+        assert_eq!(cache.read_json("broken.json"), None);
+        assert_eq!(
+            cache
+                .read_json("good.json")
+                .unwrap()
+                .get("a")
+                .and_then(serde_json::Value::as_i64),
+            Some(1)
+        );
     }
 
     /// One file's extraction, spelled out by hand for the join tests.

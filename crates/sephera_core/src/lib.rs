@@ -34,6 +34,7 @@
 pub mod boundary;
 pub mod config;
 pub mod declarations;
+pub mod jsonc;
 pub mod language_data;
 pub mod line_slices;
 pub mod path_utils;

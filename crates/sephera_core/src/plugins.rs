@@ -17,6 +17,7 @@
 //! indexed, cached, and rebuilt on every analysis.
 
 use std::collections::BTreeSet;
+use std::sync::Arc;
 
 use crate::types::ImportKind;
 
@@ -85,6 +86,42 @@ pub trait FileTextLookup: Send + Sync {
     /// directories hold no `package.json`, and that absence is what
     /// the caller needed to know.
     fn read_text(&self, relative_path: &str) -> Option<String>;
+
+    /// The parsed JSON form of a project file, or `None` when it
+    /// cannot be read or is not plain JSON. A `package.json` with
+    /// comments is malformed, so this stays strict: lenient parsing
+    /// would invent an entry point no loader produces.
+    ///
+    /// The default answers by reading and parsing on every call,
+    /// which is what a context without an analysis cache gets. An
+    /// analysis cache overrides this to memoize: a tree asks for
+    /// the same manifest per import that touches it, and
+    /// re-parsing it per import was the cost this exists to end.
+    /// A file that fails to parse is not memoized -- the next call
+    /// re-parses, exactly as before, so a parse failure can never
+    /// be mistaken for a cached answer.
+    fn read_json(&self, relative_path: &str) -> Option<Arc<serde_json::Value>> {
+        let text = self.read_text(relative_path)?;
+        serde_json::from_str(&text).ok().map(Arc::new)
+    }
+
+    /// The parsed JSONC form of a project file: JSON with `//` and
+    /// `/* */` comments and trailing commas, as a tsconfig carries
+    /// them. Same memoization contract as [`Self::read_json`].
+    fn read_jsonc(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<serde_json::Value>> {
+        let text = self.read_text(relative_path)?;
+        crate::jsonc::parse(&text).map(Arc::new)
+    }
+
+    /// The parsed TOML form of a project file. Same memoization
+    /// contract as [`Self::read_json`].
+    fn read_toml(&self, relative_path: &str) -> Option<Arc<toml::Value>> {
+        let text = self.read_text(relative_path)?;
+        toml::from_str(&text).ok().map(Arc::new)
+    }
 }
 
 /// Everything a resolver needs to look at besides the import itself.
@@ -155,6 +192,67 @@ impl ResolveContext<'_> {
         self.file_text.map_or_else(
             || std::fs::read_to_string(self.base_path.join(relative_path)).ok(),
             |cache| cache.read_text(relative_path),
+        )
+    }
+
+    /// The parsed JSON form of a project file, through this
+    /// analysis' cache when it carries one, else parsed on the
+    /// spot.
+    ///
+    /// The same one-door rule as [`Self::read_project_file`]: a
+    /// resolver that parses a config per import gets the memoized
+    /// answer when an analysis cache is attached, and the identical
+    /// freshly parsed answer when it is not (a unit test resolving
+    /// one import).
+    #[must_use]
+    pub fn read_json_project_file(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<serde_json::Value>> {
+        self.file_text.map_or_else(
+            || {
+                std::fs::read_to_string(self.base_path.join(relative_path))
+                    .ok()
+                    .and_then(|text| serde_json::from_str(&text).ok())
+                    .map(Arc::new)
+            },
+            |cache| cache.read_json(relative_path),
+        )
+    }
+
+    /// The parsed JSONC form of a project file. Same one-door rule
+    /// as [`Self::read_json_project_file`].
+    #[must_use]
+    pub fn read_jsonc_project_file(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<serde_json::Value>> {
+        self.file_text.map_or_else(
+            || {
+                std::fs::read_to_string(self.base_path.join(relative_path))
+                    .ok()
+                    .and_then(|text| crate::jsonc::parse(&text))
+                    .map(Arc::new)
+            },
+            |cache| cache.read_jsonc(relative_path),
+        )
+    }
+
+    /// The parsed TOML form of a project file. Same one-door rule
+    /// as [`Self::read_json_project_file`].
+    #[must_use]
+    pub fn read_toml_project_file(
+        &self,
+        relative_path: &str,
+    ) -> Option<Arc<toml::Value>> {
+        self.file_text.map_or_else(
+            || {
+                std::fs::read_to_string(self.base_path.join(relative_path))
+                    .ok()
+                    .and_then(|text| toml::from_str(&text).ok())
+                    .map(Arc::new)
+            },
+            |cache| cache.read_toml(relative_path),
         )
     }
 }
