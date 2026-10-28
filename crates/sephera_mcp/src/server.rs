@@ -538,7 +538,9 @@ impl SepheraServer {
             None | Some("json") => {
                 serialize_json(&AffectedTestsDocument { targets: &impacts })
             }
-            Some("markdown") => Ok(affected_tests_markdown(&impacts)),
+            Some("markdown") => {
+                Ok(affected_tests::render_report(&impacts, &[], &[]))
+            }
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported affected_tests format `{other}`; expected \
@@ -2489,82 +2491,6 @@ struct ReviewDocument<'a> {
 #[derive(serde::Serialize)]
 struct AffectedTestsDocument<'a> {
     targets: &'a [affected_tests::TestImpact],
-}
-
-fn affected_tests_markdown(targets: &[affected_tests::TestImpact]) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let several = targets.len() > 1;
-
-    if several {
-        let _ =
-            writeln!(output, "# Affected tests for {} files\n", targets.len());
-        let _ = writeln!(output, "Most affected first.");
-    }
-
-    for entry in targets {
-        let count = affected_tests::affected_test_count(entry);
-        if several {
-            let _ = writeln!(
-                output,
-                "\n## Affected tests for `{}`\n",
-                entry.target
-            );
-        } else {
-            let _ =
-                writeln!(output, "# Affected tests for `{}`\n", entry.target);
-        }
-        let _ = writeln!(
-            output,
-            "{}",
-            match count {
-                0 => "No test file reaches this one.".to_owned(),
-                1 => "1 test file would notice a change here.".to_owned(),
-                other => {
-                    format!("{other} test files would notice a change here.")
-                }
-            }
-        );
-        if let Some(depth) = entry.depth {
-            let _ = writeln!(output, "\nLimited to {depth} hop(s) away.");
-        }
-        if entry.tests.is_empty() {
-            continue;
-        }
-        let sub = if several { "###" } else { "##" };
-        let _ = writeln!(output, "\n{sub} Test files\n");
-        for test in &entry.tests {
-            if test.distance == 0 {
-                let _ = writeln!(
-                    output,
-                    "- `{}` (the changed file itself)",
-                    test.file
-                );
-            } else if test.imports.is_empty() {
-                let _ = writeln!(
-                    output,
-                    "- `{}` ({} hop(s) away)",
-                    test.file, test.distance
-                );
-            } else {
-                let names: Vec<String> = test
-                    .imports
-                    .iter()
-                    .map(|name| format!("`{name}`"))
-                    .collect();
-                let _ = writeln!(
-                    output,
-                    "- `{}` imports {}",
-                    test.file,
-                    names.join(", ")
-                );
-            }
-        }
-        output.push('\n');
-    }
-
-    output
 }
 
 /// The JSON shape the `impact` tool returns.
