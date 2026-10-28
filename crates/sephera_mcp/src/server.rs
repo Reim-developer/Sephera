@@ -703,11 +703,11 @@ impl SepheraServer {
                 ..coupling::CouplingOptions::default()
             },
         );
-        let built = CouplingReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(coupling_markdown(&built, min_co_changes)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => {
+                Ok(coupling_markdown(&measured, min_co_changes))
+            }
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported coupling format `{other}`; expected \
@@ -2161,66 +2161,15 @@ fn why_markdown(report: &WhyReport) -> String {
     output
 }
 
-/// The JSON shape the `coupling` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct CouplingReport {
-    /// Commits handed to the measurement.
-    pub commits_scanned: u64,
-    /// Commits that touched at least one file in the tree and were
-    /// small enough to count. A pair's counts mean nothing without
-    /// the window behind them, so the window is part of the answer
-    /// rather than a parameter the caller has to remember sending.
-    pub commits_counted: u64,
-    /// The pairs found, strongest first.
-    pub pairs: Vec<CouplingPair>,
-}
-
-/// One pair of files that change together with no import between them.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct CouplingPair {
-    /// The lexicographically first file of the pair.
-    pub first: String,
-    /// The other file.
-    pub second: String,
-    /// Commits in the window that touched both files.
-    pub co_changes: u64,
-    /// Commits in the window that touched `first`.
-    pub first_commits: u64,
-    /// Commits in the window that touched `second`.
-    pub second_commits: u64,
-    /// `co_changes` over the smaller of the two commit counts: the
-    /// share of the quieter file's commits that also touched the
-    /// other file.
-    pub containment: f64,
-}
-
-impl CouplingReport {
-    fn from_measured(measured: &coupling::CouplingReport) -> Self {
-        Self {
-            commits_scanned: measured.commits_scanned,
-            commits_counted: measured.commits_counted,
-            pairs: measured
-                .pairs
-                .iter()
-                .map(|pair| CouplingPair {
-                    first: pair.first.clone(),
-                    second: pair.second.clone(),
-                    co_changes: pair.co_changes,
-                    first_commits: pair.first_commits,
-                    second_commits: pair.second_commits,
-                    containment: pair.containment,
-                })
-                .collect(),
-        }
-    }
-}
-
 /// Render a coupling report as Markdown for an agent's context window.
 ///
 /// The wording follows the CLI's report, as the other tools' Markdown
 /// follows its command's: the same measurement should not need two
 /// phrasings learned.
-fn coupling_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
+fn coupling_markdown(
+    report: &coupling::CouplingReport,
+    min_co_changes: u64,
+) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();

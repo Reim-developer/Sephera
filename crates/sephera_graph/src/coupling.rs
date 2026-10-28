@@ -33,10 +33,12 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::Serialize;
+
 use super::types::GraphReport;
 
 /// One pair of files that change together with no edge between them.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CoupledPair {
     /// The lexicographically first file of the pair.
     pub first: String,
@@ -54,10 +56,12 @@ pub struct CoupledPair {
 }
 
 /// The hidden-coupling report for one analysis.
-#[derive(Debug, Clone, PartialEq)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Serialize)]
 pub struct CouplingReport {
-    /// The pairs found, strongest first.
-    pub pairs: Vec<CoupledPair>,
     /// Commits handed to the measurement.
     pub commits_scanned: u64,
     /// Commits that touched at least one tracked file and were small
@@ -65,6 +69,8 @@ pub struct CouplingReport {
     /// merges, the commits about other trees, and the oversized ones
     /// the module documentation describes skipping.
     pub commits_counted: u64,
+    /// The pairs found, strongest first.
+    pub pairs: Vec<CoupledPair>,
 }
 
 /// Thresholds for one coupling measurement.
@@ -260,9 +266,9 @@ pub fn measure_coupling(
     });
 
     CouplingReport {
-        pairs,
         commits_scanned: u64::try_from(commits.len()).unwrap_or(u64::MAX),
         commits_counted: counted.counted,
+        pairs,
     }
 }
 

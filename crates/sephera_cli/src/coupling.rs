@@ -73,28 +73,10 @@ pub fn render_markdown(report: &CouplingReport, min_co_changes: u64) -> String {
 /// behind them were the same size before it compares the pairs.
 #[must_use]
 pub fn render_json(report: &CouplingReport) -> String {
-    let pairs: Vec<serde_json::Value> = report
-        .pairs
-        .iter()
-        .map(|pair| {
-            serde_json::json!({
-                "first": pair.first,
-                "second": pair.second,
-                "co_changes": pair.co_changes,
-                "first_commits": pair.first_commits,
-                "second_commits": pair.second_commits,
-                "containment": pair.containment,
-            })
-        })
-        .collect();
-
-    let payload = serde_json::json!({
-        "commits_scanned": report.commits_scanned,
-        "commits_counted": report.commits_counted,
-        "pairs": pairs,
-    });
-
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    // The graph report serializes directly: its field order is the
+    // JSON order, so there is no hand-built document to drift from
+    // the measurement.
+    serde_json::to_string_pretty(report).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }
