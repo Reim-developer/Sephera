@@ -892,7 +892,7 @@ impl SepheraServer {
         );
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(risk_markdown(&measured)),
+            Some("markdown") => Ok(risk::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported risk format `{other}`; expected \
@@ -2214,47 +2214,6 @@ fn inject_dependency_closure(
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-/// Render a risk ranking as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn risk_markdown(report: &risk::RiskReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(output, "# Risk ranking\n");
-    let _ = writeln!(
-        output,
-        "History: {} commits scanned, {} counted. Score is dependents \
-         × churn × (1 + coupled partners); only files both depended on \
-         and in motion are listed.",
-        report.commits_scanned, report.commits_counted
-    );
-
-    if report.files.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo file in this tree is both depended on and changing \
-             inside the window."
-        );
-        return output;
-    }
-
-    let _ = writeln!(output);
-    for file in &report.files {
-        let _ = writeln!(
-            output,
-            "- `{}` — score {}, {} dependents, {} changes, {} coupled partner(s)",
-            file.file,
-            file.score,
-            file.dependents,
-            file.churn,
-            file.coupled_partners
-        );
-    }
-    output
-}
-
 fn archaeology_markdown(report: &archaeology::ArchaeologyReport) -> String {
     use std::fmt::Write as _;
 

@@ -5,59 +5,11 @@
 //! same question. This module is how a risk ranking reads on a
 //! terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole risk
 // surface.
-pub use sephera_graph::risk::{RiskOptions, RiskReport, measure_risk};
-
-/// Render the ranking as Markdown.
-///
-/// The header states the window and the score's definition before
-/// any row, because a score is meaningless without both: the same
-/// file is a different risk over fifty commits than over five
-/// hundred, and a product cannot be audited from its result alone.
-/// Each row then prints the score's factors beside it, so the row
-/// can be checked rather than believed.
-#[must_use]
-pub fn render_markdown(report: &RiskReport) -> String {
-    let mut output = String::new();
-    writeln!(output, "# Risk ranking\n")
-        .expect("writing to a String must succeed");
-    writeln!(
-        output,
-        "History: {} commits scanned, {} counted. Score is dependents \
-         × churn × (1 + coupled partners); only files both depended on \
-         and in motion are listed.",
-        report.commits_scanned, report.commits_counted
-    )
-    .expect("writing to a String must succeed");
-
-    if report.files.is_empty() {
-        writeln!(
-            output,
-            "\nNo file in this tree is both depended on and changing \
-             inside the window."
-        )
-        .expect("writing to a String must succeed");
-        return output;
-    }
-
-    writeln!(output).expect("writing to a String must succeed");
-    for file in &report.files {
-        writeln!(
-            output,
-            "- `{}` — score {}, {} dependents, {} changes, {} coupled partner(s)",
-            file.file,
-            file.score,
-            file.dependents,
-            file.churn,
-            file.coupled_partners
-        )
-        .expect("writing to a String must succeed");
-    }
-    output
-}
+pub use sephera_graph::risk::{
+    RiskOptions, RiskReport, measure_risk, render_markdown,
+};
 
 /// Render the ranking as JSON.
 ///
