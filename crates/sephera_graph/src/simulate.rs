@@ -136,6 +136,107 @@ impl fmt::Display for SimulateError {
 
 impl std::error::Error for SimulateError {}
 
+/// Render the report as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+/// Render the report as Markdown.
+///
+/// The verdict comes first, because a simulation is read for its
+/// answer before its evidence: blocked, with the destination
+/// collision named, or safe, with the count of files the real
+/// rename would have to touch. The sections after it keep the
+/// tiers apart — files that must update, files that may use the
+/// symbol through a namespace, files downstream of both — so a
+/// reviewer can tell what the rename touches from what it merely
+/// reaches.
+#[must_use]
+pub fn render_markdown(report: &SimulateReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
+        report.symbol, report.file, report.new_name, report.new_file
+    )
+    .expect("writing to a String must succeed");
+
+    let destination = report
+        .collisions
+        .iter()
+        .find(|collision| collision.kind == CollisionKind::Destination);
+    if let Some(collision) = destination {
+        writeln!(
+            output,
+            "Blocked: `{}` already declares `{}`.",
+            collision.file, report.new_name
+        )
+        .expect("writing to a String must succeed");
+    } else if report.direct.is_empty() {
+        writeln!(
+            output,
+            "Safe to rename: no file names this symbol, so the rename touches only its declaration."
+        )
+        .expect("writing to a String must succeed");
+    } else {
+        writeln!(
+            output,
+            "Safe to rename: {} file(s) must update their import.",
+            report.direct.len()
+        )
+        .expect("writing to a String must succeed");
+    }
+
+    if !report.direct.is_empty() {
+        writeln!(output, "\n## Must update")
+            .expect("writing to a String must succeed");
+        for user in &report.direct {
+            writeln!(
+                output,
+                "\n- `{}` ({}).",
+                user.file,
+                user.imports.join(", ")
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+    if !report.namespace_users.is_empty() {
+        writeln!(output, "\n## May use, through a namespace")
+            .expect("writing to a String must succeed");
+        for file in &report.namespace_users {
+            writeln!(output, "\n- `{file}`.")
+                .expect("writing to a String must succeed");
+        }
+    }
+    if !report.downstream.is_empty() {
+        writeln!(output, "\n## Downstream, untouched by the rename")
+            .expect("writing to a String must succeed");
+        for file in &report.downstream {
+            writeln!(output, "\n- `{file}`.")
+                .expect("writing to a String must succeed");
+        }
+    }
+    let shadowing: Vec<&str> = report
+        .collisions
+        .iter()
+        .filter(|collision| collision.kind == CollisionKind::Shadowing)
+        .map(|collision| collision.file.as_str())
+        .collect();
+    if !shadowing.is_empty() {
+        writeln!(output, "\n## Shadowing warnings")
+            .expect("writing to a String must succeed");
+        for file in shadowing {
+            writeln!(
+                output,
+                "\n- `{file}` already declares `{}`: the renamed import would rebind a name the file owns.",
+                report.new_name
+            )
+            .expect("writing to a String must succeed");
+        }
+    }
+    output
+}
+
 /// Predict what renaming `symbol` in `file` to `new_name` — and,
 /// when `new_file` is present, moving it there — would touch and
 /// what would block it.

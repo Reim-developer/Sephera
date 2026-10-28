@@ -1502,7 +1502,7 @@ impl SepheraServer {
         })?;
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(simulate_markdown(&measured)),
+            Some("markdown") => Ok(simulate::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported simulate format `{other}`; expected \
@@ -2235,61 +2235,6 @@ fn behavior_markdown(report: &behavior::BehaviorReport) -> String {
 ///
 /// The wording follows the CLI's report, as the other tools'
 /// Markdown follows its command's.
-fn simulate_markdown(report: &simulate::SimulateReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
-        report.symbol, report.file, report.new_name, report.new_file
-    );
-    let destination = report.collisions.iter().find(|collision| {
-        collision.kind == simulate::CollisionKind::Destination
-    });
-    if let Some(collision) = destination {
-        let _ = writeln!(
-            output,
-            "Blocked: `{}` already declares `{}`.",
-            collision.file, report.new_name
-        );
-    } else if report.direct.is_empty() {
-        let _ = writeln!(
-            output,
-            "Safe to rename: no file names this symbol, so the rename touches only its declaration."
-        );
-    } else {
-        let _ = writeln!(
-            output,
-            "Safe to rename: {} file(s) must update their import.",
-            report.direct.len()
-        );
-    }
-    for user in &report.direct {
-        let _ = writeln!(
-            output,
-            "\n- `{}` ({}).",
-            user.file,
-            user.imports.join(", ")
-        );
-    }
-    for file in &report.namespace_users {
-        let _ = writeln!(output, "\n- `{file}` (namespace).");
-    }
-    for file in &report.downstream {
-        let _ = writeln!(output, "\n- `{file}` (downstream).");
-    }
-    for collision in &report.collisions {
-        if collision.kind == simulate::CollisionKind::Shadowing {
-            let _ = writeln!(
-                output,
-                "\n- `{}` already declares `{}`: the renamed import would rebind a name the file owns.",
-                collision.file, report.new_name
-            );
-        }
-    }
-    output
-}
 /// The JSON document the `review` tool returns: the graph review
 /// plus the ref it was read against and the breaking report
 /// embedded between the changed files and the warnings, as the

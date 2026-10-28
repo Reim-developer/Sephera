@@ -5,109 +5,11 @@
 //! the same question. This module is how a simulated rename reads
 //! on a terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // simulate surface.
 pub use sephera_graph::simulate::{
-    CollisionKind, SimulateReport, measure_simulate,
+    SimulateReport, measure_simulate, render_markdown,
 };
-
-/// Render the report as Markdown.
-///
-/// The verdict comes first, because a simulation is read for its
-/// answer before its evidence: blocked, with the destination
-/// collision named, or safe, with the count of files the real
-/// rename would have to touch. The sections after it keep the
-/// tiers apart — files that must update, files that may use the
-/// symbol through a namespace, files downstream of both — so a
-/// reviewer can tell what the rename touches from what it merely
-/// reaches.
-#[must_use]
-pub fn render_markdown(report: &SimulateReport) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# Simulated rename: `{}` in `{}` → `{}` in `{}`\n",
-        report.symbol, report.file, report.new_name, report.new_file
-    )
-    .expect("writing to a String must succeed");
-
-    let destination = report
-        .collisions
-        .iter()
-        .find(|collision| collision.kind == CollisionKind::Destination);
-    if let Some(collision) = destination {
-        writeln!(
-            output,
-            "Blocked: `{}` already declares `{}`.",
-            collision.file, report.new_name
-        )
-        .expect("writing to a String must succeed");
-    } else if report.direct.is_empty() {
-        writeln!(
-            output,
-            "Safe to rename: no file names this symbol, so the rename touches only its declaration."
-        )
-        .expect("writing to a String must succeed");
-    } else {
-        writeln!(
-            output,
-            "Safe to rename: {} file(s) must update their import.",
-            report.direct.len()
-        )
-        .expect("writing to a String must succeed");
-    }
-
-    if !report.direct.is_empty() {
-        writeln!(output, "\n## Must update")
-            .expect("writing to a String must succeed");
-        for user in &report.direct {
-            writeln!(
-                output,
-                "\n- `{}` ({}).",
-                user.file,
-                user.imports.join(", ")
-            )
-            .expect("writing to a String must succeed");
-        }
-    }
-    if !report.namespace_users.is_empty() {
-        writeln!(output, "\n## May use, through a namespace")
-            .expect("writing to a String must succeed");
-        for file in &report.namespace_users {
-            writeln!(output, "\n- `{file}`.")
-                .expect("writing to a String must succeed");
-        }
-    }
-    if !report.downstream.is_empty() {
-        writeln!(output, "\n## Downstream, untouched by the rename")
-            .expect("writing to a String must succeed");
-        for file in &report.downstream {
-            writeln!(output, "\n- `{file}`.")
-                .expect("writing to a String must succeed");
-        }
-    }
-    let shadowing: Vec<&str> = report
-        .collisions
-        .iter()
-        .filter(|collision| collision.kind == CollisionKind::Shadowing)
-        .map(|collision| collision.file.as_str())
-        .collect();
-    if !shadowing.is_empty() {
-        writeln!(output, "\n## Shadowing warnings")
-            .expect("writing to a String must succeed");
-        for file in shadowing {
-            writeln!(
-                output,
-                "\n- `{file}` already declares `{}`: the renamed import would rebind a name the file owns.",
-                report.new_name
-            )
-            .expect("writing to a String must succeed");
-        }
-    }
-    output
-}
 
 /// Render the report as JSON.
 #[must_use]
