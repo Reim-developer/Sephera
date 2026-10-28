@@ -186,10 +186,9 @@ pub fn measure_symbol_scoped(
     })
 }
 
-/// Render a symbol impact as Markdown, one renderer for both
+/// Render one symbol impact as Markdown, one renderer for both
 /// surfaces: the CLI and the MCP tool print this text, so a
 /// wording fix lands in one place.
-/// Render one symbol impact as Markdown.
 ///
 /// The three lists stay in separate sections because they are three
 /// different strengths of claim: a file that names the symbol, a file

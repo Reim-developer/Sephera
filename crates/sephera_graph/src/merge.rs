@@ -165,7 +165,6 @@ pub struct MergeReport {
 /// Render the report as Markdown, one renderer for both
 /// surfaces: the CLI and the MCP tool print this text, so a
 /// wording fix lands in one place.
-/// Render the report as Markdown.
 ///
 /// One section per predicted conflict, proven first within a
 /// symbol. The kind line states which side changed the contract

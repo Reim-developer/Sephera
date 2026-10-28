@@ -615,7 +615,6 @@ pub fn collect_facts(base: &Path, ignore: &IgnoreMatcher) -> TreeFacts {
 /// Render the report as Markdown, one renderer for both
 /// surfaces: the CLI and the MCP tool print this text, so a
 /// wording fix lands in one place.
-/// Render the report as Markdown.
 ///
 /// The count line comes first, because a behaviour scan is read
 /// for its size before its entries, and an empty scan says so

@@ -1976,11 +1976,6 @@ fn inject_dependency_closure(
     Ok(())
 }
 
-/// Render a dead-file report as Markdown for an agent's context
-/// window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
 /// The JSON document the `review` tool returns: the graph review
 /// plus the ref it was read against and the breaking report
 /// embedded between the changed files and the warnings, as the

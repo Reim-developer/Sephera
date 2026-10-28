@@ -233,11 +233,6 @@ pub fn render_report(impacts: &[TestImpact], plan: &RunnerPlan) -> String {
     )
 }
 
-/// Render every target's test plan as one JSON report.
-///
-/// The shape mirrors `impact`'s JSON -- a `targets` list with a count per
-/// target -- with the plan attached once at the top level, because the plan
-/// belongs to the whole change rather than to any one file in it.
 /// The JSON document `render_report_json` emits: one entry per
 /// target, serialized from the graph impacts, with the run plan
 /// attached once at the top level, because the plan belongs to
@@ -251,6 +246,11 @@ struct AffectedTestsDocument<'a> {
     manual: &'a [String],
 }
 
+/// Render every target's test plan as one JSON report.
+///
+/// The shape mirrors `impact`'s JSON -- a `targets` list with a count per
+/// target -- with the plan attached once at the top level, because the plan
+/// belongs to the whole change rather than to any one file in it.
 #[must_use]
 pub fn render_report_json(impacts: &[TestImpact], plan: &RunnerPlan) -> String {
     let document = AffectedTestsDocument {

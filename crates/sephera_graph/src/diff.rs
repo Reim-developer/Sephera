@@ -79,10 +79,16 @@ pub struct DiffReport {
     pub changes: Vec<DiffSymbol>,
 }
 
-/// Render the report as Markdown, one renderer for both
-/// surfaces: the CLI and the MCP tool print this text, so a
-/// wording fix lands in one place.
+/// Render the report as Markdown.
+///
+/// One line per changed symbol, in file then symbol order. The
+/// count line comes first, because a changelog is read for its
+/// size before its entries, and an empty diff says so plainly
+/// rather than printing a bare heading: no changes is the answer,
 /// not an absence of one.
+///
+/// One renderer for both surfaces: the CLI and the MCP tool print
+/// this text, so a wording fix lands in one place.
 #[must_use]
 pub fn render_markdown(report: &DiffReport) -> String {
     use std::fmt::Write as _;

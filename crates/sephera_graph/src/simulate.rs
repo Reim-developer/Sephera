@@ -139,7 +139,6 @@ impl std::error::Error for SimulateError {}
 /// Render the report as Markdown, one renderer for both
 /// surfaces: the CLI and the MCP tool print this text, so a
 /// wording fix lands in one place.
-/// Render the report as Markdown.
 ///
 /// The verdict comes first, because a simulation is read for its
 /// answer before its evidence: blocked, with the destination

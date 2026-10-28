@@ -347,7 +347,6 @@ fn next_older(
 /// Render the report as Markdown, one renderer for both
 /// surfaces: the CLI and the MCP tool print this text, so a
 /// wording fix lands in one place.
-/// Render the report as Markdown.
 ///
 /// Steps read oldest first, because a trail is a biography: born
 /// as one name, renamed, moved. A trail that stops early says so

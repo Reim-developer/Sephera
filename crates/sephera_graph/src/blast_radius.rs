@@ -183,10 +183,9 @@ pub fn dependent_count(radius: &BlastRadius) -> u64 {
     u64::try_from(radius.dependents.len()).unwrap_or(u64::MAX)
 }
 
-/// Render a blast radius as Markdown, one renderer for both
+/// Render one blast radius as Markdown, one renderer for both
 /// surfaces: the CLI and the MCP tool print this text, so a
 /// wording fix lands in one place.
-/// Render one blast radius as Markdown.
 ///
 /// `heading_level` is 1 for a single target and 2 when several targets share
 /// one report, so the first target is the document title and the rest are
@@ -241,7 +240,8 @@ pub fn render_markdown(radius: &BlastRadius, heading_level: usize) -> String {
 /// in the graph rather than as a transitive dependent the resolver never saw an
 /// import from.
 ///
-/// `pub` within a private module, which is crate-visible and nothing more.
+/// Public API: the CLI re-exports it and the change-impact path calls it
+/// across the crate boundary.
 pub fn write_dependents(output: &mut String, radius: &BlastRadius) {
     use std::fmt::Write as _;
 

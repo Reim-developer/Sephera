@@ -18,7 +18,6 @@ pub use sephera_graph::breaking::{
 
 use crate::sarif;
 
-/// Render the report as Markdown.
 /// Render the report as JSON.
 ///
 /// The change rides as a tagged object — `{"type": "removed"}` or

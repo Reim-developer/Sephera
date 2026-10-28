@@ -17,11 +17,6 @@ pub use sephera_graph::symbol_impact::{
     render_symbol_report,
 };
 
-/// Render every blast radius as one JSON report.
-///
-/// The shape is the same whatever the count, with `targets` as the list. A
-/// consumer should not have to write one parser for one file and another for
-/// two.
 /// The JSON document the impact renders emit: one entry per
 /// target, serialized from the graph measurements directly.
 #[derive(serde::Serialize)]
@@ -29,6 +24,11 @@ struct ImpactDocument<'a, T> {
     targets: &'a [T],
 }
 
+/// Render every blast radius as one JSON report.
+///
+/// The shape is the same whatever the count, with `targets` as the list. A
+/// consumer should not have to write one parser for one file and another for
+/// two.
 #[must_use]
 pub fn render_report_json(radii: &[BlastRadius]) -> String {
     let document = ImpactDocument { targets: radii };
