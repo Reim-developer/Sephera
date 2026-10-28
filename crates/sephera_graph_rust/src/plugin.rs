@@ -442,13 +442,13 @@ fn named_crate_root(context: ResolveContext<'_>, name: &str) -> Option<String> {
             } else {
                 format!("{crate_dir}/Cargo.toml")
             };
-            // Through the analysis' cache: this runs per crate
+            // Through the analysis' parsed cache: this runs per crate
             // named in a path and reads every crate's manifest, so
-            // uncached it multiplied the manifest reads by the
+            // uncached it multiplied the manifest parses by the
             // number of cross-crate imports -- the cost the PR #41
             // review flagged.
-            let text = context.read_project_file(&manifest)?;
-            let declared = declared_crate(&text)?;
+            let declared = context.read_toml_project_file(&manifest)?;
+            let declared = declared_crate(&declared)?;
             if declared.name.replace('-', "_") != name {
                 return None;
             }
@@ -485,14 +485,13 @@ struct DeclaredCrate {
     lib_path: Option<String>,
 }
 
-/// Read the crate a `Cargo.toml` declares, with a real TOML parser.
+/// Read the crate a `Cargo.toml` declares, from its parsed form.
 ///
 /// Parsed properly rather than scanned, for the reason `manifests.rs`
 /// records: a hand-rolled read of this format failed silently once
 /// before, and the failure mode here would be invisible -- the crate
 /// simply stays external.
-fn declared_crate(manifest: &str) -> Option<DeclaredCrate> {
-    let value = toml::from_str::<toml::Value>(manifest).ok()?;
+fn declared_crate(value: &toml::Value) -> Option<DeclaredCrate> {
     let lib = value.get("lib");
     let name = lib
         .and_then(|lib| lib.get("name"))
