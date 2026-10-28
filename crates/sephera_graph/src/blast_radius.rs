@@ -27,11 +27,13 @@ use std::path::Path;
 use anyhow::{Result, bail};
 
 use super::resolver::path_matches_focus;
+use serde::Serialize;
+
 use super::types::{GraphQuery, GraphReport};
 use sephera_core::path_utils;
 
 /// One dependent file and what it imports from the target.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct Dependent {
     /// Path of the file that imports the target.
     pub file: String,
@@ -48,6 +50,26 @@ pub struct BlastRadius {
     pub dependents: Vec<Dependent>,
     /// The depth limit applied, if any.
     pub depth: Option<u32>,
+}
+
+// Serialization is hand-written rather than derived because the
+// JSON shape carries `dependent_count`, which is derived from
+// `dependents` rather than stored: deriving would either drop the
+// key or force every construction site to fill a redundant field.
+impl Serialize for BlastRadius {
+    fn serialize<S: serde::Serializer>(
+        &self,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        use serde::ser::SerializeStruct as _;
+
+        let mut state = serializer.serialize_struct("BlastRadius", 4)?;
+        state.serialize_field("target", &self.target)?;
+        state.serialize_field("dependent_count", &dependent_count(self))?;
+        state.serialize_field("depth", &self.depth)?;
+        state.serialize_field("dependents", &self.dependents)?;
+        state.end()
+    }
 }
 
 /// Count the files that depend on `target`.

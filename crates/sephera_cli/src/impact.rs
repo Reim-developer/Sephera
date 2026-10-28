@@ -142,11 +142,18 @@ pub fn render_report(radii: &[BlastRadius]) -> String {
 /// The shape is the same whatever the count, with `targets` as the list. A
 /// consumer should not have to write one parser for one file and another for
 /// two.
+/// The JSON document the impact renders emit: one entry per
+/// target, serialized from the graph measurements directly.
+#[derive(serde::Serialize)]
+struct ImpactDocument<'a, T> {
+    targets: &'a [T],
+}
+
 #[must_use]
 pub fn render_report_json(radii: &[BlastRadius]) -> String {
-    let payload = serde_json::json!({ "targets": radii.iter().map(json_for).collect::<Vec<_>>() });
+    let document = ImpactDocument { targets: radii };
 
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }
@@ -308,53 +315,10 @@ pub fn render_symbol_report(impacts: &[SymbolImpact]) -> String {
 /// JSON is: `targets` is always the list.
 #[must_use]
 pub fn render_symbol_report_json(impacts: &[SymbolImpact]) -> String {
-    let payload = serde_json::json!({ "targets": impacts.iter().map(symbol_json_for).collect::<Vec<_>>() });
+    let document = ImpactDocument { targets: impacts };
 
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    serde_json::to_string_pretty(&document).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
-    })
-}
-
-fn symbol_json_for(impact: &SymbolImpact) -> serde_json::Value {
-    let direct: Vec<serde_json::Value> = impact
-        .direct
-        .iter()
-        .map(|user| {
-            serde_json::json!({
-                "file": user.file,
-                "imports": user.imports,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "target": impact.target,
-        "symbol": impact.symbol,
-        "direct_count": symbol_direct_count(impact),
-        "depth": impact.depth,
-        "direct": direct,
-        "namespace_users": impact.namespace_users,
-        "downstream": impact.downstream,
-    })
-}
-
-fn json_for(radius: &BlastRadius) -> serde_json::Value {
-    let dependents: Vec<serde_json::Value> = radius
-        .dependents
-        .iter()
-        .map(|dependent| {
-            serde_json::json!({
-                "file": dependent.file,
-                "imports": dependent.imports,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "target": radius.target,
-        "dependent_count": dependent_count(radius),
-        "depth": radius.depth,
-        "dependents": dependents,
     })
 }
 
