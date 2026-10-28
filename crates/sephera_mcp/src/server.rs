@@ -1308,7 +1308,7 @@ impl SepheraServer {
         );
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(behavior_markdown(&measured)),
+            Some("markdown") => Ok(behavior::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported behavior format `{other}`; expected \
@@ -2186,55 +2186,6 @@ fn archaeology_markdown(report: &archaeology::ArchaeologyReport) -> String {
     output
 }
 
-fn behavior_markdown(report: &behavior::BehaviorReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Silent behaviour changes: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    );
-    let _ = writeln!(output, "{} change(s) found.", report.changes.len());
-    if report.changes.is_empty() {
-        let _ = writeln!(output, "\nNo silent behaviour change was found.");
-        return output;
-    }
-    for change in &report.changes {
-        let line = match change {
-            behavior::BehaviorChange::ArgOrderSwap {
-                file,
-                callee,
-                old_args,
-                new_args,
-            } => {
-                format!(
-                    "Swapped arguments at a call to `{callee}` in `{file}`: ({}) → ({}).",
-                    old_args.join(", "),
-                    new_args.join(", ")
-                )
-            }
-            behavior::BehaviorChange::ConstantChanged {
-                file,
-                name,
-                old_value,
-                new_value,
-            } => {
-                format!(
-                    "Changed `{name}` in `{file}`: {old_value} → {new_value}."
-                )
-            }
-        };
-        let _ = writeln!(output, "\n- {line}");
-    }
-    output
-}
-
-/// Render a simulate report as Markdown for an agent's context
-/// window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
 /// The JSON document the `review` tool returns: the graph review
 /// plus the ref it was read against and the breaking report
 /// embedded between the changed files and the warnings, as the

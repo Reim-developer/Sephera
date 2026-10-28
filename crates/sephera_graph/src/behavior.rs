@@ -612,6 +612,66 @@ pub fn collect_facts(base: &Path, ignore: &IgnoreMatcher) -> TreeFacts {
     merged
 }
 
+/// Render the report as Markdown, one renderer for both
+/// surfaces: the CLI and the MCP tool print this text, so a
+/// wording fix lands in one place.
+/// Render the report as Markdown.
+///
+/// The count line comes first, because a behaviour scan is read
+/// for its size before its entries, and an empty scan says so
+/// plainly rather than printing a bare heading: no silent change
+/// is the answer, not an absence of one.
+#[must_use]
+pub fn render_markdown(report: &BehaviorReport) -> String {
+    use std::fmt::Write as _;
+
+    let mut output = String::new();
+    writeln!(
+        output,
+        "# Silent behaviour changes: `{}` → `{}`\n",
+        report.from_ref, report.to_ref
+    )
+    .expect("writing to a String must succeed");
+    writeln!(output, "{} change(s) found.", report.changes.len())
+        .expect("writing to a String must succeed");
+
+    if report.changes.is_empty() {
+        writeln!(output, "\nNo silent behaviour change was found.")
+            .expect("writing to a String must succeed");
+        return output;
+    }
+
+    for change in &report.changes {
+        let line = match change {
+            BehaviorChange::ArgOrderSwap {
+                file,
+                callee,
+                old_args,
+                new_args,
+            } => {
+                format!(
+                    "Swapped arguments at a call to `{callee}` in `{file}`: ({}) → ({}).",
+                    old_args.join(", "),
+                    new_args.join(", ")
+                )
+            }
+            BehaviorChange::ConstantChanged {
+                file,
+                name,
+                old_value,
+                new_value,
+            } => {
+                format!(
+                    "Changed `{name}` in `{file}`: {old_value} → {new_value}."
+                )
+            }
+        };
+        writeln!(output, "\n- {line}")
+            .expect("writing to a String must succeed");
+    }
+    output
+}
+
 /// Compare two trees' facts and report the silent changes.
 ///
 /// `old_index` and `new_index` carry the callee signatures the

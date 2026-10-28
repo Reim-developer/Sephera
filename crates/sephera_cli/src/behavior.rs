@@ -5,68 +5,11 @@
 //! the same question. This module is how a behaviour report reads
 //! on a terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // behavior surface.
 pub use sephera_graph::behavior::{
-    BehaviorChange, BehaviorReport, collect_facts, measure_behavior,
+    BehaviorReport, collect_facts, measure_behavior, render_markdown,
 };
-
-/// Render the report as Markdown.
-///
-/// The count line comes first, because a behaviour scan is read
-/// for its size before its entries, and an empty scan says so
-/// plainly rather than printing a bare heading: no silent change
-/// is the answer, not an absence of one.
-#[must_use]
-pub fn render_markdown(report: &BehaviorReport) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# Silent behaviour changes: `{}` → `{}`\n",
-        report.from_ref, report.to_ref
-    )
-    .expect("writing to a String must succeed");
-    writeln!(output, "{} change(s) found.", report.changes.len())
-        .expect("writing to a String must succeed");
-
-    if report.changes.is_empty() {
-        writeln!(output, "\nNo silent behaviour change was found.")
-            .expect("writing to a String must succeed");
-        return output;
-    }
-
-    for change in &report.changes {
-        let line = match change {
-            BehaviorChange::ArgOrderSwap {
-                file,
-                callee,
-                old_args,
-                new_args,
-            } => {
-                format!(
-                    "Swapped arguments at a call to `{callee}` in `{file}`: ({}) → ({}).",
-                    old_args.join(", "),
-                    new_args.join(", ")
-                )
-            }
-            BehaviorChange::ConstantChanged {
-                file,
-                name,
-                old_value,
-                new_value,
-            } => {
-                format!(
-                    "Changed `{name}` in `{file}`: {old_value} → {new_value}."
-                )
-            }
-        };
-        writeln!(output, "\n- {line}")
-            .expect("writing to a String must succeed");
-    }
-    output
-}
 
 /// Render the report as JSON.
 #[must_use]
@@ -83,7 +26,7 @@ mod tests {
     use sephera_graph::behavior::BehaviorReport;
 
     use super::{render_json, render_markdown};
-    use crate::behavior::BehaviorChange;
+    use sephera_graph::behavior::BehaviorChange;
 
     fn report(changes: Vec<BehaviorChange>) -> BehaviorReport {
         BehaviorReport {
