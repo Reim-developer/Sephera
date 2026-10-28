@@ -1147,7 +1147,7 @@ impl SepheraServer {
         );
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&measured),
-            Some("markdown") => Ok(merge_markdown(&measured)),
+            Some("markdown") => Ok(merge::render_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported merge format `{other}`; expected \
@@ -2290,135 +2290,6 @@ fn simulate_markdown(report: &simulate::SimulateReport) -> String {
     }
     output
 }
-/// The kind line of one conflict: which side changed the
-/// contract, which side added the consumer, and — for a warning —
-/// why a human look is still needed.
-fn merge_kind_line(conflict: &merge::MergeConflict) -> String {
-    let (contract, consumer) = match conflict.contract_side {
-        merge::MergeSide::Ours => ("ours", "theirs"),
-        merge::MergeSide::Theirs => ("theirs", "ours"),
-        merge::MergeSide::Both => ("both sides", "either side"),
-    };
-    match &conflict.kind {
-        merge::MergeConflictKind::RemovedVsNewConsumer => {
-            format!("Removed on {contract}; {consumer} added a consumer.")
-        }
-        merge::MergeConflictKind::KindChangedVsNewConsumer { to } => {
-            format!(
-                "Changed kind to {to:?} on {contract}; {consumer} added a consumer."
-            )
-        }
-        merge::MergeConflictKind::BothReshaped { ours, theirs } => {
-            format!(
-                "Reshaped differently: ours {} vs theirs {}.",
-                ours.render(),
-                theirs.render()
-            )
-        }
-        merge::MergeConflictKind::SignatureVsNewConsumer { from, to } => {
-            format!(
-                "Changed signature: {} → {} on {contract}; {consumer} added a consumer. \
-                 Warning: the new call's shape is unproven — a human look is needed.",
-                from.render(),
-                to.render()
-            )
-        }
-    }
-}
-
-/// The suggestion lines of one conflict, empty when the
-/// changing side says nothing actionable. The suggestion sits
-/// first, before the evidence: it is the one line a reviewer
-/// acts on, and the consumer list below is why it is
-/// trustworthy.
-fn merge_suggestion_lines(conflict: &merge::MergeConflict) -> String {
-    match &conflict.suggestion {
-        Some(breaking::BreakSuggestion::Moved { file, kind }) => {
-            format!("Suggestion: moved to `{file}` ({kind:?}).")
-        }
-        Some(breaking::BreakSuggestion::NewCallShape { signature }) => {
-            format!(
-                "Suggestion: call `{}{}`.",
-                conflict.symbol,
-                signature.render()
-            )
-        }
-        None => String::new(),
-    }
-}
-
-/// Render a merge report as Markdown for an agent's context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's: the same measurement should
-/// not need two phrasings learned. The kind line states which
-/// side changed the contract and which side added the consumer
-/// before the evidence, and the suggestion sits first, as in
-/// the breaking report.
-fn merge_markdown(report: &merge::MergeReport) -> String {
-    use std::fmt::Write as _;
-
-    let mut output = String::new();
-    let _ = writeln!(
-        output,
-        "# Predicted merge conflicts: `{}` vs `{}`\n",
-        report.ours_ref, report.theirs_ref
-    );
-    let _ = writeln!(output, "Base: `{}`.\n", report.base_ref);
-    let proven = report
-        .conflicts
-        .iter()
-        .filter(|c| c.kind.is_proven())
-        .count();
-    let _ = writeln!(
-        output,
-        "{} conflict(s) predicted; {} of them proven.",
-        report.conflicts.len(),
-        proven
-    );
-
-    if report.conflicts.is_empty() {
-        let _ = writeln!(
-            output,
-            "\nNo contradiction between the two sides: nothing one side changed is newly used by the other."
-        );
-        return output;
-    }
-
-    for conflict in &report.conflicts {
-        let _ = writeln!(output);
-        let tier = if conflict.kind.is_proven() {
-            "proven"
-        } else {
-            "warning"
-        };
-        let _ = writeln!(
-            output,
-            "## `{}` — `{}` ({tier})",
-            conflict.file, conflict.symbol
-        );
-        let _ = writeln!(output, "\n{}", merge_kind_line(conflict));
-        let suggestion = merge_suggestion_lines(conflict);
-        if !suggestion.is_empty() {
-            let _ = writeln!(output, "\n{suggestion}");
-        }
-        if conflict.consumers.is_empty() {
-            let _ = writeln!(output, "\nNo consumers on the other side.");
-        } else {
-            let heading = if conflict.contract_side == merge::MergeSide::Both {
-                "Consumers:"
-            } else {
-                "New consumers:"
-            };
-            let _ = writeln!(output, "\n{heading}");
-            for file in &conflict.consumers {
-                let _ = writeln!(output, "- `{file}`");
-            }
-        }
-    }
-    output
-}
-
 fn diff_markdown(report: &diff::DiffReport) -> String {
     use std::fmt::Write as _;
 

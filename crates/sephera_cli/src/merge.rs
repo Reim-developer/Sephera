@@ -5,147 +5,9 @@
 //! the same question. This module is how a merge report reads on
 //! a terminal and in JSON.
 
-use std::fmt::Write as _;
-
 // Re-exported so `run.rs` keeps one import site for the whole
 // merge surface.
-use sephera_graph::breaking::BreakSuggestion as Suggestion;
-use sephera_graph::merge::MergeConflictKind as Kind;
-use sephera_graph::merge::MergeSide as Side;
-pub use sephera_graph::merge::{MergeReport, measure_merge};
-
-/// Render the report as Markdown.
-///
-/// One section per predicted conflict, proven first within a
-/// symbol. The kind line states which side changed the contract
-/// and which side added the consumer before the evidence: a
-/// reader deciding whether to merge reads "removed on ours, new
-/// consumer on theirs" differently from a warning, and the
-/// consumer list that follows is the evidence for either.
-#[must_use]
-pub fn render_markdown(report: &MergeReport) -> String {
-    let mut output = String::new();
-    writeln!(
-        output,
-        "# Predicted merge conflicts: `{}` vs `{}`\n",
-        report.ours_ref, report.theirs_ref
-    )
-    .expect("writing to a String must succeed");
-    writeln!(output, "Base: `{}`.\n", report.base_ref)
-        .expect("writing to a String must succeed");
-    output.push_str(&render_body(report));
-    output
-}
-
-/// The body shared by the document: the count line, then the
-/// empty-state line or one entry per predicted conflict.
-fn render_body(report: &MergeReport) -> String {
-    let mut output = String::new();
-    let proven = report
-        .conflicts
-        .iter()
-        .filter(|conflict| conflict.kind.is_proven())
-        .count();
-    writeln!(
-        output,
-        "{} conflict(s) predicted; {} of them proven.",
-        report.conflicts.len(),
-        proven
-    )
-    .expect("writing to a String must succeed");
-
-    if report.conflicts.is_empty() {
-        writeln!(
-            output,
-            "\nNo contradiction between the two sides: nothing one side changed is newly used by the other."
-        )
-        .expect("writing to a String must succeed");
-        return output;
-    }
-
-    for conflict in &report.conflicts {
-        writeln!(output).expect("writing to a String must succeed");
-        let tier = if conflict.kind.is_proven() {
-            "proven"
-        } else {
-            "warning"
-        };
-        writeln!(
-            output,
-            "## `{}` — `{}` ({tier})",
-            conflict.file, conflict.symbol
-        )
-        .expect("writing to a String must succeed");
-        let (contract, consumer) = match conflict.contract_side {
-            Side::Ours => ("ours", "theirs"),
-            Side::Theirs => ("theirs", "ours"),
-            Side::Both => ("both sides", "either side"),
-        };
-        let kind_line = match &conflict.kind {
-            Kind::RemovedVsNewConsumer => {
-                format!("Removed on {contract}; {consumer} added a consumer.")
-            }
-            Kind::KindChangedVsNewConsumer { to } => {
-                format!(
-                    "Changed kind to {to:?} on {contract}; {consumer} added a consumer."
-                )
-            }
-            Kind::BothReshaped { ours, theirs } => {
-                format!(
-                    "Reshaped differently: ours {} vs theirs {}.",
-                    ours.render(),
-                    theirs.render()
-                )
-            }
-            Kind::SignatureVsNewConsumer { from, to } => {
-                format!(
-                    "Changed signature: {} → {} on {contract}; {consumer} added a consumer. \
-                     Warning: the new call's shape is unproven — a human look is needed.",
-                    from.render(),
-                    to.render()
-                )
-            }
-        };
-        writeln!(output, "\n{kind_line}")
-            .expect("writing to a String must succeed");
-        // The suggestion sits first, before the evidence: it is
-        // the one line a reviewer acts on, and the consumer list
-        // below is why it is trustworthy.
-        match &conflict.suggestion {
-            Some(Suggestion::Moved { file, kind }) => {
-                writeln!(output, "\nSuggestion: moved to `{file}` ({kind:?}).")
-                    .expect("writing to a String must succeed");
-            }
-            Some(Suggestion::NewCallShape { signature }) => {
-                writeln!(
-                    output,
-                    "\nSuggestion: call `{}{}`.",
-                    conflict.symbol,
-                    signature.render()
-                )
-                .expect("writing to a String must succeed");
-            }
-            None => {}
-        }
-        if conflict.consumers.is_empty() {
-            writeln!(output, "\nNo consumers on the other side.")
-                .expect("writing to a String must succeed");
-        } else {
-            let heading = if conflict.contract_side == Side::Both {
-                "Consumers:"
-            } else {
-                "New consumers:"
-            };
-            writeln!(output, "\n{heading}")
-                .expect("writing to a String must succeed");
-            for file in &conflict.consumers {
-                writeln!(output, "- `{file}`")
-                    .expect("writing to a String must succeed");
-            }
-        }
-    }
-    output
-}
+pub use sephera_graph::merge::{MergeReport, measure_merge, render_markdown};
 
 /// Render the report as JSON.
 ///
@@ -164,6 +26,8 @@ pub fn render_json(report: &MergeReport) -> String {
 mod tests {
     use sephera_core::declarations::{DeclarationKind, Signature};
 
+    use sephera_graph::breaking::BreakSuggestion;
+
     use super::{MergeReport, render_json, render_markdown};
     use sephera_graph::merge::{MergeConflict, MergeConflictKind, MergeSide};
 
@@ -178,7 +42,7 @@ mod tests {
 
     fn conflict(
         kind: MergeConflictKind,
-        suggestion: Option<super::Suggestion>,
+        suggestion: Option<BreakSuggestion>,
     ) -> MergeConflict {
         MergeConflict {
             file: "lib.py".to_owned(),
@@ -194,7 +58,7 @@ mod tests {
     fn a_move_suggestion_renders_first_and_the_kind_line_names_both_sides() {
         let report = report(vec![conflict(
             MergeConflictKind::RemovedVsNewConsumer,
-            Some(super::Suggestion::Moved {
+            Some(BreakSuggestion::Moved {
                 file: "other.py".to_owned(),
                 kind: DeclarationKind::Function,
             }),
