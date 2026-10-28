@@ -11,7 +11,7 @@ use std::fmt::Write as _;
 // Re-exported so `run.rs` keeps one import site for the whole
 // dependency-path surface. The search itself lives in core, where the
 // MCP server reaches the same code.
-pub use sephera_graph::dependency_path::{DependencyPath, explain};
+pub use sephera_graph::dependency_path::{DependencyPath, WhyReport, explain};
 
 /// Render the answer as Markdown.
 ///
@@ -80,32 +80,11 @@ pub fn render_json(
     from: &str,
     to: &str,
 ) -> String {
-    let payload = path.map_or_else(
-        || {
-            serde_json::json!({
-                "from": from,
-                "to": to,
-                "connected": false,
-                "hop_count": null,
-                "direct": false,
-                "hops": [],
-            })
-        },
-        |path| {
-            serde_json::json!({
-                "from": path.from,
-                "to": path.to,
-                "connected": true,
-                "hop_count": path.hop_count(),
-                "direct": path.is_direct(),
-                "hops": path.hops.iter().map(|hop| {
-                    serde_json::json!({ "file": hop.file, "via": hop.via })
-                }).collect::<Vec<_>>(),
-            })
-        },
-    );
-
-    serde_json::to_string_pretty(&payload).unwrap_or_else(|error| {
+    // The graph report serializes directly: its field order is the
+    // JSON order, so there is no hand-built document to drift from
+    // the search.
+    let report = WhyReport::from_path(path, from, to);
+    serde_json::to_string_pretty(&report).unwrap_or_else(|error| {
         format!("{{\"error\": \"JSON serialization failed: {error}\"}}")
     })
 }

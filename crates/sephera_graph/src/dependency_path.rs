@@ -31,6 +31,7 @@
 //!   a mistyped path because a path that matches no file *is* an error.
 
 use anyhow::{Result, bail};
+use serde::Serialize;
 
 use super::blast_radius::match_path;
 use super::types::GraphReport;
@@ -162,7 +163,7 @@ impl Successors for ReportEdges<'_> {
 }
 
 /// One file on a dependency chain, and how the chain arrives at it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct PathHop {
     /// The file this hop lands on.
     pub file: String,
@@ -194,6 +195,65 @@ impl DependencyPath {
     #[must_use]
     pub fn is_direct(&self) -> bool {
         self.hops.len() == 2
+    }
+}
+
+/// Why one file depends on another, as one shape.
+///
+/// Whether or not a chain exists, `connected` carries the
+/// distinction, so a consumer parses one shape, with `hop_count`
+/// null and `hops` empty when there is no chain.
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+pub struct WhyReport {
+    /// The dependent file, spelled as the graph spells it.
+    pub from: String,
+    /// The dependency, spelled as the graph spells it.
+    pub to: String,
+    /// Whether a chain connects them. `false` is an answer, not a
+    /// failure: the two files never touch.
+    pub connected: bool,
+    /// How many edges the chain crosses. `None` when there is no
+    /// chain.
+    pub hop_count: Option<usize>,
+    /// Whether `from` imports `to` with no file in between.
+    pub direct: bool,
+    /// Every file on the chain, `from` first and `to` last. Empty
+    /// when there is no chain.
+    pub hops: Vec<PathHop>,
+}
+
+impl WhyReport {
+    /// Build the report from the search result: the chain's own
+    /// spelling when one exists, the caller's spelling when none
+    /// does.
+    #[must_use]
+    pub fn from_path(
+        path: Option<&DependencyPath>,
+        from: &str,
+        to: &str,
+    ) -> Self {
+        path.map_or_else(
+            || Self {
+                from: from.to_owned(),
+                to: to.to_owned(),
+                connected: false,
+                hop_count: None,
+                direct: false,
+                hops: Vec::new(),
+            },
+            |path| Self {
+                from: path.from.clone(),
+                to: path.to.clone(),
+                connected: true,
+                hop_count: Some(path.hop_count()),
+                direct: path.is_direct(),
+                hops: path.hops.clone(),
+            },
+        )
     }
 }
 

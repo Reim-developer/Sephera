@@ -626,7 +626,8 @@ impl SepheraServer {
             None => (canonical(&param.from), canonical(&param.to)),
         };
 
-        let built = WhyReport::new(path.as_ref(), &from, &to);
+        let built =
+            dependency_path::WhyReport::from_path(path.as_ref(), &from, &to);
 
         match param.format.as_deref() {
             None | Some("json") => serialize_json(&built),
@@ -2049,77 +2050,12 @@ impl AffectedTestsReport {
     }
 }
 
-/// The JSON shape the `why` tool returns.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct WhyReport {
-    /// The dependent file, spelled as the graph spells it.
-    pub from: String,
-    /// The dependency, spelled as the graph spells it.
-    pub to: String,
-    /// Whether a chain connects them. `false` is an answer, not a
-    /// failure: the two files never touch.
-    pub connected: bool,
-    /// How many edges the chain crosses. `null` when there is no
-    /// chain, matching how absence is spelled elsewhere in these
-    /// reports rather than inventing a second convention.
-    pub hop_count: Option<usize>,
-    /// Whether `from` imports `to` with no file in between.
-    pub direct: bool,
-    /// Every file on the chain, `from` first and `to` last. Empty
-    /// when there is no chain.
-    pub hops: Vec<WhyHopEntry>,
-}
-
-/// One file on a dependency chain.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct WhyHopEntry {
-    /// The file this hop lands on.
-    pub file: String,
-    /// Import paths written in the previous file that name this one.
-    /// Empty on the first hop, which has no predecessor.
-    pub via: Vec<String>,
-}
-
-impl WhyReport {
-    fn new(
-        path: Option<&dependency_path::DependencyPath>,
-        from: &str,
-        to: &str,
-    ) -> Self {
-        path.map_or_else(
-            || Self {
-                from: from.to_owned(),
-                to: to.to_owned(),
-                connected: false,
-                hop_count: None,
-                direct: false,
-                hops: Vec::new(),
-            },
-            |path| Self {
-                from: path.from.clone(),
-                to: path.to.clone(),
-                connected: true,
-                hop_count: Some(path.hop_count()),
-                direct: path.is_direct(),
-                hops: path
-                    .hops
-                    .iter()
-                    .map(|hop| WhyHopEntry {
-                        file: hop.file.clone(),
-                        via: hop.via.clone(),
-                    })
-                    .collect(),
-            },
-        )
-    }
-}
-
 /// Render a dependency chain as Markdown for an agent's context window.
 ///
 /// The same rendering the `why` command prints, kept in step with it:
 /// an agent reading the tool's answer and a person reading the
 /// terminal should be looking at the same explanation.
-fn why_markdown(report: &WhyReport) -> String {
+fn why_markdown(report: &dependency_path::WhyReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
