@@ -32,6 +32,8 @@
 use std::collections::BTreeSet;
 use std::fmt;
 
+use serde::Serialize;
+
 use sephera_core::declarations::DeclarationIndex;
 
 use crate::breaking::{ResolutionOracle, consumers};
@@ -62,7 +64,8 @@ pub struct HistorySnapshot {
 }
 
 /// How one step of the trail changed the symbol's identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
+#[serde(rename_all = "snake_case")]
 pub enum ArchaeologyKind {
     /// The symbol first appears here: no older identity could be
     /// proven, and no older commit touches the tracked file.
@@ -78,8 +81,14 @@ pub enum ArchaeologyKind {
 /// One step of the trail, in chronological order: the identity
 /// the symbol had before this commit, and the identity it has
 /// from this commit on.
-#[derive(Debug, Clone)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Clone, Serialize)]
 pub struct ArchaeologyStep {
+    /// The kind of change this step records.
+    pub kind: ArchaeologyKind,
     /// The commit that introduced the `to` identity.
     pub commit: String,
     /// The commit's author.
@@ -88,8 +97,6 @@ pub struct ArchaeologyStep {
     pub date: String,
     /// The commit's subject line.
     pub message: String,
-    /// The kind of change this step records.
-    pub kind: ArchaeologyKind,
     /// The file the symbol lived in before this step, absent for
     /// a birth.
     pub from_file: Option<String>,
@@ -103,21 +110,25 @@ pub struct ArchaeologyStep {
 }
 
 /// The trail of one symbol through history, oldest step first.
-#[derive(Debug)]
+///
+/// Field order is the JSON order: the CLI and the MCP tool
+/// serialize this struct directly, so the declaration order is
+/// the emitted order.
+#[derive(Debug, Serialize)]
 pub struct ArchaeologyReport {
     /// The file the symbol was queried in.
     pub file: String,
     /// The name the symbol was queried by.
     pub symbol: String,
-    /// The steps, oldest first. The last step is the queried
-    /// identity itself, unless the trail stopped early.
-    pub steps: Vec<ArchaeologyStep>,
     /// True when the trail reached a birth: the symbol's origin
     /// is known. False when the window ran out or the identity
     /// turned ambiguous, in which case `note` says why.
     pub origin_found: bool,
     /// Why the trail ends without a birth, when it does.
     pub note: Option<String>,
+    /// The steps, oldest first. The last step is the queried
+    /// identity itself, unless the trail stopped early.
+    pub steps: Vec<ArchaeologyStep>,
 }
 
 /// What can go wrong while tracing a symbol.

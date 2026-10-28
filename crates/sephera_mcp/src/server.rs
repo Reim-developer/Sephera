@@ -1421,11 +1421,9 @@ impl SepheraServer {
                 None,
             ),
         })?;
-        let built = ArchaeologyReport::from_measured(&measured);
-
         match param.format.as_deref() {
-            None | Some("json") => serialize_json(&built),
-            Some("markdown") => Ok(archaeology_markdown(&built)),
+            None | Some("json") => serialize_json(&measured),
+            Some("markdown") => Ok(archaeology_markdown(&measured)),
             Some(other) => Err(rmcp::ErrorData::invalid_params(
                 format!(
                     "unsupported archaeology format `{other}`; expected \
@@ -2290,94 +2288,7 @@ fn risk_markdown(report: &risk::RiskReport) -> String {
     output
 }
 
-/// The trail of one symbol through history, as the `archaeology`
-/// tool renders it.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ArchaeologyReport {
-    /// The file the symbol was queried in.
-    pub file: String,
-    /// The name the symbol was queried by.
-    pub symbol: String,
-    /// The steps, oldest first.
-    pub steps: Vec<ArchaeologyStepReport>,
-    /// True when the trail reached a birth.
-    pub origin_found: bool,
-    /// Why the trail ends without a birth, when it does.
-    pub note: Option<String>,
-}
-
-/// One step of the trail, as the `archaeology` tool renders it.
-///
-/// The shape is flat on purpose: `kind` says which shape the
-/// other fields carry — `born` fills neither `from_*` field, the
-/// other kinds fill both — and the absent fields stay null rather
-/// than disappearing.
-#[derive(serde::Serialize, schemars::JsonSchema)]
-pub struct ArchaeologyStepReport {
-    /// `born`, `renamed`, `moved`, or `moved_and_renamed`.
-    pub kind: String,
-    /// The commit that introduced the `to` identity.
-    pub commit: String,
-    /// The commit's author.
-    pub author: String,
-    /// The commit's date.
-    pub date: String,
-    /// The commit's subject line.
-    pub message: String,
-    /// The file the symbol lived in before this step, absent for
-    /// a birth.
-    pub from_file: Option<String>,
-    /// The name the symbol had before this step, absent for a
-    /// birth.
-    pub from_name: Option<String>,
-    /// The file the symbol lives in from this step on.
-    pub to_file: String,
-    /// The name the symbol has from this step on.
-    pub to_name: String,
-}
-
-impl ArchaeologyReport {
-    fn from_measured(measured: &archaeology::ArchaeologyReport) -> Self {
-        Self {
-            file: measured.file.clone(),
-            symbol: measured.symbol.clone(),
-            steps: measured
-                .steps
-                .iter()
-                .map(|step| {
-                    let kind = match step.kind {
-                        archaeology::ArchaeologyKind::Born => "born",
-                        archaeology::ArchaeologyKind::Renamed => "renamed",
-                        archaeology::ArchaeologyKind::Moved => "moved",
-                        archaeology::ArchaeologyKind::MovedAndRenamed => {
-                            "moved_and_renamed"
-                        }
-                    };
-                    ArchaeologyStepReport {
-                        kind: kind.to_owned(),
-                        commit: step.commit.clone(),
-                        author: step.author.clone(),
-                        date: step.date.clone(),
-                        message: step.message.clone(),
-                        from_file: step.from_file.clone(),
-                        from_name: step.from_name.clone(),
-                        to_file: step.to_file.clone(),
-                        to_name: step.to_name.clone(),
-                    }
-                })
-                .collect(),
-            origin_found: measured.origin_found,
-            note: measured.note.clone(),
-        }
-    }
-}
-
-/// Render an archaeology report as Markdown for an agent's
-/// context window.
-///
-/// The wording follows the CLI's report, as the other tools'
-/// Markdown follows its command's.
-fn archaeology_markdown(report: &ArchaeologyReport) -> String {
+fn archaeology_markdown(report: &archaeology::ArchaeologyReport) -> String {
     use std::fmt::Write as _;
 
     let mut output = String::new();
@@ -2390,11 +2301,11 @@ fn archaeology_markdown(report: &ArchaeologyReport) -> String {
         let _ = writeln!(output, "No step of the trail could be proven.");
     }
     for step in &report.steps {
-        let detail = match step.kind.as_str() {
-            "born" => {
+        let detail = match step.kind {
+            archaeology::ArchaeologyKind::Born => {
                 format!("Born as `{}` in `{}`.", step.to_name, step.to_file)
             }
-            "renamed" => {
+            archaeology::ArchaeologyKind::Renamed => {
                 format!(
                     "Renamed `{}` → `{}` in `{}`.",
                     step.from_name.as_deref().unwrap_or("?"),
@@ -2402,7 +2313,7 @@ fn archaeology_markdown(report: &ArchaeologyReport) -> String {
                     step.to_file
                 )
             }
-            "moved" => {
+            archaeology::ArchaeologyKind::Moved => {
                 format!(
                     "Moved `{}` from `{}` to `{}`.",
                     step.to_name,
@@ -2410,7 +2321,7 @@ fn archaeology_markdown(report: &ArchaeologyReport) -> String {
                     step.to_file
                 )
             }
-            _ => {
+            archaeology::ArchaeologyKind::MovedAndRenamed => {
                 format!(
                     "Moved and renamed `{}` in `{}` → `{}` in `{}`.",
                     step.from_name.as_deref().unwrap_or("?"),

@@ -86,44 +86,10 @@ pub fn render_markdown(report: &ArchaeologyReport) -> String {
 /// Render the report as JSON.
 #[must_use]
 pub fn render_json(report: &ArchaeologyReport) -> String {
-    let payload = json_value(report);
-    serde_json::to_string_pretty(&payload).expect("the report serializes")
-}
-
-/// The JSON shape of the report.
-#[must_use]
-pub fn json_value(report: &ArchaeologyReport) -> serde_json::Value {
-    let steps: Vec<serde_json::Value> = report
-        .steps
-        .iter()
-        .map(|step| {
-            let kind = match step.kind {
-                ArchaeologyKind::Born => "born",
-                ArchaeologyKind::Renamed => "renamed",
-                ArchaeologyKind::Moved => "moved",
-                ArchaeologyKind::MovedAndRenamed => "moved_and_renamed",
-            };
-            serde_json::json!({
-                "kind": kind,
-                "commit": step.commit,
-                "author": step.author,
-                "date": step.date,
-                "message": step.message,
-                "from_file": step.from_file,
-                "from_name": step.from_name,
-                "to_file": step.to_file,
-                "to_name": step.to_name,
-            })
-        })
-        .collect();
-
-    serde_json::json!({
-        "file": report.file,
-        "symbol": report.symbol,
-        "origin_found": report.origin_found,
-        "note": report.note,
-        "steps": steps,
-    })
+    // The graph report serializes directly: its field order is the
+    // JSON order, so there is no hand-built document to drift from
+    // the measurement.
+    serde_json::to_string_pretty(report).expect("the report serializes")
 }
 
 #[cfg(test)]
@@ -131,7 +97,7 @@ mod tests {
     use sephera_graph::archaeology::ArchaeologyStep;
 
     use super::{
-        ArchaeologyKind, ArchaeologyReport, json_value, render_markdown,
+        ArchaeologyKind, ArchaeologyReport, render_json, render_markdown,
     };
 
     fn step(
@@ -213,7 +179,7 @@ mod tests {
 
     #[test]
     fn json_tags_each_step() {
-        let payload = json_value(&report(
+        let rendered = render_json(&report(
             vec![step(
                 ArchaeologyKind::Moved,
                 Some("old.py"),
@@ -223,6 +189,8 @@ mod tests {
             )],
             true,
         ));
+        let payload: serde_json::Value =
+            serde_json::from_str(&rendered).expect("the report serializes");
         assert_eq!(payload["steps"][0]["kind"], "moved");
         assert_eq!(payload["steps"][0]["from_file"], "old.py");
         assert_eq!(payload["origin_found"], true);
