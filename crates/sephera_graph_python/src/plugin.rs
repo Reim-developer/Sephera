@@ -196,11 +196,15 @@ fn import_root(context: ResolveContext<'_>) -> String {
 /// Whether `src/<segment>/` holds a package in this analysis.
 ///
 /// The evidence is a regular package (`src/<segment>/__init__.py`) or a
-/// namespace package (any file under `src/<segment>/`). The check is a
-/// `contains` plus one prefix range scan over the sorted known-file set, so
-/// it costs O(log n) rather than a scan per import -- and the range scan is
-/// what keeps a `src/` directory that is merely a folder of modules, like
-/// `src/utils.py`, from counting: that file is not under `src/utils/`.
+/// namespace package (a Python file under `src/<segment>/`). The namespace
+/// branch requires a `.py` file specifically: a directory holding only a
+/// `README.md` is documentation, not a package, and counting it would both
+/// fire the third root and hand `first_existing` a non-Python target. The
+/// check is a `contains` plus one prefix range scan over the sorted
+/// known-file set, so it costs O(log n) rather than a scan per import -- and
+/// the range scan is what keeps a `src/` directory that is merely a folder
+/// of modules, like `src/utils.py`, from counting: that file is not under
+/// `src/utils/`.
 ///
 /// The guard matters because the third root must not hijack genuine external
 /// dependencies: it fires only when the tree itself holds the package, which
@@ -220,8 +224,12 @@ fn src_layout_package(context: ResolveContext<'_>, segment: &str) -> bool {
     context
         .known_files
         .range(prefix.clone()..)
-        .next()
-        .is_some_and(|file| file.starts_with(prefix.as_str()))
+        .take_while(|file| file.starts_with(prefix.as_str()))
+        .any(|file| {
+            std::path::Path::new(file.as_str())
+                .extension()
+                .is_some_and(|ext| ext == "py")
+        })
 }
 
 /// Try `path.py`, then `path/__init__.py`.
@@ -242,10 +250,18 @@ fn first_existing(context: ResolveContext<'_>, path: &str) -> Option<String> {
 
     // A directory named after the module, with its own package root. This is
     // what a namespace package looks like, and it has no `__init__.py` at all.
+    // The target must be a Python file: the first file beneath the directory
+    // in sort order can be a `README.md`, and a documentation file is not a
+    // module an import can name.
     let directory = format!("{path}/");
     context
         .files()
-        .find(|known| known.starts_with(&directory))
+        .find(|known| {
+            known.starts_with(&directory)
+                && std::path::Path::new(known.as_str())
+                    .extension()
+                    .is_some_and(|ext| ext == "py")
+        })
         .cloned()
 }
 
@@ -624,6 +640,44 @@ mod tests {
         let files = ["src/utils.py", "tests/test_x.py"];
 
         assert_eq!(resolve("utils", "tests/test_x.py", &files), None);
+    }
+
+    #[test]
+    fn a_src_directory_with_only_a_readme_is_not_a_namespace_package() {
+        // CodeRabbit on PR #59: the namespace branch used to accept any file
+        // under `src/<segment>/` as evidence, so a lone `README.md` both
+        // fired the third root and became the import's target -- `README.md`
+        // sorts before any `.py` file, so it was the file `first_existing`
+        // returned. Documentation is not a package.
+        let files = ["src/requests/README.md", "tests/test_x.py"];
+
+        assert_eq!(resolve("requests", "tests/test_x.py", &files), None);
+
+        let known: BTreeSet<String> =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let context =
+            sephera_core::plugins::test_context("tests/test_x.py", &known);
+        assert!(
+            !PythonPlugin.names_a_known_module("requests", context),
+            "the gap question must agree with resolution"
+        );
+    }
+
+    #[test]
+    fn a_namespace_package_target_is_a_python_file_not_a_readme() {
+        // Same defect from the target side: with a real module present, the
+        // answer must be the module, not the `README.md` that sorts first.
+        let files = [
+            "src/pkg/__init__.py",
+            "src/pkg/sub/README.md",
+            "src/pkg/sub/mod.py",
+            "tests/test_x.py",
+        ];
+
+        assert_eq!(
+            resolve("pkg.sub", "tests/test_x.py", &files),
+            Some("src/pkg/sub/mod.py".to_owned())
+        );
     }
 
     #[test]
