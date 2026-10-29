@@ -189,7 +189,13 @@ language = "Python"
 # of its names. And for a path that is one dot and a name, the split
 # that finds the parent sliced at the dot and left it empty -- the
 # package itself is the parent, and it is asked now.
-unresolved_local = 0
+# Up from 0, and the one is a true gap the fix surfaced rather than
+# created: `from flask import Module` in
+# tests/test_apps/subdomaintestmodule/__init__.py names a binding flask no
+# longer exports (Module predates the modern API). It was previously misfiled
+# as an external dependency because no root could see src/flask; every other
+# newly resolved statement points at a file that exists.
+unresolved_local = 1
 # Up from 80 when a zero-byte file stopped being dropped from the graph. The
 # three are the empty `__init__.py` files under `tests/`, which are the thing
 # that makes each of those directories a package -- and this resolver already
@@ -215,7 +221,11 @@ files = 83
 # through -- the import works only because flask's test setup puts it there
 # itself, and nothing in the repository says so. `blueprintapp` next to it does
 # have one, and its imports resolve.
-internal_edges = 188
+# Up from 188: absolute imports from test files now find the src/ layout
+# package, so 124 module edges that were filed as external dependencies point
+# at files under src/flask. The count is exactly the newly resolved module
+# edges; symbol halves stay unresolved by design.
+internal_edges = 312
 # Up from 5 for the same reason as the edges above: `from js_example import views`
 # in `js_example/__init__.py` names the package it is already inside, and that
 # statement only became visible once absolute imports found their root.
@@ -411,10 +421,24 @@ language = "Python"
 # record exactly the names an `if`/`elif`/`else` chain binds on
 # every path through it. A bare annotation in a branch binds
 # nothing and does not count. Zero.
-unresolved_local = 0
+# Up from 0: `from _pytest.python import CallSpec2` in
+# testing/deprecated_test.py. CallSpec2 is bound only under
+# `if TYPE_CHECKING:` plus a PEP 562 `__getattr__` fallback, neither of which
+# the declaration index models, so the gap rule cannot vouch for it. A
+# measurement limitation surfaced by the fix, not a broken import: the name
+# resolves at runtime through `__getattr__`.
+unresolved_local = 1
 files = 274
-internal_edges = 870
+# Up from 870: 651 module edges from test and doc files now resolve into
+# src/_pytest and src/pytest instead of filing as external dependencies.
+internal_edges = 1521
 self_references = 4
 cfg_gated_edges = 0
-cycles = 91
+# Down from 91, and the drop is a traversal artifact, not lost dependencies:
+# internal edges rose by 651 in the same run. The cycle detector reports one
+# cycle per back edge found in DFS order with globally visited nodes, so newly
+# added edges rewire the traversal and merge/split the reported rings (25
+# identical, 29 new, 66 gone). Nothing was lost; the rings are reported
+# differently because the graph got denser.
+cycles = 54
 structural_cycles = 0
