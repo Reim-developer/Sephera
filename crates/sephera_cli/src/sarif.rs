@@ -216,24 +216,32 @@ pub fn result(
     value
 }
 
+/// Test-only assertion helper: a SARIF document must never carry a
+/// `region`, because neither report carries line numbers and a line
+/// guessed by text search would be a fabricated location.
+///
+/// One home for the check the three SARIF test suites used to copy
+/// verbatim: the file-level-locations invariant belongs with the
+/// scaffold that builds the envelope, not re-spelled per renderer.
+#[cfg(test)]
+pub(crate) fn has_no_region(value: &serde_json::Value) -> bool {
+    match value {
+        serde_json::Value::Object(map) => {
+            !map.contains_key("region") && map.values().all(has_no_region)
+        }
+        serde_json::Value::Array(items) => items.iter().all(has_no_region),
+        _ => true,
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
 
     use super::{
-        document, encode_uri, file_location, fingerprint, path_prefix,
-        prefixed_path, result, rule,
+        document, encode_uri, file_location, fingerprint, has_no_region,
+        path_prefix, prefixed_path, result, rule,
     };
-
-    fn has_no_region(value: &serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(map) => {
-                !map.contains_key("region") && map.values().all(has_no_region)
-            }
-            serde_json::Value::Array(items) => items.iter().all(has_no_region),
-            _ => true,
-        }
-    }
 
     #[test]
     fn the_document_claims_sarif_2_1_0_with_one_run() {

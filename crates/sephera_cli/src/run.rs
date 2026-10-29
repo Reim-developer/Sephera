@@ -2676,7 +2676,10 @@ async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
         );
         println!(
             "{}",
-            guard::decision_json(false, "no edited file in the hook payload")
+            guard::decision_json(
+                guard::GuardDecision::Allow,
+                "no edited file in the hook payload"
+            )
         );
         return Ok(Vec::new());
     };
@@ -2716,7 +2719,7 @@ async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
         println!(
             "{}",
             guard::decision_json(
-                false,
+                guard::GuardDecision::Allow,
                 "the edited file is not in the analysed graph"
             )
         );
@@ -2738,32 +2741,35 @@ async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
          {test_count} affected test(s)"
     );
 
-    let blocked = arguments
+    let decision = if arguments
         .max_dependents
-        .is_some_and(|limit| dependents >= limit);
-    let reason = if blocked {
-        format!(
+        .is_some_and(|limit| dependents >= limit)
+    {
+        guard::GuardDecision::Deny
+    } else {
+        guard::GuardDecision::Allow
+    };
+    let reason = match decision {
+        guard::GuardDecision::Deny => format!(
             "`{canonical}` has {dependents} dependents, at or over the limit \
              of {}. Measure it with `sephera impact {canonical}` and get a \
              person's agreement before editing it.",
             arguments.max_dependents.unwrap_or_default()
-        )
-    } else {
-        format!(
+        ),
+        guard::GuardDecision::Allow => format!(
             "`{canonical}` has {dependents} dependent(s) and {test_count} \
              affected test(s)"
-        )
+        ),
     };
-    println!("{}", guard::decision_json(blocked, &reason));
+    println!("{}", guard::decision_json(decision, &reason));
 
-    if blocked {
-        Ok(vec![Gate::new(
+    match decision {
+        guard::GuardDecision::Deny => Ok(vec![Gate::new(
             format!("files depending on `{canonical}`"),
             dependents,
             arguments.max_dependents.unwrap_or_default(),
-        )])
-    } else {
-        Ok(Vec::new())
+        )]),
+        guard::GuardDecision::Allow => Ok(Vec::new()),
     }
 }
 

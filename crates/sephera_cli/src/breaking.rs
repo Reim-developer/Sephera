@@ -192,6 +192,7 @@ mod tests {
     use sephera_graph::breaking::render_markdown_section;
 
     use super::{render_json, render_markdown};
+    use crate::sarif::has_no_region;
 
     fn broken(
         change: BreakChange,
@@ -288,16 +289,6 @@ mod tests {
             serde_json::from_str(&render_json(&report)).expect("valid JSON");
         assert!(json["broken"][0]["suggestion"].is_null());
         assert!(!render_markdown(&report).contains("Suggestion:"));
-    }
-
-    fn has_no_region(value: &serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(map) => {
-                !map.contains_key("region") && map.values().all(has_no_region)
-            }
-            serde_json::Value::Array(items) => items.iter().all(has_no_region),
-            _ => true,
-        }
     }
 
     fn sarif(report: &super::BreakingReport) -> serde_json::Value {
