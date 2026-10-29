@@ -230,7 +230,7 @@ pub enum UserPathError {
 impl std::fmt::Display for UserPathError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            UserPathError::EscapesBase(path) => write!(
+            Self::EscapesBase(path) => write!(
                 f,
                 "path `{}` must resolve inside the base path",
                 path.display()

@@ -476,21 +476,23 @@ fn rust_param_types(signature: &Signature) -> Vec<String> {
 /// a body that merely contains such a core counts, because the
 /// check errs toward skipping: a false skip costs recall, a false
 /// flag costs the precision this command is measured by.
+/// The operator table for [`body_is_symmetric`]'s commutative cores.
+/// Hand-writing both orders per operator meant adding an operator
+/// touched two mirrored lines and could leave one order present and
+/// the other missing; the check set is unchanged, only its
+/// construction is table-driven now.
+const SYMMETRIC_OPS: [&str; 6] = ["+", "*", "==", "!=", "&&", "||"];
+const SYMMETRIC_NAMES: [&str; 2] = ["min", "max"];
+
 fn body_is_symmetric(body: &str, first: &str, second: &str) -> bool {
     let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-    // The operator table is the data. Hand-writing both orders per
-    // operator meant adding an operator touched two mirrored lines and
-    // could leave one order present and the other missing; the check
-    // set is unchanged, only its construction is table-driven now.
-    const OPS: [&str; 6] = ["+", "*", "==", "!=", "&&", "||"];
-    const NAMES: [&str; 2] = ["min", "max"];
-    let binary = OPS.iter().flat_map(|op| {
+    let binary = SYMMETRIC_OPS.iter().flat_map(|op| {
         [
             format!("{first}{op}{second}"),
             format!("{second}{op}{first}"),
         ]
     });
-    let named = NAMES.iter().flat_map(|name| {
+    let named = SYMMETRIC_NAMES.iter().flat_map(|name| {
         [
             format!("{name}({first},{second})"),
             format!("{name}({second},{first})"),

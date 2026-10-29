@@ -775,7 +775,6 @@ fn threshold_gates<T>(
 /// measuring code: the source resolution and graph build above are
 /// shared, everything from the scope note down is this question --
 /// file-level or symbol-level -- asked of the same report.
-
 fn impact_outcome(
     arguments: &ImpactArgs,
     report: &sephera_graph::types::GraphReport,
@@ -1269,7 +1268,6 @@ fn canonical_and_toplevel(
 /// must carry none. The same prefix also scopes a comparison's old
 /// side to `--path` (see `build_old_side`): both uses need the
 /// directory the analysis sits under, not a rendering detail.
-
 #[must_use]
 fn analysis_prefix(source: &ResolvedSource) -> PathBuf {
     let relative =
@@ -1360,7 +1358,7 @@ fn normalize_archaeology_file(source: &ResolvedSource, file: &str) -> String {
     {
         return slash_spelling(&path);
     }
-    slash_spelling(&prefix.join(path))
+    slash_spelling(prefix.join(path))
 }
 
 /// Strip leading `./` segments from a spelling.
@@ -1815,7 +1813,6 @@ fn history_commit(
 
 /// The commit-log provider for archaeology: the commits touching
 /// a file from a ref, newest first, as graph history commits.
-
 fn archaeology_log(
     repo_root: &Path,
     from_ref: &str,
@@ -2462,7 +2459,6 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
     )?;
     let old_schema = build_schema_side(&old_base, &old_ignore)?;
 
-    let to_label = arguments.to.as_deref().unwrap_or("working tree");
     let (new_report, new_schema, new_texts) = if let Some(to) = &arguments.to {
         let new_worktree = checkout_worktree(&source.repo_root, to)
             .with_context(|| {
@@ -2498,7 +2494,7 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         &new_report,
         &new_texts,
         &arguments.from,
-        to_label,
+        arguments.to.as_deref().unwrap_or("working tree"),
     );
 
     let rendered = match arguments.format {
@@ -2831,7 +2827,6 @@ fn graph_gates(
 ///
 /// Synchronous despite the caller being async: the source is already resolved by
 /// the time this runs, and a diff against it is file reads rather than a clone.
-
 fn run_graph_diff(
     source: &ResolvedSource,
     ignore: &IgnoreMatcher,

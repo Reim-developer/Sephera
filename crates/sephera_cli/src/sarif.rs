@@ -224,7 +224,7 @@ pub fn result(
 /// verbatim: the file-level-locations invariant belongs with the
 /// scaffold that builds the envelope, not re-spelled per renderer.
 #[cfg(test)]
-pub(crate) fn has_no_region(value: &serde_json::Value) -> bool {
+pub fn has_no_region(value: &serde_json::Value) -> bool {
     match value {
         serde_json::Value::Object(map) => {
             !map.contains_key("region") && map.values().all(has_no_region)

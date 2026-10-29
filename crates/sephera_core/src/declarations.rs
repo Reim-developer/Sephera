@@ -477,7 +477,7 @@ const RUST_REEXPORT_KINDS: [&str; 1] = ["use_declaration"];
 /// ```
 /// use sephera_core::declarations::collapse_whitespace;
 ///
-/// assert_eq!(collapse_whitespace("fn  f(\n    a: u8,\n)"), "fn f( a: u8,)");
+/// assert_eq!(collapse_whitespace("fn  f(\n    a: u8,\n)"), "fn f( a: u8, )");
 /// assert_eq!(collapse_whitespace("  already  tidy  "), "already tidy");
 /// ```
 #[must_use]
