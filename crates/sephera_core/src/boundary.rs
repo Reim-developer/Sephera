@@ -16,8 +16,10 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
+use serde::{Deserialize, Serialize};
+
 /// The boundary mechanism a name crosses by.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BoundaryKind {
     /// A Rust `#[pymodule]` and the items it registers, called from Python
     /// through `PyO3`.
@@ -37,7 +39,7 @@ pub enum BoundaryKind {
 /// what a Python `import` statement names. `exposed` holds the names visible
 /// inside the module, again in their foreign spelling, so an item-level
 /// reference (`from m import f`) can be checked against it.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoundaryModule {
     /// The module name as the foreign side spells it.
     pub name: String,
@@ -48,7 +50,7 @@ pub struct BoundaryModule {
 }
 
 /// Which side of a boundary a file stands on for one symbol.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum BoundaryRole {
     /// The file declares that the name exists elsewhere: a Java `native`
     /// method, whose body the language runtime must be given.
@@ -65,7 +67,7 @@ pub enum BoundaryRole {
 /// file: Java declares a `native` method and C defines a function whose
 /// name is the method's, mangled (`Java_com_acme_Native_add`). The pair
 /// only exists because both spellings are harvested and matched.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct BoundarySymbol {
     /// The name as the boundary spells it (for JNI, the mangled name).
     pub name: String,
@@ -96,7 +98,7 @@ pub struct JoinedSymbol<'index> {
 }
 
 /// Everything one file exposes across language boundaries.
-#[derive(Debug, Clone, Default, PartialEq, Eq)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FileBoundary {
     /// The boundary modules this file declares.
     pub modules: Vec<BoundaryModule>,
