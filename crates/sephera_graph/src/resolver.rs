@@ -923,7 +923,22 @@ impl sephera_core::plugins::FileTextLookup for FileTextCache {
         }
         let text =
             std::fs::read_to_string(self.base_path.join(relative_path)).ok();
-        entries.insert(relative_path.to_owned(), text.clone());
+        // Retention is bounded at the extraction cap: a text larger than
+        // that is never an extraction input, so nothing depends on its
+        // answer being pinned -- but retaining it would let one
+        // suffix-matched candidate read (the Java dropped-prefix loop
+        // checks every file a candidate names, including files the
+        // extractor deliberately skipped) pin megabytes for the rest of
+        // the analysis. The answer is still returned; only the
+        // retention is skipped, so a later read re-reads the disk,
+        // exactly as the pre-cache code did.
+        if text
+            .as_ref()
+            .is_some_and(|t| t.len() as u64 <= MAX_IMPORT_FILE_BYTES)
+            || text.is_none()
+        {
+            entries.insert(relative_path.to_owned(), text.clone());
+        }
         text
     }
 
@@ -2267,6 +2282,34 @@ mod tests {
         assert_eq!(cache.read_text("absent.txt"), None);
         fs::write(temp_dir.path().join("absent.txt"), "late").unwrap();
         assert_eq!(cache.read_text("absent.txt"), None);
+    }
+
+    #[test]
+    fn the_file_text_cache_does_not_retain_oversized_texts() {
+        // CodeRabbit on PR #60: the Java dropped-prefix loop checks every
+        // file a candidate names, including files the extractor skips for
+        // size -- and the old code retained each full text it read until
+        // the analysis ended. A set of oversized suffix matches could
+        // therefore pin unbounded megabytes. Texts above the extraction
+        // cap are still answered, but not retained: a second read
+        // re-reads the disk, which is the pre-cache behavior and loses
+        // nothing, since no extraction input is ever that large.
+        use sephera_core::plugins::FileTextLookup as _;
+
+        let temp_dir = tempdir().unwrap();
+        let cache = FileTextCache::new(temp_dir.path().to_path_buf());
+        let big =
+            "x".repeat(usize::try_from(MAX_IMPORT_FILE_BYTES).unwrap() + 1);
+        fs::write(temp_dir.path().join("big.txt"), &big).unwrap();
+
+        assert_eq!(cache.read_text("big.txt"), Some(big));
+        // The file changes on disk; an oversized text is not pinned, so
+        // the second read sees the new content -- the opposite of the
+        // small-file test above, and the proof nothing was retained.
+        let bigger =
+            "y".repeat(usize::try_from(MAX_IMPORT_FILE_BYTES).unwrap() + 1);
+        fs::write(temp_dir.path().join("big.txt"), &bigger).unwrap();
+        assert_eq!(cache.read_text("big.txt"), Some(bigger));
     }
 
     #[test]

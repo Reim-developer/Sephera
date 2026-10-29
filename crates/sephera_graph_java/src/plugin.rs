@@ -113,8 +113,13 @@ fn names_the_imported_type(
     file: &str,
     import_path: &str,
 ) -> bool {
-    let Ok(contents) = std::fs::read_to_string(context.base_path.join(file))
-    else {
+    // Through the context's text lookup, not a fresh disk read: during a
+    // graph build the lookup is the analysis's pinned cache, so a file
+    // that changed mid-analysis cannot make resolution disagree with
+    // extraction -- and a file the cache already holds is not re-read
+    // once per candidate. Without a cache this falls back to the same
+    // disk read as before, so the answer is unchanged there.
+    let Some(contents) = context.read_project_file(file) else {
         return false;
     };
     let Some(package) = declared_package(&contents) else {
@@ -206,6 +211,8 @@ fn all_existing(context: &ResolveContext<'_>, path: &str) -> Vec<String> {
 mod tests {
     use super::*;
     use std::collections::BTreeSet;
+
+    use sephera_core::plugins::FileTextLookup;
 
     fn resolve(import_path: &str, files: &[&str]) -> Option<String> {
         resolve_with_kind(import_path, files, ImportKind::Dependency)
@@ -471,5 +478,50 @@ mod tests {
         let files = ["com/example/util/Helper.java"];
 
         assert_eq!(resolve("vendor.com.example.util.Helper", &files), None);
+    }
+
+    /// A text lookup that answers from canned text, standing in for the
+    /// analysis's pinned cache: no file on disk backs it.
+    struct CannedText {
+        path: &'static str,
+        text: &'static str,
+    }
+
+    impl FileTextLookup for CannedText {
+        fn read_text(&self, relative_path: &str) -> Option<String> {
+            (relative_path == self.path).then(|| self.text.to_owned())
+        }
+    }
+
+    #[test]
+    fn a_dropped_prefix_verifies_against_the_cached_text_not_the_disk() {
+        // The case the cache route exists for: the candidate file is
+        // known to the analysis, but nothing on disk backs it in this
+        // test -- the old direct disk read refused the guess, while the
+        // pinned text verifies it. The cached package is what the
+        // import names, so the edge is real even though the disk here
+        // is empty.
+        let canned = CannedText {
+            path: "lib/Widget.java",
+            text: "package org.example;\n\npublic class Widget {}\n",
+        };
+        let known: BTreeSet<String> =
+            std::iter::once("lib/Widget.java".to_owned()).collect();
+        let directory = tempfile::tempdir().expect("a writable directory");
+        let context = ResolveContext {
+            source_file: "src/Main.java",
+            known_files: &known,
+            module_depth: 0,
+            kind: ImportKind::Dependency,
+            declarations: None,
+            manifests: None,
+            base_path: directory.path(),
+            file_text: Some(&canned),
+        };
+
+        assert_eq!(
+            JavaPlugin.resolve("org.example.Widget", context),
+            Some("lib/Widget.java".to_owned())
+        );
     }
 }

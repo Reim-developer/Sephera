@@ -35,6 +35,7 @@ use tree_sitter::{Node, Tree};
 use sephera_core::boundary::{
     BoundaryKind, BoundaryModule, BoundaryRole, BoundarySymbol, FileBoundary,
 };
+use sephera_core::plugins::contains_bytes;
 use sephera_core::plugins::node_text;
 
 /// Harvests the boundary evidence this source carries, if any: `PyO3`
@@ -47,6 +48,23 @@ use sephera_core::plugins::node_text;
 /// cannot see the caller (dead-code reachability above all) know the file
 /// is reached from outside the graph.
 pub fn collect_boundary(source: &[u8], tree: &Tree) -> Option<FileBoundary> {
+    // The three walks below key on five names and nothing else: no marker,
+    // no boundary, so the walks are skipped rather than run to the same
+    // empty answer. `wrap_pyfunction` is read only inside `#[pymodule]`
+    // functions, so it cannot produce output on its own -- but it is a
+    // name the harvest keys on, and listing it keeps the skip sound if
+    // that ever changes. A marker inside a comment or a string only ever
+    // causes the walks to run anyway.
+    const MARKERS: [&[u8]; 5] = [
+        b"pymodule",
+        b"pyfunction",
+        b"pyclass",
+        b"wasm_bindgen",
+        b"wrap_pyfunction",
+    ];
+    if !MARKERS.iter().any(|marker| contains_bytes(source, marker)) {
+        return None;
+    }
     let renames = collect_renames(source, tree.root_node());
     let mut modules = Vec::new();
     collect_modules(source, tree.root_node(), &renames, &mut modules);
@@ -596,5 +614,17 @@ impl Counter {
         .expect("a boundary is harvested");
         assert_eq!(boundary.symbols.len(), 1);
         assert_eq!(boundary.symbols[0].name, "bump");
+    }
+
+    #[test]
+    fn a_file_without_any_boundary_marker_has_no_boundary() {
+        // Pins the marker skip's answer, not its speed: a file naming
+        // none of the five harvest markers yields nothing whether the
+        // walks run or not. The marker-positive tests above are what
+        // guard the skip against over-firing -- they still walk.
+        assert!(harvest(
+            "pub fn add(a: i32, b: i32) -> i32 { a + b }\n\npub struct Point { x: i32, y: i32 }\n",
+        )
+        .is_none());
     }
 }
