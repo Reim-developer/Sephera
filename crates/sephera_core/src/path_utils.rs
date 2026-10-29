@@ -10,7 +10,7 @@
 //! separator, so a plugin can reuse them for its own segment syntax (`::` for
 //! Rust modules, `.` for Python) without allocating an intermediate [`Path`].
 
-use std::path::{Component, Path};
+use std::path::{Component, Path, PathBuf};
 
 /// Splits a normalised relative path into its segments.
 ///
@@ -21,9 +21,23 @@ pub fn segments(path: &str) -> Vec<&str> {
 }
 
 /// Number of segments in a path.
+///
+/// This counts what [`segments`] returns without building the vector:
+/// empty segments are dropped, so `a//b/` and `a/b` both count 2, and
+/// a path of only separators counts 0.
+///
+/// # Examples
+///
+/// ```
+/// use sephera_core::path_utils::segment_count;
+///
+/// assert_eq!(segment_count("src/lib.rs"), 2);
+/// assert_eq!(segment_count("a//b/"), 2);
+/// assert_eq!(segment_count(""), 0);
+/// ```
 #[must_use]
 pub fn segment_count(path: &str) -> usize {
-    segments(path).len()
+    path.split('/').filter(|part| !part.is_empty()).count()
 }
 
 /// Returns the path with its final segment removed.
@@ -193,16 +207,63 @@ pub fn forward_slashes(value: &str) -> String {
     }
 }
 
+/// The error [`normalize_user_path`] returns.
+///
+/// A dedicated type rather than a string so a caller can match on the
+/// failure instead of string-matching a message: there is exactly one
+/// way this function fails — an escape above the base — and that fact
+/// belongs in the type, where the compiler checks it, not in prose
+/// a caller has to re-read. The [`Display`] text is unchanged from
+/// the string error this replaces, so nothing that prints the error
+/// observes a difference.
+///
+/// [`Display`]: std::fmt::Display
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserPathError {
+    /// A `..` component would move above the analysis root.
+    ///
+    /// Carries the offending path as supplied, not the normalised
+    /// prefix, so the caller can report what the user actually typed.
+    EscapesBase(PathBuf),
+}
+
+impl std::fmt::Display for UserPathError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::EscapesBase(path) => write!(
+                f,
+                "path `{}` must resolve inside the base path",
+                path.display()
+            ),
+        }
+    }
+}
+
+impl std::error::Error for UserPathError {}
+
 /// Normalises a user-supplied relative path into `/`-separated form.
 ///
 /// `..` beyond the start is reported rather than normalised away, because a
 /// query that escapes the analysis root has to fail loudly.
 ///
+/// # Examples
+///
+/// ```
+/// use std::path::Path;
+/// use sephera_core::path_utils::normalize_user_path;
+///
+/// assert_eq!(
+///     normalize_user_path(Path::new("src/main.rs")).unwrap(),
+///     "src/main.rs"
+/// );
+/// assert!(normalize_user_path(Path::new("../outside")).is_err());
+/// ```
+///
 /// # Errors
 ///
-/// Returns the offending path when a `..` component would move above the
-/// analysis root.
-pub fn normalize_user_path(path: &Path) -> Result<String, String> {
+/// Returns [`UserPathError::EscapesBase`] when a `..` component would
+/// move above the analysis root, carrying the path as supplied.
+pub fn normalize_user_path(path: &Path) -> Result<String, UserPathError> {
     let mut parts: Vec<String> = Vec::new();
 
     for component in path.components() {
@@ -212,10 +273,7 @@ pub fn normalize_user_path(path: &Path) -> Result<String, String> {
             }
             Component::ParentDir => {
                 if parts.pop().is_none() {
-                    return Err(format!(
-                        "path `{}` must resolve inside the base path",
-                        path.display()
-                    ));
+                    return Err(UserPathError::EscapesBase(path.to_path_buf()));
                 }
             }
             Component::CurDir | Component::RootDir | Component::Prefix(_) => {}
@@ -389,6 +447,18 @@ mod tests {
         assert!(
             normalize_user_path(Path::new("../outside")).is_err(),
             "escaping the base path must fail"
+        );
+        // The contract a caller matches on: the variant, and the
+        // message text the string error used to carry.
+        assert_eq!(
+            normalize_user_path(Path::new("../outside")).unwrap_err(),
+            UserPathError::EscapesBase(PathBuf::from("../outside"))
+        );
+        assert_eq!(
+            normalize_user_path(Path::new("../outside"))
+                .unwrap_err()
+                .to_string(),
+            "path `../outside` must resolve inside the base path"
         );
     }
 

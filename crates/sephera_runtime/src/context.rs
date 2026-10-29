@@ -455,8 +455,14 @@ impl ProjectSettings {
     pub fn merged_ignore(&self, from_flags: &[String]) -> Vec<String> {
         let mut merged: Vec<String> =
             Vec::with_capacity(self.ignore.len() + from_flags.len());
+        // Membership is a set lookup, not a scan of the growing vec:
+        // first-occurrence order is the only observable property, and
+        // the set preserves it exactly while keeping the check O(1).
+        let mut seen = std::collections::HashSet::with_capacity(
+            self.ignore.len() + from_flags.len(),
+        );
         for pattern in self.ignore.iter().chain(from_flags) {
-            if !merged.contains(pattern) {
+            if seen.insert(pattern.as_str()) {
                 merged.push(pattern.clone());
             }
         }

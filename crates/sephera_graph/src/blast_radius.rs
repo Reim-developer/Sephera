@@ -362,19 +362,7 @@ pub fn measure_all(
     }
 
     if !unknown.is_empty() {
-        let listed: Vec<String> =
-            unknown.iter().map(|path| format!("  `{path}`")).collect();
-        bail!(
-            "{} path(s) did not resolve to a file in the analysed graph:\n{}\n\
-             Paths are relative to the analysis base{}.",
-            unknown.len(),
-            listed.join("\n"),
-            if base_prefix.is_empty() {
-                String::new()
-            } else {
-                format!(", or to the repository root under `{base_prefix}`")
-            }
-        );
+        return Err(unknown_paths_error(&unknown, base_prefix));
     }
 
     // Widest first. Asking about several files at once means reading several
@@ -387,6 +375,37 @@ pub fn measure_all(
     });
 
     Ok(matched)
+}
+
+/// Render the refusal for paths that did not resolve to a file in the
+/// analysed graph.
+///
+/// Four commands refused unknown paths with this exact wording, and
+/// wording that lives in four places drifts. Collection stays at each
+/// call site on purpose: two of them dedup, two do not, so this formats
+/// exactly the paths it is given and never decides which ones count.
+/// A caller that dedups and a caller that does not therefore keep
+/// different error text for repeated bad paths, as they do today.
+#[must_use]
+pub(crate) fn unknown_paths_error(
+    unknown: &[impl AsRef<str>],
+    base_prefix: &str,
+) -> anyhow::Error {
+    let listed: Vec<String> = unknown
+        .iter()
+        .map(|path| format!("  `{}`", path.as_ref()))
+        .collect();
+    anyhow::anyhow!(
+        "{} path(s) did not resolve to a file in the analysed graph:\n{}\n\
+         Paths are relative to the analysis base{}.",
+        unknown.len(),
+        listed.join("\n"),
+        if base_prefix.is_empty() {
+            String::new()
+        } else {
+            format!(", or to the repository root under `{base_prefix}`")
+        }
+    )
 }
 
 /// Rewrite a requested path into the separator convention the graph uses.

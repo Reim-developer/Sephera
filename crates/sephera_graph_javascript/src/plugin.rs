@@ -135,11 +135,7 @@ fn package_entry_point(
     // common case and the read is what discovers it. The read goes through
     // the analysis' parsed cache: a tree asks this question per directory import,
     // and the manifest's answer cannot change mid-analysis.
-    let manifest = if directory.is_empty() {
-        "package.json".to_owned()
-    } else {
-        format!("{directory}/package.json")
-    };
+    let manifest = join_candidate(directory, "/package.json");
     let contents = context.read_json_project_file(&manifest)?;
     let main = contents.get("main")?.as_str()?.trim();
     if main.is_empty() {
@@ -216,11 +212,7 @@ impl TsconfigPaths {
     fn load(context: &ResolveContext<'_>) -> Option<Self> {
         let mut dir = paths::parent(context.source_file);
         loop {
-            let config = if dir.is_empty() {
-                "tsconfig.json".to_owned()
-            } else {
-                format!("{dir}/tsconfig.json")
-            };
+            let config = join_candidate(&dir, "/tsconfig.json");
             if let Some(found) = Self::load_chain(context, &config) {
                 return Some(found);
             }

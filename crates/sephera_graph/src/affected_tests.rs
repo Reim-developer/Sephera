@@ -25,7 +25,7 @@
 //! the report does not pretend otherwise; it is a list of test files, not a
 //! guess at coverage.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde::Serialize;
 
 use super::blast_radius;
@@ -449,19 +449,7 @@ pub fn measure_tests_all(
     }
 
     if !unknown.is_empty() {
-        let listed: Vec<String> =
-            unknown.iter().map(|path| format!("  `{path}`")).collect();
-        bail!(
-            "{} path(s) did not resolve to a file in the analysed graph:\n{}\n\
-             Paths are relative to the analysis base{}.",
-            unknown.len(),
-            listed.join("\n"),
-            if base_prefix.is_empty() {
-                String::new()
-            } else {
-                format!(", or to the repository root under `{base_prefix}`")
-            }
-        );
+        return Err(blast_radius::unknown_paths_error(&unknown, base_prefix));
     }
 
     matched.sort_by(|left, right| {

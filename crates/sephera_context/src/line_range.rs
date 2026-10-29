@@ -104,11 +104,18 @@ impl LineRange {
     /// Sort ranges by position and merge any that touch or overlap.
     ///
     /// Two requests for overlapping spans of one file are one span to emit;
-    /// keeping both would duplicate the shared lines.
+    /// keeping both would duplicate the shared lines. The sort is
+    /// unstable on purpose: the key is the whole value — a range is
+    /// exactly its `start` and `end` — so two elements with equal keys
+    /// are identical values and no ordering between them is
+    /// observable. The unstable sort skips the stable sort's
+    /// auxiliary allocation. If a field is ever added to this struct
+    /// without joining the key, revisit this: stability would matter
+    /// again.
     #[must_use]
     pub fn normalized(ranges: &[Self]) -> Vec<Self> {
         let mut sorted = ranges.to_vec();
-        sorted.sort_by_key(|range| (range.start, range.end));
+        sorted.sort_unstable_by_key(|range| (range.start, range.end));
 
         let mut merged: Vec<Self> = Vec::with_capacity(sorted.len());
         for range in sorted {

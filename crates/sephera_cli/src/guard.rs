@@ -81,16 +81,35 @@ fn canonicalise_lenient(path: &Path) -> PathBuf {
     }
 }
 
+/// The verdict a `guard` hook run hands back to the harness.
+///
+/// This used to travel as a `bool` (`true` = deny), and every call
+/// site read as `decision_json(true, ...)` — true for what? The
+/// harness contract has exactly two verdicts, and naming them removes
+/// the only way to misread a call site. The JSON strings are the
+/// harness's, not ours: `deny` and `allow` are what the hook
+/// protocol expects, so the mapping lives here, once.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum GuardDecision {
+    /// The edit may proceed.
+    Allow,
+    /// The edit must not proceed; `reason` says why and what to do instead.
+    Deny,
+}
+
 /// Render the hook decision for stdout.
 ///
 /// `reason` reaches the agent verbatim when the decision is a denial, so it
 /// is written for the agent: what file, how wide, what to do instead.
 #[must_use]
-pub fn decision_json(blocked: bool, reason: &str) -> String {
+pub fn decision_json(decision: GuardDecision, reason: &str) -> String {
     serde_json::json!({
         "hookSpecificOutput": {
             "hookEventName": "PreToolUse",
-            "permissionDecision": if blocked { "deny" } else { "allow" },
+            "permissionDecision": match decision {
+                GuardDecision::Allow => "allow",
+                GuardDecision::Deny => "deny",
+            },
             "permissionDecisionReason": reason,
         }
     })
@@ -101,7 +120,9 @@ pub fn decision_json(blocked: bool, reason: &str) -> String {
 mod tests {
     use std::path::Path;
 
-    use super::{decision_json, file_path_from_hook_input, graph_spelling};
+    use super::{
+        GuardDecision, decision_json, file_path_from_hook_input, graph_spelling,
+    };
 
     #[test]
     fn a_claude_code_edit_payload_yields_its_file() {
@@ -176,7 +197,7 @@ mod tests {
 
     #[test]
     fn the_decision_names_the_verdict_in_the_harness_shape() {
-        let denied = decision_json(true, "too wide");
+        let denied = decision_json(GuardDecision::Deny, "too wide");
         let parsed: serde_json::Value =
             serde_json::from_str(&denied).expect("valid json");
         assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "deny");
@@ -185,7 +206,7 @@ mod tests {
             "too wide"
         );
 
-        let allowed = decision_json(false, "fine");
+        let allowed = decision_json(GuardDecision::Allow, "fine");
         let parsed: serde_json::Value =
             serde_json::from_str(&allowed).expect("valid json");
         assert_eq!(parsed["hookSpecificOutput"]["permissionDecision"], "allow");

@@ -903,17 +903,22 @@ impl SepheraServer {
             &source.repo_root,
             &source.analysis_path,
         );
-        let mut extra_roots = Vec::new();
-        for raw in param.roots.as_deref().unwrap_or(&[]) {
-            let matched = blast_radius::match_path(&report, raw, &base_prefix)
-                .ok_or_else(|| {
-                    rmcp::ErrorData::invalid_params(
-                        format!("no file in the analysis matches `{raw}`"),
-                        None,
-                    )
-                })?;
-            extra_roots.push(matched);
-        }
+        let extra_roots: Vec<_> = param
+            .roots
+            .as_deref()
+            .unwrap_or(&[])
+            .iter()
+            .map(|raw| {
+                blast_radius::match_path(&report, raw, &base_prefix).ok_or_else(
+                    || {
+                        rmcp::ErrorData::invalid_params(
+                            format!("no file in the analysis matches `{raw}`"),
+                            None,
+                        )
+                    },
+                )
+            })
+            .collect::<Result<_, _>>()?;
 
         let measured = dead::measure_dead(&report, &extra_roots);
 

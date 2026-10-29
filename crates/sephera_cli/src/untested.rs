@@ -127,6 +127,7 @@ mod tests {
     use sephera_graph::untested::UntestedSymbol;
 
     use super::*;
+    use crate::sarif::has_no_region;
 
     fn report() -> UntestedReport {
         UntestedReport {
@@ -150,16 +151,6 @@ mod tests {
         prefix: &str,
     ) -> serde_json::Value {
         serde_json::from_str(&render_sarif(report, prefix)).expect("valid JSON")
-    }
-
-    fn has_no_region(value: &serde_json::Value) -> bool {
-        match value {
-            serde_json::Value::Object(map) => {
-                !map.contains_key("region") && map.values().all(has_no_region)
-            }
-            serde_json::Value::Array(items) => items.iter().all(has_no_region),
-            _ => true,
-        }
     }
 
     #[test]

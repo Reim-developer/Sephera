@@ -123,10 +123,7 @@ async fn dispatch(command: Commands) -> Result<ExitCode> {
     let gate = match command {
         Commands::Loc(arguments) => run_loc(&arguments).await,
         Commands::Symbols(arguments) => run_symbols(&arguments).await,
-        Commands::Context(arguments) => {
-            let profile = arguments.settings.profile.clone();
-            run_context(arguments, profile).await
-        }
+        Commands::Context(arguments) => run_context(arguments).await,
         Commands::Mcp => run_mcp().await,
         Commands::Graph(arguments) => run_graph(&arguments).await,
         // Dispatched by `run` before the runtime starts, because `run_watch` owns a
@@ -249,9 +246,7 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
 /// Used where an exit code cannot carry the verdict, which today is only the
 /// watch loop: it runs until interrupted, so there is no final exit code to set.
 fn report_gates(gates: &[Gate]) {
-    let crossed: Vec<&Gate> =
-        gates.iter().filter(|gate| gate.crossed()).collect();
-    for gate in crossed {
+    for gate in gates.iter().filter(|gate| gate.crossed()) {
         eprintln!("error: {}", gate.failure_line());
     }
 }
@@ -615,12 +610,9 @@ async fn run_symbols(arguments: &SymbolsArgs) -> Result<Vec<Gate>> {
     Ok(no_gates())
 }
 
-async fn run_context(
-    arguments: ContextArgs,
-    profile: Option<String>,
-) -> Result<Vec<Gate>> {
+async fn run_context(arguments: ContextArgs) -> Result<Vec<Gate>> {
     let closure = arguments.closure;
-    match resolve_context_options(arguments, profile).await? {
+    match resolve_context_options(arguments).await? {
         ResolvedContextCommand::Execute(mut resolved) => {
             if closure {
                 inject_dependency_closure(&mut resolved)?;
@@ -756,6 +748,27 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     Ok(gates)
 }
 
+/// One gate per target at or over `limit`, for one impact question.
+///
+/// The rule ("one gate per offending target") used to be stated
+/// twice, once per branch, so a future rule change could half-land.
+/// What genuinely differs — what is counted and what it is called —
+/// stays a parameter; the rule itself lives here once.
+fn threshold_gates<T>(
+    items: &[T],
+    limit: Option<u64>,
+    count: impl Fn(&T) -> u64,
+    label: impl Fn(&T) -> String,
+) -> Vec<Gate> {
+    limit.map_or_else(Vec::new, |limit| {
+        items
+            .iter()
+            .filter(|item| count(item) >= limit)
+            .map(|item| Gate::new(label(item), count(item), limit))
+            .collect()
+    })
+}
+
 /// Measure one impact run and render it, with the gates it crosses.
 ///
 /// Split out of `run_impact` because the symbol branch doubled the
@@ -807,22 +820,17 @@ fn impact_outcome(
                 impact::render_symbol_report_json(&impacts)
             }
         };
-        let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
-            impacts
-                .iter()
-                .filter(|impact| impact::symbol_direct_count(impact) >= limit)
-                .map(|impact| {
-                    Gate::new(
-                        format!(
-                            "files importing `{symbol}` from `{}`{scope_note}",
-                            impact.target
-                        ),
-                        impact::symbol_direct_count(impact),
-                        limit,
-                    )
-                })
-                .collect()
-        });
+        let gates = threshold_gates(
+            &impacts,
+            arguments.fail_on,
+            impact::symbol_direct_count,
+            |impact| {
+                format!(
+                    "files importing `{symbol}` from `{}`{scope_note}",
+                    impact.target
+                )
+            },
+        );
         (rendered, gates)
     } else {
         let radii = impact::measure_all(
@@ -836,22 +844,14 @@ fn impact_outcome(
             ImpactOutputFormat::Markdown => impact::render_report(&radii),
             ImpactOutputFormat::Json => impact::render_report_json(&radii),
         };
-        let gates = arguments.fail_on.map_or_else(Vec::new, |limit| {
-            radii
-                .iter()
-                .filter(|radius| impact::dependent_count(radius) >= limit)
-                .map(|radius| {
-                    Gate::new(
-                        format!(
-                            "files depending on `{}`{scope_note}",
-                            radius.target
-                        ),
-                        impact::dependent_count(radius),
-                        limit,
-                    )
-                })
-                .collect()
-        });
+        let gates = threshold_gates(
+            &radii,
+            arguments.fail_on,
+            impact::dependent_count,
+            |radius| {
+                format!("files depending on `{}`{scope_note}", radius.target)
+            },
+        );
         (rendered, gates)
     };
     Ok((rendered, gates))
@@ -1199,14 +1199,19 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
     // A named root that matches nothing is a typo in the one input
     // the whole verdict rests on; refuse it the way every other
     // command refuses a path that matches no file.
-    let mut extra_roots = Vec::new();
-    for raw in &arguments.root {
-        let matched =
+    // A loop whose only job is "map each input, fail on the first
+    // error, collect the successes" is what collect::<Result> is
+    // for: the fail-fast-on-first-typo semantics reads in the type
+    // instead of relying on `?`-in-a-loop.
+    let extra_roots: Vec<_> = arguments
+        .root
+        .iter()
+        .map(|raw| {
             impact::match_path(&report, raw, "").with_context(|| {
                 format!("no file in the analysis matches `{raw}`")
-            })?;
-        extra_roots.push(matched);
-    }
+            })
+        })
+        .collect::<Result<_, _>>()?;
 
     let measured = dead::measure_dead(&report, &extra_roots);
 
@@ -1221,6 +1226,23 @@ async fn run_dead(arguments: &DeadArgs) -> Result<Vec<Gate>> {
         &rendered,
     )?;
     Ok(Vec::new())
+}
+
+/// Canonicalize the analysis path and find its repository root.
+///
+/// Shared fallback of [`analysis_prefix`] and [`sarif_repo_prefix`]:
+/// when the repo-relative first attempt comes back empty, the answer
+/// is computed from the canonical path against the work-tree root.
+/// `None` is the "not a repository" case, not an error: both callers
+/// spell that as their own empty value.
+#[must_use]
+fn canonical_and_toplevel(
+    source: &ResolvedSource,
+) -> Option<(PathBuf, PathBuf)> {
+    let canonical = std::fs::canonicalize(&source.analysis_path)
+        .unwrap_or_else(|_| source.analysis_path.clone());
+    let toplevel = repo_toplevel(&source.analysis_path)?;
+    Some((canonical, toplevel))
 }
 
 /// The repo-relative prefix SARIF URIs need for one analysis directory.
@@ -1253,9 +1275,7 @@ fn analysis_prefix(source: &ResolvedSource) -> PathBuf {
     if !relative.as_os_str().is_empty() {
         return relative;
     }
-    let canonical = std::fs::canonicalize(&source.analysis_path)
-        .unwrap_or_else(|_| source.analysis_path.clone());
-    let Some(toplevel) = repo_toplevel(&source.analysis_path) else {
+    let Some((canonical, toplevel)) = canonical_and_toplevel(source) else {
         return PathBuf::new();
     };
     sarif::relative_path(&canonical, &toplevel)
@@ -1291,9 +1311,7 @@ fn sarif_repo_prefix(source: &ResolvedSource) -> String {
     if !stripped.is_empty() {
         return stripped;
     }
-    let canonical = std::fs::canonicalize(&source.analysis_path)
-        .unwrap_or_else(|_| source.analysis_path.clone());
-    let Some(toplevel) = repo_toplevel(&source.analysis_path) else {
+    let Some((canonical, toplevel)) = canonical_and_toplevel(source) else {
         return String::new();
     };
     sarif::path_prefix(&canonical, &toplevel)
@@ -1324,27 +1342,42 @@ fn sarif_repo_prefix(source: &ResolvedSource) -> String {
 /// the spelling root runs already established.
 #[must_use]
 fn normalize_archaeology_file(source: &ResolvedSource, file: &str) -> String {
-    let mut current = file;
-    while let Some(rest) = current.strip_prefix("./") {
-        current = rest;
-    }
-    let mut path = PathBuf::from(current);
+    let mut path = PathBuf::from(strip_dot_slash(file));
     if path.is_absolute() {
         if let Some(toplevel) = repo_toplevel(&source.analysis_path)
             && let Ok(relative) = path.strip_prefix(&toplevel)
         {
             path = relative.to_path_buf();
         }
-        return path.to_string_lossy().replace('\\', "/");
+        return slash_spelling(&path);
     }
     let prefix = analysis_prefix(source);
     if prefix.as_os_str().is_empty()
         || path == prefix
         || path.starts_with(&prefix)
     {
-        return path.to_string_lossy().replace('\\', "/");
+        return slash_spelling(&path);
     }
-    prefix.join(path).to_string_lossy().replace('\\', "/")
+    slash_spelling(prefix.join(path))
+}
+
+/// Strip leading `./` segments from a spelling.
+///
+/// A `./`-prefixed spelling misses the exact-match lookup, so both
+/// spelling normalizers share this rather than re-spelling the loop.
+fn strip_dot_slash(mut spelling: &str) -> &str {
+    while let Some(rest) = spelling.strip_prefix("./") {
+        spelling = rest;
+    }
+    spelling
+}
+
+/// Spell a path with `/` separators, lossily.
+///
+/// The graph's spelling is `/`-separated on every platform, so a
+/// Windows `\` in a stored path must not survive into a lookup key.
+fn slash_spelling(path: impl AsRef<Path>) -> String {
+    path.as_ref().to_string_lossy().replace('\\', "/")
 }
 
 /// The graph's spelling of a file inside one analysed tree.
@@ -1372,11 +1405,7 @@ fn normalize_tree_file(analysis_path: &Path, file: &str) -> String {
     {
         return relative.to_string_lossy().replace('\\', "/");
     }
-    let mut stripped = file;
-    while let Some(rest) = stripped.strip_prefix("./") {
-        stripped = rest;
-    }
-    stripped.replace('\\', "/")
+    slash_spelling(strip_dot_slash(file))
 }
 
 /// The base the old side of a comparison is built from.
@@ -1765,6 +1794,23 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
     Ok(Vec::new())
 }
 
+/// Map one git log entry onto the history view's commit.
+///
+/// The four-field literal used to be copied at three sites, which
+/// is exactly where a future field gets added to two of them and
+/// missed in the third, producing a history view that disagrees
+/// with itself by construction site.
+fn history_commit(
+    meta: sephera_runtime::CommitMeta,
+) -> archaeology::HistoryCommit {
+    archaeology::HistoryCommit {
+        hash: meta.hash,
+        author: meta.author,
+        date: meta.date,
+        message: meta.message,
+    }
+}
+
 /// The commit-log provider for archaeology: the commits touching
 /// a file from a ref, newest first, as graph history commits.
 fn archaeology_log(
@@ -1773,17 +1819,7 @@ fn archaeology_log(
     file: &str,
 ) -> Result<Vec<archaeology::HistoryCommit>, archaeology::ArchaeologyError> {
     log_commits_for_file(repo_root, from_ref, file)
-        .map(|commits| {
-            commits
-                .into_iter()
-                .map(|meta| archaeology::HistoryCommit {
-                    hash: meta.hash,
-                    author: meta.author,
-                    date: meta.date,
-                    message: meta.message,
-                })
-                .collect()
-        })
+        .map(|commits| commits.into_iter().map(history_commit).collect())
         .map_err(|error| {
             archaeology::ArchaeologyError::History(error.to_string())
         })
@@ -1826,14 +1862,7 @@ fn archaeology_parent(
     hash: &str,
 ) -> Result<Option<archaeology::HistoryCommit>, archaeology::ArchaeologyError> {
     first_parent_commit(repo_root, hash)
-        .map(|parent| {
-            parent.map(|meta| archaeology::HistoryCommit {
-                hash: meta.hash,
-                author: meta.author,
-                date: meta.date,
-                message: meta.message,
-            })
-        })
+        .map(|parent| parent.map(history_commit))
         .map_err(|error| {
             archaeology::ArchaeologyError::History(error.to_string())
         })
@@ -1892,12 +1921,7 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
                 arguments.start_ref
             )
         })?;
-    let start = archaeology::HistoryCommit {
-        hash: start.hash,
-        author: start.author,
-        date: start.date,
-        message: start.message,
-    };
+    let start = history_commit(start);
     let measured = archaeology::trace_symbol(
         &start,
         &file,
@@ -2260,35 +2284,31 @@ fn measure_review_breaking(
     ))
 }
 
-/// Build one side's schema index from a base directory, with the
-/// side's own ignore matcher: the schema walk respects the same
+/// Build one side's schema index from a base directory, using the
+/// caller's ignore matcher: the schema walk respects the same
 /// ignore rules as the code graph, so a proto file the graph ignores
-/// is not a schema file either.
+/// is not a schema file either. The matcher arrives built rather
+/// than built here so one side's graph, schema index, and consumer
+/// texts all read the same file set by construction, instead of by
+/// three parallel argument lists that can drift.
 fn build_schema_side(
     base: &std::path::Path,
-    settings: &SettingsArgs,
-    ignore_patterns: &[String],
-    no_gitignore: bool,
+    ignore: &IgnoreMatcher,
 ) -> Result<sephera_graph::schema::SchemaIndex> {
-    let ignore =
-        build_ignore_matcher(base, settings, ignore_patterns, no_gitignore)?;
-    let files = sephera_graph::schema::collect_schema_files(base, &ignore)
+    let files = sephera_graph::schema::collect_schema_files(base, ignore)
         .map_err(anyhow::Error::new)?;
     sephera_graph::schema::build_schema_index(&files)
         .map_err(anyhow::Error::new)
 }
 
 /// Build one side's consumer texts (Go/Python files) from a base
-/// directory, with the side's own ignore matcher.
+/// directory, using the caller's ignore matcher, for the same
+/// one-matcher-per-side reason as [`build_schema_side`].
 fn build_consumer_texts_side(
     base: &std::path::Path,
-    settings: &SettingsArgs,
-    ignore_patterns: &[String],
-    no_gitignore: bool,
+    ignore: &IgnoreMatcher,
 ) -> Result<Vec<(String, String)>> {
-    let ignore =
-        build_ignore_matcher(base, settings, ignore_patterns, no_gitignore)?;
-    sephera_graph::schema::collect_consumer_texts(base, &ignore)
+    sephera_graph::schema::collect_consumer_texts(base, ignore)
         .map_err(anyhow::Error::new)
 }
 
@@ -2316,13 +2336,8 @@ fn build_new_schema_side(
         build_ignore_matcher(base, settings, ignore_patterns, no_gitignore)?;
     Ok((
         build_graph(base, &matcher, &[], None, None)?,
-        build_schema_side(base, settings, ignore_patterns, no_gitignore)?,
-        build_consumer_texts_side(
-            base,
-            settings,
-            ignore_patterns,
-            no_gitignore,
-        )?,
+        build_schema_side(base, &matcher)?,
+        build_consumer_texts_side(base, &matcher)?,
     ))
 }
 
@@ -2436,14 +2451,14 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
     )?;
     let old_base =
         old_side_base(old_worktree.path(), &source, arguments.to.is_none());
-    let old_schema = build_schema_side(
+    let old_ignore = build_ignore_matcher(
         &old_base,
         &arguments.settings,
         &arguments.ignore_args.ignore,
         arguments.ignore_args.no_gitignore,
     )?;
+    let old_schema = build_schema_side(&old_base, &old_ignore)?;
 
-    let to_label = arguments.to.as_deref().unwrap_or("working tree");
     let (new_report, new_schema, new_texts) = if let Some(to) = &arguments.to {
         let new_worktree = checkout_worktree(&source.repo_root, to)
             .with_context(|| {
@@ -2479,7 +2494,7 @@ async fn run_schema_impact(arguments: &SchemaImpactArgs) -> Result<Vec<Gate>> {
         &new_report,
         &new_texts,
         &arguments.from,
-        to_label,
+        arguments.to.as_deref().unwrap_or("working tree"),
     );
 
     let rendered = match arguments.format {
@@ -2676,7 +2691,10 @@ async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
         );
         println!(
             "{}",
-            guard::decision_json(false, "no edited file in the hook payload")
+            guard::decision_json(
+                guard::GuardDecision::Allow,
+                "no edited file in the hook payload"
+            )
         );
         return Ok(Vec::new());
     };
@@ -2716,7 +2734,7 @@ async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
         println!(
             "{}",
             guard::decision_json(
-                false,
+                guard::GuardDecision::Allow,
                 "the edited file is not in the analysed graph"
             )
         );
@@ -2738,33 +2756,67 @@ async fn run_guard(arguments: &GuardArgs) -> Result<Vec<Gate>> {
          {test_count} affected test(s)"
     );
 
-    let blocked = arguments
+    let decision = if arguments
         .max_dependents
-        .is_some_and(|limit| dependents >= limit);
-    let reason = if blocked {
-        format!(
+        .is_some_and(|limit| dependents >= limit)
+    {
+        guard::GuardDecision::Deny
+    } else {
+        guard::GuardDecision::Allow
+    };
+    let reason = match decision {
+        guard::GuardDecision::Deny => format!(
             "`{canonical}` has {dependents} dependents, at or over the limit \
              of {}. Measure it with `sephera impact {canonical}` and get a \
              person's agreement before editing it.",
             arguments.max_dependents.unwrap_or_default()
-        )
-    } else {
-        format!(
+        ),
+        guard::GuardDecision::Allow => format!(
             "`{canonical}` has {dependents} dependent(s) and {test_count} \
              affected test(s)"
-        )
+        ),
     };
-    println!("{}", guard::decision_json(blocked, &reason));
+    println!("{}", guard::decision_json(decision, &reason));
 
-    if blocked {
-        Ok(vec![Gate::new(
+    match decision {
+        guard::GuardDecision::Deny => Ok(vec![Gate::new(
             format!("files depending on `{canonical}`"),
             dependents,
             arguments.max_dependents.unwrap_or_default(),
-        )])
-    } else {
-        Ok(Vec::new())
+        )]),
+        guard::GuardDecision::Allow => Ok(Vec::new()),
     }
+}
+
+/// The `--fail-on-*` gates for a graph report, shared by the diff
+/// and non-diff paths.
+///
+/// This exact block used to exist twice, and the duplication already
+/// caused a real bug once: `--fail-on-cycles` was accepted on the
+/// diff path and then dropped, so a diff run over a cyclic tree
+/// exited 0 where the same tree without `--diff` exited 2. One
+/// function makes the two paths incapable of disagreeing about
+/// which thresholds they honour.
+fn graph_gates(
+    report: &sephera_graph::types::GraphReport,
+    arguments: &GraphArgs,
+) -> Vec<Gate> {
+    let mut gates = Vec::new();
+    if let Some(limit) = arguments.fail_on_cycles {
+        gates.push(Gate::new(
+            "circular dependencies",
+            report.metrics.circular_dependencies,
+            limit,
+        ));
+    }
+    if let Some(limit) = arguments.fail_on_unresolved {
+        gates.push(Gate::new(
+            "unresolved local paths",
+            report.metrics.unresolved_local_edges,
+            limit,
+        ));
+    }
+    gates
 }
 
 /// Report what a change reaches, rather than what the repository depends on.
@@ -2825,12 +2877,11 @@ fn run_graph_diff(
     let skipped: Vec<String> = requested
         .iter()
         .filter(|path| {
+            // The needle depends only on `path`, so build it once per
+            // path rather than once per (path, change) pair.
+            let needle = format!("/{}", path.replace('\\', "/"));
             !matched.contains(path.as_str())
-                && !changes.iter().any(|change| {
-                    change
-                        .file
-                        .ends_with(&format!("/{}", path.replace('\\', "/")))
-                })
+                && !changes.iter().any(|change| change.file.ends_with(&needle))
         })
         .cloned()
         .collect();
@@ -2850,24 +2901,9 @@ fn run_graph_diff(
         }
     };
 
-    // Both thresholds the non-diff path honours. `--fail-on-cycles` used
-    // to be accepted here and then dropped, so a diff run over a cyclic
-    // tree exited 0 where the same tree without `--diff` exited 2.
-    let mut gates = Vec::new();
-    if let Some(limit) = arguments.fail_on_cycles {
-        gates.push(Gate::new(
-            "circular dependencies",
-            report.metrics.circular_dependencies,
-            limit,
-        ));
-    }
-    if let Some(limit) = arguments.fail_on_unresolved {
-        gates.push(Gate::new(
-            "unresolved local paths",
-            report.metrics.unresolved_local_edges,
-            limit,
-        ));
-    }
+    // Thresholds live in graph_gates() now: the diff path used to
+    // accept --fail-on-cycles and then drop it.
+    let gates = graph_gates(&report, arguments);
 
     finish_output(
         progress,
@@ -2932,21 +2968,7 @@ async fn run_graph(arguments: &GraphArgs) -> Result<Vec<Gate>> {
 
     // Thresholds are read off the report that was just built, before it is
     // rendered, so a gate and the number printed next to it cannot disagree.
-    let mut gates = Vec::new();
-    if let Some(limit) = arguments.fail_on_cycles {
-        gates.push(Gate::new(
-            "circular dependencies",
-            report.metrics.circular_dependencies,
-            limit,
-        ));
-    }
-    if let Some(limit) = arguments.fail_on_unresolved {
-        gates.push(Gate::new(
-            "unresolved local paths",
-            report.metrics.unresolved_local_edges,
-            limit,
-        ));
-    }
+    let gates = graph_gates(&report, arguments);
 
     let writes_to_stdout = arguments.output_args.output.is_none();
     if !writes_to_stdout {
