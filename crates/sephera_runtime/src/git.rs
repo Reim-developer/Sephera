@@ -25,7 +25,7 @@ where
     if let Some(working_directory) = working_directory {
         command.current_dir(working_directory);
     }
-    command.args(args.iter().map(AsRef::as_ref));
+    command.args(args.iter());
 
     let output = command.output().with_context(|| {
         format!("failed to invoke git while trying to {action}")
@@ -118,7 +118,7 @@ where
     if let Some(working_directory) = working_directory {
         command.current_dir(working_directory);
     }
-    command.args(args.iter().map(AsRef::as_ref));
+    command.args(args.iter());
 
     let mut child = command.spawn().with_context(|| {
         format!("failed to invoke git while trying to {action}")

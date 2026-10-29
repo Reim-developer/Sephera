@@ -67,7 +67,7 @@ impl SymbolAnalyzer {
     ///
     /// Returns an error when the base path is missing or traversal fails.
     pub fn analyze(&self) -> Result<SymbolReport> {
-        self.run(false).map(|detail| detail.report)
+        self.run(DetailLevel::Totals).map(|detail| detail.report)
     }
 
     /// Analyse the tree and return totals plus every declaration found.
@@ -76,10 +76,10 @@ impl SymbolAnalyzer {
     ///
     /// Returns an error when the base path is missing or traversal fails.
     pub fn analyze_detailed(&self) -> Result<SymbolDetail> {
-        self.run(true)
+        self.run(DetailLevel::Detailed)
     }
 
-    fn run(&self, include_symbols: bool) -> Result<SymbolDetail> {
+    fn run(&self, level: DetailLevel) -> Result<SymbolDetail> {
         let started = Instant::now();
         let project_files =
             collect_project_files(&self.base_path, &self.ignore)?;
@@ -90,7 +90,7 @@ impl SymbolAnalyzer {
         // worker finished first.
         let outcomes = project_files
             .par_iter()
-            .map(|file| count_project_file(file, include_symbols))
+            .map(|file| count_project_file(file, level))
             .collect::<Result<Vec<_>>>()?;
 
         let mut per_language: BTreeMap<
@@ -258,6 +258,29 @@ fn text(source: &[u8], node: Node<'_>) -> String {
 
 /// Counts one file's declarations, or says why there are none.
 ///
+/// How much of a file's declarations a run keeps.
+///
+/// This used to be a `bool` threaded through three private functions,
+/// and every call site read as `run(true)` — true for what? A second
+/// flag would have made the pair unreadable, and a swapped argument
+/// at any site would silently change the report's shape. The enum
+/// names the choice at each site, and the public `analyze` /
+/// [`SymbolAnalyzer::analyze_detailed`] entry points are unchanged.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DetailLevel {
+    /// Totals only; declarations are parsed but discarded.
+    Totals,
+    /// Totals plus every declaration found.
+    Detailed,
+}
+
+impl DetailLevel {
+    /// Whether the declaration entries themselves are kept.
+    const fn includes_entries(self) -> bool {
+        matches!(self, DetailLevel::Detailed)
+    }
+}
+
 /// # Errors
 ///
 /// Returns an error when the file cannot be read, which is different from
@@ -265,7 +288,7 @@ fn text(source: &[u8], node: Node<'_>) -> String {
 /// the totals.
 fn count_project_file(
     file: &ProjectFile,
-    include_symbols: bool,
+    level: DetailLevel,
 ) -> Result<FileOutcome> {
     let Some((_, language)) = file.language_match else {
         return Ok(FileOutcome::NoDeclarations);
@@ -291,7 +314,7 @@ fn count_project_file(
         &source,
         ts_language,
         &file.normalized_relative_path,
-        include_symbols,
+        level.includes_entries(),
     ) else {
         return Ok(FileOutcome::NoDeclarations);
     };

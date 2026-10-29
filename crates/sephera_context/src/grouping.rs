@@ -1,8 +1,13 @@
 use super::types::{ContextFile, ContextGroupKind, ContextGroupSummary};
 
-/// # Panics
+/// Summarize each group in [`GROUP_ORDER`], skipping groups with no files.
 ///
-/// Panics when the grouped file count exceeds the `u64` reporting limit.
+/// The three aggregates are folded in one pass over the group's files
+/// instead of collecting the group and then iterating the collect
+/// twice: the collect existed only so emptiness could be checked
+/// before summing, and the fold answers that question with its
+/// count. Counts that exceed the `u64` reporting limit saturate at
+/// [`u64::MAX`] rather than panicking.
 #[must_use]
 pub(super) fn summarize_groups(
     files: &[ContextFile],
@@ -10,25 +15,25 @@ pub(super) fn summarize_groups(
     let mut summaries = Vec::new();
 
     for group_kind in GROUP_ORDER {
-        let grouped_files = files
-            .iter()
-            .filter(|file| file.group == group_kind)
-            .collect::<Vec<_>>();
-        if grouped_files.is_empty() {
+        let (count, estimated_tokens, truncated_files) =
+            files.iter().filter(|file| file.group == group_kind).fold(
+                (0usize, 0u64, 0usize),
+                |(count, tokens, truncated), file| {
+                    (
+                        count + 1,
+                        tokens + file.estimated_tokens,
+                        truncated + usize::from(file.truncated),
+                    )
+                },
+            );
+        if count == 0 {
             continue;
         }
-
-        let estimated_tokens = grouped_files
-            .iter()
-            .map(|file| file.estimated_tokens)
-            .sum::<u64>();
-        let truncated_files =
-            grouped_files.iter().filter(|file| file.truncated).count();
 
         summaries.push(ContextGroupSummary {
             group: group_kind,
             label: group_kind.label(),
-            files: u64::try_from(grouped_files.len()).unwrap_or(u64::MAX),
+            files: u64::try_from(count).unwrap_or(u64::MAX),
             estimated_tokens,
             truncated_files: u64::try_from(truncated_files).unwrap_or(u64::MAX),
         });

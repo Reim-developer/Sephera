@@ -462,6 +462,29 @@ const RUST_DECLARATION_KINDS: [(&str, DeclarationKind); 10] = [
 /// both are Rust's, and the two are read together when adding a language.
 const RUST_REEXPORT_KINDS: [&str; 1] = ["use_declaration"];
 
+/// Collapse every whitespace run in `text` to one space, and trim.
+///
+/// Signatures are compared as text, so two spellings of one shape
+/// must compare equal: a line break inside a parameter list is not a
+/// breaking change, and a comparison that said otherwise would
+/// report formatting as breakage. This is the one home for that
+/// rule: the declaration index and the behavior detector both compare
+/// signatures, and two copies of the rule could silently disagree
+/// about what "same" means.
+///
+/// # Examples
+///
+/// ```
+/// use sephera_core::declarations::collapse_whitespace;
+///
+/// assert_eq!(collapse_whitespace("fn  f(\n    a: u8,\n)"), "fn f( a: u8,)");
+/// assert_eq!(collapse_whitespace("  already  tidy  "), "already tidy");
+/// ```
+#[must_use]
+pub fn collapse_whitespace(text: &str) -> String {
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
 /// Collapse every whitespace run to one space, and trim.
 ///
 /// Signatures are compared as text, so two spellings of one shape
@@ -469,7 +492,7 @@ const RUST_REEXPORT_KINDS: [&str; 1] = ["use_declaration"];
 /// breaking change, and a comparison that said otherwise would
 /// report formatting as breakage.
 fn normalize(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    collapse_whitespace(text)
 }
 
 /// Read a Rust function node's call shape: its parameter types in
