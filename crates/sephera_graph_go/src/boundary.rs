@@ -17,10 +17,19 @@ use tree_sitter::{Node, Tree};
 use sephera_core::boundary::{
     BoundaryKind, BoundaryRole, BoundarySymbol, FileBoundary,
 };
+use sephera_core::plugins::contains_bytes;
 use sephera_core::plugins::node_text;
 
 /// Harvests the cgo exports this source declares, if any.
 pub fn collect_boundary(source: &[u8], tree: &Tree) -> Option<FileBoundary> {
+    // The harvest records only `//export` directives -- the spaced
+    // spelling is an ordinary comment, not a directive -- so a file
+    // without those bytes cannot yield a symbol however the walk runs.
+    // The walk is skipped rather than run to the same empty answer; a
+    // `//export` inside a string only ever causes the walk to run anyway.
+    if !contains_bytes(source, b"//export") {
+        return None;
+    }
     let mut symbols = Vec::new();
     collect_from(source, &tree.root_node(), &mut symbols);
     if symbols.is_empty() {
@@ -110,5 +119,16 @@ mod tests {
     #[test]
     fn a_plain_go_file_has_no_boundary() {
         assert!(harvest("package main\n\nfunc main() {}\n").is_none());
+    }
+
+    #[test]
+    fn prose_about_exporting_is_not_a_directive() {
+        // Pins the marker's exact spelling: the skip looks for
+        // `//export`, not the word `export`, so a comment merely
+        // describing an export still yields nothing.
+        assert!(harvest(
+            "package main\n\n// exported for later use\nfunc Add(a int) int { return a }\n",
+        )
+        .is_none());
     }
 }

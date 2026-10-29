@@ -15,10 +15,19 @@ use tree_sitter::{Node, Tree};
 use sephera_core::boundary::{
     BoundaryKind, BoundaryRole, BoundarySymbol, FileBoundary,
 };
+use sephera_core::plugins::contains_bytes;
 use sephera_core::plugins::node_text;
 
 /// Harvests the JNI symbols this source implements, if any.
 pub fn collect_boundary(source: &[u8], tree: &Tree) -> Option<FileBoundary> {
+    // The harvest records only declarators whose name starts with `Java_`,
+    // so a file without those bytes cannot yield a symbol however the
+    // walk runs. The walk is skipped rather than run to the same empty
+    // answer; a `Java_` inside a comment or a string only ever causes
+    // the walk to run anyway.
+    if !contains_bytes(source, b"Java_") {
+        return None;
+    }
     let mut symbols = Vec::new();
     collect_from(source, &tree.root_node(), &mut symbols);
     if symbols.is_empty() {
@@ -140,5 +149,19 @@ mod tests {
             SupportedLanguage::C,
         )
         .is_none());
+    }
+
+    #[test]
+    fn a_file_without_the_jni_marker_has_no_boundary() {
+        // Pins the marker skip's answer: no `Java_` bytes, no symbol,
+        // whether the walk runs or not. The `Java_`-carrying tests
+        // above are what guard the skip against over-firing.
+        assert!(
+            harvest(
+                "int add(int a, int b) { return a + b; }\n",
+                SupportedLanguage::C,
+            )
+            .is_none()
+        );
     }
 }

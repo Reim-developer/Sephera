@@ -440,6 +440,21 @@ pub fn node_text(source: &[u8], node: &Node<'_>) -> String {
         .to_owned()
 }
 
+/// Whether `source` contains `needle` as a byte substring.
+///
+/// The boundary harvests walk a whole tree looking for one marker each --
+/// `Java_` for JNI, `//export` for cgo, `pymodule` for `PyO3` -- so a file
+/// without the marker cannot yield a boundary however the walk runs, and
+/// the walk is pure overhead on it. A marker inside a comment or a string
+/// only ever causes the walk to run anyway, never a missed boundary: the
+/// names the harvests key on come from these bytes, so absence is proof
+/// and presence is merely a reason to look.
+#[must_use]
+pub fn contains_bytes(source: &[u8], needle: &[u8]) -> bool {
+    !needle.is_empty()
+        && source.windows(needle.len()).any(|window| window == needle)
+}
+
 /// The 1-based line a node sits on.
 ///
 /// Tree-sitter rows are 0-based and every report here is 1-based, so the
@@ -687,5 +702,13 @@ mod tests {
         assert!(!ends_with_segments("a/b/NotFoo.java", "Foo.java"));
         // A partial segment must not match, or `Helper` would match `MyHelper`.
         assert!(!ends_with_segments("a/b/XHelper.java", "Helper.java"));
+    }
+
+    #[test]
+    fn byte_substring_search_finds_markers_and_nothing_else() {
+        assert!(contains_bytes(b"//export Add", b"//export"));
+        assert!(!contains_bytes(b"// export Add", b"//export"));
+        assert!(!contains_bytes(b"nothing here", b"pymodule"));
+        assert!(!contains_bytes(b"anything", b""));
     }
 }
