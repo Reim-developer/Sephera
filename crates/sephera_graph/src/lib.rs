@@ -16,6 +16,7 @@ pub mod coupling;
 pub mod dead;
 pub mod dependency_path;
 pub mod diff;
+mod extract_cache;
 pub mod manifests;
 pub mod merge;
 pub mod plugins;

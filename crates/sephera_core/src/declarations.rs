@@ -22,7 +22,7 @@
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 
 /// What kind of thing a declaration is.
 ///
@@ -33,7 +33,9 @@ use serde::Serialize;
 /// differently; this is the shared vocabulary the walk translates
 /// into, kept deliberately coarse — the distinctions a consumer can
 /// act on, not a grammar's full taxonomy.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+#[derive(
+    Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize,
+)]
 #[serde(rename_all = "snake_case")]
 pub enum DeclarationKind {
     /// A callable: a Rust `fn`, a Python `def`.
@@ -88,7 +90,7 @@ pub enum DeclarationKind {
 /// called; a Python signature compares names and annotations,
 /// because a caller breaks when a keyword name changes, and default
 /// values are dropped, because they change no call shape.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Signature {
     /// The comma-joined parameter spellings.
     pub parameters: String,
@@ -107,7 +109,7 @@ impl Signature {
     }
 }
 
-#[derive(Debug, Clone, Default)]
+#[derive(Debug, Clone, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DeclaredNames {
     /// The names, each with the kind of thing it is.
     declared: BTreeMap<String, DeclarationKind>,

@@ -22,7 +22,7 @@ use sephera_scan::project_files::{ProjectFile, collect_project_files};
 use sephera_core::boundary;
 use sephera_core::declarations;
 
-use super::{manifests, plugins};
+use super::{extract_cache, manifests, plugins};
 
 use super::types::{
     FileMetric, GraphEdge, GraphMetrics, GraphNode, GraphQuery, GraphReport,
@@ -223,11 +223,16 @@ fn build_graph_impl(
         .transpose()?;
 
     // Phase 1: Extract imports from all supported files, and what each declares.
+    //
+    // The extraction cache lives for this build: files whose bytes have not
+    // changed since a previous run skip the parse entirely. It is keyed by
+    // content hash, so it cannot serve a stale answer.
+    let cache = extract_cache::ExtractionCache::for_base(base_path);
     let Extraction {
         files: mut all_file_imports,
         declarations,
         boundaries,
-    } = extract_all_imports(&project_files, progress)?;
+    } = extract_all_imports(&project_files, progress, &cache)?;
     if filters != EdgeFilters::default() {
         for file in &mut all_file_imports {
             file.imports.retain(|statement| !filters.rejects(statement));
@@ -323,12 +328,13 @@ struct FileImportData {
 fn extract_all_imports(
     project_files: &[ProjectFile],
     progress: &dyn Progress,
+    cache: &extract_cache::ExtractionCache,
 ) -> Result<Extraction> {
     progress.set_total(project_files.len() as u64);
 
     let extracted: Vec<ExtractedFile> = project_files
         .par_iter()
-        .map(extract_one_file)
+        .map(|project_file| extract_one_file(project_file, cache))
         .collect::<Result<Vec<_>>>()?
         .into_iter()
         .flatten()
@@ -384,6 +390,7 @@ struct ExtractedFile {
 /// a file that should have been analysed was silently dropped otherwise.
 fn extract_one_file(
     project_file: &ProjectFile,
+    cache: &extract_cache::ExtractionCache,
 ) -> Result<Option<ExtractedFile>> {
     // Only an oversized file is skipped. A zero-byte file is not.
     //
@@ -423,6 +430,19 @@ fn extract_one_file(
             )
         })?;
 
+    // The cache is keyed by content hash, and extraction is a pure function
+    // of (bytes, language): a hit skips the parse and the walk entirely.
+    // Anything the cache cannot answer — missing entry, corrupt entry,
+    // stale version — degrades to a miss, never an error.
+    if let Some(cached) = cache.load(language.name, &source) {
+        return Ok(Some(attach_cached(
+            cached,
+            project_file,
+            language.name,
+            ts_language,
+        )));
+    }
+
     // Bytes that are not valid UTF-8 yield no edges at all.
     //
     // Tree-sitter recovers rather than failing, so a file with a broken encoding
@@ -437,16 +457,15 @@ fn extract_one_file(
     // all. The file stays a node, which is what it is; it just contributes
     // nothing.
     if std::str::from_utf8(&source).is_err() {
-        return Ok(Some(ExtractedFile {
-            data: FileImportData {
-                file_path: project_file.normalized_relative_path.clone(),
-                language: Some(language.name),
-                ts_language,
-                imports: Vec::new(),
-            },
-            declared: None,
-            boundary: None,
-        }));
+        let cached =
+            extract_cache::CachedExtraction::new(Vec::new(), None, None);
+        cache.store(language.name, &source, &cached);
+        return Ok(Some(attach_cached(
+            cached,
+            project_file,
+            language.name,
+            ts_language,
+        )));
     }
 
     // Extraction goes through the language's plugin so that dispatch is uniform:
@@ -460,32 +479,57 @@ fn extract_one_file(
     let Some(plugin) = plugins::builtin_import_plugin(ts_language) else {
         return Ok(None);
     };
-    let mut extracted = with_parser(ts_language, source.len(), |parser| {
+    let extracted = with_parser(ts_language, source.len(), |parser| {
         walk_with_declarations(&source, parser, plugin)
     })
     .unwrap_or_default();
 
-    // Taken rather than cloned: the declaration map is the larger of the two
-    // halves by far, and there is no reason to copy it to get it out of the
-    // struct that is about to be dropped.
-    let declared = extracted
-        .declared
-        .take()
-        .map(|names| (project_file.normalized_relative_path.clone(), names));
-    let boundary = extracted.boundary.take().map(|boundary| {
-        (project_file.normalized_relative_path.clone(), boundary)
-    });
+    // Persist for the next run, then move the same pieces into the
+    // returned file: a miss costs zero deep copies. The declaration map
+    // is the only large piece, and it is moved twice, never cloned.
+    let cached = extract_cache::CachedExtraction::new(
+        extracted.imports,
+        extracted.declared,
+        extracted.boundary,
+    );
+    cache.store(language.name, &source, &cached);
 
-    Ok(Some(ExtractedFile {
+    Ok(Some(attach_cached(
+        cached,
+        project_file,
+        language.name,
+        ts_language,
+    )))
+}
+
+/// Reattach the path-bound halves of an [`ExtractedFile`] to a cached
+/// extraction.
+///
+/// The cache stores only what extraction computes from bytes — imports,
+/// declared names, boundary — because those are pure in (bytes, language).
+/// The file path, language name, and tree-sitter language never required a
+/// read; they come from the [`ProjectFile`] scan and are reattached here,
+/// so a cache hit builds the identical `ExtractedFile` the parse would have.
+fn attach_cached(
+    cached: extract_cache::CachedExtraction,
+    project_file: &ProjectFile,
+    language_name: &'static str,
+    ts_language: SupportedLanguage,
+) -> ExtractedFile {
+    ExtractedFile {
         data: FileImportData {
             file_path: project_file.normalized_relative_path.clone(),
-            language: Some(language.name),
+            language: Some(language_name),
             ts_language,
-            imports: extracted.imports,
+            imports: cached.imports,
         },
-        declared,
-        boundary,
-    }))
+        declared: cached.declared.map(|names| {
+            (project_file.normalized_relative_path.clone(), names)
+        }),
+        boundary: cached.boundary.map(|boundary| {
+            (project_file.normalized_relative_path.clone(), boundary)
+        }),
+    }
 }
 
 /// Builds the set of focused normalized paths for filtering.
