@@ -506,7 +506,7 @@ mod tests {
             text: "package org.example;\n\npublic class Widget {}\n",
         };
         let known: BTreeSet<String> =
-            ["lib/Widget.java".to_owned()].into_iter().collect();
+            std::iter::once("lib/Widget.java".to_owned()).collect();
         let directory = tempfile::tempdir().expect("a writable directory");
         let context = ResolveContext {
             source_file: "src/Main.java",
