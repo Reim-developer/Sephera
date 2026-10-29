@@ -84,17 +84,20 @@ impl Gate {
 /// gate is named, all of them rather than just the first: a run that violates
 /// three rules should not take three CI runs to find out which.
 pub fn evaluate(gates: &[Gate]) -> ExitCode {
-    let crossed: Vec<&Gate> =
-        gates.iter().filter(|gate| gate.crossed()).collect();
-
-    if crossed.is_empty() {
-        return ExitCode::SUCCESS;
-    }
-
-    for gate in &crossed {
+    // No intermediate Vec: the only questions are "did anything
+    // cross" and "in what order to name them", and the filter
+    // answers both in one pass.
+    let mut crossed = false;
+    for gate in gates.iter().filter(|gate| gate.crossed()) {
+        crossed = true;
         eprintln!("error: {}", gate.failure_line());
     }
-    ExitCode::from(GATE_VIOLATED)
+
+    if crossed {
+        ExitCode::from(GATE_VIOLATED)
+    } else {
+        ExitCode::SUCCESS
+    }
 }
 
 #[cfg(test)]
