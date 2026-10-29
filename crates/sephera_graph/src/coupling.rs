@@ -113,7 +113,12 @@ pub fn rebase_path(path: &str, base_prefix: &str) -> Option<String> {
     if prefix.is_empty() {
         return Some(path.to_owned());
     }
-    path.strip_prefix(&format!("{prefix}/"))
+    // Two strips, not a `format!("{prefix}/")` needle: the only allocation
+    // needed is the returned `String`, and the segment boundary is exact —
+    // `path == prefix` leaves an empty rest, which fails the `/` strip,
+    // and `ab/c` under prefix `a` leaves `b/c`, which fails it too.
+    path.strip_prefix(prefix)
+        .and_then(|rest| rest.strip_prefix('/'))
         .map(ToOwned::to_owned)
 }
 

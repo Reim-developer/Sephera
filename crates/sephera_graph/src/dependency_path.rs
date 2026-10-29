@@ -30,10 +30,10 @@
 //!   never touch are the normal case, and a caller distinguishes that from
 //!   a mistyped path because a path that matches no file *is* an error.
 
-use anyhow::{Result, bail};
+use anyhow::Result;
 use serde::Serialize;
 
-use super::blast_radius::match_path;
+use super::blast_radius::{match_path, unknown_paths_error};
 use super::types::GraphReport;
 
 /// A directed graph stated as "which files does this file point at".
@@ -349,19 +349,7 @@ pub fn explain(
         None
     });
     if !unknown.is_empty() {
-        let listed: Vec<String> =
-            unknown.iter().map(|path| format!("  `{path}`")).collect();
-        bail!(
-            "{} path(s) did not resolve to a file in the analysed graph:\n{}\n\
-             Paths are relative to the analysis base{}.",
-            unknown.len(),
-            listed.join("\n"),
-            if base_prefix.is_empty() {
-                String::new()
-            } else {
-                format!(", or to the repository root under `{base_prefix}`")
-            }
-        );
+        return Err(unknown_paths_error(&unknown, base_prefix));
     }
     let (Some(from), Some(to)) = (from, to) else {
         unreachable!("both paths matched, or the error above returned")

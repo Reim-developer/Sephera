@@ -229,8 +229,11 @@ fn text_of<'a>(node: tree_sitter::Node<'a>, source: &'a str) -> &'a str {
     node.utf8_text(source.as_bytes()).unwrap_or("")
 }
 
+/// Local name for the shared whitespace rule,
+/// [`sephera_core::declarations::collapse_whitespace`], kept so the nine
+/// call sites below read as signature comparison rather than text munging.
 fn normalized(text: &str) -> String {
-    text.split_whitespace().collect::<Vec<_>>().join(" ")
+    sephera_core::declarations::collapse_whitespace(text)
 }
 
 fn walk(
@@ -475,25 +478,25 @@ fn rust_param_types(signature: &Signature) -> Vec<String> {
 /// flag costs the precision this command is measured by.
 fn body_is_symmetric(body: &str, first: &str, second: &str) -> bool {
     let flat: String = body.chars().filter(|c| !c.is_whitespace()).collect();
-    let cores = [
-        format!("{first}+{second}"),
-        format!("{second}+{first}"),
-        format!("{first}*{second}"),
-        format!("{second}*{first}"),
-        format!("{first}=={second}"),
-        format!("{second}=={first}"),
-        format!("{first}!={second}"),
-        format!("{second}!={first}"),
-        format!("{first}&&{second}"),
-        format!("{second}&&{first}"),
-        format!("{first}||{second}"),
-        format!("{second}||{first}"),
-        format!("min({first},{second})"),
-        format!("min({second},{first})"),
-        format!("max({first},{second})"),
-        format!("max({second},{first})"),
-    ];
-    cores.iter().any(|core| flat.contains(core.as_str()))
+    // The operator table is the data. Hand-writing both orders per
+    // operator meant adding an operator touched two mirrored lines and
+    // could leave one order present and the other missing; the check
+    // set is unchanged, only its construction is table-driven now.
+    const OPS: [&str; 6] = ["+", "*", "==", "!=", "&&", "||"];
+    const NAMES: [&str; 2] = ["min", "max"];
+    let binary = OPS.iter().flat_map(|op| {
+        [
+            format!("{first}{op}{second}"),
+            format!("{second}{op}{first}"),
+        ]
+    });
+    let named = NAMES.iter().flat_map(|name| {
+        [
+            format!("{name}({first},{second})"),
+            format!("{name}({second},{first})"),
+        ]
+    });
+    binary.chain(named).any(|core| flat.contains(&core))
 }
 
 /// The two positions that differ between two argument lists, when

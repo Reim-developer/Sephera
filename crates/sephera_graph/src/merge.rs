@@ -49,7 +49,7 @@ use sephera_core::declarations::{
 use super::breaking::{
     BreakChange, BreakSuggestion, BreakingReport, measure_breaking,
 };
-use super::resolver::split_trailing_name;
+use super::resolver::{path_names_symbol, split_trailing_name};
 use super::types::{GraphReport, ImportKind};
 
 /// Everything one side of a three-way comparison needs, as one
@@ -574,9 +574,7 @@ fn direct_consumers(
                     continue;
                 }
                 if edge.items.iter().any(|item| item == symbol)
-                    || split_trailing_name(&edge.import_path).is_some_and(
-                        |(parent, leaf)| leaf == symbol && !parent.is_empty(),
-                    )
+                    || path_names_symbol(&edge.import_path, symbol)
                 {
                     found.insert((edge.from.clone(), edge.import_path.clone()));
                 }

@@ -1956,6 +1956,19 @@ const fn module_suffixes(
 /// names the `App` class in the module `.sansio.app`, so the name is what is
 /// missing and the parent is what resolves.
 ///
+/// Whether an item path's trailing segment is `symbol`.
+///
+/// Requires a parent: a bare `Router` names nothing about which file
+/// holds it, and a one-segment path on an edge to the target is the
+/// target's own module path, which names the file rather than a name
+/// inside it. The guard is the subtle part, which is why this lives
+/// once beside [`split_trailing_name`] instead of once per caller.
+#[must_use]
+pub(crate) fn path_names_symbol(import_path: &str, symbol: &str) -> bool {
+    split_trailing_name(import_path)
+        .is_some_and(|(parent, leaf)| leaf == symbol && !parent.is_empty())
+}
+
 /// A trailing `*` needs no handling here. A wildcard names a package, which the
 /// gap rule already counts on its own account, and no declaration index holds a
 /// name spelled `*` -- every one of them is read out of a grammar's `name`

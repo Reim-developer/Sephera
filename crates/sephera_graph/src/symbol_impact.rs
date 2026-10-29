@@ -48,8 +48,8 @@ use serde::Serialize;
 
 use sephera_core::path_utils;
 
-use super::blast_radius::in_scope;
-use super::resolver::split_trailing_name;
+use super::blast_radius::{in_scope, unknown_paths_error};
+use super::resolver::{path_names_symbol, split_trailing_name};
 use super::types::{GraphQuery, GraphReport, ImportKind};
 
 /// One file that names the symbol from the target.
@@ -389,19 +389,7 @@ pub fn measure_symbol_all(
     }
 
     if !unknown.is_empty() {
-        let listed: Vec<String> =
-            unknown.iter().map(|path| format!("  `{path}`")).collect();
-        bail!(
-            "{} path(s) did not resolve to a file in the analysed graph:\n{}\n\
-             Paths are relative to the analysis base{}.",
-            unknown.len(),
-            listed.join("\n"),
-            if base_prefix.is_empty() {
-                String::new()
-            } else {
-                format!(", or to the repository root under `{base_prefix}`")
-            }
-        );
+        return Err(unknown_paths_error(&unknown, base_prefix));
     }
 
     matched.sort_by(|left, right| {
@@ -497,17 +485,6 @@ fn naming_files(
         .filter(|file| !direct.iter().any(|user| &user.file == file))
         .collect();
     (direct, namespace_users)
-}
-
-/// Whether an item path's trailing segment is `symbol`.
-///
-/// Requires a parent: a bare `Router` names nothing about which file
-/// holds it, and a one-segment path on an edge to the target is the
-/// target's own module path, which names the file rather than a name
-/// inside it.
-fn path_names_symbol(import_path: &str, symbol: &str) -> bool {
-    split_trailing_name(import_path)
-        .is_some_and(|(parent, leaf)| leaf == symbol && !parent.is_empty())
 }
 
 /// Files downstream of the seed files, following resolved edges

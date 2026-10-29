@@ -52,7 +52,7 @@ use sephera_core::declarations::{
     DeclarationIndex, DeclarationKind, Signature,
 };
 
-use super::resolver::split_trailing_name;
+use super::resolver::{path_names_symbol, split_trailing_name};
 use super::symbol_impact::SymbolUser;
 use super::types::{GraphReport, ImportKind};
 
@@ -642,12 +642,6 @@ pub(crate) fn consumers(
         .filter(|file| !direct.iter().any(|user| &user.file == file))
         .collect();
     (direct, namespace_users)
-}
-
-/// Whether an item path's trailing segment is `symbol`.
-fn path_names_symbol(import_path: &str, symbol: &str) -> bool {
-    split_trailing_name(import_path)
-        .is_some_and(|(parent, leaf)| leaf == symbol && !parent.is_empty())
 }
 
 /// Files downstream of the seed files, following resolved edges
