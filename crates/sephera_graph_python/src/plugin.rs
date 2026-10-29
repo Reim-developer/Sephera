@@ -79,18 +79,34 @@ impl ResolverPlugin for PythonPlugin {
             return first_existing(context, &relative);
         }
 
-        // Absolute import. Two roots, because Python has two: the analysis base,
-        // and the directory a module in this package would have on `sys.path`.
+        // Absolute import. Three roots, because Python has three places a
+        // package can sit: the analysis base, the directory a module in this
+        // package would have on `sys.path`, and the `src/` layout an editable
+        // install puts on `sys.path`.
         //
-        // Only the first was tried, so `from pkg.sub.value import VALUE` inside
-        // `pkg/sub/value.py`'s own package produced no edge at all when `pkg`
-        // sat below the base rather than at it. The relative forms walked up
-        // correctly the whole time, which is why the walk worked in one direction
-        // only.
-        first_existing(context, &module_path).or_else(|| {
-            let rooted = paths::join(&import_root(context), &[&module_path]);
-            first_existing(context, &rooted)
-        })
+        // Only the first two were tried, so `from pkg.sub.value import VALUE`
+        // inside `pkg/sub/value.py`'s own package produced no edge at all when
+        // `pkg` sat below the base rather than at it. The relative forms walked
+        // up correctly the whole time, which is why the walk worked in one
+        // direction only. The third root is the same defect from the other
+        // side: a test file belongs to no package, so its import root is the
+        // base, and a package living under `src/` was invisible to it -- which
+        // is how flask's tests ended up unable to reach `src/flask` at all.
+        first_existing(context, &module_path)
+            .or_else(|| {
+                let rooted =
+                    paths::join(&import_root(context), &[&module_path]);
+                first_existing(context, &rooted)
+            })
+            .or_else(|| {
+                let segment = module_path.split('/').next().unwrap_or_default();
+                if src_layout_package(context, segment) {
+                    let laid_out = paths::join("src", &[&module_path]);
+                    first_existing(context, &laid_out)
+                } else {
+                    None
+                }
+            })
     }
 
     /// Whether `name` names a module this analysis can see.
@@ -100,7 +116,7 @@ impl ResolverPlugin for PythonPlugin {
     /// both a dotted path with no leading dot, and nothing in the shape says
     /// which. So the question cannot be answered from the path and is answered
     /// here instead -- by whether a file of that name is in the analysis, under
-    /// either root the language would search.
+    /// any root the language would search.
     ///
     /// The default in the trait says "cannot tell", so the languages that were
     /// not counting their bare specifiers as gaps go on not counting them.
@@ -119,6 +135,7 @@ impl ResolverPlugin for PythonPlugin {
                 &paths::join(&import_root(context), &[name]),
             )
             .is_some()
+            || src_layout_package(context, name)
     }
 }
 
@@ -174,6 +191,37 @@ fn import_root(context: ResolveContext<'_>) -> String {
     }
 
     topmost_package.map_or(directory, |package| paths::parent(&package))
+}
+
+/// Whether `src/<segment>/` holds a package in this analysis.
+///
+/// The evidence is a regular package (`src/<segment>/__init__.py`) or a
+/// namespace package (any file under `src/<segment>/`). The check is a
+/// `contains` plus one prefix range scan over the sorted known-file set, so
+/// it costs O(log n) rather than a scan per import -- and the range scan is
+/// what keeps a `src/` directory that is merely a folder of modules, like
+/// `src/utils.py`, from counting: that file is not under `src/utils/`.
+///
+/// The guard matters because the third root must not hijack genuine external
+/// dependencies: it fires only when the tree itself holds the package, which
+/// is exactly the dev-install semantics -- an editable install puts `src/` on
+/// `sys.path` ahead of site-packages, so an in-tree package of the same name
+/// is what the import names.
+fn src_layout_package(context: ResolveContext<'_>, segment: &str) -> bool {
+    if segment.is_empty() {
+        return false;
+    }
+
+    if context.contains(&format!("src/{segment}/__init__.py")) {
+        return true;
+    }
+
+    let prefix = format!("src/{segment}/");
+    context
+        .known_files
+        .range(prefix.clone()..)
+        .next()
+        .is_some_and(|file| file.starts_with(prefix.as_str()))
 }
 
 /// Try `path.py`, then `path/__init__.py`.
@@ -491,5 +539,138 @@ mod tests {
 
         let resolved = plugin.resolve("...outside", context);
         assert_eq!(resolved, None, "climbing past root should not resolve");
+    }
+
+    #[test]
+    fn an_absolute_import_from_a_test_file_finds_the_src_layout_package() {
+        // flask's shape: tests import `flask`, the package lives under `src/`,
+        // and a test file belongs to no package, so the second root is the
+        // analysis base and both earlier attempts are identical -- `flask/cli.py`
+        // is tried, `src/flask/cli.py` never is. The third root is the fix.
+        let files = [
+            "src/flask/__init__.py",
+            "src/flask/cli.py",
+            "tests/test_cli.py",
+        ];
+
+        assert_eq!(
+            resolve("flask.cli", "tests/test_cli.py", &files),
+            Some("src/flask/cli.py".to_owned())
+        );
+        assert_eq!(
+            resolve("flask", "tests/test_cli.py", &files),
+            Some("src/flask/__init__.py".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_src_layout_namespace_package_resolves_from_a_test_file() {
+        // A namespace package has no `__init__.py`; the evidence is files
+        // under the directory, and the answer is the first file beneath it.
+        let files = [
+            "src/pkg/__init__.py",
+            "src/pkg/sub/mod.py",
+            "tests/test_x.py",
+        ];
+
+        assert_eq!(
+            resolve("pkg.sub", "tests/test_x.py", &files),
+            Some("src/pkg/sub/mod.py".to_owned())
+        );
+    }
+
+    #[test]
+    fn an_external_dependency_is_not_hijacked_by_an_absent_src_package() {
+        // The third root fires only on evidence of an in-tree `src/<pkg>`
+        // package. With no such package, a third-party name stays unresolved
+        // even though `src/` exists as a directory in the analysis.
+        let files = ["src/other/__init__.py", "tests/test_x.py"];
+
+        assert_eq!(resolve("requests", "tests/test_x.py", &files), None);
+    }
+
+    #[test]
+    fn the_analysis_base_and_the_import_root_still_win_over_src_layout() {
+        // Order is base, then import root, then src-layout: earlier roots
+        // keep their wins, so nothing that resolved before changes its answer.
+        let files = ["pkg/util.py", "src/pkg/util.py", "tests/test_x.py"];
+
+        assert_eq!(
+            resolve("pkg.util", "tests/test_x.py", &files),
+            Some("pkg/util.py".to_owned()),
+            "the analysis base wins over src-layout"
+        );
+
+        let files = [
+            "app/pkg/__init__.py",
+            "app/pkg/x.py",
+            "src/pkg/__init__.py",
+            "src/pkg/x.py",
+            "app/pkg/deep.py",
+        ];
+
+        assert_eq!(
+            resolve("pkg.x", "app/pkg/deep.py", &files),
+            Some("app/pkg/x.py".to_owned()),
+            "the import root wins over src-layout"
+        );
+    }
+
+    #[test]
+    fn a_src_directory_that_is_not_a_package_does_not_count() {
+        // `src/utils.py` is a module under `src/`, not a package named
+        // `utils`: there is no `src/utils/__init__.py` and no file under
+        // `src/utils/`, so the third root must not fire for it.
+        let files = ["src/utils.py", "tests/test_x.py"];
+
+        assert_eq!(resolve("utils", "tests/test_x.py", &files), None);
+    }
+
+    #[test]
+    fn a_nested_src_layout_is_out_of_scope() {
+        // Only the analysis base's own `src/` counts. A `src/` nested deeper
+        // is some other project's layout, and this fix does not go looking
+        // for it.
+        let files = ["lib/src/pkg/__init__.py", "tests/test_x.py"];
+
+        assert_eq!(resolve("pkg", "tests/test_x.py", &files), None);
+    }
+
+    #[test]
+    fn an_in_tree_src_package_wins_over_the_same_external_name() {
+        // Dev-install semantics, stated so it reads as a decision rather than
+        // an accident: when the tree itself holds `src/requests`, an import
+        // of `requests` names that package, not the PyPI one. An editable
+        // install puts the same directory on `sys.path` ahead of site-packages.
+        let files = ["src/requests/__init__.py", "tests/test_x.py"];
+
+        assert_eq!(
+            resolve("requests", "tests/test_x.py", &files),
+            Some("src/requests/__init__.py".to_owned())
+        );
+    }
+
+    #[test]
+    fn names_a_known_module_gains_the_src_layout_root() {
+        // The gap question must agree with resolution, or an import that now
+        // resolves is still filed as a local gap (or a broken one is not).
+        let files = ["src/flask/__init__.py", "tests/test_x.py"];
+        let known: BTreeSet<String> =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let plugin = PythonPlugin;
+
+        let context =
+            sephera_core::plugins::test_context("tests/test_x.py", &known);
+        assert!(
+            plugin.names_a_known_module("flask", context),
+            "`flask` is a package under `src/` in this analysis"
+        );
+
+        let context =
+            sephera_core::plugins::test_context("tests/test_x.py", &known);
+        assert!(
+            !plugin.names_a_known_module("collections", context),
+            "the standard library is not a local gap just because `src/` exists"
+        );
     }
 }
