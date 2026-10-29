@@ -21,7 +21,8 @@
 //!   on any I/O error. A poisoned, corrupt, or half-written entry fails to
 //!   parse and is recomputed; an unwritable cache directory disables the
 //!   cache for the run. The cache can never fail a build.
-//! * **Bounded.** The store is capped at 1 GiB; over the cap, oldest-created
+//! * **Bounded per namespace.** Each namespace — one per analyzed repo or
+//!   worktree family — is capped at 1 GiB; over the cap, oldest-created
 //!   entries are evicted first. mtime orders eviction only — clock skew
 //!   cannot affect correctness.
 //!
@@ -50,8 +51,15 @@ use serde::{Deserialize, Serialize};
 /// value changes; old entries are then treated as misses, never misread.
 const FORMAT_VERSION: u8 = 1;
 
-/// The most the store may hold. Past this, the oldest-created entries are
-/// evicted first.
+/// Revision of the extractor itself: the plugin walk, the tree-sitter
+/// grammars, and the meaning of every cached field. Bumped with any of
+/// those, because a grammar or extractor fix does not bump the sephera
+/// version and would otherwise keep serving stale entries. Kept separate
+/// from [`FORMAT_VERSION`], which only tracks the serialization shape.
+const EXTRACTOR_REVISION: u16 = 1;
+
+/// The most one namespace's store may hold. Past this, the oldest-created
+/// entries are evicted first.
 const MAX_CACHE_BYTES: u64 = 1024 * 1024 * 1024;
 
 /// Per-write temp-name counter. Two processes may store the same key
@@ -60,12 +68,18 @@ static TMP_COUNTER: AtomicU64 = AtomicU64::new(0);
 
 /// One file's extraction result, as stored on disk.
 ///
-/// Built by [`CachedExtraction::new`], which stamps the format version and
-/// the sephera version: a sephera upgrade (new grammars, new tables)
-/// silently invalidates every entry instead of misreading one.
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+/// Built by [`CachedExtraction::new`], which stamps the format version, the
+/// extractor revision, and the sephera version: a sephera upgrade, a grammar
+/// or extractor change, or a new serialization shape silently invalidates
+/// every entry instead of misreading one.
+//
+// `Clone` is deliberately absent: the miss and hit paths move the pieces
+// instead of copying them (see `attach_cached`), and a stray `.clone()`
+// on a declaration map would be the most expensive line in this module.
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
 pub struct CachedExtraction {
     format: u8,
+    extractor: u16,
     sephera: String,
     pub imports: Vec<sephera_core::types::ImportStatement>,
     pub declared: Option<sephera_core::declarations::DeclaredNames>,
@@ -82,6 +96,7 @@ impl CachedExtraction {
     ) -> Self {
         Self {
             format: FORMAT_VERSION,
+            extractor: EXTRACTOR_REVISION,
             sephera: env!("CARGO_PKG_VERSION").to_owned(),
             imports,
             declared,
@@ -93,6 +108,7 @@ impl CachedExtraction {
     /// thing by it as this one does.
     fn is_current(&self) -> bool {
         self.format == FORMAT_VERSION
+            && self.extractor == EXTRACTOR_REVISION
             && self.sephera == env!("CARGO_PKG_VERSION")
     }
 }
@@ -176,8 +192,10 @@ impl ExtractionCache {
     }
 
     /// Store one file's extraction result. Best-effort: any I/O failure is
-    /// silently dropped, and the entry is stamped with the current format
-    /// and sephera versions on the way in.
+    /// silently dropped. The value is serialized as given: stamping happens
+    /// in [`CachedExtraction::new`], the only constructor, so a re-stamp
+    /// here would be a no-op — and the clone it required copied the whole
+    /// declaration map on every miss.
     pub fn store(
         &self,
         language: &str,
@@ -187,10 +205,7 @@ impl ExtractionCache {
         let Some(dir) = self.dir.as_ref() else {
             return;
         };
-        let mut value = value.clone();
-        value.format = FORMAT_VERSION;
-        env!("CARGO_PKG_VERSION").clone_into(&mut value.sephera);
-        let Ok(bytes) = serde_json::to_vec(&value) else {
+        let Ok(bytes) = serde_json::to_vec(value) else {
             return;
         };
         let path = entry_path(dir, language, source);
@@ -227,12 +242,7 @@ impl ExtractionCache {
             .saturating_add(added)
             > MAX_CACHE_BYTES
         {
-            let total = evict_oldest(
-                dir,
-                self.bytes_base
-                    .load(Ordering::Relaxed)
-                    .saturating_add(added),
-            );
+            let total = evict_oldest(dir);
             self.bytes_base.store(total, Ordering::Relaxed);
             self.bytes_added.store(0, Ordering::Relaxed);
         }
@@ -240,19 +250,37 @@ impl ExtractionCache {
 }
 
 impl Drop for ExtractionCache {
-    /// Flush the batched size accounting. Best-effort like everything
-    /// else here: a killed process leaves a stale (low) total, and the
-    /// next over-cap walk corrects the drift.
+    /// Flush the batched size accounting. Skipped when nothing was stored,
+    /// so a read-only build never clobbers a newer total written by a
+    /// concurrent build; the write goes through a temp file + rename so a
+    /// concurrent reader never sees a half-written `meta.json`. Best-effort
+    /// like everything else here: a killed process leaves a stale (low)
+    /// total, and the next over-cap walk corrects the drift.
     fn drop(&mut self) {
-        if let Some(dir) = self.dir.as_ref() {
-            let total = self
-                .bytes_base
-                .load(Ordering::Relaxed)
-                .saturating_add(self.bytes_added.load(Ordering::Relaxed));
-            let meta = CacheMeta { bytes: total };
-            if let Ok(bytes) = serde_json::to_vec(&meta) {
-                let _ = fs::write(dir.join("meta.json"), bytes);
-            }
+        let Some(dir) = self.dir.as_ref() else {
+            return;
+        };
+        let added = self.bytes_added.load(Ordering::Relaxed);
+        if added == 0 {
+            return;
+        }
+        let total = self
+            .bytes_base
+            .load(Ordering::Relaxed)
+            .saturating_add(added);
+        let meta = CacheMeta { bytes: total };
+        let Ok(bytes) = serde_json::to_vec(&meta) else {
+            return;
+        };
+        let tmp = dir.join(format!(
+            "meta.json.tmp-{}-{}",
+            std::process::id(),
+            TMP_COUNTER.fetch_add(1, Ordering::Relaxed)
+        ));
+        if fs::write(&tmp, &bytes).is_err()
+            || fs::rename(&tmp, dir.join("meta.json")).is_err()
+        {
+            let _ = fs::remove_file(&tmp);
         }
     }
 }
@@ -267,6 +295,16 @@ fn cache_root() -> Option<PathBuf> {
         }
         return None;
     }
+    fallback_cache_root()
+}
+
+/// The XDG/`~/.cache` fallback. In test builds this is compiled out and
+/// the override above is the only way to get a cache: unit tests must
+/// never touch the developer's real `~/.cache`, and resolver tests call
+/// `build_graph` without the env lock, so an override left set by another
+/// test would otherwise leak into them.
+#[cfg(not(test))]
+fn fallback_cache_root() -> Option<PathBuf> {
     if let Some(xdg) = std::env::var_os("XDG_CACHE_HOME") {
         let path = PathBuf::from(xdg);
         if path.is_absolute() {
@@ -275,6 +313,12 @@ fn cache_root() -> Option<PathBuf> {
     }
     std::env::var_os("HOME")
         .map(|home| PathBuf::from(home).join(".cache").join("sephera"))
+}
+
+/// Test builds have no fallback: see [`fallback_cache_root`].
+#[cfg(test)]
+const fn fallback_cache_root() -> Option<PathBuf> {
+    None
 }
 
 /// The namespace for analyses rooted at `base`: the canonical git common
@@ -336,12 +380,30 @@ fn entry_path(dir: &Path, language: &str, source: &[u8]) -> PathBuf {
     dir.join(&key[..2]).join(format!("{key}.json"))
 }
 
+/// Evict down to this fraction of the cap, so the store after the next
+/// miss is still under the cap instead of triggering another full walk.
+const EVICT_TARGET_BYTES: u64 = MAX_CACHE_BYTES / 4 * 3;
+
 /// Delete oldest-created entries until the store is back under the cap.
 /// Returns the true total afterwards; mtime orders eviction only.
-fn evict_oldest(dir: &Path, mut total: u64) -> u64 {
+///
+/// The total is recomputed from the walk itself rather than trusted from
+/// the caller's estimate: `meta.json` is best-effort accounting, and a
+/// stale-low estimate must not let the store sit over the cap. A directory
+/// that cannot be walked counts as empty; the next successful walk
+/// corrects the total.
+fn evict_oldest(dir: &Path) -> u64 {
+    evict_below(dir, MAX_CACHE_BYTES, EVICT_TARGET_BYTES)
+}
+
+/// Walk `dir`, and when over `cap`, delete oldest-created entries until at
+/// or under `target`. Returns the true total of what remains. Split out so
+/// the recompute and the low-water behavior are unit-testable without
+/// filling a 1 GiB store.
+fn evict_below(dir: &Path, cap: u64, target: u64) -> u64 {
     let mut entries: Vec<(SystemTime, u64, PathBuf)> = Vec::new();
     let Ok(shards) = fs::read_dir(dir) else {
-        return total;
+        return 0;
     };
     for shard in shards.flatten() {
         if !shard.file_type().is_ok_and(|kind| kind.is_dir()) {
@@ -365,13 +427,17 @@ fn evict_oldest(dir: &Path, mut total: u64) -> u64 {
             ));
         }
     }
+    let mut total: u64 = entries.iter().map(|entry| entry.1).sum();
+    if total <= cap {
+        return total;
+    }
     entries.sort_by_key(|entry| entry.0);
-    for (_, size, path) in entries {
-        if total <= MAX_CACHE_BYTES {
+    for (_, size, path) in &entries {
+        if total <= target {
             break;
         }
-        if fs::remove_file(&path).is_ok() {
-            total = total.saturating_sub(size);
+        if fs::remove_file(path).is_ok() {
+            total = total.saturating_sub(*size);
         }
     }
     total
@@ -380,23 +446,69 @@ fn evict_oldest(dir: &Path, mut total: u64) -> u64 {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::ffi::{OsStr, OsString};
     use std::sync::{Mutex, MutexGuard};
 
     /// The cache reads process-global env vars, and Rust runs tests on
     /// threads: hold this while mutating them so no two tests race.
     static ENV_LOCK: Mutex<()> = Mutex::new(());
 
-    fn lock_env() -> MutexGuard<'static, ()> {
-        ENV_LOCK
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
+    /// The env lock plus restoration. The old `temp_cache` leaked every
+    /// override process-wide — a later (or concurrent) test without the
+    /// lock, like the resolver tests that call `build_graph`, could then
+    /// observe a `SEPHERA_CACHE_DIR` pointing at a deleted tempdir.
+    /// Dropping the guard puts both variables back the way they were.
+    struct EnvGuard {
+        _lock: MutexGuard<'static, ()>,
+        prev_cache_dir: Option<OsString>,
+        prev_no_cache: Option<OsString>,
     }
 
-    fn temp_cache() -> (tempfile::TempDir, MutexGuard<'static, ()>) {
-        let guard = lock_env();
+    impl EnvGuard {
+        fn lock() -> Self {
+            let lock = ENV_LOCK
+                .lock()
+                .unwrap_or_else(std::sync::PoisonError::into_inner);
+            Self {
+                prev_cache_dir: std::env::var_os("SEPHERA_CACHE_DIR"),
+                prev_no_cache: std::env::var_os("SEPHERA_NO_CACHE"),
+                _lock: lock,
+            }
+        }
+    }
+
+    impl Drop for EnvGuard {
+        fn drop(&mut self) {
+            // SAFETY: the ENV_LOCK is held until the end of drop, so no
+            // other test in this module observes a half-restored pair.
+            unsafe {
+                restore_var("SEPHERA_CACHE_DIR", self.prev_cache_dir.take());
+                restore_var("SEPHERA_NO_CACHE", self.prev_no_cache.take());
+            }
+        }
+    }
+
+    /// Put an env var back the way it was before the guard locked.
+    ///
+    /// # Safety
+    ///
+    /// The caller must hold [`ENV_LOCK`].
+    unsafe fn restore_var(name: &str, prev: Option<OsString>) {
+        // SAFETY: see the contract above; edition 2024 still wants the
+        // block spelled out inside an unsafe fn.
+        unsafe {
+            match prev {
+                Some(value) => std::env::set_var(name, value),
+                None => std::env::remove_var(name),
+            }
+        }
+    }
+
+    fn temp_cache() -> (tempfile::TempDir, EnvGuard) {
+        let guard = EnvGuard::lock();
         let dir = tempfile::tempdir().unwrap();
-        // SAFETY: the ENV_LOCK serializes every env mutation in this
-        // test module, so no other thread observes a half-set pair.
+        // SAFETY: the ENV_LOCK is held, so no other thread observes a
+        // half-set pair.
         unsafe {
             std::env::set_var(
                 "SEPHERA_CACHE_DIR",
@@ -480,7 +592,7 @@ mod tests {
 
     #[test]
     fn no_cache_env_disables_everything() {
-        let (_temp, guard) = temp_cache();
+        let (_temp, _guard) = temp_cache();
         // SAFETY: the ENV_LOCK is held.
         unsafe {
             std::env::set_var("SEPHERA_NO_CACHE", "1");
@@ -490,12 +602,7 @@ mod tests {
         // Loads miss and stores are dropped, without touching the disk.
         assert_eq!(cache.load("Python", b"x"), None);
         cache.store("Python", b"x", &sample_value());
-        drop(guard);
-        let _guard = lock_env();
-        // SAFETY: the ENV_LOCK is held.
-        unsafe {
-            std::env::remove_var("SEPHERA_NO_CACHE");
-        }
+        // The guard's drop restores both variables; nothing leaks.
     }
 
     #[test]
@@ -503,7 +610,7 @@ mod tests {
         // Teeth: if any cache op unwrapped I/O, this panics instead of
         // degrading. A file where the directory should be makes every
         // create_dir_all fail.
-        let guard = lock_env();
+        let _guard = EnvGuard::lock();
         let temp = tempfile::tempdir().unwrap();
         let file = temp.path().join("not-a-dir");
         fs::write(&file, b"nope").unwrap();
@@ -517,12 +624,7 @@ mod tests {
         assert!(cache.dir.is_none());
         assert_eq!(cache.load("Python", b"x"), None);
         cache.store("Python", b"x", &sample_value());
-        drop(guard);
-        let _guard = lock_env();
-        // SAFETY: the ENV_LOCK is held.
-        unsafe {
-            std::env::remove_var("SEPHERA_CACHE_DIR");
-        }
+        // The guard's drop restores both variables; nothing leaks.
     }
 
     #[test]
@@ -550,7 +652,7 @@ mod tests {
     /// warm report would diverge from the other two.
     #[test]
     fn cache_hit_and_cache_miss_build_identical_reports() {
-        let guard = lock_env();
+        let _guard = EnvGuard::lock();
         let repo = tempfile::tempdir().unwrap();
         let cache_root = tempfile::tempdir().unwrap();
         fs::write(repo.path().join("a.py"), "import os\nfrom b import thing\n")
@@ -588,7 +690,7 @@ mod tests {
             cold, bypassed,
             "cached report diverged from cache-disabled report"
         );
-        drop(guard);
+        // The guard's drop restores both variables; nothing leaks.
     }
 
     /// Teeth for the whole wiring: a well-formed fabricated entry planted
@@ -598,7 +700,7 @@ mod tests {
     /// import instead of the fabricated one.
     #[test]
     fn hit_path_serves_planted_entry_in_graph_build() {
-        let guard = lock_env();
+        let _guard = EnvGuard::lock();
         let repo = tempfile::tempdir().unwrap();
         let cache_root = tempfile::tempdir().unwrap();
         let source = b"import real_module\n";
@@ -630,6 +732,133 @@ mod tests {
             !text.contains("real_module"),
             "stale parse leaked through the cache"
         );
-        drop(guard);
+        // The guard's drop restores both variables; nothing leaks.
+    }
+
+    #[test]
+    fn stale_extractor_revision_is_a_miss() {
+        // Teeth: without the revision in is_current, a grammar or
+        // extractor change that keeps the sephera version would keep
+        // serving stale entries.
+        let (_temp, _guard) = temp_cache();
+        let cache = ExtractionCache::for_base(Path::new("/nonexistent-base"));
+
+        let source = b"import os\n";
+        cache.store("Python", source, &sample_value());
+        let dir = cache.dir.clone().unwrap();
+        let path = entry_path(&dir, "Python", source);
+
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["extractor"] = serde_json::json!(u16::MAX);
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert_eq!(cache.load("Python", source), None);
+    }
+
+    #[test]
+    fn drop_without_stores_writes_no_meta() {
+        // Teeth: Drop used to rewrite meta.json unconditionally, so a
+        // read-only build clobbered a concurrent build's newer total.
+        let (_temp, _guard) = temp_cache();
+        let dir = {
+            let cache =
+                ExtractionCache::for_base(Path::new("/nonexistent-base"));
+            assert!(cache.dir.is_some());
+            cache.dir.clone().unwrap()
+        }; // dropped without storing anything
+        assert!(
+            !dir.join("meta.json").exists(),
+            "drop wrote meta.json with nothing stored"
+        );
+    }
+
+    #[test]
+    fn evict_below_recomputes_the_true_total() {
+        // Teeth: evict_oldest used to return the caller's estimate without
+        // summing the walk, so a stale-low meta.json let the store sit
+        // over the cap.
+        let temp = tempfile::tempdir().unwrap();
+        let shard = temp.path().join("ab");
+        fs::create_dir_all(&shard).unwrap();
+        fs::write(shard.join("k1.json"), vec![0u8; 10]).unwrap();
+        fs::write(shard.join("k2.json"), vec![0u8; 20]).unwrap();
+        fs::write(shard.join("k3.json"), vec![0u8; 30]).unwrap();
+
+        // Under the cap: nothing evicted, and the returned total is the
+        // walked sum, not an estimate.
+        assert_eq!(evict_below(temp.path(), u64::MAX, u64::MAX), 60);
+        assert_eq!(shard.read_dir().unwrap().count(), 3);
+    }
+
+    #[test]
+    fn evict_below_evicts_oldest_to_low_water_mark() {
+        // Three 100-byte entries, cap 250, target 150: 300 > 250, so
+        // eviction removes entries until at most 150 remain — two files
+        // gone, one 100-byte file left, true total returned. The count
+        // and total hold regardless of mtime granularity.
+        let temp = tempfile::tempdir().unwrap();
+        let shard = temp.path().join("ab");
+        fs::create_dir_all(&shard).unwrap();
+        for name in ["k1.json", "k2.json", "k3.json"] {
+            fs::write(shard.join(name), vec![0u8; 100]).unwrap();
+        }
+
+        assert_eq!(evict_below(temp.path(), 250, 150), 100);
+        let remaining: Vec<_> = shard.read_dir().unwrap().collect();
+        assert_eq!(remaining.len(), 1);
+        assert_eq!(
+            remaining[0].as_ref().unwrap().metadata().unwrap().len(),
+            100
+        );
+    }
+
+    #[test]
+    fn eviction_target_sits_below_the_cap() {
+        // Compile-time pin of the production wiring invariant: evict_oldest
+        // passes EVICT_TARGET_BYTES as the target, so a full store is
+        // brought down to 75% of the cap instead of stopping exactly at
+        // it — otherwise every miss on a full store would pay for another
+        // full walk. const, because clippy::assertions_on_constants
+        // rightly notes these never change at runtime.
+        const _: () = {
+            assert!(EVICT_TARGET_BYTES < MAX_CACHE_BYTES);
+            assert!(EVICT_TARGET_BYTES == MAX_CACHE_BYTES / 4 * 3);
+        };
+    }
+
+    #[test]
+    fn env_guard_restores_captured_values() {
+        // Teeth: the old lock guard never restored, so temp_cache leaked
+        // SEPHERA_CACHE_DIR process-wide and a later test could see a
+        // cache dir pointing at a deleted tempdir.
+        //
+        // The pre-value is read under the lock: another test may be
+        // mid-mutation when this test starts, and every guard restores on
+        // drop, so a quiescent read under the lock is the stable baseline.
+        let prev = {
+            let _guard = EnvGuard::lock();
+            std::env::var_os("SEPHERA_CACHE_DIR")
+        };
+        {
+            let guard = EnvGuard::lock();
+            // SAFETY: the ENV_LOCK is held.
+            unsafe {
+                std::env::set_var(
+                    "SEPHERA_CACHE_DIR",
+                    "/sentinel-must-not-leak",
+                );
+            }
+            assert_eq!(
+                std::env::var_os("SEPHERA_CACHE_DIR").as_deref(),
+                Some(OsStr::new("/sentinel-must-not-leak"))
+            );
+            drop(guard);
+        }
+        // Re-lock for the final read: without the lock, another test's
+        // temp_cache could set the variable between the restore and the
+        // assertion.
+        let _guard = EnvGuard::lock();
+        assert_eq!(std::env::var_os("SEPHERA_CACHE_DIR"), prev);
     }
 }

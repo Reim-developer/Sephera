@@ -436,7 +436,7 @@ fn extract_one_file(
     // stale version — degrades to a miss, never an error.
     if let Some(cached) = cache.load(language.name, &source) {
         return Ok(Some(attach_cached(
-            &cached,
+            cached,
             project_file,
             language.name,
             ts_language,
@@ -461,7 +461,7 @@ fn extract_one_file(
             extract_cache::CachedExtraction::new(Vec::new(), None, None);
         cache.store(language.name, &source, &cached);
         return Ok(Some(attach_cached(
-            &cached,
+            cached,
             project_file,
             language.name,
             ts_language,
@@ -479,45 +479,27 @@ fn extract_one_file(
     let Some(plugin) = plugins::builtin_import_plugin(ts_language) else {
         return Ok(None);
     };
-    let mut extracted = with_parser(ts_language, source.len(), |parser| {
+    let extracted = with_parser(ts_language, source.len(), |parser| {
         walk_with_declarations(&source, parser, plugin)
     })
     .unwrap_or_default();
 
-    // Persist for the next run before the takes below move the pieces out.
-    // The clones are small next to the parse they save: imports are a few
-    // dozen statements, and the declaration map is the only large piece.
-    cache.store(
-        language.name,
-        &source,
-        &extract_cache::CachedExtraction::new(
-            extracted.imports.clone(),
-            extracted.declared.clone(),
-            extracted.boundary.clone(),
-        ),
+    // Persist for the next run, then move the same pieces into the
+    // returned file: a miss costs zero deep copies. The declaration map
+    // is the only large piece, and it is moved twice, never cloned.
+    let cached = extract_cache::CachedExtraction::new(
+        extracted.imports,
+        extracted.declared,
+        extracted.boundary,
     );
+    cache.store(language.name, &source, &cached);
 
-    // Taken rather than cloned: the declaration map is the larger of the two
-    // halves by far, and there is no reason to copy it to get it out of the
-    // struct that is about to be dropped.
-    let declared = extracted
-        .declared
-        .take()
-        .map(|names| (project_file.normalized_relative_path.clone(), names));
-    let boundary = extracted.boundary.take().map(|boundary| {
-        (project_file.normalized_relative_path.clone(), boundary)
-    });
-
-    Ok(Some(ExtractedFile {
-        data: FileImportData {
-            file_path: project_file.normalized_relative_path.clone(),
-            language: Some(language.name),
-            ts_language,
-            imports: extracted.imports,
-        },
-        declared,
-        boundary,
-    }))
+    Ok(Some(attach_cached(
+        cached,
+        project_file,
+        language.name,
+        ts_language,
+    )))
 }
 
 /// Reattach the path-bound halves of an [`ExtractedFile`] to a cached
@@ -529,7 +511,7 @@ fn extract_one_file(
 /// read; they come from the [`ProjectFile`] scan and are reattached here,
 /// so a cache hit builds the identical `ExtractedFile` the parse would have.
 fn attach_cached(
-    cached: &extract_cache::CachedExtraction,
+    cached: extract_cache::CachedExtraction,
     project_file: &ProjectFile,
     language_name: &'static str,
     ts_language: SupportedLanguage,
@@ -539,12 +521,12 @@ fn attach_cached(
             file_path: project_file.normalized_relative_path.clone(),
             language: Some(language_name),
             ts_language,
-            imports: cached.imports.clone(),
+            imports: cached.imports,
         },
-        declared: cached.declared.clone().map(|names| {
+        declared: cached.declared.map(|names| {
             (project_file.normalized_relative_path.clone(), names)
         }),
-        boundary: cached.boundary.clone().map(|boundary| {
+        boundary: cached.boundary.map(|boundary| {
             (project_file.normalized_relative_path.clone(), boundary)
         }),
     }
