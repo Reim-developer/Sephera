@@ -111,6 +111,13 @@ struct CacheMeta {
 #[derive(Debug)]
 pub struct ExtractionCache {
     dir: Option<PathBuf>,
+    /// Best-effort size accounting, batched: `meta.json` is read once at
+    /// construction, additions accumulate in memory, and the total is
+    /// flushed back on drop. This keeps the per-store cost at one integer
+    /// add instead of a read-modify-write cycle per file; the 1 GiB cap
+    /// stays approximate, which is all a best-effort cache needs.
+    bytes_base: AtomicU64,
+    bytes_added: AtomicU64,
 }
 
 impl ExtractionCache {
@@ -124,18 +131,31 @@ impl ExtractionCache {
     /// correctness never depends on it, because entries are content-addressed.
     #[must_use]
     pub fn for_base(base: &Path) -> Self {
+        let disabled = Self {
+            dir: None,
+            bytes_base: AtomicU64::new(0),
+            bytes_added: AtomicU64::new(0),
+        };
         if std::env::var_os("SEPHERA_NO_CACHE").is_some() {
-            return Self { dir: None };
+            return disabled;
         }
         let Some(root) = cache_root() else {
-            return Self { dir: None };
+            return disabled;
         };
         let namespace = namespace_for(base);
         let dir = root.join("extract-v1").join(namespace);
         if fs::create_dir_all(&dir).is_err() {
-            return Self { dir: None };
+            return disabled;
         }
-        Self { dir: Some(dir) }
+        let bytes_base = fs::read(dir.join("meta.json"))
+            .ok()
+            .and_then(|bytes| serde_json::from_slice::<CacheMeta>(&bytes).ok())
+            .map_or(0, |meta| meta.bytes);
+        Self {
+            dir: Some(dir),
+            bytes_base: AtomicU64::new(bytes_base),
+            bytes_added: AtomicU64::new(0),
+        }
     }
 
     /// The cached extraction of `(language, source)`, if one was stored by
@@ -193,24 +213,46 @@ impl ExtractionCache {
             let _ = fs::remove_file(&tmp);
             return;
         }
-        Self::account(dir, bytes.len() as u64);
-    }
-
-    /// Best-effort size accounting: add the new entry, and only when the
-    /// cap is exceeded pay for a full walk to evict oldest-first.
-    fn account(dir: &Path, new_bytes: u64) {
-        let meta_path = dir.join("meta.json");
-        let mut total: u64 = fs::read(&meta_path)
-            .ok()
-            .and_then(|bytes| serde_json::from_slice::<CacheMeta>(&bytes).ok())
-            .map_or(0, |meta| meta.bytes);
-        total = total.saturating_add(new_bytes);
-        if total > MAX_CACHE_BYTES {
-            total = evict_oldest(dir, total);
+        let new_bytes = bytes.len() as u64;
+        let added = self
+            .bytes_added
+            .fetch_add(new_bytes, Ordering::Relaxed)
+            .saturating_add(new_bytes);
+        // Only when the cap is exceeded pay for a full walk to evict
+        // oldest-first. Two threads crossing at once both walk; the
+        // second finds nothing left to evict — harmless.
+        if self
+            .bytes_base
+            .load(Ordering::Relaxed)
+            .saturating_add(added)
+            > MAX_CACHE_BYTES
+        {
+            let total = evict_oldest(
+                dir,
+                self.bytes_base
+                    .load(Ordering::Relaxed)
+                    .saturating_add(added),
+            );
+            self.bytes_base.store(total, Ordering::Relaxed);
+            self.bytes_added.store(0, Ordering::Relaxed);
         }
-        let meta = CacheMeta { bytes: total };
-        if let Ok(bytes) = serde_json::to_vec(&meta) {
-            let _ = fs::write(&meta_path, bytes);
+    }
+}
+
+impl Drop for ExtractionCache {
+    /// Flush the batched size accounting. Best-effort like everything
+    /// else here: a killed process leaves a stale (low) total, and the
+    /// next over-cap walk corrects the drift.
+    fn drop(&mut self) {
+        if let Some(dir) = self.dir.as_ref() {
+            let total = self
+                .bytes_base
+                .load(Ordering::Relaxed)
+                .saturating_add(self.bytes_added.load(Ordering::Relaxed));
+            let meta = CacheMeta { bytes: total };
+            if let Ok(bytes) = serde_json::to_vec(&meta) {
+                let _ = fs::write(dir.join("meta.json"), bytes);
+            }
         }
     }
 }
