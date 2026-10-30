@@ -7,3 +7,5 @@
 
 #[path = "regressions/sarif.rs"]
 mod sarif;
+#[path = "regressions/tworef_paths.rs"]
+mod tworef_paths;
