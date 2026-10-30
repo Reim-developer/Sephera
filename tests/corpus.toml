@@ -234,10 +234,15 @@ files = 83
 # edges; symbol halves stay unresolved by design.
 #
 # Up from 312: an absolute import now tries the importing file's own directory
-# last, which is where Python puts it when the file runs as a script. Sixteen
-# sibling imports in examples/ and tests/ resolve -- `from hello import app`
-# beside `hello.py`, and the like. All point at files that exist.
-internal_edges = 328
+# last, which is where Python puts it when the file runs as a script. One
+# true script import resolves -- `from hello import app` in
+# `tests/test_apps/helloworld/wsgi.py` beside `hello.py`.
+#
+# Down from the 328 the first version of this root produced: 15 of its 16
+# edges were false, imports inside packages where the directory is never on
+# sys.path (the same defect CodeRabbit caught on pytest's `_pytest`).
+# The fallback now fires only outside packages.
+internal_edges = 313
 # Up from 5 for the same reason as the edges above: `from js_example import views`
 # in `js_example/__init__.py` names the package it is already inside, and that
 # statement only became visible once absolute imports found their root.
@@ -250,7 +255,9 @@ cfg_gated_edges = 0
 # see either end of it.
 #
 # Up from 44: one more cycle through a sibling-resolved import in the examples.
-cycles = 45
+# Down from the 45 the first version produced, back to 44: the ring through
+# the false sibling edge is gone with it.
+cycles = 44
 # Flask's `__init__.py` is the public API and its modules import back through it,
 # so every cycle here involves a real dependency.
 structural_cycles = 0
@@ -452,9 +459,15 @@ files = 274
 # Up from 870: 651 module edges from test and doc files now resolve into
 # src/_pytest and src/pytest instead of filing as external dependencies.
 #
-# Up from 1521: 44 more via the script-directory root -- sibling imports in
+# Up from 1521: 8 more via the script-directory root -- sibling imports in
 # testing/ and doc/ scripts that run with their own directory on sys.path.
-internal_edges = 1565
+# Down from the 1565 the first version of this root produced: 36 of its 44
+# edges were false, imports inside packages where the importing directory
+# is never on sys.path (`from warnings import deprecated` in
+# `src/_pytest/compat.py` edged the adjacent `src/_pytest/warnings.py`
+# instead of the standard library). The fallback now fires only outside
+# packages (no `__init__.py` beside the importer).
+internal_edges = 1529
 self_references = 4
 cfg_gated_edges = 0
 # Down from 91, and the drop is a traversal artifact, not lost dependencies:
@@ -464,7 +477,8 @@ cfg_gated_edges = 0
 # identical, 29 new, 66 gone). Nothing was lost; the rings are reported
 # differently because the graph got denser.
 #
-# Up from 54: the 44 new sibling edges densify the graph further, and the
-# traversal reports 58 more rings. Same artifact, same reason.
-cycles = 112
+# Down from the 112 the first version produced, back to the pre-sibling 54:
+# the false package-internal edges had woven 58 spurious rings, and removing
+# them restores the count exactly -- the evidence the true edges were kept.
+cycles = 54
 structural_cycles = 0
