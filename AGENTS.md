@@ -97,15 +97,11 @@ without a shell.
   $env:SEPHERA_CORPUS_DIR = "$env:LOCALAPPDATA\sephera\corpus"
   python scripts\measure_accuracy.py --verify    # pinned extraction figures
   python scripts\check_readme_examples.py        # every documented command runs
-  python scripts\check_readme_figures.py         # quoted numbers are true
   ```
 
-  `check_readme_figures.py` regenerates the README's blast-radius example from a
-  real run. **If you change extraction behaviour, this will fail** — and that is
-  the point. Update the README from a fresh run rather than editing the number
-  by hand, and re-read `tests/corpus.toml` before changing a pin: the comment
-  beside each figure records *why* it is what it is, and a figure that moves
-  during a correctness fix needs its new value justified, not just accepted.
+  Re-read `tests/corpus.toml` before changing a pin: the comment beside each
+  figure records *why* it is what it is, and a figure that moves during a
+  correctness fix needs its new value justified, not just accepted.
 
 - **Adding a language** means one crate under `crates/` — a directory named
   `sephera_graph_<language>` with a `plugin.rs` and an `extract.rs` — plus one row

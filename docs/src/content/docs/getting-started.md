@@ -135,18 +135,11 @@ first:
 $env:SEPHERA_CORPUS_DIR = "$env:LOCALAPPDATA\sephera\corpus"
 
 python scripts/check_readme_examples.py             # every documented command runs
-python scripts/check_readme_figures.py              # the numbers the README quotes are true
 python scripts/measure_accuracy.py --verify         # the pinned extraction figures hold
-python scripts/check_docs.py                        # code fences are paired, quoted paths exist
-python scripts/check_doc_flags.py                   # every documented flag exists
 python scripts/check_doc_links.py                   # documentation links are claims the tree can keep
 python scripts/check_publish_order.py               # every crate packages in dependency order
 npx pyright
 ```
-
-`check_readme_figures.py` regenerates the README's blast-radius example from a real
-run. If you change extraction behaviour, this will fail, and that is the point:
-update the README from a fresh run rather than editing the number by hand.
 
 ## Docs development
 
