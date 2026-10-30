@@ -222,11 +222,23 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
         root.display()
     );
 
+    // The watcher itself must honour the user's `--ignore` patterns:
+    // without this, editing an ignored file restarts the analysis the
+    // patterns were meant to skip. The matcher is built from the same
+    // inputs as each re-run's, so the trigger and the analysis cannot
+    // disagree about what is ignored.
+    let watch_ignore = build_ignore_matcher(
+        &root,
+        &arguments.settings,
+        &ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
     // A watch loop has no single moment to evaluate a threshold against, so the
     // per-run gates are reported as they happen and the final exit code is
     // success. `watch --once` is the form to use in a pipeline that needs a
     // threshold.
-    watch::watch(&root, || {
+    watch::watch(&root, &watch_ignore, || {
         let gates = runtime.block_on(run_watch_target(
             target,
             arguments.on.as_deref(),
