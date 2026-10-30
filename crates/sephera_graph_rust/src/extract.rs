@@ -40,16 +40,15 @@ pub fn extract_from_node(
 
 /// `mod util;` — a declaration, which is structural rather than an import.
 ///
-/// Inline modules (`mod util { ... }`) declare no file, and `#[path = "..."]`
-/// renames the one it names, so both are skipped. The `#[path]` attribute is a
+/// Inline modules (`mod util { ... }`) declare no file and are skipped. A
+/// `#[path = "..."]` attribute names the module's file explicitly, relative
+/// to the declaring file's directory — the value is passed through for the
+/// resolver, which knows that directory. The `#[path]` attribute is a
 /// *sibling* of `mod_item` in this grammar rather than a child, so this looks
 /// back rather than at a field — an assumption that had to be corrected once
 /// already.
 fn extract_mod(source: &[u8], node: &Node<'_>) -> Option<Vec<ImportStatement>> {
     if node.child_by_field_name("body").is_some() {
-        return None;
-    }
-    if has_path_attribute(source, node) {
         return None;
     }
 
@@ -58,40 +57,57 @@ fn extract_mod(source: &[u8], node: &Node<'_>) -> Option<Vec<ImportStatement>> {
     if module_name.is_empty() {
         return None;
     }
+    // A `#[path]` value is a file path, not a module path: it always names
+    // the file, so the resolver recognizes it by the `.rs` suffix and joins
+    // it with the declaring file's directory. A plain `mod foo;` keeps the
+    // `self::` form, which resolves against the module children directory.
+    let raw_path = path_attribute_value(source, node)
+        .unwrap_or_else(|| format!("self::{module_name}"));
 
     Some(vec![
         ImportStatement::new(
             // `self::` anchors to the containing module, so `pub mod types;` in
-            // `src/graph/mod.rs` resolves to `src/graph/types.rs`.
-            format!("self::{module_name}"),
+            // `src/graph/mod.rs` resolves to `src/graph/types.rs`. A `#[path]`
+            // value is already a file path and passes through untouched.
+            raw_path,
             line_of(node)?,
         )
         .with_kind(ImportKind::ModuleDeclaration),
     ])
 }
 
-/// Whether a `mod` declaration carries a `#[path = "..."]` attribute.
+/// The value of a `#[path = "..."]` attribute on a `mod` declaration, if any.
 ///
 /// A `#[cfg]` attribute is skipped rather than treated as a rename: it gates
 /// whether the declaration exists, which does not move the file.
-fn has_path_attribute(source: &[u8], node: &Node<'_>) -> bool {
+fn path_attribute_value(source: &[u8], node: &Node<'_>) -> Option<String> {
     let mut current = node.prev_sibling();
 
     while let Some(sibling) = current {
         match sibling.kind() {
             "attribute_item" => {
                 let text = node_text(source, &sibling);
-                if text.contains("path") && text.contains('=') {
-                    return true;
+                if let Some(value) = parse_path_attribute(&text) {
+                    return Some(value);
                 }
             }
             // Only attributes bind to the declaration; anything else ends the run.
-            _ => return false,
+            _ => return None,
         }
         current = sibling.prev_sibling();
     }
 
-    false
+    None
+}
+
+/// Pull the string literal out of `#[path = "..."]`.
+///
+/// Returns `None` for any other attribute, including `#[cfg]`.
+fn parse_path_attribute(text: &str) -> Option<String> {
+    let inner = text.trim().strip_prefix("#[")?.strip_suffix("]")?.trim();
+    let value = inner.strip_prefix("path")?.trim().strip_prefix('=')?.trim();
+    let value = value.strip_prefix('"')?.strip_suffix('"')?;
+    Some(value.to_owned())
 }
 
 /// `use ...;` — every path a `use` tree names.
@@ -371,18 +387,32 @@ mod tests {
     }
 
     #[test]
-    fn a_path_attribute_module_is_skipped_because_the_name_no_longer_holds() {
+    fn a_path_attribute_passes_its_value_to_the_resolver() {
         // The grammar attaches the attribute as the preceding sibling of
-        // `mod_item`, not as its child, so the declared name would resolve to
-        // the wrong file.
+        // `mod_item`, not as its child. The value is a file path relative to
+        // the declaring file's directory -- the resolver joins it there, so
+        // the extractor passes it through untouched rather than building a
+        // `self::` module path that would resolve against the wrong directory.
+        let found =
+            walk(b"#[path = \"elsewhere.rs\"]\nmod generated_language_data;\n");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "elsewhere.rs");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
+    fn regression_a_default_path_attribute_keeps_the_declaration() {
+        // Generated code emits `#[path = "foo.rs"] mod foo;` with the default
+        // path, which renames nothing. Skipping it dropped a real edge and
+        // reported the file as dead.
         let found = walk(
             b"#[path = \"generated_language_data.rs\"]\nmod generated_language_data;\n",
         );
 
-        assert!(
-            found.is_empty(),
-            "`#[path]` renames the file, so the declared name is not a path"
-        );
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "generated_language_data.rs");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
     }
 
     #[test]

@@ -192,6 +192,26 @@ impl ResolverPlugin for RustPlugin {
                 });
         }
 
+        // A `#[path = "..."]` attribute names the module's file relative to the
+        // declaring file's directory -- `#[path = "generated.rs"]` in
+        // `src/language_data.rs` is `src/generated.rs`, not
+        // `src/language_data/generated.rs`. The extractor passes the literal
+        // value through; a module path never names a `.rs` file, so the
+        // extension is the marker. This must come before the `self::`
+        // handling, which resolves against the module children directory
+        // instead.
+        if context.kind == ImportKind::ModuleDeclaration
+            && std::path::Path::new(import_path)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
+        {
+            let candidate = shared_paths::join(
+                &shared_paths::parent(context.source_file),
+                &[import_path],
+            );
+            return context.contains(&candidate).then_some(candidate);
+        }
+
         // `self::` is relative to the module's own directory, which is not the same
         // as the module path for a crate root: `self::util` in `src/main.rs`
         // means `src/util.rs`, not `src/main/util.rs`.
@@ -650,6 +670,30 @@ mod tests {
         assert_eq!(
             resolve("crate::core::graph", "src/main.rs", &files),
             Some("src/core/graph/mod.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn regression_path_attribute_resolves_beside_the_declaring_file() {
+        // `#[path = "generated_language_data.rs"]` in
+        // `src/language_data.rs` names `src/generated_language_data.rs` --
+        // relative to the declaring file's directory, not the module
+        // children directory `src/language_data/` that `self::` would use.
+        // The extractor passes the literal value; the `.rs` suffix marks it.
+        let files = [
+            "src/language_data.rs",
+            "src/generated_language_data.rs",
+            "src/language_data/tests.rs",
+        ];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let mut context =
+            sephera_core::plugins::test_context("src/language_data.rs", &known);
+        context.kind = sephera_core::types::ImportKind::ModuleDeclaration;
+
+        assert_eq!(
+            RustPlugin.resolve("generated_language_data.rs", context),
+            Some("src/generated_language_data.rs".to_owned())
         );
     }
 
