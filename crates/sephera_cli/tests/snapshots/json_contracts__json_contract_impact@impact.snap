@@ -1,0 +1,14 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "targets": [
+    {
+      "target": "helper.rs",
+      "dependent_count": 0,
+      "depth": null,
+      "dependents": []
+    }
+  ]
+}

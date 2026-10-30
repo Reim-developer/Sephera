@@ -1,0 +1,9 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "commits_scanned": 1,
+  "commits_counted": 1,
+  "files": []
+}

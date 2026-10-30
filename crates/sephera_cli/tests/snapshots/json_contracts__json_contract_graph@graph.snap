@@ -1,0 +1,42 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "base_path": "[PATH]",
+  "focus_paths": [],
+  "depth": null,
+  "query": null,
+  "nodes": [
+    {
+      "file_path": "helper.rs",
+      "language": "Rust",
+      "imports_count": 0,
+      "imported_by_count": 0
+    },
+    {
+      "file_path": "main.rs",
+      "language": "Rust",
+      "imports_count": 0,
+      "imported_by_count": 0
+    }
+  ],
+  "edges": [],
+  "metrics": {
+    "total_files": 2,
+    "total_internal_edges": 0,
+    "self_references": 0,
+    "total_external_edges": 0,
+    "unresolved_local_edges": 0,
+    "unresolved_local_samples": [],
+    "cfg_gated_edges": 0,
+    "dependencies": [],
+    "declared_dependency_edges": 0,
+    "local_crate_edges": 0,
+    "builtin_edges": 0,
+    "circular_dependencies": 0,
+    "most_importing": [],
+    "most_imported": [],
+    "cycles": []
+  }
+}

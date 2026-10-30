@@ -293,6 +293,9 @@ def readme(crate: str, summary: str, wanted: str, deps: list[str]) -> str:
 def write_readmes(names: dict[str, pathlib.Path], paths: dict[str, set[str]]) -> int:
     written = 0
     for crate, (summary, wanted) in CRATE_NOTES.items():
+        if crate not in names:
+            # Not publishable (publish = false): no crates.io README needed.
+            continue
         target = names[crate] / "README.md"
         if target.exists():
             continue

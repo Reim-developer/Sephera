@@ -1,4 +1,9 @@
 [package]
+# Not published to crates.io: Sephera ships as GitHub release archives
+# (see .github/workflows/release.yml), and `cargo install --git` works
+# regardless. The library crates are also publish=false; this is a CLI,
+# not a library.
+publish = false
 name = "sephera"
 version.workspace = true
 edition = "2024"
@@ -8,7 +13,6 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Know what breaks before you touch it. Reverse dependency analysis and cycle detection for 8 languages, token-budgeted context packs, and a built-in MCP server."
-documentation = "https://docs.rs/sephera"
 readme = "README.crates-io.md"
 keywords = ["loc", "context", "mcp", "llm", "tree-sitter"]
 categories = ["command-line-utilities", "development-tools"]

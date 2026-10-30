@@ -1,0 +1,31 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "symbols": [
+    {
+      "file": "helper.rs",
+      "symbol": "helper",
+      "kind": "function",
+      "downstream": 0,
+      "churn": 1,
+      "coupled_partners": 0,
+      "score": 0
+    },
+    {
+      "file": "main.rs",
+      "symbol": "main",
+      "kind": "function",
+      "downstream": 0,
+      "churn": 1,
+      "coupled_partners": 0,
+      "score": 0
+    }
+  ],
+  "untested_total": 2,
+  "tested_direct": 0,
+  "tested_indirect": 0,
+  "commits_scanned": 1,
+  "commits_counted": 1
+}

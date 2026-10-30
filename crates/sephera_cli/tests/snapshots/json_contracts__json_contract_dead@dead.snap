@@ -1,0 +1,18 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "total": 2,
+  "reachable": 1,
+  "roots": [
+    "main.rs"
+  ],
+  "dead": [
+    {
+      "file": "helper.rs",
+      "imported_by": 0,
+      "imports": 0
+    }
+  ]
+}
