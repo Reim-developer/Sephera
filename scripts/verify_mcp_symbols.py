@@ -116,11 +116,22 @@ def decode_tool_result(response: JsonObject) -> JsonObject:
     return payload
 
 
+def resolve_binary() -> list[str]:
+    """Argv prefix that runs the CLI.
+
+    Prefers a built release binary (what the gate builds before this check);
+    falls back to `cargo run` so the script also works on a fresh checkout.
+    Checks both executable names so it works on Linux and Windows.
+    """
+    for name in ("sephera", "sephera.exe"):
+        binary = os.path.join("target", "release", name)
+        if os.path.isfile(binary):
+            return [binary]
+    return ["cargo", "run", "--quiet", "--package", "sephera", "--"]
+
+
 def main() -> int:
-    binary = os.path.join("target", "release", "sephera.exe")
-    if not os.path.exists(binary):
-        print("build release first")
-        return 1
+    argv = resolve_binary()
 
     with tempfile.TemporaryDirectory() as tmp:
         os.makedirs(os.path.join(tmp, "src"))
@@ -134,7 +145,7 @@ def main() -> int:
             fh.write("def gamma():\n    pass\n")
 
         proc = subprocess.Popen(
-            [binary, "mcp"],
+            [*argv, "mcp"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
             stderr=subprocess.DEVNULL,
