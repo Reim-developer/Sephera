@@ -70,10 +70,12 @@ LONG_FLAG = re.compile(r"(?<![\w-])(--[a-z][a-z0-9-]*)")
 #
 # The subcommand is required, and it is what makes this correct rather than
 # merely plausible. `cargo publish --dry-run -p sephera` names the package and
-# the line is cargo's; demanding one of the ten subcommands is what tells the
+# the line is cargo's; demanding one of the subcommands is what tells the
 # two apart, since `sephera` on its own is a valid argument to something else.
+# This list must stay in sync with COMMANDS above: every command whose docs
+# show invocations needs to be recognized, or its example flags go unchecked.
 INVOKES = re.compile(
-    r"(?<![\w-])sephera(\.exe)?\s+(?:loc|symbols|context|graph|impact|watch|mcp|affected-tests|guard|why|breaking|diff|behavior|simulate|archaeology|untested|test-priority|schema-impact|merge)\b"
+    r"(?<![\w-])sephera(\.exe)?\s+(?:loc|symbols|context|graph|impact|watch|mcp|affected-tests|guard|why|coupling|review|risk|dead|breaking|diff|behavior|simulate|archaeology|untested|test-priority|schema-impact|skill|merge)\b"
 )
 
 
