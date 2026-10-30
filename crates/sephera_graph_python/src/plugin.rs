@@ -137,6 +137,13 @@ impl ResolverPlugin for PythonPlugin {
     /// here instead -- by whether a file of that name is in the analysis, under
     /// any root the language would search.
     ///
+    /// The sibling directory is deliberately not one of those roots. `resolve`
+    /// tries it last as a script-execution fallback, but a sibling sharing the
+    /// first segment's name does not make the import local:
+    /// `src/_pytest/warnings.py` sits beside `src/_pytest/compat.py`, yet
+    /// `from warnings import deprecated` there names the standard library.
+    /// Counting it here turned sixteen stdlib imports into false local gaps.
+    ///
     /// The default in the trait says "cannot tell", so the languages that were
     /// not counting their bare specifiers as gaps go on not counting them.
     fn names_a_known_module(
@@ -299,6 +306,33 @@ mod tests {
             files.iter().map(|f| (*f).to_owned()).collect();
         let context = sephera_core::plugins::test_context(source_file, &known);
         PythonPlugin.resolve(import_path, context)
+    }
+
+    #[test]
+    fn regression_a_sibling_sharing_the_name_is_not_locality_evidence() {
+        // `src/_pytest/warnings.py` sits beside `src/_pytest/compat.py`, but
+        // `from warnings import deprecated` in the latter names the standard
+        // library: the package runs with `src/` on `sys.path`, not
+        // `src/_pytest/`. The sibling directory is a `resolve` fallback, not
+        // a `names_a_known_module` root -- counting it here turned sixteen
+        // stdlib imports into false local gaps on pytest.
+        let files = [
+            "src/_pytest/__init__.py",
+            "src/_pytest/compat.py",
+            "src/_pytest/warnings.py",
+        ];
+        let known: BTreeSet<String> =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let plugin = PythonPlugin;
+
+        let context = sephera_core::plugins::test_context(
+            "src/_pytest/compat.py",
+            &known,
+        );
+        assert!(
+            !plugin.names_a_known_module("warnings", context),
+            "a sibling file does not make the stdlib name local"
+        );
     }
 
     #[test]

@@ -30,7 +30,7 @@ The first two forms exit on their own and are the ones to paste into a script. T
 
 ## Choosing what to re-run
 
-`--target` is required unless `--once` is passed:
+`--target` is required:
 
 | target | re-runs |
 |---|---|
