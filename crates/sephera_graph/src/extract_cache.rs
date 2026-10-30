@@ -56,7 +56,12 @@ const FORMAT_VERSION: u8 = 1;
 /// those, because a grammar or extractor fix does not bump the sephera
 /// version and would otherwise keep serving stale entries. Kept separate
 /// from [`FORMAT_VERSION`], which only tracks the serialization shape.
-const EXTRACTOR_REVISION: u16 = 1;
+///
+/// Revision history:
+/// - 1: initial revision (extraction cache introduced).
+/// - 2: the Rust extractor passes `#[path = "..."]` module declarations
+///   through to the resolver instead of skipping them.
+const EXTRACTOR_REVISION: u16 = 2;
 
 /// The most one namespace's store may hold. Past this, the oldest-created
 /// entries are evicted first.
@@ -751,6 +756,27 @@ mod tests {
         let mut json: serde_json::Value =
             serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
         json["extractor"] = serde_json::json!(u16::MAX);
+        fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
+
+        assert_eq!(cache.load("Python", source), None);
+    }
+
+    #[test]
+    fn previous_real_revision_is_a_miss() {
+        // Teeth for the bump discipline: an entry stamped with the
+        // immediately previous revision must miss, not just a garbage
+        // one. Guards against `is_current` ever degrading to `<=`.
+        let (_temp, _guard) = temp_cache();
+        let cache = ExtractionCache::for_base(Path::new("/nonexistent-base"));
+
+        let source = b"import os\n";
+        cache.store("Python", source, &sample_value());
+        let dir = cache.dir.clone().unwrap();
+        let path = entry_path(&dir, "Python", source);
+
+        let mut json: serde_json::Value =
+            serde_json::from_slice(&fs::read(&path).unwrap()).unwrap();
+        json["extractor"] = serde_json::json!(EXTRACTOR_REVISION - 1);
         fs::write(&path, serde_json::to_vec(&json).unwrap()).unwrap();
 
         assert_eq!(cache.load("Python", source), None);
