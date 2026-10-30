@@ -106,7 +106,7 @@ jobs:
       # for no extra failure detection. This keeps the strict modes
       # (mismatch + pending snapshots) in a single run.
       - name: Run tests and verify snapshots
-        run: cargo insta test --review --workspace
+        run: cargo insta test --check --workspace
 
       # The README quotes command output verbatim, so both the commands and the
       # numbers they produce are checked. Writing the demo section found a summary
@@ -183,9 +183,16 @@ jobs:
     name: MCP Wire Protocol
     timeout-minutes: 30
     runs-on: ubuntu-latest
+    # This job builds and runs tests; it pushes nothing, so it gets a
+    # read-only token like the coverage job does.
+    permissions:
+    contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
+      with:
+      persist-credentials: false
+        
 
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
@@ -202,6 +209,7 @@ jobs:
         run: cargo build --release --bin sephera
 
       - name: Verify MCP wire protocol
+        timeout-minutes: 10
         run: |
           python3 scripts/verify_mcp_graph_formats.py
           python3 scripts/verify_mcp_symbols.py
