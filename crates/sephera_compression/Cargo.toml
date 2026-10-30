@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "sephera_compression"
 version.workspace = true
 edition.workspace = true
