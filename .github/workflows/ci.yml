@@ -100,10 +100,12 @@ jobs:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/fetch_corpus.py
 
-      - name: Run tests
-        run: cargo test --workspace
-
-      - name: Verify snapshots
+      # One invocation, not two: `cargo insta test` already runs the whole
+      # suite, and plain `cargo test` fails on snapshot mismatch under
+      # insta's CI defaults — so the old pair ran all 1300+ tests twice
+      # for no extra failure detection. This keeps the strict modes
+      # (mismatch + pending snapshots) in a single run.
+      - name: Run tests and verify snapshots
         run: cargo insta test --review --workspace
 
       # The README quotes command output verbatim, so both the commands and the
@@ -135,6 +137,9 @@ jobs:
       # worth a check rather than a review.
       - name: Check docs fences and quoted paths
         run: python scripts/check_docs.py
+
+      - name: Check docs sidebar lists every command
+        run: python scripts/check_docs_sidebar.py
 
       # A `documentation` field is a claim the tree has to be able to keep. A
       # crate with `publish = false` claiming `https://docs.rs/<name>` points at
@@ -200,6 +205,37 @@ jobs:
       # and a suite that quietly stops reporting it is how it stays on.
       - name: Run every case
         run: python e2e/run.py
+
+  # The only tests that drive the MCP server over real stdio JSON-RPC.
+  # Rust handler tests call the handlers directly, so a transport
+  # framing regression would pass them all and break every agent
+  # integration silently. These two scripts are that coverage.
+  mcp_wire:
+    name: MCP Wire Protocol
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build release binary
+        run: cargo build --release --bin sephera
+
+      - name: Verify MCP wire protocol
+        run: |
+          python3 scripts/verify_mcp_graph_formats.py
+          python3 scripts/verify_mcp_symbols.py
 
   coverage:
     name: Coverage
