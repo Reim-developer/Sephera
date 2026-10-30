@@ -59,8 +59,16 @@ jobs:
           else
             REF="${GITHUB_REF}"
             TAG="${GITHUB_REF_NAME}"
-            PRERELEASE="false"
             DRAFT="false"
+            # A tag push is a stable release unless the tag itself says
+            # otherwise: v2.0.0-rc1, v2.1.0-beta2 and v3.0.0-alpha all mark the
+            # GitHub Release as a prerelease, so nobody installs an RC thinking
+            # it is the final. The manual dispatch keeps its explicit checkbox.
+            if [[ "${TAG}" == *-rc* || "${TAG}" == *-beta* || "${TAG}" == *-alpha* ]]; then
+              PRERELEASE="true"
+            else
+              PRERELEASE="false"
+            fi
           fi
 
           if [[ -z "${TAG}" ]]; then
@@ -76,6 +84,7 @@ jobs:
   preflight:
     name: Release Preflight
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     needs: prepare
     steps:
       - name: Checkout
@@ -125,6 +134,7 @@ jobs:
   build:
     name: Build release (${{ matrix.target }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
     needs:
       - prepare
       - preflight
@@ -132,28 +142,43 @@ jobs:
       fail-fast: false
       matrix:
         include:
-          - os: windows-latest
-            target: x86_64-pc-windows-msvc
-            binary_name: sephera.exe
-            # The GUI's binary name, alongside the CLI's. Both go in the same
-            # archive: a person who does not use a terminal should not have to
-            # work out which of two releases to download.
-            gui_binary_name: sephera-gui.exe
-            archive_ext: zip
+          # Static musl binaries: they run on any Linux new enough to have the
+          # kernel, with no glibc floor to think about. That is why both Linux
+          # targets are musl rather than gnu -- a gnu binary built on
+          # ubuntu-24.04 would refuse to start on anything with glibc < 2.39,
+          # and the failure would be silent until a user hit it.
           - os: ubuntu-latest
             target: x86_64-unknown-linux-musl
             binary_name: sephera
-            gui_binary_name: sephera-gui
             archive_ext: tar.gz
+          # Native ARM64 runner (ubuntu-24.04-arm, GA for public repos, managed
+          # by Arm): no QEMU, no cross toolchain, just a native build. musl-tools
+          # on the ARM image provides the aarch64 musl-gcc the target needs --
+          # if that ever stops being true, the loud failure here is the signal
+          # to fall back to aarch64-unknown-linux-gnu on the same runner.
+          - os: ubuntu-24.04-arm
+            target: aarch64-unknown-linux-musl
+            binary_name: sephera
+            archive_ext: tar.gz
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+            binary_name: sephera.exe
+            archive_ext: zip
+          # Windows on ARM (Copilot+ PCs and the like). windows-11-arm is
+          # available to public repositories; the VS2026 image migration
+          # finished 2026-09-30, so the floating label is the current image.
+          # aarch64-pc-windows-msvc is a rustup Tier 2 target with full std.
+          - os: windows-11-arm
+            target: aarch64-pc-windows-msvc
+            binary_name: sephera.exe
+            archive_ext: zip
           - os: macos-15-intel
             target: x86_64-apple-darwin
             binary_name: sephera
-            gui_binary_name: sephera-gui
             archive_ext: tar.gz
           - os: macos-14
             target: aarch64-apple-darwin
             binary_name: sephera
-            gui_binary_name: sephera-gui
             archive_ext: tar.gz
     steps:
       - name: Checkout
@@ -170,23 +195,40 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Install musl tools
-        if: ${{ matrix.target == 'x86_64-unknown-linux-musl' }}
+        if: ${{ contains(matrix.target, 'unknown-linux-musl') }}
         run: sudo apt-get update && sudo apt-get install --yes musl-tools
 
       - name: Build release binary
         run: cargo build --locked --release --bin sephera --target ${{ matrix.target }}
 
-      # The GUI, on its own profile. `--profile release-gui` rather than
-      # `--release`, because the CLI's fat-LTO profile exists for a hot loop
-      # crossing a crate boundary and a GUI has none: thin LTO builds the same
-      # window in about two-thirds of the time (`Cargo.toml` records the
-      # measurements). A release build that has to pay four minutes for fat LTO
-      # over `winit` and a graphics backend buys nothing a click would notice.
-      - name: Build the GUI binary
-        run: >-
-          cargo build --locked -p sephera_gui --profile release-gui
-          --bin sephera-gui --target ${{ matrix.target }}
+      # Every leg of this matrix is a native runner, so the binary built here
+      # can execute right here: --version proves it is the right architecture
+      # (a wrong-arch binary fails to execute at all), and a two-file graph
+      # run proves extraction and resolution actually work before the archive
+      # is uploaded. The first real tag push must not be the first time anyone
+      # runs these binaries.
+      - name: Smoke-test the built binary
+        shell: bash
+        run: |
+          BIN="target/${{ matrix.target }}/release/${{ matrix.binary_name }}"
+          "$BIN" --version
+          SMOKE_DIR="$(mktemp -d)"
+          printf 'from helper import greet\nprint(greet())\n' > "$SMOKE_DIR/main.py"
+          printf 'def greet():\n    return "hi"\n' > "$SMOKE_DIR/helper.py"
+          "$BIN" graph --format json --path "$SMOKE_DIR" | grep -q "helper.py"
+          rm -rf "$SMOKE_DIR"
+          case "${{ matrix.target }}" in
+            *-linux-*) file "$BIN" | grep -q "statically linked" ;;
+            *-apple-*) lipo -info "$BIN" ;;
+          esac
 
+      # The GUI used to be a cargo binary built here, but since the Tauri move
+      # (PR #37) `crates/sephera_gui` is a view-model *library* and the client
+      # is the Tauri app in `gui/`, which ships through its own bundling
+      # (per-platform installers via tauri-action), not as a file in this
+      # archive. Keeping a `cargo build --bin sephera-gui` step would fail the
+      # whole release on a target that no longer exists, so the archive is the
+      # CLI plus its license -- the thing `cargo install sephera` gives you.
       - name: Package Windows archive
         if: ${{ runner.os == 'Windows' }}
         shell: pwsh
@@ -196,11 +238,8 @@ jobs:
 
           New-Item -ItemType Directory -Path $packageDir -Force | Out-Null
           Copy-Item "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" (Join-Path $packageDir "${{ matrix.binary_name }}")
-          Copy-Item "target/${{ matrix.target }}/release-gui/${{ matrix.gui_binary_name }}" (Join-Path $packageDir "${{ matrix.gui_binary_name }}")
           Copy-Item "LICENSE" (Join-Path $packageDir "LICENSE")
 
-          # Both binaries in one archive, so a reader who does not use a
-          # terminal has one download and one folder to open.
           Compress-Archive -Path $packageDir -DestinationPath "dist/$archiveBase.zip" -Force
 
       - name: Package Unix archive
@@ -212,7 +251,6 @@ jobs:
 
           mkdir -p "${PACKAGE_DIR}"
           cp "target/${{ matrix.target }}/release/${{ matrix.binary_name }}" "${PACKAGE_DIR}/${{ matrix.binary_name }}"
-          cp "target/${{ matrix.target }}/release-gui/${{ matrix.gui_binary_name }}" "${PACKAGE_DIR}/${{ matrix.gui_binary_name }}"
           cp "LICENSE" "${PACKAGE_DIR}/LICENSE"
 
           tar -C dist -czf "dist/${ARCHIVE_BASE}.tar.gz" "${ARCHIVE_BASE}"
@@ -227,6 +265,7 @@ jobs:
   publish:
     name: Publish GitHub Release
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     needs:
       - prepare
       - build
