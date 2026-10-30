@@ -24,20 +24,26 @@ fn normalize_json(stdout: &str) -> String {
     // A simple approach: replace everything that looks like an absolute path
     // in the base_path field and file paths.
     for line in stdout.lines() {
-        if line.contains("/tmp/") || line.contains("\\Temp\\") || line.contains("/private/") {
+        if line.contains("/tmp/")
+            || line.contains("\\Temp\\")
+            || line.contains("/private/")
+        {
             // Extract and replace - this is heuristic but works for our fixtures
             break;
         }
     }
     // Replace temp dir paths: find the pattern and replace
     // This handles Unix (/tmp/xxx) and Windows paths
-    let temp_patterns = ["/tmp/", "/private/var/folders/", "\\AppData\\Local\\Temp\\"];
+    let temp_patterns =
+        ["/tmp/", "/private/var/folders/", "\\AppData\\Local\\Temp\\"];
     for pattern in temp_patterns {
         while let Some(idx) = out.find(pattern) {
             // Find the end of the path (quote, whitespace, or comma)
             let rest = &out[idx..];
             let end = rest
-                .find(|c: char| c == '"' || c == '\'' || c == ',' || c == '\n' || c == ' ')
+                .find(|c: char| {
+                    c == '"' || c == '\'' || c == ',' || c == '\n' || c == ' '
+                })
                 .unwrap_or(rest.len());
             let path = &rest[..end];
             out = out.replacen(path, "[PATH]", 1);
@@ -56,11 +62,31 @@ fn write_fixture(dir: &std::path::Path) {
 }
 
 fn init_git_repo(dir: &std::path::Path) {
-    Command::new("git").args(["init", "-q"]).current_dir(dir).output().unwrap();
-    Command::new("git").args(["config", "user.email", "t@t"]).current_dir(dir).output().unwrap();
-    Command::new("git").args(["config", "user.name", "t"]).current_dir(dir).output().unwrap();
-    Command::new("git").args(["add", "."]).current_dir(dir).output().unwrap();
-    Command::new("git").args(["commit", "-qm", "init"]).current_dir(dir).output().unwrap();
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "t@t"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "t"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", "init"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
 }
 
 fn run_json(args: &[&str], dir: &std::path::Path) -> String {
@@ -184,7 +210,8 @@ fn json_contract_why() {
 fn json_contract_affected_tests() {
     let dir = tempdir().unwrap();
     write_fixture(dir.path());
-    std::fs::write(dir.path().join("test_main.rs"), b"#[test] fn t() {}\n").unwrap();
+    std::fs::write(dir.path().join("test_main.rs"), b"#[test] fn t() {}\n")
+        .unwrap();
     let output = Command::new(sephera())
         .args(["affected-tests", "--path"])
         .arg(dir.path())
@@ -239,9 +266,18 @@ fn json_contract_coupling() {
     write_fixture(dir.path());
     init_git_repo(dir.path());
     // Make a second commit touching both files for coupling data
-    std::fs::write(dir.path().join("main.rs"), b"fn main() { helper(); }\n").unwrap();
-    Command::new("git").args(["add", "."]).current_dir(dir.path()).output().unwrap();
-    Command::new("git").args(["commit", "-qm", "couple"]).current_dir(dir.path()).output().unwrap();
+    std::fs::write(dir.path().join("main.rs"), b"fn main() { helper(); }\n")
+        .unwrap();
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", "couple"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
     let out = run_json(&["coupling"], dir.path());
     with_settings!({ snapshot_suffix => "coupling" }, {
         assert_snapshot!(out);
