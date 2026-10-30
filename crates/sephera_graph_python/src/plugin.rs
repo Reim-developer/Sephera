@@ -79,10 +79,10 @@ impl ResolverPlugin for PythonPlugin {
             return first_existing(context, &relative);
         }
 
-        // Absolute import. Three roots, because Python has three places a
-        // package can sit: the analysis base, the directory a module in this
-        // package would have on `sys.path`, and the `src/` layout an editable
-        // install puts on `sys.path`.
+        // Absolute import. Four roots, because Python has four places a
+        // module can sit: the analysis base, the directory a module in this
+        // package would have on `sys.path`, the `src/` layout an editable
+        // install puts on `sys.path`, and the importing file's own directory.
         //
         // Only the first two were tried, so `from pkg.sub.value import VALUE`
         // inside `pkg/sub/value.py`'s own package produced no edge at all when
@@ -92,6 +92,14 @@ impl ResolverPlugin for PythonPlugin {
         // side: a test file belongs to no package, so its import root is the
         // base, and a package living under `src/` was invisible to it -- which
         // is how flask's tests ended up unable to reach `src/flask` at all.
+        //
+        // The fourth root is the script case: `python benchmarks/run.py` puts
+        // `benchmarks/` on `sys.path`, so `from benchmark_harness import main`
+        // written in `benchmarks/run.py` names `benchmarks/benchmark_harness.py`
+        // even though no package structure justifies it. Without this, every
+        // script-style sibling import stayed unresolved, and `dead` reported
+        // files as dead that a real import chain reaches. It is tried last, so
+        // a project-structure answer always wins over the script guess.
         first_existing(context, &module_path)
             .or_else(|| {
                 let rooted =
@@ -106,6 +114,17 @@ impl ResolverPlugin for PythonPlugin {
                 } else {
                     None
                 }
+            })
+            .or_else(|| {
+                let sibling = paths::join(
+                    &paths::parent(context.source_file),
+                    &[&module_path],
+                );
+                // A file never imports itself: `import doctest` in
+                // `src/_pytest/doctest.py` names the standard library, and
+                // without this the sibling root invents a self-edge.
+                first_existing(context, &sibling)
+                    .filter(|found| found.as_str() != context.source_file)
             })
     }
 
@@ -171,8 +190,9 @@ fn ascend(base: &str, levels: usize) -> String {
 ///
 /// A file outside any package has no topmost package, and returns the analysis
 /// base -- which makes the second attempt identical to the first. Nothing is
-/// lost by asking, and a bare module beside the source stays unresolved rather
-/// than becoming a dependency Python has no package structure to justify.
+/// lost by asking. A bare module beside the source is tried as the last
+/// absolute-import root (the script directory Python puts on `sys.path`),
+/// not here: this function answers the package question only.
 fn import_root(context: ResolveContext<'_>) -> String {
     let mut directory = paths::parent(context.source_file);
     let mut topmost_package: Option<String> = None;
@@ -471,19 +491,19 @@ mod tests {
     }
 
     #[test]
-    fn an_absolute_import_outside_a_package_stays_unresolved() {
-        // The judgement call this pins, in the direction of not inventing a
-        // dependency. flask's `tests/test_apps/helloworld/wsgi.py` says
-        // `from hello import app`, and `hello.py` sits beside it -- but
-        // `helloworld` has no `__init__.py` and neither does `test_apps`, so
-        // there is no package whose parent would be on `sys.path`. The import
-        // works because flask's test setup puts the directory there itself, and
-        // nothing in the repository says so.
+    fn regression_sibling_script_import_resolves_to_the_sibling() {
+        // The judgement call this pins, reversed: a bare module beside the
+        // importing file now resolves. `python benchmarks/run.py` puts
+        // `benchmarks/` on `sys.path`, so `from benchmark_harness import main`
+        // names `benchmarks/benchmark_harness.py` at runtime -- leaving it
+        // unresolved reported four files as dead that a real import chain
+        // reaches, which is the worse error. The sibling root is tried last,
+        // so a project-structure answer still wins when one exists.
         //
-        // The rule that keeps it unresolved is the one above finding the topmost
-        // package: with none, the root is the analysis base, and `hello` is not
-        // there. `blueprintapp` beside it has an `__init__.py` and does resolve,
-        // which is what makes this a distinction rather than a blanket refusal.
+        // flask's `tests/test_apps/helloworld/wsgi.py` says
+        // `from hello import app` with `hello.py` beside it: same shape, same
+        // answer -- the script directory is on `sys.path` when the file runs
+        // as a script, which is the only way such a file runs at all.
         let files = [
             "tests/test_apps/helloworld/wsgi.py",
             "tests/test_apps/helloworld/hello.py",
@@ -491,9 +511,22 @@ mod tests {
 
         assert_eq!(
             resolve("hello", "tests/test_apps/helloworld/wsgi.py", &files),
+            Some("tests/test_apps/helloworld/hello.py".to_owned()),
+            "a script's own directory is on sys.path when it runs"
+        );
+    }
+
+    #[test]
+    fn regression_sibling_root_never_resolves_a_file_to_itself() {
+        // `import doctest` in `src/_pytest/doctest.py` names the standard
+        // library. The sibling root would otherwise match the importing file
+        // itself and invent a self-edge.
+        let files = ["src/_pytest/doctest.py"];
+
+        assert_eq!(
+            resolve("doctest", "src/_pytest/doctest.py", &files),
             None,
-            "a bare module in a directory that is not a package is not \
-             importable by convention"
+            "a file does not import itself"
         );
     }
 
