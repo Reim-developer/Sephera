@@ -204,9 +204,12 @@ jobs:
       # Every leg of this matrix is a native runner, so the binary built here
       # can execute right here: --version proves it is the right architecture
       # (a wrong-arch binary fails to execute at all), and a two-file graph
-      # run proves extraction and resolution actually work before the archive
-      # is uploaded. The first real tag push must not be the first time anyone
-      # runs these binaries.
+      # run proves the binary works end to end before the archive is uploaded:
+      # the report must name helper.py as an edge target (extraction found the
+      # file) and contain a resolved edge (resolution linked the import). The
+      # first real tag push must not be the first time anyone runs these
+      # binaries. (Deeper resolution correctness is already proven by the
+      # preflight test suite, which runs on this same ref before any build.)
       - name: Smoke-test the built binary
         shell: bash
         run: |
@@ -215,10 +218,16 @@ jobs:
           SMOKE_DIR="$(mktemp -d)"
           printf 'from helper import greet\nprint(greet())\n' > "$SMOKE_DIR/main.py"
           printf 'def greet():\n    return "hi"\n' > "$SMOKE_DIR/helper.py"
-          "$BIN" graph --format json --path "$SMOKE_DIR" | grep -q "helper.py"
+                    "$BIN" graph --format json --path "$SMOKE_DIR" | grep -q '"to": *"helper.py"'
+          "$BIN" graph --format json --path "$SMOKE_DIR" | grep -q '"resolved": *true'
           rm -rf "$SMOKE_DIR"
           case "${{ matrix.target }}" in
-            *-linux-*) file "$BIN" | grep -q "statically linked" ;;
+            # rustc links x86_64-unknown-linux-musl as static PIE
+            # (static_position_independent_executables in its target spec),
+            # which `file` reports as "static-pie linked" instead of
+            # "statically linked" -- accept both descriptions of a valid
+            # static binary.
+            *-linux-*) file "$BIN" | grep -Eq "statically linked|static-pie linked" ;;
             *-apple-*) lipo -info "$BIN" ;;
           esac
 
