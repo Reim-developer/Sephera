@@ -117,6 +117,11 @@ pub fn should_trigger(
 /// what the patterns are written against. An event naming nothing at all
 /// is not user-ignored: like [`is_ignored`], a pathless event counts as
 /// relevant rather than dropped.
+///
+/// Edits to the files that control the analysis itself are never treated
+/// as ignored: suppressing `.sephera.toml` under `--ignore "*.toml"` would
+/// swallow the very edit that changes the ignore rules, leaving the
+/// displayed report stale until some other file happens to trigger a run.
 #[must_use]
 fn user_ignored(
     root: &Path,
@@ -125,9 +130,26 @@ fn user_ignored(
 ) -> bool {
     !paths.is_empty()
         && paths.iter().all(|path| {
-            path.strip_prefix(root)
-                .is_ok_and(|relative| ignore.is_ignored(relative))
+            !is_control_file(path)
+                && path
+                    .strip_prefix(root)
+                    .is_ok_and(|relative| ignore.is_ignored(relative))
         })
+}
+
+/// A file whose edit changes the analysis inputs.
+///
+/// `.sephera.toml` carries settings and `[project]` ignore patterns;
+/// `.gitignore` and `.sepheraignore` feed the ignore matcher (unless
+/// `--no-gitignore`). Watching them is pointless if their own edits cannot
+/// trigger, so they bypass the user's `--ignore` patterns for the trigger
+/// decision only -- the analysis still honors the patterns themselves.
+fn is_control_file(path: &Path) -> bool {
+    path.file_name().is_some_and(|name| {
+        name == ".sephera.toml"
+            || name == ".sepheraignore"
+            || name == ".gitignore"
+    })
 }
 
 /// Whether an event represents a change to source rather than to metadata.
@@ -329,6 +351,26 @@ mod tests {
         let mut event = Event::new(notify::EventKind::Modify(ModifyKind::Any));
         event.paths = vec![root.join("a.snap"), root.join("b.rs")];
         assert!(should_trigger(root, &ignore, &event));
+    }
+
+    #[test]
+    fn regression_control_file_edits_trigger_despite_ignore_patterns() {
+        // `--ignore "*.toml"` matching `.sephera.toml` must not swallow the
+        // edit that changes the ignore rules themselves: the next analysis
+        // would use the new rules, but the displayed report would stay
+        // stale until some other file happened to trigger a run.
+        let root = Path::new("/proj");
+        let ignore = matcher_with(&["*.toml", ".gitignore"]);
+        for control in [".sephera.toml", ".sepheraignore", ".gitignore"] {
+            let event = trigger_event(root, control);
+            assert!(
+                should_trigger(root, &ignore, &event),
+                "{control} controls the analysis, so its edit must re-run"
+            );
+        }
+        // An ordinary file the patterns match still does not trigger.
+        let event = trigger_event(root, "config.toml");
+        assert!(!should_trigger(root, &ignore, &event));
     }
 
     #[test]
