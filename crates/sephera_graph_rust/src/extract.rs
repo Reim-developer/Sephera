@@ -416,6 +416,21 @@ mod tests {
     }
 
     #[test]
+    fn regression_cfg_feature_is_not_a_path_attribute() {
+        // The old detector matched the substring "path" in "feature", so
+        // `#[cfg(feature = "async-read-body")] mod async_read_body;` was
+        // skipped as if `#[path]` had renamed it. Parsing the attribute
+        // keeps the declaration.
+        let found = walk(
+            b"#[cfg(feature = \"async-read-body\")]\nmod async_read_body;\n",
+        );
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "self::async_read_body");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
     fn a_cfg_attribute_does_not_hide_a_module_declaration() {
         // `#[cfg]` gates whether the module exists; it does not move the file, so
         // the declaration still resolves when the gate passes.
