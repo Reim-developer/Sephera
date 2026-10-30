@@ -186,13 +186,13 @@ jobs:
     # This job builds and runs tests; it pushes nothing, so it gets a
     # read-only token like the coverage job does.
     permissions:
-    contents: read
+      contents: read
     steps:
       - name: Checkout
         uses: actions/checkout@v4
-      with:
-      persist-credentials: false
-       
+        with:
+          persist-credentials: false
+
       - name: Install Rust toolchain
         uses: dtolnay/rust-toolchain@stable
 
