@@ -116,10 +116,22 @@ impl ResolverPlugin for PythonPlugin {
                 }
             })
             .or_else(|| {
-                let sibling = paths::join(
-                    &paths::parent(context.source_file),
-                    &[&module_path],
-                );
+                // The script-execution fallback, and only for files outside
+                // a package. `python benchmarks/run.py` puts `benchmarks/`
+                // on `sys.path`, but an imported module never gets its own
+                // directory on the path -- so `from warnings import deprecated`
+                // in `src/_pytest/compat.py` names the standard library even
+                // though `src/_pytest/warnings.py` sits beside it, and
+                // resolving there records a false internal edge. A directory
+                // holding an `__init__.py` is a package; without one this
+                // stays a guess (PEP 420 namespace packages have none, and a
+                // script run from inside a package directory would miss too --
+                // both rarer than the false edge this gate removes).
+                let dir = paths::parent(context.source_file);
+                if context.contains(&paths::join(&dir, &["__init__.py"])) {
+                    return None;
+                }
+                let sibling = paths::join(&dir, &[&module_path]);
                 // A file never imports itself: `import doctest` in
                 // `src/_pytest/doctest.py` names the standard library, and
                 // without this the sibling root invents a self-edge.
@@ -561,6 +573,28 @@ mod tests {
             resolve("doctest", "src/_pytest/doctest.py", &files),
             None,
             "a file does not import itself"
+        );
+    }
+
+    #[test]
+    fn regression_sibling_fallback_skipped_inside_packages() {
+        // `from warnings import deprecated` in `src/_pytest/compat.py` names
+        // the standard library: the package runs with `src/` on `sys.path`,
+        // never `src/_pytest/`. The sibling fallback is a script-execution
+        // guess, and applying it inside a package resolved `warnings` to the
+        // adjacent `src/_pytest/warnings.py` -- a false internal edge the
+        // real binary recorded on the pytest corpus. The `__init__.py`
+        // beside the importer is the evidence it is a package, not a script.
+        let files = [
+            "src/_pytest/__init__.py",
+            "src/_pytest/compat.py",
+            "src/_pytest/warnings.py",
+        ];
+
+        assert_eq!(
+            resolve("warnings", "src/_pytest/compat.py", &files),
+            None,
+            "a package module's directory is not on sys.path"
         );
     }
 
