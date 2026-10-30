@@ -195,19 +195,23 @@ impl ResolverPlugin for RustPlugin {
         // A `#[path = "..."]` attribute names the module's file relative to the
         // declaring file's directory -- `#[path = "generated.rs"]` in
         // `src/language_data.rs` is `src/generated.rs`, not
-        // `src/language_data/generated.rs`. The extractor passes the literal
-        // value through; a module path never names a `.rs` file, so the
-        // extension is the marker. This must come before the `self::`
-        // handling, which resolves against the module children directory
-        // instead.
+        // `src/language_data/generated.rs` (verified against rustc: unlike
+        // default module resolution, `#[path]` does not use the module
+        // children directory). The extractor prefixes enclosing inline
+        // module names onto the value -- `mod m { #[path = "x.rs"] ... }`
+        // in `src/main.rs` arrives as `m/x.rs` -- because the attribute is
+        // relative to the inline module's directory too (also verified:
+        // `src/main.rs`'s `mod inline { #[path = "other.rs"] ... }` loads
+        // `src/inline/other.rs`). `..` segments are collapsed so
+        // `#[path = "../shared.rs"]` meets the normalized known files.
         if context.kind == ImportKind::ModuleDeclaration
             && std::path::Path::new(import_path)
                 .extension()
                 .is_some_and(|ext| ext.eq_ignore_ascii_case("rs"))
         {
-            let candidate = shared_paths::join(
+            let candidate = shared_paths::resolve_relative(
                 &shared_paths::parent(context.source_file),
-                &[import_path],
+                import_path,
             );
             return context.contains(&candidate).then_some(candidate);
         }
@@ -694,6 +698,78 @@ mod tests {
         assert_eq!(
             RustPlugin.resolve("generated_language_data.rs", context),
             Some("src/generated_language_data.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn regression_path_attribute_in_inline_module_uses_the_inline_dir() {
+        // `mod inline { #[path = "other.rs"] mod inner; }` in `src/main.rs`
+        // loads `src/inline/other.rs` (verified against rustc). The
+        // extractor prefixes the enclosing inline module onto the value, so
+        // the resolver sees `inline/other.rs` and joins it with the
+        // declaring file's directory.
+        let files = ["src/main.rs", "src/inline/other.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let mut context =
+            sephera_core::plugins::test_context("src/main.rs", &known);
+        context.kind = sephera_core::types::ImportKind::ModuleDeclaration;
+
+        assert_eq!(
+            RustPlugin.resolve("inline/other.rs", context),
+            Some("src/inline/other.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn regression_path_attribute_with_dot_segments_is_normalized() {
+        // `#[path = "../shared.rs"]` in `src/a/mod.rs` names
+        // `src/shared.rs`. The naive join produces `src/a/../shared.rs`,
+        // which the normalized known-file set rejects, so the edge came
+        // back unresolved.
+        let files = ["src/a/mod.rs", "src/shared.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let mut context =
+            sephera_core::plugins::test_context("src/a/mod.rs", &known);
+        context.kind = sephera_core::types::ImportKind::ModuleDeclaration;
+
+        assert_eq!(
+            RustPlugin.resolve("../shared.rs", context),
+            Some("src/shared.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn regression_plain_mod_in_inline_module_resolves() {
+        // `mod deep;` inside `mod inline2 { ... }` in `src/main.rs` loads
+        // `src/inline2/deep.rs` (verified against rustc). The extractor
+        // qualifies the declaration with the enclosing inline modules, so
+        // the existing `self::` handling lands it.
+        let files = ["src/main.rs", "src/inline2/deep.rs"];
+
+        assert_eq!(
+            resolve("self::inline2::deep", "src/main.rs", &files),
+            Some("src/inline2/deep.rs".to_owned())
+        );
+    }
+
+    #[test]
+    fn regression_path_attribute_top_level_uses_the_file_dir() {
+        // `#[path = "alongside.rs"]` at the top of `src/sub2.rs` -- not a
+        // crate root, not a `mod.rs` -- names `src/alongside.rs` (verified
+        // against rustc). Unlike default module resolution, `#[path]` never
+        // uses the file-stem directory.
+        let files = ["src/sub2.rs", "src/alongside.rs"];
+        let known: sephera_core::plugins::KnownFiles =
+            files.iter().map(|f| (*f).to_owned()).collect();
+        let mut context =
+            sephera_core::plugins::test_context("src/sub2.rs", &known);
+        context.kind = sephera_core::types::ImportKind::ModuleDeclaration;
+
+        assert_eq!(
+            RustPlugin.resolve("alongside.rs", context),
+            Some("src/alongside.rs".to_owned())
         );
     }
 

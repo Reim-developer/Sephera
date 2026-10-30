@@ -61,7 +61,12 @@ const FORMAT_VERSION: u8 = 1;
 /// - 1: initial revision (extraction cache introduced).
 /// - 2: the Rust extractor passes `#[path = "..."]` module declarations
 ///   through to the resolver instead of skipping them.
-const EXTRACTOR_REVISION: u16 = 2;
+/// - 3: the Rust extractor qualifies `mod` declarations inside inline
+///   modules with the enclosing module names (`mod deep;` in
+///   `mod inline2 { ... }` emits `self::inline2::deep`, and a `#[path]`
+///   value there is prefixed the same way), instead of dropping the
+///   enclosing modules.
+const EXTRACTOR_REVISION: u16 = 3;
 
 /// The most one namespace's store may hold. Past this, the oldest-created
 /// entries are evicted first.
