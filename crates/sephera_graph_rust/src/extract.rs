@@ -40,16 +40,16 @@ pub fn extract_from_node(
 
 /// `mod util;` — a declaration, which is structural rather than an import.
 ///
-/// Inline modules (`mod util { ... }`) declare no file, and `#[path = "..."]`
-/// renames the one it names, so both are skipped. The `#[path]` attribute is a
+/// Inline modules (`mod util { ... }`) declare no file and are skipped. A
+/// `#[path = "..."]` attribute names the module's file explicitly, relative
+/// to the containing module's directory -- the value passes through with any
+/// enclosing inline module names prefixed, for the resolver, which joins it
+/// against the declaring file's directory. The `#[path]` attribute is a
 /// *sibling* of `mod_item` in this grammar rather than a child, so this looks
 /// back rather than at a field — an assumption that had to be corrected once
 /// already.
 fn extract_mod(source: &[u8], node: &Node<'_>) -> Option<Vec<ImportStatement>> {
     if node.child_by_field_name("body").is_some() {
-        return None;
-    }
-    if has_path_attribute(source, node) {
         return None;
     }
 
@@ -58,40 +58,101 @@ fn extract_mod(source: &[u8], node: &Node<'_>) -> Option<Vec<ImportStatement>> {
     if module_name.is_empty() {
         return None;
     }
+    // A `#[path]` value is a file path, not a module path: it always names
+    // the file, so the resolver recognizes it by the `.rs` suffix. The value
+    // is relative to the containing module's directory, which for a
+    // declaration inside inline modules is below the file's own directory --
+    // the enclosing names are prefixed here because the extractor is the
+    // only one that sees them (the resolver only gets their count). A plain
+    // `mod foo;` keeps the `self::` form, qualified the same way, which
+    // resolves against the module children directory.
+    let enclosing = enclosing_inline_modules(source, node);
+    let raw_path = match path_attribute_value(source, node) {
+        Some(value) if enclosing.is_empty() => value,
+        Some(value) => format!("{}/{value}", enclosing.join("/")),
+        None if enclosing.is_empty() => format!("self::{module_name}"),
+        None => format!("self::{}::{module_name}", enclosing.join("::")),
+    };
 
     Some(vec![
         ImportStatement::new(
             // `self::` anchors to the containing module, so `pub mod types;` in
-            // `src/graph/mod.rs` resolves to `src/graph/types.rs`.
-            format!("self::{module_name}"),
+            // `src/graph/mod.rs` resolves to `src/graph/types.rs`. A `#[path]`
+            // value is already a file path and passes through untouched.
+            raw_path,
             line_of(node)?,
         )
         .with_kind(ImportKind::ModuleDeclaration),
     ])
 }
 
-/// Whether a `mod` declaration carries a `#[path = "..."]` attribute.
+/// Names of the inline `mod name { ... }` blocks enclosing `node`, outermost
+/// first.
+///
+/// `extract_from_node` sees only the node itself, so the enclosing modules
+/// are recovered by walking up: a `mod_item` ancestor with a body is an
+/// inline module. The resolver needs the names, not just the depth --
+/// `mod inline { #[path = "other.rs"] mod inner; }` in `src/main.rs` loads
+/// `src/inline/other.rs`, and a bare depth cannot say `inline`.
+fn enclosing_inline_modules(source: &[u8], node: &Node<'_>) -> Vec<String> {
+    let mut names = Vec::new();
+    let mut current = node.parent();
+    while let Some(parent) = current {
+        if parent.kind() == "mod_item"
+            && parent.child_by_field_name("body").is_some()
+            && let Some(name) = parent.child_by_field_name("name")
+        {
+            let text = node_text(source, &name);
+            if !text.is_empty() {
+                names.push(text);
+            }
+        }
+        current = parent.parent();
+    }
+    names.reverse();
+    names
+}
+
+/// The value of a `#[path = "..."]` attribute on a `mod` declaration, if any.
 ///
 /// A `#[cfg]` attribute is skipped rather than treated as a rename: it gates
 /// whether the declaration exists, which does not move the file.
-fn has_path_attribute(source: &[u8], node: &Node<'_>) -> bool {
+fn path_attribute_value(source: &[u8], node: &Node<'_>) -> Option<String> {
     let mut current = node.prev_sibling();
 
     while let Some(sibling) = current {
         match sibling.kind() {
             "attribute_item" => {
                 let text = node_text(source, &sibling);
-                if text.contains("path") && text.contains('=') {
-                    return true;
+                if let Some(value) = parse_path_attribute(&text) {
+                    return Some(value);
                 }
             }
             // Only attributes bind to the declaration; anything else ends the run.
-            _ => return false,
+            _ => return None,
         }
         current = sibling.prev_sibling();
     }
 
-    false
+    None
+}
+
+/// Pull the string literal out of `#[path = "..."]`.
+///
+/// Returns `None` for any other attribute, including `#[cfg]`.
+///
+/// A `#[cfg_attr(..., path = "...")]` deliberately also returns `None`:
+/// choosing the right path would mean evaluating the `cfg` condition, which
+/// Sephera does not do anywhere -- it only marks the edge `cfg_gated`, and
+/// [`is_cfg_gated`] already matches `cfg_attr` since it tests the `cfg`
+/// prefix. The declaration then resolves by the default module rules, the
+/// same answer as before `#[path]` support existed, so this is a documented
+/// limitation rather than a regression.
+fn parse_path_attribute(text: &str) -> Option<String> {
+    let inner = text.trim().strip_prefix("#[")?.strip_suffix("]")?.trim();
+    let value = inner.strip_prefix("path")?.trim().strip_prefix('=')?.trim();
+    let value = value.strip_prefix('"')?.strip_suffix('"')?;
+    Some(value.to_owned())
 }
 
 /// `use ...;` — every path a `use` tree names.
@@ -371,18 +432,85 @@ mod tests {
     }
 
     #[test]
-    fn a_path_attribute_module_is_skipped_because_the_name_no_longer_holds() {
+    fn a_path_attribute_passes_its_value_to_the_resolver() {
         // The grammar attaches the attribute as the preceding sibling of
-        // `mod_item`, not as its child, so the declared name would resolve to
-        // the wrong file.
+        // `mod_item`, not as its child. The value is a file path relative to
+        // the declaring file's directory -- the resolver joins it there, so
+        // the extractor passes it through untouched rather than building a
+        // `self::` module path that would resolve against the wrong directory.
+        let found =
+            walk(b"#[path = \"elsewhere.rs\"]\nmod generated_language_data;\n");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "elsewhere.rs");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
+    fn regression_a_default_path_attribute_keeps_the_declaration() {
+        // Generated code emits `#[path = "foo.rs"] mod foo;` with the default
+        // path, which renames nothing. Skipping it dropped a real edge and
+        // reported the file as dead.
         let found = walk(
             b"#[path = \"generated_language_data.rs\"]\nmod generated_language_data;\n",
         );
 
-        assert!(
-            found.is_empty(),
-            "`#[path]` renames the file, so the declared name is not a path"
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "generated_language_data.rs");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
+    fn a_path_attribute_inside_an_inline_module_is_prefixed() {
+        // `#[path]` is relative to the containing module's directory, so
+        // inside `mod inline { ... }` the value needs the enclosing name:
+        // rustc loads `src/inline/other.rs` for this, not `src/other.rs`.
+        // The extractor prefixes it because it is the only one that sees
+        // the enclosing modules; the resolver joins the result with the
+        // declaring file's directory.
+        let found =
+            walk(b"mod inline {\n#[path = \"other.rs\"]\nmod inner;\n}\n");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "inline/other.rs");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
+    fn a_plain_mod_inside_an_inline_module_is_qualified() {
+        // `mod deep;` inside `mod inline2 { ... }` in `src/main.rs` loads
+        // `src/inline2/deep.rs` (verified against rustc), but the bare
+        // `self::deep` the extractor used to emit resolves against `src/`
+        // and came back unresolved. Qualifying with the enclosing inline
+        // modules lets the existing `self::` handling land it.
+        let found = walk(b"mod inline2 {\nmod deep;\n}\n");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "self::inline2::deep");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
+    fn nested_inline_modules_accumulate() {
+        let found = walk(b"mod a {\nmod b {\nmod c;\n}\n}\n");
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "self::a::b::c");
+    }
+
+    #[test]
+    fn regression_cfg_feature_is_not_a_path_attribute() {
+        // The old detector matched the substring "path" in "feature", so
+        // `#[cfg(feature = "async-read-body")] mod async_read_body;` was
+        // skipped as if `#[path]` had renamed it. Parsing the attribute
+        // keeps the declaration.
+        let found = walk(
+            b"#[cfg(feature = \"async-read-body\")]\nmod async_read_body;\n",
         );
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "self::async_read_body");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
     }
 
     #[test]
@@ -393,6 +521,24 @@ mod tests {
 
         assert_eq!(found.len(), 1);
         assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+    }
+
+    #[test]
+    fn a_cfg_attr_path_falls_back_to_default_resolution() {
+        // `#[cfg_attr(windows, path = "windows.rs")]` is deliberately not
+        // selected: picking the path would mean evaluating the `cfg`
+        // condition, which Sephera does not do. The declaration keeps the
+        // default `self::` form (and `is_cfg_gated` still marks the edge,
+        // since it matches the `cfg` prefix). This pins the documented
+        // limitation so a future change is deliberate.
+        let found = walk(
+            b"#[cfg_attr(windows, path = \"windows.rs\")]\nmod platform;\n",
+        );
+
+        assert_eq!(found.len(), 1);
+        assert_eq!(found[0].raw_path, "self::platform");
+        assert_eq!(found[0].kind, ImportKind::ModuleDeclaration);
+        assert!(found[0].cfg_gated);
     }
 
     #[test]

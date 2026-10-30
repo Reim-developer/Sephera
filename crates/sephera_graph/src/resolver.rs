@@ -3825,9 +3825,11 @@ mod tests {
     }
 
     #[test]
-    fn a_path_attribute_module_is_skipped() {
+    fn a_path_attribute_module_resolves_to_the_named_file() {
         // With `#[path = "..."]` the declared name no longer matches the file,
-        // so reporting `crate::util` would invent an edge that cannot resolve.
+        // so the extractor passes the literal path value and the resolver
+        // joins it with the declaring file's directory. `other/renamed.rs`
+        // beside `src/main.rs` is `src/other/renamed.rs`, which exists.
         let report = graph_for(&[
             (
                 "src/main.rs",
@@ -3837,8 +3839,8 @@ mod tests {
         ]);
 
         assert_eq!(
-            report.metrics.total_internal_edges, 0,
-            "a renamed module must not resolve against the declared name"
+            report.metrics.total_internal_edges, 1,
+            "a #[path] module resolves to the file the attribute names"
         );
     }
 

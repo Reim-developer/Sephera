@@ -222,11 +222,23 @@ fn run_watch(arguments: &WatchArgs) -> Result<Vec<Gate>> {
         root.display()
     );
 
+    // The watcher itself must honour the user's `--ignore` patterns:
+    // without this, editing an ignored file restarts the analysis the
+    // patterns were meant to skip. The matcher is built from the same
+    // inputs as each re-run's, so the trigger and the analysis cannot
+    // disagree about what is ignored.
+    let watch_ignore = build_ignore_matcher(
+        &root,
+        &arguments.settings,
+        &ignore,
+        arguments.ignore_args.no_gitignore,
+    )?;
+
     // A watch loop has no single moment to evaluate a threshold against, so the
     // per-run gates are reported as they happen and the final exit code is
     // success. `watch --once` is the form to use in a pipeline that needs a
     // threshold.
-    watch::watch(&root, || {
+    watch::watch(&root, &watch_ignore, || {
         let gates = runtime.block_on(run_watch_target(
             target,
             arguments.on.as_deref(),
@@ -1020,6 +1032,9 @@ async fn run_review(arguments: &ReviewArgs) -> Result<Vec<Gate>> {
         true,
     )
     .await?;
+    // A `--path` that is not a directory must fail before git does:
+    // otherwise the error blames a ref that was never the problem.
+    ensure_analysis_dir(&source)?;
 
     // The change and the history first, for the reason `coupling`
     // reads its history first: both errors are about git, and they
@@ -1480,6 +1495,10 @@ async fn run_breaking(arguments: &BreakingArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A `--path` that is not a directory must fail before git does:
+    // otherwise the error blames a ref that was never the problem.
+    ensure_analysis_dir(&source)?;
+
     let progress = CliProgress::start("Comparing the two refs...");
 
     // The older side always lives in a worktree: its tree must not
@@ -1619,6 +1638,10 @@ async fn run_merge(arguments: &MergeArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A `--path` that is not a directory must fail before git does:
+    // otherwise the error blames a ref that was never the problem.
+    ensure_analysis_dir(&source)?;
+
     let progress = CliProgress::start("Comparing the three sides...");
 
     // The fork point is the merge base when the caller does not
@@ -1713,6 +1736,10 @@ async fn run_diff(arguments: &DiffArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A `--path` that is not a directory must fail before git does:
+    // otherwise the error blames a ref that was never the problem.
+    ensure_analysis_dir(&source)?;
+
     let progress = CliProgress::start("Comparing the two refs...");
 
     // The older side always lives in a worktree: its tree must not
@@ -1886,6 +1913,10 @@ async fn run_archaeology(arguments: &ArchaeologyArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A `--path` that is not a directory must fail before git does:
+    // otherwise the error blames a ref that was never the problem.
+    ensure_analysis_dir(&source)?;
+
     let progress = CliProgress::start("Tracing the symbol through history...");
 
     // The git providers run from the work-tree root and the file
@@ -1976,6 +2007,10 @@ async fn run_behavior(arguments: &BehaviorArgs) -> Result<Vec<Gate>> {
         false,
     )
     .await?;
+    // A `--path` that is not a directory must fail before git does:
+    // otherwise the error blames a ref that was never the problem.
+    ensure_analysis_dir(&source)?;
+
     let progress = CliProgress::start("Comparing the two refs...");
 
     let old_worktree = checkout_worktree(&source.repo_root, &arguments.from)
@@ -2353,7 +2388,14 @@ fn build_new_schema_side(
 /// through `sephera_scan`'s project-file validation; this command
 /// checks the same thing in the same words before asking about the
 /// repo, and the MCP tool mirrors it so the two cannot disagree.
-fn ensure_schema_analysis_dir(source: &ResolvedSource) -> Result<()> {
+/// A `--path` that is not a directory must fail before any git work.
+///
+/// The two-ref commands check refs out of the analysis path, and without
+/// this a typo'd path surfaces as a confusing git worktree error about a
+/// ref that was never the problem. Same words as `sephera_scan`'s
+/// project-file validation and the watch root check, so the CLI cannot
+/// disagree with itself about what a bad path looks like.
+fn ensure_analysis_dir(source: &ResolvedSource) -> Result<()> {
     if source.analysis_path.is_dir() {
         return Ok(());
     }
@@ -2367,6 +2409,10 @@ fn ensure_schema_analysis_dir(source: &ResolvedSource) -> Result<()> {
         "path `{}` is not a directory",
         source.analysis_path.display()
     );
+}
+
+fn ensure_schema_analysis_dir(source: &ResolvedSource) -> Result<()> {
+    ensure_analysis_dir(source)
 }
 
 fn schema_impact_gates(

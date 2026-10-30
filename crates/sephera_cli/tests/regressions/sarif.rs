@@ -140,16 +140,15 @@ fn regression_untested_sarif_prefixes_subdir_paths_to_repo_relative() {
     }
 
     // Analysed from the repo root, the URIs carry the same
-    // repo-relative spelling — but the measurement itself differs,
-    // honestly: with the root as base, the bare `lib` import from
-    // subdir/test_lib.py does not resolve to subdir/lib.py
-    // (same-directory resolution only applies when the base is the
-    // directory itself), so `used` counts as untested here and the
-    // run reports three symbols, not two. This block pins the URI
-    // spelling only, not measurement equality across bases.
+    // repo-relative spelling -- and the measurement now agrees, too:
+    // the sibling root resolves the bare `lib` import from
+    // subdir/test_lib.py to subdir/lib.py whatever the base is, so
+    // `used` counts as tested here as well and the run reports two
+    // symbols, not three. (Before the sibling fix it reported three,
+    // with `used` falsely untested.)
     let root = parse(&run_untested(dir, &["--format", "sarif"]));
     let root = root["runs"][0]["results"].as_array().unwrap();
-    assert_eq!(root.len(), 3);
+    assert_eq!(root.len(), 2);
     for result in root {
         assert_eq!(
             result["locations"][0]["physicalLocation"]["artifactLocation"]["uri"],
