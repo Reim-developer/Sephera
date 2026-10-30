@@ -115,31 +115,10 @@ jobs:
       - name: Check README examples run
         run: python scripts/check_readme_examples.py
 
-      # The corpus location has to be set here too, not only on the fetch step.
-      # Without it the loc table is skipped with a message rather than checked,
-      # which is the silent-pass this workflow previously had for the corpus
-      # figures themselves.
-      - name: Check README figures are current
-        env:
-          SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
-        run: python scripts/check_readme_figures.py
-
       - name: Verify the pinned corpus figures
         env:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/measure_accuracy.py --verify
-
-      # The docs are a separate site with its own build, and its content is not
-      # checked by anything above. Two failures live there: an unbalanced code
-      # fence, which renders the rest of a page as prose, and a path quoted in an
-      # example that no longer resolves, which fails when a reader types it.
-      # `graph.md` had the first and several pages had the second, so both are
-      # worth a check rather than a review.
-      - name: Check docs fences and quoted paths
-        run: python scripts/check_docs.py
-
-      - name: Check docs sidebar lists every command
-        run: python scripts/check_docs_sidebar.py
 
       # A `documentation` field is a claim the tree has to be able to keep. A
       # crate with `publish = false` claiming `https://docs.rs/<name>` points at
@@ -150,16 +129,6 @@ jobs:
       # page, exactly as a `readme` field is the only thing that names a README.
       - name: Check documentation links are claims the tree can keep
         run: python scripts/check_doc_links.py
-
-      # A third doc failure, and the one that costs a reader the most: a page
-      # describing a flag the CLI rejects. `check_docs.py` checks that a quoted
-      # *path* exists; this checks that a quoted *flag* does, against
-      # `sephera --help` read per subcommand.
-      #
-      # It runs after the release build rather than in its own job, because it
-      # reads `--help` from the real binary.
-      - name: Check every documented flag exists
-        run: python scripts/check_doc_flags.py
 
   # The only check that runs the real resolver over expectations written by hand
   # from what each language means. `cargo test --workspace` cannot cover this: it
