@@ -9,7 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Tree-sitter AST compression: skeleton, signatures, and structure extraction."
-documentation = "https://docs.rs/sephera_compression"
 readme = "README.md"
 keywords = ["tree-sitter", "compression", "ast", "llm-context"]
 categories = ["development-tools", "text-processing"]

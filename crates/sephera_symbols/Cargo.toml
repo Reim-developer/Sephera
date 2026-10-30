@@ -9,7 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Symbol extraction and declaration analysis across languages."
-documentation = "https://docs.rs/sephera_symbols"
 readme = "README.md"
 keywords = ["symbols", "ast", "tree-sitter", "declarations", "imports"]
 categories = ["development-tools", "text-processing"]
