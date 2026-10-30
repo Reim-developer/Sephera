@@ -15,6 +15,10 @@ jobs:
   fmt:
     name: Rust Fmt
     runs-on: ubuntu-latest
+    # A hung job that never times out burns minutes until GitHub's 6-hour cap;
+    # every timeout below is a ceiling picked well above the job's normal
+    # runtime, so it can only fire on a hang, never on a slow-but-working run.
+    timeout-minutes: 15
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -32,6 +36,7 @@ jobs:
 
   clippy:
     name: Rust Clippy
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -56,6 +61,7 @@ jobs:
 
   test:
     name: Rust Test
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -164,6 +170,7 @@ jobs:
   # flattering one.
   e2e:
     name: End-to-End Graph Cases
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -196,6 +203,7 @@ jobs:
 
   coverage:
     name: Coverage
+    timeout-minutes: 45
     runs-on: ubuntu-latest
     # The job reads the repository and writes an artifact. Nothing else, so it does
     # not get a token that can push.
@@ -257,6 +265,7 @@ jobs:
 
   publish_dry_run:
     name: Publish Dry Run
+    timeout-minutes: 30
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -285,12 +294,10 @@ jobs:
 
   pyright:
     name: Pyright
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
-
-      - name: Setup Node
         uses: actions/setup-node@v4
         with:
           node-version: "22"
@@ -317,6 +324,7 @@ jobs:
 
   docs:
     name: Docs Build
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -337,6 +345,7 @@ jobs:
 
   benchmark:
     name: Benchmark
+    timeout-minutes: 60
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -430,6 +439,7 @@ jobs:
   # benchmark upload would take the measurement that *did* succeed down with it.
   pr_report:
     name: PR Report
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     needs: [coverage, benchmark]
     # A push to `dev` has no pull request, and this job is only meaningful for
