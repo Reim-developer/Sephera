@@ -1,0 +1,25 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "base_path": "[PATH]",
+  "by_language": [
+    {
+      "code_lines": 2,
+      "comment_lines": 0,
+      "empty_lines": 0,
+      "language": "Rust",
+      "size_bytes": 32
+    }
+  ],
+  "elapsed_ms": 0,
+  "files_scanned": 2,
+  "languages_detected": 1,
+  "totals": {
+    "code_lines": 2,
+    "comment_lines": 0,
+    "empty_lines": 0,
+    "size_bytes": 32
+  }
+}

@@ -1,0 +1,76 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "metadata": {
+    "base_path": "[PATH]",
+    "focus_paths": [],
+    "compression_mode": "none",
+    "budget_tokens": 128000,
+    "metadata_budget_tokens": 12800,
+    "excerpt_budget_tokens": 115200,
+    "estimated_tokens": 200,
+    "estimated_metadata_tokens": 192,
+    "estimated_excerpt_tokens": 8,
+    "files_considered": 2,
+    "files_selected": 2,
+    "truncated_files": 0,
+    "closure_pulled_files": 0
+  },
+  "dominant_languages": [
+    {
+      "language": "Rust",
+      "files": 2,
+      "size_bytes": 32
+    }
+  ],
+  "groups": [
+    {
+      "group": "entrypoints",
+      "label": "Entrypoints",
+      "files": 1,
+      "estimated_tokens": 3,
+      "truncated_files": 0
+    },
+    {
+      "group": "general",
+      "label": "General",
+      "files": 1,
+      "estimated_tokens": 5,
+      "truncated_files": 0
+    }
+  ],
+  "files": [
+    {
+      "relative_path": "main.rs",
+      "language": "Rust",
+      "size_bytes": 13,
+      "estimated_tokens": 3,
+      "truncated": false,
+      "compressed": false,
+      "group": "entrypoints",
+      "selection_class": "entrypoint",
+      "excerpt": {
+        "line_start": 1,
+        "line_end": 1,
+        "content": "fn main() {}"
+      }
+    },
+    {
+      "relative_path": "helper.rs",
+      "language": "Rust",
+      "size_bytes": 19,
+      "estimated_tokens": 5,
+      "truncated": false,
+      "compressed": false,
+      "group": "general",
+      "selection_class": "general",
+      "excerpt": {
+        "line_start": 1,
+        "line_end": 1,
+        "content": "pub fn helper() {}"
+      }
+    }
+  ]
+}

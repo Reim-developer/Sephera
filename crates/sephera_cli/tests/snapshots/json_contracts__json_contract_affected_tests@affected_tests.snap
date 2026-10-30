@@ -1,0 +1,16 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "targets": [
+    {
+      "target": "main.rs",
+      "affected_test_count": 0,
+      "depth": null,
+      "tests": []
+    }
+  ],
+  "run_plan": [],
+  "manual": []
+}
