@@ -147,7 +147,7 @@ def main() -> int:
             [*argv, "mcp"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # captured: surfaced below if the server dies early
             text=True,
             encoding="utf-8",
         )
@@ -232,6 +232,16 @@ def main() -> int:
 
             print("\nAll MCP graph format checks passed.")
             return 0
+        except Exception:
+            # The server died or never spoke: its stderr carries the real
+            # cause (a cargo build failure, a panic), not the broken pipe
+            # the request loop would otherwise report. Only read when the
+            # process already exited, so a hung server cannot block here.
+            if proc.poll() is not None and proc.stderr:
+                err = proc.stderr.read()
+                if err:
+                    print(f"server stderr:\n{err}", file=sys.stderr)
+            raise
         finally:
             proc.terminate()
             proc.wait(timeout=10)
