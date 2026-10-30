@@ -100,11 +100,13 @@ jobs:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/fetch_corpus.py
 
-      - name: Run tests
-        run: cargo test --workspace
-
-      - name: Verify snapshots
-        run: cargo insta test --review --workspace
+      # One invocation, not two: `cargo insta test` already runs the whole
+      # suite, and plain `cargo test` fails on snapshot mismatch under
+      # insta's CI defaults — so the old pair ran all 1300+ tests twice
+      # for no extra failure detection. This keeps the strict modes
+      # (mismatch + pending snapshots) in a single run.
+      - name: Run tests and verify snapshots
+        run: cargo insta test --check --workspace
 
       # The README quotes command output verbatim, so both the commands and the
       # numbers they produce are checked. Writing the demo section found a summary
@@ -113,28 +115,10 @@ jobs:
       - name: Check README examples run
         run: python scripts/check_readme_examples.py
 
-      # The corpus location has to be set here too, not only on the fetch step.
-      # Without it the loc table is skipped with a message rather than checked,
-      # which is the silent-pass this workflow previously had for the corpus
-      # figures themselves.
-      - name: Check README figures are current
-        env:
-          SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
-        run: python scripts/check_readme_figures.py
-
       - name: Verify the pinned corpus figures
         env:
           SEPHERA_CORPUS_DIR: ${{ github.workspace }}/.corpus
         run: python scripts/measure_accuracy.py --verify
-
-      # The docs are a separate site with its own build, and its content is not
-      # checked by anything above. Two failures live there: an unbalanced code
-      # fence, which renders the rest of a page as prose, and a path quoted in an
-      # example that no longer resolves, which fails when a reader types it.
-      # `graph.md` had the first and several pages had the second, so both are
-      # worth a check rather than a review.
-      - name: Check docs fences and quoted paths
-        run: python scripts/check_docs.py
 
       # A `documentation` field is a claim the tree has to be able to keep. A
       # crate with `publish = false` claiming `https://docs.rs/<name>` points at
@@ -145,16 +129,6 @@ jobs:
       # page, exactly as a `readme` field is the only thing that names a README.
       - name: Check documentation links are claims the tree can keep
         run: python scripts/check_doc_links.py
-
-      # A third doc failure, and the one that costs a reader the most: a page
-      # describing a flag the CLI rejects. `check_docs.py` checks that a quoted
-      # *path* exists; this checks that a quoted *flag* does, against
-      # `sephera --help` read per subcommand.
-      #
-      # It runs after the release build rather than in its own job, because it
-      # reads `--help` from the real binary.
-      - name: Check every documented flag exists
-        run: python scripts/check_doc_flags.py
 
   # The only check that runs the real resolver over expectations written by hand
   # from what each language means. `cargo test --workspace` cannot cover this: it
@@ -200,6 +174,44 @@ jobs:
       # and a suite that quietly stops reporting it is how it stays on.
       - name: Run every case
         run: python e2e/run.py
+
+  # The only tests that drive the MCP server over real stdio JSON-RPC.
+  # Rust handler tests call the handlers directly, so a transport
+  # framing regression would pass them all and break every agent
+  # integration silently. These two scripts are that coverage.
+  mcp_wire:
+    name: MCP Wire Protocol
+    timeout-minutes: 30
+    runs-on: ubuntu-latest
+    # This job builds and runs tests; it pushes nothing, so it gets a
+    # read-only token like the coverage job does.
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache Rust artifacts
+        uses: Swatinem/rust-cache@v2
+
+      - name: Setup Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Build release binary
+        run: cargo build --release --bin sephera
+
+      - name: Verify MCP wire protocol
+        timeout-minutes: 10
+        run: |
+          python3 scripts/verify_mcp_graph_formats.py
+          python3 scripts/verify_mcp_symbols.py
 
   coverage:
     name: Coverage

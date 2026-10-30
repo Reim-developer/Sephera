@@ -116,11 +116,22 @@ def decode_tool_result(response: JsonObject) -> JsonObject:
     return payload
 
 
+def resolve_binary() -> list[str]:
+    """Argv prefix that runs the CLI.
+
+    Prefers a built release binary (what the gate builds before this check);
+    falls back to `cargo run` so the script also works on a fresh checkout.
+    Checks both executable names so it works on Linux and Windows.
+    """
+    for name in ("sephera", "sephera.exe"):
+        binary = os.path.join("target", "release", name)
+        if os.path.isfile(binary):
+            return [binary]
+    return ["cargo", "run", "--quiet", "--package", "sephera", "--"]
+
+
 def main() -> int:
-    binary = os.path.join("target", "release", "sephera.exe")
-    if not os.path.exists(binary):
-        print("build release first")
-        return 1
+    argv = resolve_binary()
 
     with tempfile.TemporaryDirectory() as tmp:
         os.makedirs(os.path.join(tmp, "src"))
@@ -134,10 +145,10 @@ def main() -> int:
             fh.write("def gamma():\n    pass\n")
 
         proc = subprocess.Popen(
-            [binary, "mcp"],
+            [*argv, "mcp"],
             stdin=subprocess.PIPE,
             stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
+            stderr=subprocess.PIPE,  # captured: surfaced below if the server dies early
             text=True,
             encoding="utf-8",
         )
@@ -222,6 +233,16 @@ def main() -> int:
 
             print("\nAll MCP symbols checks passed.")
             return 0
+        except Exception:
+            # The server died or never spoke: its stderr carries the real
+            # cause (a cargo build failure, a panic), not the broken pipe
+            # the request loop would otherwise report. Only read when the
+            # process already exited, so a hung server cannot block here.
+            if proc.poll() is not None and proc.stderr:
+                err = proc.stderr.read()
+                if err:
+                    print(f"server stderr:\n{err}", file=sys.stderr)
+            raise
         finally:
             proc.terminate()
             proc.wait(timeout=10)

@@ -16,7 +16,8 @@ that points at a reference that moved is a workflow step that
 ends in a missing file, so every relative link in the skill
 and its references must resolve.
 
-Run from CI. The check needs nothing but the files.
+Run from the local gate (deliberately not from CI). The check needs nothing
+but the files.
 """
 
 from __future__ import annotations
