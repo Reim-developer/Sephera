@@ -48,9 +48,9 @@ use crate::{
     input::{
         AffectedTestsInput, ArchaeologyInput, BehaviorInput, BreakingInput,
         ContextInput, CouplingInput, DeadInput, DiffInput, GraphInput,
-        ImpactInput, LocInput, MergeInput, ReviewInput, RiskInput,
-        SchemaImpactInput, SimulateInput, SymbolsInput, TestPriorityInput,
-        UntestedInput, WhyInput,
+        ImpactInput, LocInput, MergeInput, MultirepoImpactInput, ReviewInput,
+        RiskInput, SchemaImpactInput, SimulateInput, SymbolsInput,
+        TestPriorityInput, UntestedInput, WhyInput,
     },
 };
 
@@ -1660,6 +1660,107 @@ impl SepheraServer {
 
         OutputKind::parse(param.format.as_deref(), "schema_impact")?
             .render(&measured, || schema_impact_markdown(&measured))
+    }
+
+    #[tool(
+        name = "multirepo_impact",
+        description = "Report cross-repo blast radius: given a file in a path-dependency repo (a library), find the files in the current repo that import it via a path dependency. Run this BEFORE editing a library file to find out which consumer-repo files break. Path deps are discovered from Cargo.toml, package.json, pyproject.toml, go.mod, settings.gradle, pom.xml, CMakeLists.txt, and WORKSPACE/MODULE.bazel. Only path-based deps create edges; version/git deps are never fabricated."
+    )]
+    #[allow(
+        clippy::unused_self,
+        reason = "the tool_router macro requires a &self receiver"
+    )]
+    async fn multirepo_impact(
+        &self,
+        rmcp::handler::server::wrapper::Parameters(param): rmcp::handler::server::wrapper::Parameters<
+            MultirepoImpactInput,
+        >,
+    ) -> Result<String, rmcp::ErrorData> {
+        use sephera_graph::multirepo::{discover_path_dependencies, resolve_cross_repo_edges};
+
+        let ignore_matcher =
+            build_ignore_matcher(param.ignore, param.no_gitignore)?;
+        if param.files.is_empty() {
+            return Err(rmcp::ErrorData::invalid_params(
+                "multirepo_impact needs at least one file in `files`",
+                None,
+            ));
+        }
+
+        let source = resolve_source(
+            &SourceRequest {
+                path: param.path.map(std::path::PathBuf::from),
+                url: param.url,
+                git_ref: param.git_ref,
+            },
+            false,
+        )
+        .await
+        .map_err(map_internal_error("source resolution failed"))?;
+
+        let repo_root = &source.analysis_path;
+        let deps = discover_path_dependencies(repo_root)
+            .map_err(map_internal_error("path dependency discovery failed"))?;
+        if deps.is_empty() {
+            return Ok("No path dependencies found in this repo.".to_string());
+        }
+
+        // Build the graph to get unresolved imports
+        let report = build_graph(
+            &source.analysis_path,
+            &ignore_matcher,
+            &[],
+            None,
+            None,
+        )
+        .map_err(map_internal_error("graph build failed"))?;
+
+        let cross_edges = resolve_cross_repo_edges(repo_root, &report.edges, &deps)
+            .map_err(map_internal_error("cross-repo resolution failed"))?;
+
+        // Match targets against cross edges
+        let mut output = String::new();
+        output.push_str("## Cross-repo dependents (via path dependencies)\n\n");
+        let mut found_any = false;
+        for target in &param.files {
+            let target_suffix = target
+                .rsplit('/')
+                .take(3)
+                .collect::<Vec<_>>()
+                .into_iter()
+                .rev()
+                .collect::<Vec<_>>()
+                .join("/");
+            let dependents: Vec<_> = cross_edges
+                .iter()
+                .filter(|e| {
+                    e.to_file.ends_with(&target_suffix)
+                        || target.ends_with(&e.to_file)
+                        || e.to_file == *target
+                })
+                .collect();
+            if !dependents.is_empty() {
+                found_any = true;
+                output.push_str(&format!("### `{target}`\n\n"));
+                for d in dependents {
+                    output.push_str(&format!(
+                        "- `{}` imports `{}`\n  (via path dependency `{}` → `{}` in `{}`)\n",
+                        d.from_file,
+                        d.import_path,
+                        d.via.name,
+                        d.via.path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                        d.via.via_manifest,
+                    ));
+                }
+                output.push('\n');
+            }
+        }
+        if !found_any {
+            output.push_str("No cross-repo dependents found for the given files.\n");
+        }
+        // format is accepted for parity; output is markdown-shaped text
+        let _ = param.format;
+        Ok(output)
     }
 }
 

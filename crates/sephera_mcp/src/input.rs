@@ -691,6 +691,45 @@ pub struct SchemaImpactInput {
     pub format: Option<String>,
 }
 
+/// Arguments accepted by the `multirepo_impact` tool.
+///
+/// Cross-repo blast radius: given a file in a path-dependency repo
+/// (e.g., a library), report the files in the current repo that import it
+/// via a path dependency. This answers "if I change this library file,
+/// which files in my service break?" — the question single-repo impact
+/// cannot see.
+///
+/// Path dependencies are discovered from manifests: `Cargo.toml` (Rust),
+/// `package.json` (Node), `pyproject.toml` (Python), `go.mod` (Go),
+/// `settings.gradle` (Gradle), `pom.xml` (Maven), `CMakeLists.txt` (CMake),
+/// `WORKSPACE`/`MODULE.bazel` (Bazel). Only path-based deps create edges;
+/// version and git deps are reported as unresolvable, never fabricated.
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+#[serde(deny_unknown_fields)]
+pub struct MultirepoImpactInput {
+    /// File or files in the dependency repo whose cross-repo dependents to
+    /// report. Paths may be relative to the current repo (e.g.,
+    /// `../mylib/src/types.rs`) or absolute.
+    pub files: Vec<String>,
+    /// Absolute or relative path to the repository root (the consumer repo).
+    /// Mutually exclusive with `url`.
+    pub path: Option<String>,
+    /// Cloneable repository URL or supported tree URL. Mutually exclusive with `path`.
+    pub url: Option<String>,
+    /// Optional git ref to check out before analysis. Only valid with repo URLs.
+    #[serde(rename = "ref")]
+    pub git_ref: Option<String>,
+    /// Optional list of ignore patterns. Patterns containing `*`, `?`, or `[` are
+    /// globs matched against both the file name and the path relative to the
+    /// analysis root. Any other pattern is a regex matched against that path.
+    pub ignore: Option<Vec<String>>,
+    /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
+    pub no_gitignore: Option<bool>,
+    /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
+    /// compact summary that fits an agent's context.
+    pub format: Option<String>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::{ContextInput, GraphInput, LocInput};

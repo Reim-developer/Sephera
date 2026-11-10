@@ -288,6 +288,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "impact",
             "loc",
             "merge",
+            "multirepo_impact",
             "review",
             "risk",
             "schema_impact",
