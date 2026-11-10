@@ -488,10 +488,18 @@ fn parse_bazel_local_repos(
     // Look for local_repository( ... ) or local_path_override( ... )
     let mut search_from = 0;
     while search_from < content.len() {
-        // Find the next rule start
-        let rule_start = content[search_from..]
-            .find("local_repository")
-            .or_else(|| content[search_from..].find("local_path_override"));
+        // Find the next rule start: the earliest of either kind. Preferring
+        // `local_repository` via `or_else` skips a `local_path_override`
+        // that appears earlier in the file, because `search_from` then
+        // jumps past it and never comes back.
+        let tail = &content[search_from..];
+        let rule_start = [
+            tail.find("local_repository"),
+            tail.find("local_path_override"),
+        ]
+        .into_iter()
+        .flatten()
+        .min();
         let rule_start = match rule_start {
             Some(idx) => search_from + idx,
             None => break,
@@ -1368,6 +1376,52 @@ replace example.com/mylib => ../mylib
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "CMakeLists.txt");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: a `local_path_override` appearing BEFORE a
+    /// `local_repository` in the same file was never parsed. The loop
+    /// preferred `local_repository` via `or_else` even when the override
+    /// came first, then advanced `search_from` past the repository rule,
+    /// skipping the earlier override forever. The earliest rule of
+    /// either kind must win. Found by `CodeRabbit` on PR #68.
+    #[test]
+    fn bazel_earliest_rule_wins_over_local_repository() {
+        let tmp = std::env::temp_dir().join("multirepo-test-bazel-order");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let first_repo = tmp.join("first-lib");
+        fs::create_dir_all(&first_repo).unwrap();
+        fs::write(first_repo.join("BUILD"), "").unwrap();
+        let second_repo = tmp.join("second-lib");
+        fs::create_dir_all(&second_repo).unwrap();
+        fs::write(second_repo.join("BUILD"), "").unwrap();
+
+        let main_repo = tmp.join("my-app");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("WORKSPACE"),
+            r#"local_path_override(
+    module_name = "first_lib",
+    path = "../first-lib",
+)
+local_repository(
+    name = "second_lib",
+    path = "../second-lib",
+)
+"#,
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 2, "expected both deps, got {deps:?}");
+        assert!(
+            deps.iter().any(|d| d.name == "first_lib"),
+            "the earlier local_path_override must not be skipped: {deps:?}"
+        );
+        assert!(deps.iter().any(|d| d.name == "second_lib"));
 
         let _ = fs::remove_dir_all(&tmp);
     }
