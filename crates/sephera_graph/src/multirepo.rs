@@ -698,6 +698,30 @@ fn import_remainder<'a>(
     }
 }
 
+/// The package segment of an import path: the part naming the dependency.
+///
+/// `::` and `.` separators are stripped first, so `mylib::types` and
+/// `mylib.types` both yield `mylib`. A `/` is a subpath, not a module
+/// path: `mylib/utils` names the package `mylib`, and a scoped package
+/// `@scope/pkg/sub` names `@scope/pkg`. Go imports keep their own
+/// segment scan in [`resolve_cross_repo_edges`]; this only changes what
+/// the direct lookup tries.
+fn package_segment(import_path: &str) -> &str {
+    let first = import_path.split("::").next().unwrap_or("");
+    let first = first.split('.').next().unwrap_or(first);
+    let Some((package, rest)) = first.split_once('/') else {
+        return first;
+    };
+    if !package.starts_with('@') {
+        return package;
+    }
+    // Scoped package: the name is the first two segments.
+    match rest.split_once('/') {
+        Some((second, _)) => &first[..package.len() + 1 + second.len()],
+        None => first,
+    }
+}
+
 /// Resolve cross-repo edges for one repo's unresolved imports.
 ///
 /// Takes a repo's graph edges (with unresolved imports) and its path
@@ -736,12 +760,10 @@ pub fn resolve_cross_repo_edges(
             continue;
         }
 
-        // Get the first segment of the import path
-        // e.g., "sephera_core::types::GraphReport" → "sephera_core"
-        let first_segment = edge.import_path.split("::").next().unwrap_or("");
-        // Also handle Python-style "sephera_core.types" and JS-style
-        let first_segment =
-            first_segment.split('.').next().unwrap_or(first_segment);
+        // The package segment of the import path, e.g.
+        // "sephera_core::types::GraphReport" → "sephera_core",
+        // "mylib/utils" → "mylib" (see `package_segment`).
+        let first_segment = package_segment(&edge.import_path);
 
         // Try direct match first
         let mut matched_dep = dep_map.get(first_segment);
@@ -1653,6 +1675,56 @@ tokio = { version = "1.0", features = ["full"] }
             cross[0].to_file, "src/types.rs",
             "the remainder after the dep prefix is the types module"
         );
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: `import "mylib/utils"` produced no cross-repo edge.
+    /// `first_segment` split only on `::` and `.`, so it came out as
+    /// "mylib/utils" and the dep_map lookup missed; the only `/`-aware
+    /// fallback was the Go scan, which runs only with a go.mod dep. The
+    /// package segment before the first `/` is the dep name (two segments
+    /// for scoped `@scope/pkg` packages). Found by CodeRabbit on PR #68.
+    #[test]
+    fn js_subpath_import_matches_package_name() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-js-subpath");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("utils.js"), "export function helper() {}")
+            .unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "package.json".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "index.js".to_string(),
+            to: None,
+            import_path: "mylib/utils".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(
+            cross.len(),
+            1,
+            "a mylib/utils subpath import must resolve into the dep"
+        );
+        assert_eq!(cross[0].to_file, "utils.js");
 
         let _ = fs::remove_dir_all(&tmp);
     }
