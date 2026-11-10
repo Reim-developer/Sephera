@@ -761,6 +761,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
             &source.analysis_path,
             &arguments.files,
             &report,
+            arguments.symbol.as_deref(),
         )?;
         // For cross-repo targets, the cross-repo section IS the report.
         // Gates don't apply (no in-repo dependents to count).
@@ -861,6 +862,7 @@ fn multirepo_impact_section(
     repo_root: &std::path::Path,
     target_files: &[String],
     report: &sephera_graph::types::GraphReport,
+    symbol: Option<&str>,
 ) -> Result<String> {
     use sephera_graph::multirepo::{
         discover_path_dependencies, resolve_cross_repo_edges,
@@ -903,9 +905,24 @@ fn multirepo_impact_section(
             cross_edges
                 .iter()
                 .filter(|e| {
-                    e.to_file.ends_with(&target_suffix)
+                    let file_matches = e.to_file.ends_with(&target_suffix)
                         || target.ends_with(&e.to_file)
-                        || e.to_file == *target
+                        || e.to_file == *target;
+                    if !file_matches {
+                        return false;
+                    }
+                    // If --symbol is given, only report edges importing that symbol.
+                    // e.g., --symbol greet matches `mylib::greet` but not `mylib::farewell`.
+                    if let Some(sym) = symbol {
+                        let import = &e.import_path;
+                        // Match: ends with ::sym, .sym, /sym, or equals sym
+                        import == sym
+                            || import.ends_with(&format!("::{sym}"))
+                            || import.ends_with(&format!(".{sym}"))
+                            || import.ends_with(&format!("/{sym}"))
+                    } else {
+                        true
+                    }
                 })
                 .collect();
 
