@@ -46,6 +46,12 @@ pub struct PathDependency {
     pub path: PathBuf,
     /// Which manifest declared it (e.g., "Cargo.toml", "package.json").
     pub via_manifest: String,
+    /// Full module path as written in the manifest, for Go `replace` deps
+    /// (e.g. `"example.org/http"`). `name` is only the last segment, which
+    /// is ambiguous: `net/http` shares the segment `http` with an unrelated
+    /// replacement. Matching must use this path, not the segment.
+    /// `None` for non-Go deps, which never need it.
+    pub module_path: Option<String>,
 }
 
 /// A cross-repo edge: a file in one repo importing from a file in another.
@@ -156,6 +162,7 @@ fn discover_python_path_deps(
                                     name: name.to_string(),
                                     path: canonical,
                                     via_manifest: "pyproject.toml".to_string(),
+                                    module_path: None,
                                 });
                             }
                         }
@@ -216,6 +223,11 @@ fn discover_go_path_deps(
                                 name: name.to_string(),
                                 path: canonical,
                                 via_manifest: "go.mod".to_string(),
+                                // Retain the full module path: matching on
+                                // the last segment alone cross-matches
+                                // unrelated imports (`net/http` against a
+                                // `example.org/http` replacement).
+                                module_path: Some(module.to_string()),
                             });
                         }
                     }
@@ -285,6 +297,7 @@ fn discover_gradle_path_deps(
                             name,
                             path: canonical,
                             via_manifest: settings_file.to_string(),
+                            module_path: None,
                         });
                     }
                 }
@@ -379,6 +392,7 @@ fn discover_maven_path_deps(
                                 name,
                                 path: canonical,
                                 via_manifest: "pom.xml".to_string(),
+                                module_path: None,
                             });
                         }
                     }
@@ -436,6 +450,7 @@ fn discover_cmake_path_deps(
                         name,
                         path: canonical,
                         via_manifest: "CMakeLists.txt".to_string(),
+                        module_path: None,
                     });
                 }
             }
@@ -561,6 +576,7 @@ fn parse_bazel_local_repos(
                     name,
                     path: canonical,
                     via_manifest: via_manifest.to_string(),
+                    module_path: None,
                 });
             }
         }
@@ -619,6 +635,7 @@ fn discover_cargo_path_deps(
                                 name: name.replace('-', "_"),
                                 path: canonical,
                                 via_manifest: "Cargo.toml".to_string(),
+                                module_path: None,
                             });
                         }
                     }
@@ -654,6 +671,7 @@ fn discover_npm_path_deps(
                                 name: name.clone(),
                                 path: canonical,
                                 via_manifest: "package.json".to_string(),
+                                module_path: None,
                             });
                         }
                     }
@@ -787,6 +805,38 @@ pub fn edge_matches_target(
         .is_ok_and(|path| path == target_canonical)
 }
 
+/// Match a Go import against the full replaced module paths of the Go deps.
+///
+/// Returns the dep and the byte index just past the matched module path, so
+/// the remainder starts at a real segment boundary. An import matches only
+/// the full module path, exactly (module root) or as a slash-delimited
+/// prefix (subpackage); a trailing segment is not an identity — with
+/// `replace example.org/http => ../httpdep`, an unrelated `net/http` import
+/// shares the `http` segment and must not match. Longest match wins when
+/// two replaced modules prefix-match.
+fn match_go_dep<'a>(
+    import_path: &str,
+    deps: &'a [PathDependency],
+) -> Option<(&'a PathDependency, usize)> {
+    let mut best: Option<(&PathDependency, usize)> = None;
+    for dep in deps {
+        if dep.via_manifest != "go.mod" {
+            continue;
+        }
+        let Some(module) = dep.module_path.as_deref() else {
+            continue;
+        };
+        let rest = import_path.strip_prefix(module);
+        if !rest.is_some_and(|r| r.is_empty() || r.starts_with('/')) {
+            continue;
+        }
+        if best.is_none_or(|(_, len)| module.len() > len) {
+            best = Some((dep, module.len()));
+        }
+    }
+    best
+}
+
 /// Resolve cross-repo edges for one repo's unresolved imports.
 ///
 /// Takes a repo's graph edges (with unresolved imports) and its path
@@ -831,36 +881,22 @@ pub fn resolve_cross_repo_edges(
         let first_segment = package_segment(&edge.import_path);
 
         // Try direct match first
-        let mut matched_dep = dep_map.get(first_segment);
+        let mut matched_dep = dep_map.get(first_segment).copied();
         // Byte index just past the matched segment, set only by the Go
         // segment scan below, so the remainder starts at a real segment
         // boundary instead of rfind's substring guess.
         let mut go_segment_end: Option<usize> = None;
 
         // Go: `import "example.com/mylib"` or `"example.com/mylib/sub"` —
-        // the dep name is the module path's last segment, which sits at the
-        // end for a module-root import but in the middle for a subpackage
-        // import. Match it as a complete '/'-separated segment, scanning
-        // from the right; a substring inside a longer segment (e.g. the
-        // "mylib" in "mylibutil") must not count. Other languages never need
-        // this: their first-segment match already fired above, and a '/' in
-        // their imports is a subpath, not a module path.
+        // matched against the full replaced module path by `match_go_dep`.
+        // Other languages never need this: their first-segment match already
+        // fired above, and a '/' in their imports is a subpath, not a
+        // module path.
         if matched_dep.is_none() && has_go_dep && edge.import_path.contains('/')
         {
-            let mut seg_end = edge.import_path.len();
-            for seg in edge.import_path.rsplit('/') {
-                if let Some(dep) = dep_map.get(seg) {
-                    matched_dep = Some(dep);
-                    go_segment_end = Some(seg_end);
-                    break;
-                }
-                // Step over the segment and its '/'. The leftmost segment
-                // has no '/' to step over, so plain subtraction underflows
-                // there (e.g. `net/http`: 8 → 3 → 3 - 4) and panics in
-                // debug builds; saturating is exact because the value is
-                // only read when a segment matched, which never happens
-                // after the leftmost one.
-                seg_end = seg_end.saturating_sub(seg.len() + 1);
+            if let Some((dep, len)) = match_go_dep(&edge.import_path, deps) {
+                matched_dep = Some(dep);
+                go_segment_end = Some(len);
             }
         }
 
@@ -1329,6 +1365,11 @@ replace example.com/mylib => ../mylib
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "go.mod");
+        assert_eq!(
+            deps[0].module_path.as_deref(),
+            Some("example.com/mylib"),
+            "discovery must retain the full replaced module path"
+        );
     }
 
     #[test]
@@ -1526,6 +1567,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "sephera_core".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "Cargo.toml".to_string(),
+            module_path: None,
         };
 
         // An unresolved edge importing from sephera_core
@@ -1576,6 +1618,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "go.mod".to_string(),
+            module_path: Some("example.com/mylib".to_string()),
         };
         let edge = GraphEdge {
             from: "main.go".to_string(),
@@ -1624,6 +1667,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "go.mod".to_string(),
+            module_path: Some("example.com/mylib".to_string()),
         };
         let edge = GraphEdge {
             from: "main.go".to_string(),
@@ -1673,6 +1717,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "go.mod".to_string(),
+            module_path: Some("example.com/mylib".to_string()),
         };
         let edge = GraphEdge {
             from: "main.go".to_string(),
@@ -1715,6 +1760,7 @@ tokio = { version = "1.0", features = ["full"] }
                 name: "dep_b".to_string(),
                 path: dep_b.canonicalize().unwrap(),
                 via_manifest: "Cargo.toml".to_string(),
+                module_path: None,
             },
             import_path: "dep_b::helper".to_string(),
             items: vec![],
@@ -1755,6 +1801,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "package.json".to_string(),
+            module_path: None,
         };
         let edge = GraphEdge {
             from: "index.js".to_string(),
@@ -1811,6 +1858,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "Cargo.toml".to_string(),
+            module_path: None,
         };
         let edge = GraphEdge {
             from: "src/main.rs".to_string(),
@@ -1861,6 +1909,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "package.json".to_string(),
+            module_path: None,
         };
         let edge = GraphEdge {
             from: "index.js".to_string(),
@@ -1914,6 +1963,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "go.mod".to_string(),
+            module_path: Some("example.com/mylib".to_string()),
         };
         let edges = ["net/http", "encoding/json"].map(|import| GraphEdge {
             from: "main.go".to_string(),
@@ -1932,6 +1982,83 @@ tokio = { version = "1.0", features = ["full"] }
             cross.len(),
             0,
             "stdlib imports match no path dep and must resolve to nothing"
+        );
+    }
+
+    /// Regression: with `replace example.org/http => ../httpdep`, an
+    /// unrelated `net/http` import matched the dep's last segment `http`
+    /// and reported a false dependent of the replacement repo. Go imports
+    /// must match the full replaced module path, exactly or as a
+    /// slash-delimited prefix — a trailing segment is not an identity.
+    /// Found by `CodeRabbit` on PR #68 (round 2).
+    #[test]
+    fn go_import_matches_full_replaced_module_path() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
+
+        // Dep repo: the replacement for example.org/http.
+        let dep_repo = tmp.join("httpdep");
+        fs::create_dir_all(dep_repo.join("sub")).unwrap();
+        fs::write(
+            dep_repo.join("go.mod"),
+            "module example.org/http\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(dep_repo.join("http.go"), "package http\n").unwrap();
+        fs::write(dep_repo.join("sub/helper.go"), "package sub\n").unwrap();
+
+        // Main repo with the replace directive.
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("go.mod"),
+            "module example.com/app\n\ngo 1.21\n\nreplace example.org/http => ../httpdep\n",
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
+        assert_eq!(deps[0].name, "http");
+        assert_eq!(
+            deps[0].module_path.as_deref(),
+            Some("example.org/http"),
+            "discovery must retain the full replaced module path"
+        );
+
+        let edges = ["net/http", "example.org/http", "example.org/http/sub"]
+            .map(|import| GraphEdge {
+                from: "main.go".to_string(),
+                to: None,
+                import_path: import.to_string(),
+                resolved: false,
+                local_gap: false,
+                cfg_gated: false,
+                kind: ImportKind::Dependency,
+                items: vec![],
+            });
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &edges, &deps).unwrap();
+        assert_eq!(
+            cross.len(),
+            2,
+            "only the real module and subpackage imports resolve, got {cross:?}"
+        );
+        assert!(
+            cross.iter().any(|e| e.import_path == "example.org/http"
+                && e.to_file == "http.go"),
+            "module-root import must still resolve: {cross:?}"
+        );
+        assert!(
+            cross.iter().any(|e| e.import_path == "example.org/http/sub"
+                && e.to_file == "sub/helper.go"),
+            "subpackage import must still resolve: {cross:?}"
+        );
+        assert!(
+            cross.iter().all(|e| e.import_path != "net/http"),
+            "net/http shares only a segment and must not match: {cross:?}"
         );
     }
 
@@ -1959,6 +2086,7 @@ tokio = { version = "1.0", features = ["full"] }
             name: "mylib".to_string(),
             path: dep_repo.canonicalize().unwrap(),
             via_manifest: "CMakeLists.txt".to_string(),
+            module_path: None,
         };
         let edge = GraphEdge {
             from: "main.cpp".to_string(),
