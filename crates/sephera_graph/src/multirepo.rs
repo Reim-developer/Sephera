@@ -217,7 +217,9 @@ pub fn resolve_cross_repo_edges(
 
 /// Try to resolve an import remainder against a dependency repo's files.
 ///
-/// For Rust: `types::GraphReport` → tries `src/types.rs`, `src/types/mod.rs`
+/// For Rust: `types::GraphReport` → tries `src/types.rs`, `src/types/mod.rs`.
+/// If the module file doesn't exist (e.g., `Router` in `use axum::Router`),
+/// falls back to `src/lib.rs` — the symbol is likely defined or re-exported there.
 fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Option<String>> {
     if remainder.is_empty() {
         // `use sephera_core;` alone — resolves to lib.rs
@@ -244,6 +246,14 @@ fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Optio
     for candidate in candidates {
         if dep_path.join(&candidate).exists() {
             return Ok(Some(candidate));
+        }
+    }
+
+    // Fallback: symbol might be defined or re-exported in lib.rs
+    // (e.g., `use axum::Router` where Router is in lib.rs, not router.rs)
+    for lib_candidate in ["src/lib.rs", "lib.rs"] {
+        if dep_path.join(lib_candidate).exists() {
+            return Ok(Some(lib_candidate.to_string()));
         }
     }
 
