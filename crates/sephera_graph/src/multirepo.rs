@@ -720,6 +720,11 @@ pub fn resolve_cross_repo_edges(
     let dep_map: BTreeMap<&str, &PathDependency> =
         deps.iter().map(|d| (d.name.as_str(), d)).collect();
 
+    // Whether any dep comes from go.mod, decided once: the Go segment scan
+    // below runs per edge, and re-answering the question for each one is
+    // pure waste.
+    let has_go_dep = deps.iter().any(|d| d.via_manifest == "go.mod");
+
     for edge in edges {
         // Only unresolved edges can be cross-repo
         if edge.resolved || edge.to.is_some() {
@@ -748,7 +753,6 @@ pub fn resolve_cross_repo_edges(
         // "mylib" in "mylibutil") must not count. Other languages never need
         // this: their first-segment match already fired above, and a '/' in
         // their imports is a subpath, not a module path.
-        let has_go_dep = deps.iter().any(|d| d.via_manifest == "go.mod");
         if matched_dep.is_none() && has_go_dep && edge.import_path.contains('/')
         {
             let mut seg_end = edge.import_path.len();
@@ -758,7 +762,13 @@ pub fn resolve_cross_repo_edges(
                     go_segment_end = Some(seg_end);
                     break;
                 }
-                seg_end -= seg.len() + 1; // step over the segment and its '/'
+                // Step over the segment and its '/'. The leftmost segment
+                // has no '/' to step over, so plain subtraction underflows
+                // there (e.g. `net/http`: 8 → 3 → 3 - 4) and panics in
+                // debug builds; saturating is exact because the value is
+                // only read when a segment matched, which never happens
+                // after the leftmost one.
+                seg_end = seg_end.saturating_sub(seg.len() + 1);
             }
         }
 
@@ -1523,6 +1533,61 @@ tokio = { version = "1.0", features = ["full"] }
             resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
         assert_eq!(cross.len(), 1, "expected the subpackage import to resolve");
         assert_eq!(cross[0].to_file, "sub/helper.go");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: an unmatched stdlib import (`net/http`) panicked the Go
+    /// segment scan with "attempt to subtract with overflow" in debug
+    /// builds whenever a `replace` directive existed. The scan steps
+    /// `seg_end` left past every non-matching segment, including the
+    /// leftmost one, which has no `/` to step over: for `net/http`,
+    /// `seg_end` went 8 → 3 → 3 - 4. Found by CodeRabbit on PR #68; the
+    /// existing Go fixtures never caught it because every import matched
+    /// a dependency. The scan must return no edge, not a panic.
+    #[test]
+    fn go_unmatched_stdlib_import_does_not_panic() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-go-stdlib");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(
+            dep_repo.join("go.mod"),
+            "module example.com/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(dep_repo.join("mylib.go"), "package mylib\n").unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "go.mod".to_string(),
+        };
+        let edges = ["net/http", "encoding/json"].map(|import| GraphEdge {
+            from: "main.go".to_string(),
+            to: None,
+            import_path: import.to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        });
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &edges, &[dep]).unwrap();
+        assert_eq!(
+            cross.len(),
+            0,
+            "stdlib imports match no path dep and must resolve to nothing"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
