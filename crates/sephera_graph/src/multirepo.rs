@@ -676,14 +676,14 @@ fn import_remainder<'a>(
         // "sub" for "example.com/mylib/sub", "" for the module root.
         return import_path[end..].trim_start_matches('/');
     }
-    let Some(pos) = import_path.rfind(&dep.name) else {
-        // Fallback: use first_segment logic
-        return import_path[first_segment.len()..]
-            .trim_start_matches(':')
-            .trim_start_matches('.')
-            .trim_start_matches('/');
-    };
-    let after = &import_path[pos + dep.name.len()..];
+    // The dep matched on `first_segment`, which is a prefix of the import
+    // path by construction (it is the import split on `::`, `.`, `/`), so
+    // the remainder is what follows it. `rfind(dep.name)` is wrong here:
+    // for `mylib::types::mylib_helper` it finds the name inside
+    // `mylib_helper` and leaves `_helper`, matching nothing.
+    let after = import_path
+        .strip_prefix(first_segment)
+        .unwrap_or(import_path);
     let is_cpp_dep = matches!(
         dep.via_manifest.as_str(),
         "CMakeLists.txt" | "WORKSPACE" | "BUILD" | "BUILD.bazel"
@@ -1599,6 +1599,60 @@ tokio = { version = "1.0", features = ["full"] }
             resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
         assert_eq!(cross.len(), 1, "expected the subpackage import to resolve");
         assert_eq!(cross[0].to_file, "sub/helper.go");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: `mylib::types::mylib_helper` resolved to `src/lib.rs`
+    /// instead of `src/types.rs`. The remainder was computed with
+    /// `rfind(dep.name)`, which found the dep name inside `mylib_helper`
+    /// and left the remainder `_helper`, matching nothing, so resolution
+    /// fell back to the entry point. The dep name sits at byte 0 when it
+    /// matched, so the remainder must be sliced from the matched prefix.
+    /// Found by CodeRabbit on PR #68.
+    #[test]
+    fn remainder_uses_matched_prefix_not_rfind() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-rfind");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(dep_repo.join("src")).unwrap();
+        fs::write(dep_repo.join("src/types.rs"), "// types").unwrap();
+        fs::write(dep_repo.join("src/lib.rs"), "pub mod types;\n").unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "Cargo.toml".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "src/main.rs".to_string(),
+            to: None,
+            import_path: "mylib::types::mylib_helper".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(
+            cross.len(),
+            1,
+            "the import must resolve, not fall back silently"
+        );
+        assert_eq!(
+            cross[0].to_file, "src/types.rs",
+            "the remainder after the dep prefix is the types module"
+        );
 
         let _ = fs::remove_dir_all(&tmp);
     }
