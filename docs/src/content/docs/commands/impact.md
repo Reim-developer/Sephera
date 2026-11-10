@@ -340,16 +340,16 @@ Targets are split per file: a target inside a path dependency gets the
 cross-repo section, and every other target gets its normal in-repo blast
 radius, so one run can mix both —
 
-A path dependency inside the repo itself (`foo = { path = "crates/foo" }`)
-is still local: its files get the normal blast radius, not the
-cross-repo section, because the import is already resolved by the
-in-repo graph.
-
 ```bash
 # the dep target reports cross-repo dependents, the local target its
 # in-repo blast radius, in one report
 sephera impact ../mylib/src/lib.rs src/main.rs --multi
 ```
+
+A path dependency inside the repo itself (`foo = { path = "crates/foo" }`)
+is still local: its files get the normal blast radius, not the
+cross-repo section, because the import is already resolved by the
+in-repo graph.
 
 A target that is in no repo and in no path dependency is an error, exactly
 as without `--multi`: a typo or a path outside every known repo is reported
