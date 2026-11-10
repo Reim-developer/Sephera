@@ -1160,6 +1160,7 @@ fn first_go_file(dir: &Path) -> Option<String> {
 mod tests {
     use super::*;
     use std::fs;
+    use tempfile::tempdir;
 
     fn make_repo_with_cargo_toml(dir: &Path, content: &str) -> PathBuf {
         let repo = dir.join("test-repo");
@@ -1170,22 +1171,14 @@ mod tests {
 
     #[test]
     fn discovers_cargo_path_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-1");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target
         let dep_repo = tmp.join("sephera_core");
         fs::create_dir_all(&dep_repo).unwrap();
 
-        // Create the main repo with a path dep
-        // Note: make_repo_with_cargo_toml creates tmp/test-repo, but we need
-        // tmp/my-service with ../sephera_core resolving to tmp/sephera_core.
-        // So we clean up and create the layout manually.
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
-        let dep_repo = tmp.join("sephera_core");
-        fs::create_dir_all(&dep_repo).unwrap();
+        // Create the main repo with a path dep.
         let main_repo = tmp.join("my-service");
         fs::create_dir_all(&main_repo).unwrap();
         fs::write(
@@ -1208,8 +1201,6 @@ serde = "1.0"
         assert_eq!(deps[0].via_manifest, "Cargo.toml");
         // Path should be canonicalized
         assert!(deps[0].path.ends_with("sephera_core"));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: a hyphenated Cargo dep (`my-lib`) was stored as
@@ -1222,9 +1213,8 @@ serde = "1.0"
     fn cargo_hyphenated_dep_name_normalizes_to_underscores() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-cargo-hyphen");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("my-lib");
         fs::create_dir_all(dep_repo.join("src")).unwrap();
@@ -1269,15 +1259,12 @@ my-lib = { path = "../my-lib" }
             "a use of my_lib must resolve into the hyphenated dep"
         );
         assert_eq!(cross[0].to_file, "src/types.rs");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn discovers_python_path_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-py");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target
         let dep_repo = tmp.join("mylib");
@@ -1304,15 +1291,12 @@ dependencies = [
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "pyproject.toml");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn discovers_go_path_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-go");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target
         let dep_repo = tmp.join("mylib");
@@ -1344,15 +1328,12 @@ replace example.com/mylib => ../mylib
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "go.mod");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn discovers_gradle_composite_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-gradle");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target (a Gradle library)
         let dep_repo = tmp.join("my-utils");
@@ -1376,15 +1357,12 @@ replace example.com/mylib => ../mylib
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "my-utils");
         assert_eq!(deps[0].via_manifest, "settings.gradle");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn discovers_maven_module_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-maven");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target (a Maven module)
         let dep_repo = tmp.join("my-utils");
@@ -1407,15 +1385,12 @@ replace example.com/mylib => ../mylib
         let deps = discover_path_dependencies(&main_repo).unwrap();
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].via_manifest, "pom.xml");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn discovers_cmake_subdirectory_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-cmake");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target
         let dep_repo = tmp.join("mylib");
@@ -1435,8 +1410,6 @@ replace example.com/mylib => ../mylib
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "CMakeLists.txt");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: a `local_path_override` appearing BEFORE a
@@ -1447,9 +1420,8 @@ replace example.com/mylib => ../mylib
     /// either kind must win. Found by `CodeRabbit` on PR #68.
     #[test]
     fn bazel_earliest_rule_wins_over_local_repository() {
-        let tmp = std::env::temp_dir().join("multirepo-test-bazel-order");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let first_repo = tmp.join("first-lib");
         fs::create_dir_all(&first_repo).unwrap();
@@ -1481,15 +1453,12 @@ local_repository(
             "the earlier local_path_override must not be skipped: {deps:?}"
         );
         assert!(deps.iter().any(|d| d.name == "second_lib"));
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn discovers_bazel_local_repository_dep() {
-        let tmp = std::env::temp_dir().join("multirepo-test-bazel");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create the dependency target
         let dep_repo = tmp.join("my-utils");
@@ -1513,17 +1482,14 @@ local_repository(
         assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "my_utils");
         assert_eq!(deps[0].via_manifest, "WORKSPACE");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn ignores_version_deps() {
-        let tmp = std::env::temp_dir().join("multirepo-test-2");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
         let repo = make_repo_with_cargo_toml(
-            &tmp,
+            tmp,
             r#"
 [package]
 name = "my-service"
@@ -1537,17 +1503,14 @@ tokio = { version = "1.0", features = ["full"] }
 
         let deps = discover_path_dependencies(&repo).unwrap();
         assert_eq!(deps.len(), 0, "expected no deps, got {deps:?}");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     #[test]
     fn resolves_cross_repo_edge() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-3");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         // Create dep repo with a types.rs file
         let dep_repo = tmp.join("sephera_core");
@@ -1582,8 +1545,6 @@ tokio = { version = "1.0", features = ["full"] }
         assert_eq!(cross[0].from_file, "src/main.rs");
         assert_eq!(cross[0].to_file, "src/types.rs");
         assert_eq!(cross[0].import_path, "sephera_core::types::GraphReport");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: `import "example.com/mylib"` (a Go module-root import)
@@ -1595,9 +1556,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn go_module_root_import_resolves() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-go-root");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
@@ -1635,8 +1595,6 @@ tokio = { version = "1.0", features = ["full"] }
             "expected the module-root import to resolve"
         );
         assert_eq!(cross[0].to_file, "mylib.go");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: a Go module-root import whose package file is not named
@@ -1646,9 +1604,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn go_module_root_import_unconventional_filename() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-go-server");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
@@ -1686,8 +1643,6 @@ tokio = { version = "1.0", features = ["full"] }
             "expected the module-root import to resolve"
         );
         assert_eq!(cross[0].to_file, "server.go");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: `import "example.com/mylib/sub"` (a Go subpackage import)
@@ -1698,9 +1653,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn go_subpackage_import_resolves() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-go-sub");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(dep_repo.join("sub")).unwrap();
@@ -1734,8 +1688,6 @@ tokio = { version = "1.0", features = ["full"] }
             resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
         assert_eq!(cross.len(), 1, "expected the subpackage import to resolve");
         assert_eq!(cross[0].to_file, "sub/helper.go");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: `edge_matches_target` must distinguish two deps whose
@@ -1744,7 +1696,7 @@ tokio = { version = "1.0", features = ["full"] }
     /// equality is the only comparison that cannot cross-match.
     #[test]
     fn edge_matches_target_distinguishes_same_named_files() {
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempdir().unwrap();
         let dir = temp_dir.path();
         let dep_a = dir.join("depA");
         let dep_b = dir.join("depB");
@@ -1788,7 +1740,7 @@ tokio = { version = "1.0", features = ["full"] }
     fn symbol_filter_matches_imported_names() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let temp_dir = tempfile::tempdir().unwrap();
+        let temp_dir = tempdir().unwrap();
         let dir = temp_dir.path();
         let dep_repo = dir.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
@@ -1843,9 +1795,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn remainder_uses_matched_prefix_not_rfind() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-rfind");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(dep_repo.join("src")).unwrap();
@@ -1882,8 +1833,6 @@ tokio = { version = "1.0", features = ["full"] }
             cross[0].to_file, "src/types.rs",
             "the remainder after the dep prefix is the types module"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: `import "mylib/utils"` produced no cross-repo edge.
@@ -1896,9 +1845,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn js_subpath_import_matches_package_name() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-js-subpath");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
@@ -1932,8 +1880,6 @@ tokio = { version = "1.0", features = ["full"] }
             "a mylib/utils subpath import must resolve into the dep"
         );
         assert_eq!(cross[0].to_file, "utils.js");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: an unmatched stdlib import (`net/http`) panicked the Go
@@ -1948,9 +1894,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn go_unmatched_stdlib_import_does_not_panic() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-go-stdlib");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
@@ -1987,8 +1932,6 @@ tokio = { version = "1.0", features = ["full"] }
             0,
             "stdlib imports match no path dep and must resolve to nothing"
         );
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 
     /// Regression: `#include "mylib.h"` produced no cross-repo edge. The dep
@@ -2000,9 +1943,8 @@ tokio = { version = "1.0", features = ["full"] }
     fn cpp_include_keeps_filename() {
         use crate::types::{GraphEdge, ImportKind};
 
-        let tmp = std::env::temp_dir().join("multirepo-test-cpp-inc");
-        let _ = fs::remove_dir_all(&tmp);
-        fs::create_dir_all(&tmp).unwrap();
+        let temp_dir = tempdir().unwrap();
+        let tmp = temp_dir.path();
 
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
@@ -2032,7 +1974,5 @@ tokio = { version = "1.0", features = ["full"] }
             resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
         assert_eq!(cross.len(), 1, "expected the #include to resolve");
         assert_eq!(cross[0].to_file, "mylib.h");
-
-        let _ = fs::remove_dir_all(&tmp);
     }
 }
