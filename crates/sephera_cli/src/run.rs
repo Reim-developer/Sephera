@@ -771,7 +771,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
             &arguments.files,
         );
         let mut rendered = String::new();
-        let gates = if local_targets.is_empty() {
+        let mut gates = if local_targets.is_empty() {
             Vec::new()
         } else {
             let (normal, normal_gates) =
@@ -781,7 +781,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         };
         if !cross_targets.is_empty() {
             progress.set_message("Resolving cross-repo dependencies...");
-            let cross_section = multirepo_impact_section(
+            let (cross_section, cross_counts) = multirepo_impact_section(
                 &source.analysis_path,
                 &deps,
                 &cross_targets,
@@ -792,6 +792,30 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
                 rendered.push('\n');
             }
             rendered.push_str(&cross_section);
+            // Cross-repo targets gate exactly like in-repo ones: a CI
+            // job using --fail-on as a guard must not silently pass
+            // when the cross-repo section lists dependents.
+            gates.extend(threshold_gates(
+                &cross_counts,
+                arguments.fail_on,
+                |count| count.dependent_count,
+                |count| {
+                    arguments.symbol.as_ref().map_or_else(
+                        || {
+                            format!(
+                                "files depending on `{}` (cross-repo)",
+                                count.target
+                            )
+                        },
+                        |symbol| {
+                            format!(
+                                "files importing `{symbol}` from `{}` (cross-repo)",
+                                count.target
+                            )
+                        },
+                    )
+                },
+            ));
         }
         (rendered, gates)
     } else {
@@ -878,6 +902,15 @@ fn partition_multi_targets(
     (cross, local)
 }
 
+/// One cross-repo target and how many files in the current repo depend
+/// on it — the measurement `--fail-on` gates on, the same way the
+/// in-repo blast radius gates on its dependent count. Distinct files,
+/// not edges: one file importing twice is still one dependent.
+struct CrossTargetCount {
+    target: String,
+    dependent_count: u64,
+}
+
 /// Build the cross-repo dependents section for `sephera impact --multi`.
 ///
 /// Resolves cross-repo edges from the report's unresolved imports
@@ -885,7 +918,9 @@ fn partition_multi_targets(
 /// for each target file, reports the files in other repos that depend
 /// on it via those edges.
 ///
-/// Returns an empty string if there are no path dependencies or no
+/// Returns the section plus one count per target, so `--fail-on` can
+/// gate on cross-repo targets exactly like in-repo ones. The section
+/// is an empty string when there are no path dependencies or no
 /// cross-repo dependents — the section is omitted, not printed empty.
 fn multirepo_impact_section(
     repo_root: &std::path::Path,
@@ -893,20 +928,20 @@ fn multirepo_impact_section(
     target_files: &[String],
     report: &sephera_graph::types::GraphReport,
     symbol: Option<&str>,
-) -> Result<String> {
+) -> Result<(String, Vec<CrossTargetCount>)> {
     use sephera_graph::multirepo::{
         edge_matches_symbol, edge_matches_target, resolve_cross_repo_edges,
     };
     use std::fmt::Write as _;
 
     if deps.is_empty() {
-        return Ok(String::new());
+        return Ok((String::new(), Vec::new()));
     }
 
     // Resolve cross-repo edges from unresolved imports
     let cross_edges = resolve_cross_repo_edges(repo_root, &report.edges, deps)?;
     if cross_edges.is_empty() {
-        return Ok(String::new());
+        return Ok((String::new(), Vec::new()));
     }
 
     // For each target, find cross-repo dependents
@@ -916,6 +951,7 @@ fn multirepo_impact_section(
     section.push_str("## Cross-repo dependents (via path dependencies)\n\n");
 
     let mut found_any = false;
+    let mut counts = Vec::new();
     for target in target_files {
         // Match by canonical path, not by string suffix: every Rust dep
         // has a `src/lib.rs`, so suffix matching reports one library's
@@ -940,6 +976,21 @@ fn multirepo_impact_section(
                     edge_matches_symbol(e, symbol)
                 })
                 .collect();
+
+        // One count per target, even when it is zero: the gate must see
+        // every target the run was asked about, not only the ones with
+        // dependents. Distinct importing files, not edges.
+        let mut dependent_files: Vec<&str> = dependents
+            .iter()
+            .map(|edge| edge.from_file.as_str())
+            .collect();
+        dependent_files.sort_unstable();
+        dependent_files.dedup();
+        counts.push(CrossTargetCount {
+            target: target.clone(),
+            dependent_count: u64::try_from(dependent_files.len())
+                .unwrap_or(u64::MAX),
+        });
 
         if !dependents.is_empty() {
             found_any = true;
@@ -968,10 +1019,10 @@ fn multirepo_impact_section(
     }
 
     if !found_any {
-        return Ok(String::new());
+        return Ok((String::new(), counts));
     }
 
-    Ok(section)
+    Ok((section, counts))
 }
 
 /// Split out of `run_impact` because the symbol branch doubled the

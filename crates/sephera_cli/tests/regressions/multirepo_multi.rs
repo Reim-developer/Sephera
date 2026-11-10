@@ -305,6 +305,45 @@ fn multi_symbol_filter_matches_js_imported_names() {
     );
 }
 
+/// Bug: `--multi --fail-on 1` exited 0 even when the cross-repo section
+/// listed dependents, because cross-repo targets computed no gate at
+/// all. A CI job using `--fail-on` as a guard silently passed. The
+/// cross-repo counts must gate exactly like in-repo ones.
+/// Found by `CodeRabbit` on PR #68.
+#[test]
+fn multi_fail_on_gates_cross_repo_targets() {
+    let fixture = two_repo_fixture();
+    let main = fixture.path().join("main");
+
+    let output = run(
+        &main,
+        &["impact", "../dep/src/lib.rs", "--multi", "--fail-on", "1"],
+    );
+    assert_eq!(
+        output.status.code(),
+        Some(2),
+        "one dependent at --fail-on 1 must exit 2, got {} with stderr:\n{}",
+        output.status,
+        stderr(&output)
+    );
+    assert!(
+        stderr(&output).contains("threshold exceeded"),
+        "the gate failure must be named on stderr, got:\n{}",
+        stderr(&output)
+    );
+
+    // The threshold holding still passes: one dependent is under 2.
+    let held = run(
+        &main,
+        &["impact", "../dep/src/lib.rs", "--multi", "--fail-on", "2"],
+    );
+    assert!(
+        held.status.success(),
+        "--fail-on 2 must hold with one dependent, got stderr:\n{}",
+        stderr(&held)
+    );
+}
+
 /// tempdir holding a single repo whose path dep points INSIDE the repo
 /// (`foo = { path = "crates/foo" }`), the workspace layout.
 fn in_repo_path_dep_fixture() -> tempfile::TempDir {
