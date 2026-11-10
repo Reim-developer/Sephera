@@ -785,10 +785,41 @@ pub fn resolve_cross_repo_edges(
                     from_repo: from_repo.to_path_buf(),
                     from_file: edge.from.clone(),
                     to_repo: dep.path.clone(),
-                    to_file,
+                    to_file: to_file.clone(),
                     via: (*dep).clone(),
                     import_path: edge.import_path.clone(),
                 });
+
+                // Follow re-exports: if the resolved file is an entry point
+                // (lib.rs) and the imported symbol is re-exported from another
+                // module, also add an edge to the definition file.
+                // e.g., `use mylib::Config` → lib.rs has `pub use types::Config;`
+                // → also add edge to src/types.rs
+                if to_file.ends_with("lib.rs") {
+                    // Extract the symbol name from the import
+                    // e.g., "mylib::Config" → "Config", "mylib::types::Config" → "Config"
+                    let symbol = edge.import_path.rsplit("::").next()
+                        .or_else(|| edge.import_path.rsplit('.').next())
+                        .unwrap_or("");
+                    if !symbol.is_empty() {
+                        if let Some(mod_path) = follow_rust_reexport(&dep.path, &to_file, symbol) {
+                            // Resolve the module path to a file
+                            if let Some(def_file) = resolve_in_dep_repo(&dep.path, &dep.name, &mod_path).unwrap_or(None) {
+                                // Avoid duplicate if it's the same file
+                                if def_file != to_file {
+                                    cross_edges.push(CrossRepoEdge {
+                                        from_repo: from_repo.to_path_buf(),
+                                        from_file: edge.from.clone(),
+                                        to_repo: dep.path.clone(),
+                                        to_file: def_file,
+                                        via: (*dep).clone(),
+                                        import_path: edge.import_path.clone(),
+                                    });
+                                }
+                            }
+                        }
+                    }
+                }
             }
         } else {
             // Java: imports use reversed-domain names (com.example.mylib.Foo)
@@ -932,11 +963,65 @@ fn resolve_in_dep_repo(
     // Rust: lib.rs, JS: index.js (e.g., `use axum::Router` where Router is in lib.rs)
     for lib_candidate in ["src/lib.rs", "lib.rs", "src/index.js", "index.js"] {
         if dep_path.join(lib_candidate).exists() {
+            // Try to follow re-exports: if the imported symbol is re-exported
+            // from another module, also return that file.
+            // For now, return the entry point; the caller can follow re-exports.
             return Ok(Some(lib_candidate.to_string()));
         }
     }
 
     Ok(None)
+}
+
+/// Follow Rust `pub use` re-exports in a file.
+///
+/// Given a file like `src/lib.rs` containing `pub use types::Config;`,
+/// returns the module path (`types`) that the re-export comes from.
+/// Returns None if the file doesn't re-export the symbol.
+fn follow_rust_reexport(
+    dep_path: &Path,
+    file: &str,
+    symbol: &str,
+) -> Option<String> {
+    let content = std::fs::read_to_string(dep_path.join(file)).ok()?;
+    for line in content.lines() {
+        let line = line.trim();
+        // Match: pub use types::Config; or pub use types::{Config, Other};
+        // or pub use self::types::Config;
+        if line.starts_with("pub use ") {
+            let rest = line.strip_prefix("pub use ")?.trim().trim_end_matches(';');
+            // Handle pub use types::{A, B} — check if symbol is in the list
+            if let Some(brace_start) = rest.find('{') {
+                let modules = &rest[..brace_start].trim_end_matches(':');
+                let items = &rest[brace_start + 1..rest.find('}')?];
+                // Check if our symbol is in the item list
+                for item in items.split(',') {
+                    let item = item.trim();
+                    // Handle "Config as Renamed"
+                    let item_name = item.split(" as ").next().unwrap_or(item).trim();
+                    if item_name == symbol {
+                        // Return the module path (e.g., "types")
+                        let mod_path = modules.trim_start_matches("self::").trim_start_matches("crate::");
+                        return Some(mod_path.to_string());
+                    }
+                }
+            } else {
+                // Simple: pub use types::Config;
+                // Split into module path and symbol
+                if let Some(last_sep) = rest.rfind("::") {
+                    let sym = &rest[last_sep + 2..].trim();
+                    // Handle "Config as Renamed"
+                    let sym_name = sym.split_whitespace().next().unwrap_or(sym);
+                    if sym_name == symbol {
+                        let mod_path = rest[..last_sep].trim();
+                        let mod_path = mod_path.trim_start_matches("self::").trim_start_matches("crate::");
+                        return Some(mod_path.to_string());
+                    }
+                }
+            }
+        }
+    }
+    None
 }
 
 /// The first non-test `.go` file directly inside `dir`, by filename.
