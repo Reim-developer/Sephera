@@ -83,7 +83,7 @@ pub fn discover_path_dependencies(repo_root: &Path) -> anyhow::Result<Vec<PathDe
     deps.extend(discover_cargo_path_deps(repo_root)?);
     deps.extend(discover_npm_path_deps(repo_root)?);
     deps.extend(discover_python_path_deps(repo_root)?);
-    // Go after Python is proven.
+    deps.extend(discover_go_path_deps(repo_root)?);
     Ok(deps)
 }
 
@@ -132,6 +132,63 @@ fn discover_python_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDepende
                                     via_manifest: "pyproject.toml".to_string(),
                                 });
                             }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(deps)
+}
+
+/// Discover `replace` directives from `go.mod`.
+///
+/// Example:
+/// ```go
+/// replace example.com/mylib => ../mylib
+/// replace example.com/other v1.0.0 => ../other
+/// ```
+/// Only replacements pointing to local paths (starting with `.` or `/`)
+/// are path dependencies. Replacements pointing to other module versions
+/// are ignored.
+fn discover_go_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+    let manifest_path = repo_root.join("go.mod");
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let mut deps = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        // Skip comments and empty lines
+        if line.is_empty() || line.starts_with("//") {
+            continue;
+        }
+        // Match: replace <module> [version] => <path>
+        if let Some(rest) = line.strip_prefix("replace ") {
+            if let Some((left, right)) = rest.split_once("=>") {
+                let right = right.trim();
+                // Only local paths (not module versions)
+                if right.starts_with('.') || right.starts_with('/') {
+                    // Left side: module path (and optional version)
+                    // e.g., "example.com/mylib" or "example.com/mylib v1.0.0"
+                    let module = left.trim().split_whitespace().next().unwrap_or("");
+                    // Use the last segment as the name (e.g., "mylib" from "example.com/mylib")
+                    let name = module.rsplit('/').next().unwrap_or(module);
+                    if !name.is_empty() {
+                        let abs_path = if right.starts_with('/') {
+                            PathBuf::from(right)
+                        } else {
+                            repo_root.join(right)
+                        };
+                        if let Ok(canonical) = abs_path.canonicalize() {
+                            deps.push(PathDependency {
+                                name: name.to_string(),
+                                path: canonical,
+                                via_manifest: "go.mod".to_string(),
+                            });
                         }
                     }
                 }
@@ -300,6 +357,9 @@ fn resolve_in_dep_repo(
         candidates.push(format!("src/{}.py", dep_name));
         candidates.push(format!("src/{}/__init__.py", dep_name));
         candidates.push("__init__.py".to_string());
+        // Go: any .go file at root (package main or library)
+        // We check for common entry points; the resolver will find the right file
+        // via the module path logic below for non-empty remainders.
 
         for candidate in candidates {
             if dep_path.join(&candidate).exists() {
@@ -316,7 +376,7 @@ fn resolve_in_dep_repo(
     // JS: `mylib/utils` → `utils`
     let module_path = module_path.split('/').last().unwrap_or(module_path);
 
-    // Try common layouts: Rust first, then JS/TS, then Python
+    // Try common layouts: Rust, JS/TS, Python, Go
     let candidates = [
         format!("src/{}.rs", module_path),
         format!("src/{}/mod.rs", module_path),
@@ -331,6 +391,9 @@ fn resolve_in_dep_repo(
         format!("src/{}/__init__.py", module_path),
         format!("{}.py", module_path),
         format!("{}/__init__.py", module_path),
+        // Go: <module>.go, <module>/<file>.go (Go packages are directories)
+        format!("{}.go", module_path),
+        format!("{}/{}.go", module_path, module_path),
     ];
 
     for candidate in candidates {
@@ -437,6 +500,42 @@ dependencies = [
         assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "pyproject.toml");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discovers_go_path_dep() {
+        let tmp = std::env::temp_dir().join("multirepo-test-go");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create the dependency target
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("go.mod"), "module example.com/mylib\n\ngo 1.21\n").unwrap();
+        fs::write(dep_repo.join("mylib.go"), "package mylib\n").unwrap();
+
+        // Create the main repo with a replace directive
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("go.mod"),
+            r#"module example.com/myservice
+
+go 1.21
+
+require example.com/mylib v0.0.0
+
+replace example.com/mylib => ../mylib
+"#,
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps[0].name, "mylib");
+        assert_eq!(deps[0].via_manifest, "go.mod");
 
         let _ = fs::remove_dir_all(&tmp);
     }
