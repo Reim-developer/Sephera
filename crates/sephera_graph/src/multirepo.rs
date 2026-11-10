@@ -596,7 +596,12 @@ fn discover_cargo_path_deps(
                         // Canonicalize to handle ../ and symlinks; skip if it doesn't exist
                         if let Ok(canonical) = abs_path.canonicalize() {
                             deps.push(PathDependency {
-                                name: name.clone(),
+                                // Rust source spells `my-lib` as `my_lib`:
+                                // Cargo maps hyphens to underscores, and the
+                                // dep name is the lookup key for imports, so
+                                // storing the manifest spelling would make
+                                // every hyphenated dep silently unresolvable.
+                                name: name.replace('-', "_"),
                                 path: canonical,
                                 via_manifest: "Cargo.toml".to_string(),
                             });
@@ -1114,6 +1119,67 @@ serde = "1.0"
         assert_eq!(deps[0].via_manifest, "Cargo.toml");
         // Path should be canonicalized
         assert!(deps[0].path.ends_with("sephera_core"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: a hyphenated Cargo dep (`my-lib`) was stored as
+    /// "my-lib", but Rust source spells it `my_lib`, so the dep_map
+    /// lookup never matched and `--multi` silently reported no
+    /// cross-repo dependents. Cargo maps hyphens to underscores in
+    /// source code; the stored name must use the import spelling.
+    /// Found by CodeRabbit on PR #68.
+    #[test]
+    fn cargo_hyphenated_dep_name_normalizes_to_underscores() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-cargo-hyphen");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("my-lib");
+        fs::create_dir_all(dep_repo.join("src")).unwrap();
+        fs::write(dep_repo.join("src/types.rs"), "// types").unwrap();
+        fs::write(dep_repo.join("src/lib.rs"), "pub mod types;\n").unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("Cargo.toml"),
+            r#"
+[package]
+name = "my-service"
+version = "0.1.0"
+
+[dependencies]
+my-lib = { path = "../my-lib" }
+"#,
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
+        assert_eq!(deps[0].name, "my_lib");
+
+        // The edge a consumer actually writes must resolve.
+        let edge = GraphEdge {
+            from: "src/main.rs".to_string(),
+            to: None,
+            import_path: "my_lib::types::Config".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &deps).unwrap();
+        assert_eq!(
+            cross.len(),
+            1,
+            "a use of my_lib must resolve into the hyphenated dep"
+        );
+        assert_eq!(cross[0].to_file, "src/types.rs");
 
         let _ = fs::remove_dir_all(&tmp);
     }
