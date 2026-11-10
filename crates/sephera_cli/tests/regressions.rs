@@ -5,9 +5,9 @@
 //! file is the single target that pulls the `regressions/` modules
 //! in. Add a new area with one `#[path]` line.
 
+#[path = "regressions/multirepo_multi.rs"]
+mod multirepo_multi;
 #[path = "regressions/sarif.rs"]
 mod sarif;
 #[path = "regressions/tworef_paths.rs"]
 mod tworef_paths;
-#[path = "regressions/multirepo_multi.rs"]
-mod multirepo_multi;
