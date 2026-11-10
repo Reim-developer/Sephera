@@ -82,7 +82,62 @@ pub fn discover_path_dependencies(repo_root: &Path) -> anyhow::Result<Vec<PathDe
     let mut deps = Vec::new();
     deps.extend(discover_cargo_path_deps(repo_root)?);
     deps.extend(discover_npm_path_deps(repo_root)?);
-    // Python and Go after the Rust path is proven.
+    deps.extend(discover_python_path_deps(repo_root)?);
+    // Go after Python is proven.
+    Ok(deps)
+}
+
+/// Discover `file://` direct references from `pyproject.toml` (PEP 508).
+///
+/// Example: `mylib @ file:///../mylib` in `[project] dependencies`.
+/// Only `file://` URLs are path dependencies; version specs and git URLs
+/// are ignored (cannot be analyzed without source).
+fn discover_python_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+    let manifest_path = repo_root.join("pyproject.toml");
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let manifest: toml::Value = toml::from_str(&content)?;
+
+    let mut deps = Vec::new();
+    // [project] dependencies = ["mylib @ file:///../mylib", ...]
+    if let Some(project) = manifest.get("project").and_then(|v| v.as_table()) {
+        if let Some(dependencies) = project.get("dependencies").and_then(|v| v.as_array()) {
+            for dep_spec in dependencies {
+                if let Some(spec_str) = dep_spec.as_str() {
+                    // PEP 508: "name @ file:///path" or "name@file://..."
+                    if let Some((name_part, url_part)) = spec_str.split_once('@') {
+                        let name = name_part.trim();
+                        let url = url_part.trim();
+                        if url.starts_with("file://") {
+                            // file:///../mylib or file:///absolute/path
+                            // Note: file:// + /../ is a relative path with .., not absolute.
+                            // Only file:/// (three slashes) is truly absolute.
+                            let path_str = url.strip_prefix("file://").unwrap_or(url);
+                            let abs_path = if path_str.starts_with('/') && !path_str.starts_with("/..") {
+                                // file:///absolute/path — truly absolute
+                                PathBuf::from(path_str)
+                            } else {
+                                // file://../relative or file:///../relative — join with repo_root
+                                // Strip leading / if present (from file:///../ -> ../)
+                                let rel = path_str.strip_prefix('/').unwrap_or(path_str);
+                                repo_root.join(rel)
+                            };
+                            if let Ok(canonical) = abs_path.canonicalize() {
+                                deps.push(PathDependency {
+                                    name: name.to_string(),
+                                    path: canonical,
+                                    via_manifest: "pyproject.toml".to_string(),
+                                });
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
     Ok(deps)
 }
 
@@ -248,7 +303,7 @@ fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Optio
     // JS: `mylib/utils` → `utils`
     let module_path = module_path.split('/').last().unwrap_or(module_path);
 
-    // Try common layouts: Rust first, then JS/TS
+    // Try common layouts: Rust first, then JS/TS, then Python
     let candidates = [
         format!("src/{}.rs", module_path),
         format!("src/{}/mod.rs", module_path),
@@ -259,6 +314,10 @@ fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Optio
         format!("src/{}.ts", module_path),
         format!("src/{}/index.ts", module_path),
         format!("{}.ts", module_path),
+        format!("src/{}.py", module_path),
+        format!("src/{}/__init__.py", module_path),
+        format!("{}.py", module_path),
+        format!("{}/__init__.py", module_path),
     ];
 
     for candidate in candidates {
@@ -330,6 +389,41 @@ serde = "1.0"
         assert_eq!(deps[0].via_manifest, "Cargo.toml");
         // Path should be canonicalized
         assert!(deps[0].path.ends_with("sephera_core"));
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discovers_python_path_dep() {
+        let tmp = std::env::temp_dir().join("multirepo-test-py");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create the dependency target
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("mylib.py"), "class Config: pass").unwrap();
+
+        // Create the main repo with a file:// dep
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("pyproject.toml"),
+            r#"
+[project]
+name = "my-service"
+version = "0.1.0"
+dependencies = [
+    "mylib @ file:///../mylib",
+]
+"#,
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps[0].name, "mylib");
+        assert_eq!(deps[0].via_manifest, "pyproject.toml");
 
         let _ = fs::remove_dir_all(&tmp);
     }
