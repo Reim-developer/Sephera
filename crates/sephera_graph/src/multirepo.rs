@@ -80,7 +80,9 @@ pub struct CrossRepoEdge {
 ///
 /// Errors if a manifest exists but cannot be parsed. A missing manifest is
 /// not an error — the repo simply has no path dependencies.
-pub fn discover_path_dependencies(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+pub fn discover_path_dependencies(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let mut deps = Vec::new();
     deps.extend(discover_cargo_path_deps(repo_root)?);
     deps.extend(discover_npm_path_deps(repo_root)?);
@@ -98,7 +100,9 @@ pub fn discover_path_dependencies(repo_root: &Path) -> anyhow::Result<Vec<PathDe
 /// Example: `mylib @ file:///../mylib` in `[project] dependencies`.
 /// Only `file://` URLs are path dependencies; version specs and git URLs
 /// are ignored (cannot be analyzed without source).
-fn discover_python_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_python_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let manifest_path = repo_root.join("pyproject.toml");
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -110,25 +114,34 @@ fn discover_python_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDepende
     let mut deps = Vec::new();
     // [project] dependencies = ["mylib @ file:///../mylib", ...]
     if let Some(project) = manifest.get("project").and_then(|v| v.as_table()) {
-        if let Some(dependencies) = project.get("dependencies").and_then(|v| v.as_array()) {
+        if let Some(dependencies) =
+            project.get("dependencies").and_then(|v| v.as_array())
+        {
             for dep_spec in dependencies {
                 if let Some(spec_str) = dep_spec.as_str() {
                     // PEP 508: "name @ file:///path" or "name@file://..."
-                    if let Some((name_part, url_part)) = spec_str.split_once('@') {
+                    if let Some((name_part, url_part)) =
+                        spec_str.split_once('@')
+                    {
                         let name = name_part.trim();
                         let url = url_part.trim();
                         if url.starts_with("file://") {
                             // file:///../mylib or file:///absolute/path
                             // Note: file:// + /../ is a relative path with .., not absolute.
                             // Only file:/// (three slashes) is truly absolute.
-                            let path_str = url.strip_prefix("file://").unwrap_or(url);
-                            let abs_path = if path_str.starts_with('/') && !path_str.starts_with("/..") {
+                            let path_str =
+                                url.strip_prefix("file://").unwrap_or(url);
+                            let abs_path = if path_str.starts_with('/')
+                                && !path_str.starts_with("/..")
+                            {
                                 // file:///absolute/path — truly absolute
                                 PathBuf::from(path_str)
                             } else {
                                 // file://../relative or file:///../relative — join with repo_root
                                 // Strip leading / if present (from file:///../ -> ../)
-                                let rel = path_str.strip_prefix('/').unwrap_or(path_str);
+                                let rel = path_str
+                                    .strip_prefix('/')
+                                    .unwrap_or(path_str);
                                 repo_root.join(rel)
                             };
                             if let Ok(canonical) = abs_path.canonicalize() {
@@ -157,7 +170,9 @@ fn discover_python_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDepende
 /// Only replacements pointing to local paths (starting with `.` or `/`)
 /// are path dependencies. Replacements pointing to other module versions
 /// are ignored.
-fn discover_go_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_go_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let manifest_path = repo_root.join("go.mod");
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -180,7 +195,8 @@ fn discover_go_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>
                 if right.starts_with('.') || right.starts_with('/') {
                     // Left side: module path (and optional version)
                     // e.g., "example.com/mylib" or "example.com/mylib v1.0.0"
-                    let module = left.trim().split_whitespace().next().unwrap_or("");
+                    let module =
+                        left.trim().split_whitespace().next().unwrap_or("");
                     // Use the last segment as the name (e.g., "mylib" from "example.com/mylib")
                     let name = module.rsplit('/').next().unwrap_or(module);
                     if !name.is_empty() {
@@ -208,7 +224,9 @@ fn discover_go_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>
 ///
 /// Example: `includeBuild '../my-utils'` — combines independently-developed
 /// builds (e.g., app + library from separate Git repos).
-fn discover_gradle_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_gradle_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let mut deps = Vec::new();
 
     for settings_file in ["settings.gradle", "settings.gradle.kts"] {
@@ -282,12 +300,16 @@ fn read_gradle_project_name(build_dir: &Path) -> Option<String> {
                     // Try to extract quoted string
                     if let Some(start) = line.find('\'') {
                         if let Some(end) = line[start + 1..].find('\'') {
-                            return Some(line[start + 1..start + 1 + end].to_string());
+                            return Some(
+                                line[start + 1..start + 1 + end].to_string(),
+                            );
                         }
                     }
                     if let Some(start) = line.find('"') {
                         if let Some(end) = line[start + 1..].find('"') {
-                            return Some(line[start + 1..start + 1 + end].to_string());
+                            return Some(
+                                line[start + 1..start + 1 + end].to_string(),
+                            );
                         }
                     }
                 }
@@ -301,7 +323,9 @@ fn read_gradle_project_name(build_dir: &Path) -> Option<String> {
 ///
 /// Example: `<modules><module>../my-utils</module></modules>` — modules
 /// build from source together as part of the reactor.
-fn discover_maven_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_maven_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let manifest_path = repo_root.join("pom.xml");
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -330,7 +354,8 @@ fn discover_maven_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependen
                     let path_str = &line[start + "<module>".len()..end];
                     let path_str = path_str.trim();
                     if !path_str.is_empty()
-                        && (path_str.starts_with('.') || path_str.starts_with('/'))
+                        && (path_str.starts_with('.')
+                            || path_str.starts_with('/'))
                     {
                         let abs_path = if path_str.starts_with('/') {
                             PathBuf::from(path_str)
@@ -362,7 +387,9 @@ fn discover_maven_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependen
 ///
 /// Example: `add_subdirectory(../my-utils)` — adds a subdirectory to the build,
 /// commonly used for vendored or locally-developed dependencies.
-fn discover_cmake_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_cmake_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let manifest_path = repo_root.join("CMakeLists.txt");
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -415,14 +442,20 @@ fn discover_cmake_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependen
 ///
 /// - WORKSPACE: `local_repository(name = "my_utils", path = "../my-utils")`
 /// - MODULE.bazel: `local_path_override(module_name = "my_utils", path = "../my-utils")`
-fn discover_bazel_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_bazel_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let mut deps = Vec::new();
 
     // WORKSPACE file
     let workspace_path = repo_root.join("WORKSPACE");
     if workspace_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&workspace_path) {
-            deps.extend(parse_bazel_local_repos(&content, repo_root, "WORKSPACE"));
+            deps.extend(parse_bazel_local_repos(
+                &content,
+                repo_root,
+                "WORKSPACE",
+            ));
         }
     }
 
@@ -430,7 +463,11 @@ fn discover_bazel_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependen
     let module_path = repo_root.join("MODULE.bazel");
     if module_path.exists() {
         if let Ok(content) = std::fs::read_to_string(&module_path) {
-            deps.extend(parse_bazel_local_repos(&content, repo_root, "MODULE.bazel"));
+            deps.extend(parse_bazel_local_repos(
+                &content,
+                repo_root,
+                "MODULE.bazel",
+            ));
         }
     }
 
@@ -500,7 +537,8 @@ fn parse_bazel_local_repos(
         let name = extract_bazel_attr(rule_text, "name")
             .or_else(|| extract_bazel_attr(rule_text, "module_name"))
             .unwrap_or_default();
-        let path_str = extract_bazel_attr(rule_text, "path").unwrap_or_default();
+        let path_str =
+            extract_bazel_attr(rule_text, "path").unwrap_or_default();
 
         if !name.is_empty()
             && !path_str.is_empty()
@@ -541,7 +579,9 @@ fn extract_bazel_attr(line: &str, attr: &str) -> Option<String> {
 }
 
 /// Discover `path` dependencies from `Cargo.toml`.
-fn discover_cargo_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_cargo_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let manifest_path = repo_root.join("Cargo.toml");
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -557,7 +597,9 @@ fn discover_cargo_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependen
             for (name, spec) in table {
                 // spec can be a string (version) or a table ({ path = ..., ... })
                 if let Some(table) = spec.as_table() {
-                    if let Some(path_str) = table.get("path").and_then(|v| v.as_str()) {
+                    if let Some(path_str) =
+                        table.get("path").and_then(|v| v.as_str())
+                    {
                         let abs_path = repo_root.join(path_str);
                         // Canonicalize to handle ../ and symlinks; skip if it doesn't exist
                         if let Ok(canonical) = abs_path.canonicalize() {
@@ -576,7 +618,9 @@ fn discover_cargo_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependen
 }
 
 /// Discover `file:` dependencies from `package.json`.
-fn discover_npm_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_npm_path_deps(
+    repo_root: &Path,
+) -> anyhow::Result<Vec<PathDependency>> {
     let manifest_path = repo_root.join("package.json");
     if !manifest_path.exists() {
         return Ok(Vec::new());
@@ -606,6 +650,55 @@ fn discover_npm_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency
         }
     }
     Ok(deps)
+}
+
+/// The part of an import path that names a file inside the dependency repo.
+///
+/// Find where the dep name appears in the import path and return what follows:
+/// e.g., `"example.com/mylib"` with dep `"mylib"` → `""`;
+/// e.g., `"mylib::types"` with dep `"mylib"` → `"types"`.
+///
+/// `go_segment_end` is the byte index just past the module segment for Go
+/// imports (see the segment scan in [`resolve_cross_repo_edges`]); when set,
+/// the remainder starts at that real segment boundary instead of `rfind`'s
+/// substring guess, so `"example.com/mylib/mylibutil"` yields `"mylibutil"`,
+/// not `"util"`.
+///
+/// C/C++ imports are filenames, not module paths: for `#include "mylib.h"`
+/// the dep name is part of the filename, and stripping it would mangle
+/// `"mylib.h"` into `"h"`. When the dep comes from a C/C++ manifest and the
+/// dep name is followed by `.`, the whole import path is kept.
+fn import_remainder<'a>(
+    import_path: &'a str,
+    dep: &PathDependency,
+    first_segment: &str,
+    go_segment_end: Option<usize>,
+) -> &'a str {
+    if let Some(end) = go_segment_end {
+        // Go: the subpackage path after the module segment —
+        // "sub" for "example.com/mylib/sub", "" for the module root.
+        return import_path[end..].trim_start_matches('/');
+    }
+    let Some(pos) = import_path.rfind(&dep.name) else {
+        // Fallback: use first_segment logic
+        return import_path[first_segment.len()..]
+            .trim_start_matches(':')
+            .trim_start_matches('.')
+            .trim_start_matches('/');
+    };
+    let after = &import_path[pos + dep.name.len()..];
+    let is_cpp_dep = matches!(
+        dep.via_manifest.as_str(),
+        "CMakeLists.txt" | "WORKSPACE" | "BUILD" | "BUILD.bazel"
+    );
+    if is_cpp_dep && after.starts_with('.') {
+        import_path
+    } else {
+        after
+            .trim_start_matches(':')
+            .trim_start_matches('.')
+            .trim_start_matches('/')
+    }
 }
 
 /// Resolve cross-repo edges for one repo's unresolved imports.
@@ -645,15 +738,49 @@ pub fn resolve_cross_repo_edges(
         // e.g., "sephera_core::types::GraphReport" → "sephera_core"
         let first_segment = edge.import_path.split("::").next().unwrap_or("");
         // Also handle Python-style "sephera_core.types" and JS-style
-        let first_segment = first_segment.split('.').next().unwrap_or(first_segment);
+        let first_segment =
+            first_segment.split('.').next().unwrap_or(first_segment);
 
-        if let Some(dep) = dep_map.get(first_segment) {
-            // Try to resolve the remainder against the dep repo
-            let remainder = edge.import_path[first_segment.len()..]
-                .trim_start_matches(':')
-                .trim_start_matches('.')
-                .trim_start_matches('/');
-            if let Some(to_file) = resolve_in_dep_repo(&dep.path, &dep.name, remainder)? {
+        // Try direct match first
+        let mut matched_dep = dep_map.get(first_segment);
+        // Byte index just past the matched segment, set only by the Go
+        // segment scan below, so the remainder starts at a real segment
+        // boundary instead of rfind's substring guess.
+        let mut go_segment_end: Option<usize> = None;
+
+        // Go: `import "example.com/mylib"` or `"example.com/mylib/sub"` —
+        // the dep name is the module path's last segment, which sits at the
+        // end for a module-root import but in the middle for a subpackage
+        // import. Match it as a complete '/'-separated segment, scanning
+        // from the right; a substring inside a longer segment (e.g. the
+        // "mylib" in "mylibutil") must not count. Other languages never need
+        // this: their first-segment match already fired above, and a '/' in
+        // their imports is a subpath, not a module path.
+        let has_go_dep = deps.iter().any(|d| d.via_manifest == "go.mod");
+        if matched_dep.is_none() && has_go_dep && edge.import_path.contains('/')
+        {
+            let mut seg_end = edge.import_path.len();
+            for seg in edge.import_path.rsplit('/') {
+                if let Some(dep) = dep_map.get(seg) {
+                    matched_dep = Some(dep);
+                    go_segment_end = Some(seg_end);
+                    break;
+                }
+                seg_end -= seg.len() + 1; // step over the segment and its '/'
+            }
+        }
+
+        if let Some(dep) = matched_dep {
+            // Try to resolve the remainder against the dep repo.
+            let remainder = import_remainder(
+                &edge.import_path,
+                dep,
+                first_segment,
+                go_segment_end,
+            );
+            if let Some(to_file) =
+                resolve_in_dep_repo(&dep.path, &dep.name, remainder)?
+            {
                 cross_edges.push(CrossRepoEdge {
                     from_repo: from_repo.to_path_buf(),
                     from_file: edge.from.clone(),
@@ -674,7 +801,8 @@ pub fn resolve_cross_repo_edges(
                     || dep.via_manifest == "pom.xml"
                 {
                     // Convert com.example.mylib.Foo → com/example/mylib/Foo.java
-                    let java_path = edge.import_path.replace('.', "/") + ".java";
+                    let java_path =
+                        edge.import_path.replace('.', "/") + ".java";
                     for base in ["src/main/java", "src"] {
                         let candidate = format!("{}/{}", base, java_path);
                         if dep.path.join(&candidate).exists() {
@@ -727,15 +855,24 @@ fn resolve_in_dep_repo(
         candidates.push(format!("src/{}.py", dep_name));
         candidates.push(format!("src/{}/__init__.py", dep_name));
         candidates.push("__init__.py".to_string());
-        // Go: any .go file at root (package main or library)
-        // We check for common entry points; the resolver will find the right file
-        // via the module path logic below for non-empty remainders.
+        // Go: `import "example.com/mylib"` names the module root — the package
+        // is the .go files at the dep root. Prefer the conventional <name>.go;
+        // the directory scan below covers unconventional filenames.
+        candidates.push(format!("{dep_name}.go"));
 
         for candidate in candidates {
             if dep_path.join(&candidate).exists() {
                 return Ok(Some(candidate));
             }
         }
+
+        // Go module-root import with an unconventional filename (e.g. the
+        // package lives in server.go, not mylib.go): take the first non-test
+        // .go file at the dep root. Test files never satisfy an import.
+        if let Some(first) = first_go_file(dep_path) {
+            return Ok(Some(first));
+        }
+
         return Ok(None);
     }
 
@@ -780,6 +917,17 @@ fn resolve_in_dep_repo(
         }
     }
 
+    // Go: subpackage import ("example.com/mylib/sub") — a Go package is a
+    // directory, and its files are rarely named after the directory, so the
+    // <module>/<module>.go candidate above misses the common case.
+    // Resolve to the first non-test .go file in that directory.
+    let dir = dep_path.join(module_path);
+    if dir.is_dir() {
+        if let Some(first) = first_go_file(&dir) {
+            return Ok(Some(format!("{module_path}/{first}")));
+        }
+    }
+
     // Fallback: symbol might be defined or re-exported in entry point
     // Rust: lib.rs, JS: index.js (e.g., `use axum::Router` where Router is in lib.rs)
     for lib_candidate in ["src/lib.rs", "lib.rs", "src/index.js", "index.js"] {
@@ -789,6 +937,29 @@ fn resolve_in_dep_repo(
     }
 
     Ok(None)
+}
+
+/// The first non-test `.go` file directly inside `dir`, by filename.
+///
+/// A Go package is the set of `.go` files in one directory; an import of the
+/// package cannot be satisfied by its test files, so `*_test.go` is skipped.
+/// Returns the bare filename. [`None`] when the directory holds no package.
+///
+/// [`None`]: Option::None
+fn first_go_file(dir: &Path) -> Option<String> {
+    let entries = std::fs::read_dir(dir).ok()?;
+    let mut go_files: Vec<String> = entries
+        .filter_map(Result::ok)
+        .map(|e| e.file_name().to_string_lossy().into_owned())
+        .filter(|name| {
+            let is_go_source = std::path::Path::new(name)
+                .extension()
+                .is_some_and(|ext| ext.eq_ignore_ascii_case("go"));
+            is_go_source && !name.ends_with("_test.go")
+        })
+        .collect();
+    go_files.sort_unstable();
+    go_files.into_iter().next()
 }
 
 #[cfg(test)]
@@ -891,7 +1062,11 @@ dependencies = [
         // Create the dependency target
         let dep_repo = tmp.join("mylib");
         fs::create_dir_all(&dep_repo).unwrap();
-        fs::write(dep_repo.join("go.mod"), "module example.com/mylib\n\ngo 1.21\n").unwrap();
+        fs::write(
+            dep_repo.join("go.mod"),
+            "module example.com/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
         fs::write(dep_repo.join("mylib.go"), "package mylib\n").unwrap();
 
         // Create the main repo with a replace directive
@@ -1100,11 +1275,209 @@ tokio = { version = "1.0", features = ["full"] }
             items: vec![],
         };
 
-        let cross = resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
         assert_eq!(cross.len(), 1);
         assert_eq!(cross[0].from_file, "src/main.rs");
         assert_eq!(cross[0].to_file, "src/types.rs");
         assert_eq!(cross[0].import_path, "sephera_core::types::GraphReport");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: `import "example.com/mylib"` (a Go module-root import)
+    /// produced no cross-repo edge. The dep matched on its last path segment,
+    /// but `resolve_in_dep_repo` had no Go candidate for the empty remainder,
+    /// so the edge was silently dropped. Found by running the real binary on
+    /// 2026-11-01: `sephera impact --multi ../dep/mylib.go` printed nothing.
+    #[test]
+    fn go_module_root_import_resolves() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-go-root");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(
+            dep_repo.join("go.mod"),
+            "module example.com/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(dep_repo.join("mylib.go"), "package mylib\n").unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "go.mod".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "main.go".to_string(),
+            to: None,
+            import_path: "example.com/mylib".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(
+            cross.len(),
+            1,
+            "expected the module-root import to resolve"
+        );
+        assert_eq!(cross[0].to_file, "mylib.go");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: a Go module-root import whose package file is not named
+    /// after the module (e.g. server.go, not mylib.go) also produced no edge.
+    /// Same real-binary run as `go_module_root_import_resolves`.
+    #[test]
+    fn go_module_root_import_unconventional_filename() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-go-server");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(
+            dep_repo.join("go.mod"),
+            "module example.com/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(dep_repo.join("server.go"), "package mylib\n").unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "go.mod".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "main.go".to_string(),
+            to: None,
+            import_path: "example.com/mylib".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(
+            cross.len(),
+            1,
+            "expected the module-root import to resolve"
+        );
+        assert_eq!(cross[0].to_file, "server.go");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: `import "example.com/mylib/sub"` (a Go subpackage import)
+    /// produced no edge — Go packages are directories whose files are rarely
+    /// named after the directory, so the `<module>/<module>.go` candidate
+    /// missed the common layout.
+    #[test]
+    fn go_subpackage_import_resolves() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-go-sub");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(dep_repo.join("sub")).unwrap();
+        fs::write(
+            dep_repo.join("go.mod"),
+            "module example.com/mylib\n\ngo 1.21\n",
+        )
+        .unwrap();
+        fs::write(dep_repo.join("sub/helper.go"), "package sub\n").unwrap();
+
+        let main_repo = tmp.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "go.mod".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "main.go".to_string(),
+            to: None,
+            import_path: "example.com/mylib/sub".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(cross.len(), 1, "expected the subpackage import to resolve");
+        assert_eq!(cross[0].to_file, "sub/helper.go");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: `#include "mylib.h"` produced no cross-repo edge. The dep
+    /// matched, but the remainder computation stripped the dep name out of the
+    /// filename, turning "mylib.h" into "h", which matched nothing. Found by
+    /// running the real binary on 2026-11-01:
+    /// `sephera impact --multi ../mylib/mylib.h` printed nothing.
+    #[test]
+    fn cpp_include_keeps_filename() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let tmp = std::env::temp_dir().join("multirepo-test-cpp-inc");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("CMakeLists.txt"), "project(mylib)\n").unwrap();
+        fs::write(dep_repo.join("mylib.h"), "#pragma once\n").unwrap();
+
+        let main_repo = tmp.join("my-app");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "CMakeLists.txt".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "main.cpp".to_string(),
+            to: None,
+            import_path: "mylib.h".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec![],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(cross.len(), 1, "expected the #include to resolve");
+        assert_eq!(cross[0].to_file, "mylib.h");
 
         let _ = fs::remove_dir_all(&tmp);
     }

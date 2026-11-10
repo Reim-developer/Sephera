@@ -862,7 +862,9 @@ fn multirepo_impact_section(
     target_files: &[String],
     report: &sephera_graph::types::GraphReport,
 ) -> Result<String> {
-    use sephera_graph::multirepo::{discover_path_dependencies, resolve_cross_repo_edges};
+    use sephera_graph::multirepo::{
+        discover_path_dependencies, resolve_cross_repo_edges,
+    };
 
     // Discover path deps from the current repo
     let deps = discover_path_dependencies(repo_root)?;
@@ -871,7 +873,8 @@ fn multirepo_impact_section(
     }
 
     // Resolve cross-repo edges from unresolved imports
-    let cross_edges = resolve_cross_repo_edges(repo_root, &report.edges, &deps)?;
+    let cross_edges =
+        resolve_cross_repo_edges(repo_root, &report.edges, &deps)?;
     if cross_edges.is_empty() {
         return Ok(String::new());
     }
@@ -896,14 +899,15 @@ fn multirepo_impact_section(
             .collect::<Vec<_>>()
             .join("/");
 
-        let dependents: Vec<&sephera_graph::multirepo::CrossRepoEdge> = cross_edges
-            .iter()
-            .filter(|e| {
-                e.to_file.ends_with(&target_suffix)
-                    || target.ends_with(&e.to_file)
-                    || e.to_file == *target
-            })
-            .collect();
+        let dependents: Vec<&sephera_graph::multirepo::CrossRepoEdge> =
+            cross_edges
+                .iter()
+                .filter(|e| {
+                    e.to_file.ends_with(&target_suffix)
+                        || target.ends_with(&e.to_file)
+                        || e.to_file == *target
+                })
+                .collect();
 
         if !dependents.is_empty() {
             found_any = true;
