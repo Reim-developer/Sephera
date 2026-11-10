@@ -230,3 +230,77 @@ fn multi_target_matches_only_its_own_dep_repo() {
         "depA's importer must NOT leak into depB's report, got:\n{out_b}"
     );
 }
+
+/// tempdir holding `main/` (npm `file:` dep on `dep/`) where the
+/// consumer imports one name from the library.
+fn js_two_repo_fixture() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    write_file(
+        dir,
+        "dep/package.json",
+        b"{\"name\": \"mylib\", \"version\": \"1.0.0\", \"main\": \"index.js\"}\n",
+    );
+    write_file(
+        dir,
+        "dep/index.js",
+        b"export function greet() {}\nexport function farewell() {}\n",
+    );
+    write_file(
+        dir,
+        "main/package.json",
+        b"{\"name\": \"main\", \"version\": \"1.0.0\", \"dependencies\": {\"mylib\": \"file:../dep\"}}\n",
+    );
+    write_file(
+        dir,
+        "main/index.js",
+        b"import { greet } from 'mylib';\nconsole.log(greet());\n",
+    );
+    temp_dir
+}
+
+/// Bug: `--multi --symbol greet` dropped every JS dependent, because
+/// the filter read only the import path (`mylib`) while the imported
+/// names live in the edge's items (`greet`). The symbol filter must
+/// match the names too. Found by `CodeRabbit` on PR #68.
+#[test]
+fn multi_symbol_filter_matches_js_imported_names() {
+    let fixture = js_two_repo_fixture();
+    let main = fixture.path().join("main");
+
+    let output = run(
+        &main,
+        &["impact", "../dep/index.js", "--multi", "--symbol", "greet"],
+    );
+    assert!(
+        output.status.success(),
+        "--symbol greet must succeed, got stderr:\n{}",
+        stderr(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("imports `mylib`"),
+        "the JS importer of greet must be listed, got:\n{out}"
+    );
+
+    let missed = run(
+        &main,
+        &[
+            "impact",
+            "../dep/index.js",
+            "--multi",
+            "--symbol",
+            "farewell",
+        ],
+    );
+    assert!(
+        missed.status.success(),
+        "--symbol farewell must succeed, got stderr:\n{}",
+        stderr(&missed)
+    );
+    assert!(
+        !stdout(&missed).contains("## Cross-repo dependents"),
+        "no file imports farewell, so no cross-repo section, got:\n{}",
+        stdout(&missed)
+    );
+}

@@ -65,6 +65,12 @@ pub struct CrossRepoEdge {
     pub via: PathDependency,
     /// The import path as written (e.g., "`sephera_core::types::GraphReport`").
     pub import_path: String,
+    /// The names the importing file takes from the target, as the edge
+    /// recorded them (e.g., `["greet"]` for `import { greet } from
+    /// 'mylib'`). For JS and similar languages the import path is only
+    /// the module (`mylib`); without the names, `--symbol` filtering
+    /// cannot see what was actually imported and drops every dependent.
+    pub items: Vec<String>,
 }
 
 /// Discover path dependencies from a repo's manifests.
@@ -730,6 +736,34 @@ fn package_segment(import_path: &str) -> &str {
     }
 }
 
+/// Whether a cross-repo edge imports the requested symbol.
+///
+/// Matches the import path by its suffix rules (`::sym`, `.sym`,
+/// `/sym`, or equal), and also matches the imported names the edge
+/// carries: for JS and similar languages the import path is only the
+/// module (`mylib`), and the names live in [`CrossRepoEdge::items`].
+/// `None` matches everything.
+#[must_use]
+pub fn edge_matches_symbol(edge: &CrossRepoEdge, symbol: Option<&str>) -> bool {
+    let Some(sym) = symbol else {
+        return true;
+    };
+    import_path_matches_symbol(&edge.import_path, sym)
+        || edge
+            .items
+            .iter()
+            .any(|item| import_path_matches_symbol(item, sym))
+}
+
+/// Whether one import spelling names the symbol: equal to it, or ending
+/// in `::sym`, `.sym`, or `/sym`.
+fn import_path_matches_symbol(import: &str, sym: &str) -> bool {
+    import == sym
+        || import.ends_with(&format!("::{sym}"))
+        || import.ends_with(&format!(".{sym}"))
+        || import.ends_with(&format!("/{sym}"))
+}
+
 /// Whether a cross-repo edge points at the target file.
 ///
 /// Compares canonical paths, not string suffixes. Every Rust dep has a
@@ -847,6 +881,7 @@ pub fn resolve_cross_repo_edges(
                     to_file: to_file.clone(),
                     via: (*dep).clone(),
                     import_path: edge.import_path.clone(),
+                    items: edge.items.clone(),
                 });
 
                 // Follow re-exports: if the resolved file is an entry point
@@ -880,6 +915,7 @@ pub fn resolve_cross_repo_edges(
                                         to_file: def_file,
                                         via: (*dep).clone(),
                                         import_path: edge.import_path.clone(),
+                                        items: edge.items.clone(),
                                     });
                                 }
                             }
@@ -910,6 +946,7 @@ pub fn resolve_cross_repo_edges(
                                 to_file: candidate,
                                 via: dep.clone(),
                                 import_path: edge.import_path.clone(),
+                                items: edge.items.clone(),
                             });
                             break;
                         }
@@ -1727,6 +1764,7 @@ tokio = { version = "1.0", features = ["full"] }
                 via_manifest: "Cargo.toml".to_string(),
             },
             import_path: "dep_b::helper".to_string(),
+            items: vec![],
         };
         let target_a = dep_a.join("src/lib.rs").canonicalize().unwrap();
         let target_b = dep_b.join("src/lib.rs").canonicalize().unwrap();
@@ -1737,6 +1775,60 @@ tokio = { version = "1.0", features = ["full"] }
         assert!(
             edge_matches_target(&edge_to_b, &target_b),
             "the same edge must match depB's lib.rs"
+        );
+    }
+
+    /// Regression: `--symbol` filtering read only `import_path`, so for
+    /// JS `import { greet } from 'mylib'` — whose import path is just
+    /// `mylib` and whose names live in `items` — `--multi --symbol
+    /// greet` dropped every dependent. `CrossRepoEdge` must carry the
+    /// names, and the filter must match against them too. Found by
+    /// `CodeRabbit` on PR #68.
+    #[test]
+    fn symbol_filter_matches_imported_names() {
+        use crate::types::{GraphEdge, ImportKind};
+
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir = temp_dir.path();
+        let dep_repo = dir.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("index.js"), "export function greet() {}")
+            .unwrap();
+
+        let main_repo = dir.join("my-service");
+        fs::create_dir_all(&main_repo).unwrap();
+
+        let dep = PathDependency {
+            name: "mylib".to_string(),
+            path: dep_repo.canonicalize().unwrap(),
+            via_manifest: "package.json".to_string(),
+        };
+        let edge = GraphEdge {
+            from: "index.js".to_string(),
+            to: None,
+            import_path: "mylib".to_string(),
+            resolved: false,
+            local_gap: false,
+            cfg_gated: false,
+            kind: ImportKind::Dependency,
+            items: vec!["greet".to_string()],
+        };
+
+        let cross =
+            resolve_cross_repo_edges(&main_repo, &[edge], &[dep]).unwrap();
+        assert_eq!(cross.len(), 1);
+        assert_eq!(cross[0].items, ["greet"]);
+        assert!(
+            edge_matches_symbol(&cross[0], Some("greet")),
+            "the imported name must match the symbol"
+        );
+        assert!(
+            !edge_matches_symbol(&cross[0], Some("farewell")),
+            "a name that was not imported must not match"
+        );
+        assert!(
+            edge_matches_symbol(&cross[0], None),
+            "no symbol filter matches everything"
         );
     }
 

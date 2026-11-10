@@ -873,7 +873,7 @@ fn multirepo_impact_section(
     symbol: Option<&str>,
 ) -> Result<String> {
     use sephera_graph::multirepo::{
-        discover_path_dependencies, edge_matches_target,
+        discover_path_dependencies, edge_matches_symbol, edge_matches_target,
         resolve_cross_repo_edges,
     };
     use std::fmt::Write as _;
@@ -916,15 +916,10 @@ fn multirepo_impact_section(
                         return false;
                     }
                     // If --symbol is given, only report edges importing that symbol.
-                    // e.g., --symbol greet matches `mylib::greet` but not `mylib::farewell`.
-                    symbol.is_none_or(|sym| {
-                        let import = &e.import_path;
-                        // Match: ends with ::sym, .sym, /sym, or equals sym
-                        import == sym
-                            || import.ends_with(&format!("::{sym}"))
-                            || import.ends_with(&format!(".{sym}"))
-                            || import.ends_with(&format!("/{sym}"))
-                    })
+                    // e.g., --symbol greet matches `mylib::greet` but not `mylib::farewell`,
+                    // and for JS `import { greet } from 'mylib'` it matches the
+                    // imported name, since the import path alone is just `mylib`.
+                    edge_matches_symbol(e, symbol)
                 })
                 .collect();
 
