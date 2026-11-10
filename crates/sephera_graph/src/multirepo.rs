@@ -1146,11 +1146,11 @@ serde = "1.0"
     }
 
     /// Regression: a hyphenated Cargo dep (`my-lib`) was stored as
-    /// "my-lib", but Rust source spells it `my_lib`, so the dep_map
+    /// "my-lib", but Rust source spells it `my_lib`, so the `dep_map`
     /// lookup never matched and `--multi` silently reported no
     /// cross-repo dependents. Cargo maps hyphens to underscores in
     /// source code; the stored name must use the import spelling.
-    /// Found by CodeRabbit on PR #68.
+    /// Found by `CodeRabbit` on PR #68.
     #[test]
     fn cargo_hyphenated_dep_name_normalizes_to_underscores() {
         use crate::types::{GraphEdge, ImportKind};
@@ -1631,7 +1631,7 @@ tokio = { version = "1.0", features = ["full"] }
     /// and left the remainder `_helper`, matching nothing, so resolution
     /// fell back to the entry point. The dep name sits at byte 0 when it
     /// matched, so the remainder must be sliced from the matched prefix.
-    /// Found by CodeRabbit on PR #68.
+    /// Found by `CodeRabbit` on PR #68.
     #[test]
     fn remainder_uses_matched_prefix_not_rfind() {
         use crate::types::{GraphEdge, ImportKind};
@@ -1681,10 +1681,10 @@ tokio = { version = "1.0", features = ["full"] }
 
     /// Regression: `import "mylib/utils"` produced no cross-repo edge.
     /// `first_segment` split only on `::` and `.`, so it came out as
-    /// "mylib/utils" and the dep_map lookup missed; the only `/`-aware
+    /// "mylib/utils" and the `dep_map` lookup missed; the only `/`-aware
     /// fallback was the Go scan, which runs only with a go.mod dep. The
     /// package segment before the first `/` is the dep name (two segments
-    /// for scoped `@scope/pkg` packages). Found by CodeRabbit on PR #68.
+    /// for scoped `@scope/pkg` packages). Found by `CodeRabbit` on PR #68.
     #[test]
     fn js_subpath_import_matches_package_name() {
         use crate::types::{GraphEdge, ImportKind};
@@ -1734,7 +1734,7 @@ tokio = { version = "1.0", features = ["full"] }
     /// builds whenever a `replace` directive existed. The scan steps
     /// `seg_end` left past every non-matching segment, including the
     /// leftmost one, which has no `/` to step over: for `net/http`,
-    /// `seg_end` went 8 → 3 → 3 - 4. Found by CodeRabbit on PR #68; the
+    /// `seg_end` went 8 → 3 → 3 - 4. Found by `CodeRabbit` on PR #68; the
     /// existing Go fixtures never caught it because every import matched
     /// a dependency. The scan must return no edge, not a panic.
     #[test]
