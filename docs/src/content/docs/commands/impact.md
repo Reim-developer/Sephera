@@ -336,6 +336,20 @@ dependency that made the edge possible. The section is omitted entirely when
 there are no path dependencies or no cross-repo dependents — there is no
 empty section.
 
+Targets are split per file: a target inside a path dependency gets the
+cross-repo section, and every other target gets its normal in-repo blast
+radius, so one run can mix both —
+
+```bash
+# the dep target reports cross-repo dependents, the local target its
+# in-repo blast radius, in one report
+sephera impact ../mylib/src/lib.rs src/main.rs --multi
+```
+
+A target that is in no repo and in no path dependency is an error, exactly
+as without `--multi`: a typo or a path outside every known repo is reported
+as unresolvable, never silently answered with an empty report.
+
 Supported manifests: `Cargo.toml` (Rust path deps), `package.json` (npm
 `file:`), `pyproject.toml` (PEP 508 `file://`), `go.mod` (`replace`),
 `settings.gradle`/`settings.gradle.kts` (`includeBuild`), `pom.xml`
@@ -354,7 +368,8 @@ Three rules that matter:
 
 Known limitation: `--format json` is ignored for cross-repo targets — the
 output renders as Markdown. JSON for the cross-repo section is not yet
-implemented.
+implemented. In a mixed run the in-repo part renders as JSON and the
+cross-repo section follows it as Markdown.
 
 > Two repos, one change
 > the shock jumps the fence unseen
