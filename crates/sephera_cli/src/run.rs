@@ -783,6 +783,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
             progress.set_message("Resolving cross-repo dependencies...");
             let cross_section = multirepo_impact_section(
                 &source.analysis_path,
+                &deps,
                 &cross_targets,
                 &report,
                 arguments.symbol.as_deref(),
@@ -879,33 +880,31 @@ fn partition_multi_targets(
 
 /// Build the cross-repo dependents section for `sephera impact --multi`.
 ///
-/// Discovers path dependencies from the current repo, resolves cross-repo
-/// edges from the report's unresolved imports, and for each target file,
-/// reports the files in other repos that depend on it via those edges.
+/// Resolves cross-repo edges from the report's unresolved imports
+/// against the path dependencies `run_impact` already discovered, and
+/// for each target file, reports the files in other repos that depend
+/// on it via those edges.
 ///
 /// Returns an empty string if there are no path dependencies or no
 /// cross-repo dependents — the section is omitted, not printed empty.
 fn multirepo_impact_section(
     repo_root: &std::path::Path,
+    deps: &[sephera_graph::multirepo::PathDependency],
     target_files: &[String],
     report: &sephera_graph::types::GraphReport,
     symbol: Option<&str>,
 ) -> Result<String> {
     use sephera_graph::multirepo::{
-        discover_path_dependencies, edge_matches_symbol, edge_matches_target,
-        resolve_cross_repo_edges,
+        edge_matches_symbol, edge_matches_target, resolve_cross_repo_edges,
     };
     use std::fmt::Write as _;
 
-    // Discover path deps from the current repo
-    let deps = discover_path_dependencies(repo_root)?;
     if deps.is_empty() {
         return Ok(String::new());
     }
 
     // Resolve cross-repo edges from unresolved imports
-    let cross_edges =
-        resolve_cross_repo_edges(repo_root, &report.edges, &deps)?;
+    let cross_edges = resolve_cross_repo_edges(repo_root, &report.edges, deps)?;
     if cross_edges.is_empty() {
         return Ok(String::new());
     }
