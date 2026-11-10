@@ -9,3 +9,5 @@
 mod sarif;
 #[path = "regressions/tworef_paths.rs"]
 mod tworef_paths;
+#[path = "regressions/multirepo_multi.rs"]
+mod multirepo_multi;

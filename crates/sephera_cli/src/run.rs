@@ -750,31 +750,51 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         .into_iter()
         .collect::<Vec<_>>();
 
-    // Multi-repo: if --multi and the target is in a path dependency (not in
-    // the current repo's graph), do cross-repo analysis directly. The normal
-    // impact_outcome would fail because the target isn't in this repo's graph.
-    let (rendered, gates) = if arguments.multi
-        && is_cross_repo_target(&source.analysis_path, &arguments.files)?
-    {
-        progress.set_message("Resolving cross-repo dependencies...");
-        let cross_section = multirepo_impact_section(
-            &source.analysis_path,
-            &arguments.files,
-            &report,
-            arguments.symbol.as_deref(),
-        )?;
-        // For cross-repo targets, the cross-repo section IS the report.
-        // Gates don't apply (no in-repo dependents to count).
-        (cross_section, Vec::new())
-    } else {
-        let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
+    // Multi-repo: with --multi, targets are split per file, because one
+    // run can mix in-repo targets (normal blast radius) with targets
+    // inside a path dependency (cross-repo section). The old code took
+    // one branch for the whole run, keyed on "any target outside the
+    // repo": an unresolvable target outside the repo — /etc/passwd, a
+    // typo — was treated as cross-repo and exited 0 with an empty
+    // report instead of the "did not resolve" error, and local targets
+    // in a mixed run lost their blast-radius section entirely.
+    // Splitting per file keeps both promises: cross-repo targets get
+    // the cross-repo section, everything else goes through the normal
+    // path, which validates it and errors on the unresolvable ones.
+    let (rendered, gates) = if arguments.multi {
+        use sephera_graph::multirepo::discover_path_dependencies;
 
-        // Multi-repo: if --multi, also append cross-repo dependents for
-        // in-repo targets (e.g., target is in current repo, but we also want
-        // to see if path-dep repos use it — though that's the reverse direction
-        // and not yet implemented; for now, --multi with in-repo target just
-        // does normal impact).
+        let deps = discover_path_dependencies(&source.analysis_path)?;
+        let (cross_targets, local_targets) = partition_multi_targets(
+            &source.analysis_path,
+            &deps,
+            &arguments.files,
+        );
+        let mut rendered = String::new();
+        let gates = if local_targets.is_empty() {
+            Vec::new()
+        } else {
+            let (normal, normal_gates) =
+                impact_outcome(arguments, &local_targets, &report, &focus)?;
+            rendered.push_str(&normal);
+            normal_gates
+        };
+        if !cross_targets.is_empty() {
+            progress.set_message("Resolving cross-repo dependencies...");
+            let cross_section = multirepo_impact_section(
+                &source.analysis_path,
+                &cross_targets,
+                &report,
+                arguments.symbol.as_deref(),
+            )?;
+            if !rendered.is_empty() && !cross_section.is_empty() {
+                rendered.push('\n');
+            }
+            rendered.push_str(&cross_section);
+        }
         (rendered, gates)
+    } else {
+        impact_outcome(arguments, &arguments.files, &report, &focus)?
     };
 
     finish_output(
@@ -808,46 +828,34 @@ fn threshold_gates<T>(
 
 /// Measure one impact run and render it, with the gates it crosses.
 ///
-/// Check if any target file is outside the current repo (in a path dependency).
+/// Split `--multi` targets into the ones inside a discovered path
+/// dependency and everything else.
 ///
-/// For `sephera impact --multi ../dep/src/file.rs` run from the current repo,
-/// the target is in a path dependency, not in the current repo's graph.
-/// This detects that case so we can do cross-repo analysis directly.
-fn is_cross_repo_target(
+/// Only membership in a discovered dep makes a target cross-repo.
+/// Merely lying outside the repo root does not: `/etc/passwd` is
+/// outside the repo and inside no dep, and must land in the second
+/// bucket so the normal path reports it as unresolvable instead of
+/// an empty success. A target that does not exist at all canonicalizes
+/// to nothing and lands there too, for the same reason.
+fn partition_multi_targets(
     repo_root: &std::path::Path,
+    deps: &[sephera_graph::multirepo::PathDependency],
     target_files: &[String],
-) -> Result<bool> {
-    use sephera_graph::multirepo::discover_path_dependencies;
-
-    let deps = discover_path_dependencies(repo_root)?;
-    if deps.is_empty() {
-        return Ok(false);
-    }
-
+) -> (Vec<String>, Vec<String>) {
+    let mut cross = Vec::new();
+    let mut local = Vec::new();
     for target in target_files {
         let target_path = repo_root.join(target);
-        // Canonicalize the target path (handles ../)
-        if let Ok(canonical_target) = target_path.canonicalize() {
-            // Check if it's inside any dep repo
-            for dep in &deps {
-                if canonical_target.starts_with(&dep.path) {
-                    return Ok(true);
-                }
-            }
-        }
-        // Also check: is the target path outside repo_root?
-        // (e.g., ../mylib/src/types.rs from /tmp/myservice)
-        if let Ok(canonical_target) = target_path.canonicalize() {
-            if let Ok(canonical_root) = repo_root.canonicalize() {
-                if !canonical_target.starts_with(&canonical_root) {
-                    // Target is outside the repo — likely in a path dep
-                    return Ok(true);
-                }
-            }
+        let is_cross = target_path.canonicalize().is_ok_and(|canonical| {
+            deps.iter().any(|dep| canonical.starts_with(&dep.path))
+        });
+        if is_cross {
+            cross.push(target.clone());
+        } else {
+            local.push(target.clone());
         }
     }
-
-    Ok(false)
+    (cross, local)
 }
 
 /// Build the cross-repo dependents section for `sephera impact --multi`.
@@ -964,6 +972,7 @@ fn multirepo_impact_section(
 /// file-level or symbol-level -- asked of the same report.
 fn impact_outcome(
     arguments: &ImpactArgs,
+    files: &[String],
     report: &sephera_graph::types::GraphReport,
     focus: &[String],
 ) -> Result<(String, Vec<Gate>)> {
@@ -993,7 +1002,7 @@ fn impact_outcome(
     let (rendered, gates) = if let Some(symbol) = &arguments.symbol {
         let impacts = impact::measure_symbol_all(
             report,
-            &arguments.files,
+            files,
             "",
             symbol,
             arguments.depth,
@@ -1020,13 +1029,8 @@ fn impact_outcome(
         );
         (rendered, gates)
     } else {
-        let radii = impact::measure_all(
-            report,
-            &arguments.files,
-            "",
-            arguments.depth,
-            focus,
-        )?;
+        let radii =
+            impact::measure_all(report, files, "", arguments.depth, focus)?;
         let rendered = match arguments.format {
             ImpactOutputFormat::Markdown => impact::render_report(&radii),
             ImpactOutputFormat::Json => impact::render_report_json(&radii),
