@@ -750,7 +750,31 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
         .into_iter()
         .collect::<Vec<_>>();
 
-    let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
+    // Multi-repo: if --multi and the target is in a path dependency (not in
+    // the current repo's graph), do cross-repo analysis directly. The normal
+    // impact_outcome would fail because the target isn't in this repo's graph.
+    let (mut rendered, gates) = if arguments.multi
+        && is_cross_repo_target(&source.analysis_path, &arguments.files)?
+    {
+        progress.set_message("Resolving cross-repo dependencies...");
+        let cross_section = multirepo_impact_section(
+            &source.analysis_path,
+            &arguments.files,
+            &report,
+        )?;
+        // For cross-repo targets, the cross-repo section IS the report.
+        // Gates don't apply (no in-repo dependents to count).
+        (cross_section, Vec::new())
+    } else {
+        let (rendered, gates) = impact_outcome(arguments, &report, &focus)?;
+
+        // Multi-repo: if --multi, also append cross-repo dependents for
+        // in-repo targets (e.g., target is in current repo, but we also want
+        // to see if path-dep repos use it — though that's the reverse direction
+        // and not yet implemented; for now, --multi with in-repo target just
+        // does normal impact).
+        (rendered, gates)
+    };
 
     finish_output(
         progress,
@@ -783,6 +807,136 @@ fn threshold_gates<T>(
 
 /// Measure one impact run and render it, with the gates it crosses.
 ///
+/// Check if any target file is outside the current repo (in a path dependency).
+///
+/// For `sephera impact --multi ../dep/src/file.rs` run from the current repo,
+/// the target is in a path dependency, not in the current repo's graph.
+/// This detects that case so we can do cross-repo analysis directly.
+fn is_cross_repo_target(
+    repo_root: &std::path::Path,
+    target_files: &[String],
+) -> Result<bool> {
+    use sephera_graph::multirepo::discover_path_dependencies;
+
+    let deps = discover_path_dependencies(repo_root)?;
+    if deps.is_empty() {
+        return Ok(false);
+    }
+
+    for target in target_files {
+        let target_path = repo_root.join(target);
+        // Canonicalize the target path (handles ../)
+        if let Ok(canonical_target) = target_path.canonicalize() {
+            // Check if it's inside any dep repo
+            for dep in &deps {
+                if canonical_target.starts_with(&dep.path) {
+                    return Ok(true);
+                }
+            }
+        }
+        // Also check: is the target path outside repo_root?
+        // (e.g., ../mylib/src/types.rs from /tmp/myservice)
+        if let Ok(canonical_target) = target_path.canonicalize() {
+            if let Ok(canonical_root) = repo_root.canonicalize() {
+                if !canonical_target.starts_with(&canonical_root) {
+                    // Target is outside the repo — likely in a path dep
+                    return Ok(true);
+                }
+            }
+        }
+    }
+
+    Ok(false)
+}
+
+/// Build the cross-repo dependents section for `sephera impact --multi`.
+///
+/// Discovers path dependencies from the current repo, resolves cross-repo
+/// edges from the report's unresolved imports, and for each target file,
+/// reports the files in other repos that depend on it via those edges.
+///
+/// Returns an empty string if there are no path dependencies or no
+/// cross-repo dependents — the section is omitted, not printed empty.
+fn multirepo_impact_section(
+    repo_root: &std::path::Path,
+    target_files: &[String],
+    report: &sephera_graph::types::GraphReport,
+) -> Result<String> {
+    use sephera_graph::multirepo::{discover_path_dependencies, resolve_cross_repo_edges};
+
+    // Discover path deps from the current repo
+    let deps = discover_path_dependencies(repo_root)?;
+    if deps.is_empty() {
+        return Ok(String::new());
+    }
+
+    // Resolve cross-repo edges from unresolved imports
+    let cross_edges = resolve_cross_repo_edges(repo_root, &report.edges, &deps)?;
+    if cross_edges.is_empty() {
+        return Ok(String::new());
+    }
+
+    // For each target, find cross-repo dependents
+    // The target may be spelled as a relative path from repo_root, or as an
+    // absolute path, or as a path into a dep repo (../dep/src/file.rs).
+    let mut section = String::new();
+    section.push_str("## Cross-repo dependents (via path dependencies)\n\n");
+
+    let mut found_any = false;
+    for target in target_files {
+        // Normalize the target to match against cross_edge.to_file
+        // If target is ../sephera_core/src/types.rs and dep is at ../sephera_core,
+        // then to_file would be "src/types.rs" — we need to match the suffix.
+        let target_suffix = target
+            .rsplit('/')
+            .take(3)
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect::<Vec<_>>()
+            .join("/");
+
+        let dependents: Vec<&sephera_graph::multirepo::CrossRepoEdge> = cross_edges
+            .iter()
+            .filter(|e| {
+                e.to_file.ends_with(&target_suffix)
+                    || target.ends_with(&e.to_file)
+                    || e.to_file == *target
+            })
+            .collect();
+
+        if !dependents.is_empty() {
+            found_any = true;
+            section.push_str(&format!("### `{}`\n\n", target));
+            for dep_edge in dependents {
+                // from_repo is where the dependent lives (current repo)
+                // to_repo is the dep repo containing the target
+                // via.name is the dependency name, via.path is the dep location
+                let dep_repo_name = dep_edge
+                    .to_repo
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .unwrap_or("?");
+                section.push_str(&format!(
+                    "- `{}` imports `{}`\n  (via path dependency `{}` → `{}` in `{}`)\n",
+                    dep_edge.from_file,
+                    dep_edge.import_path,
+                    dep_edge.via.name,
+                    dep_repo_name,
+                    dep_edge.via.via_manifest,
+                ));
+            }
+            section.push('\n');
+        }
+    }
+
+    if !found_any {
+        return Ok(String::new());
+    }
+
+    Ok(section)
+}
+
 /// Split out of `run_impact` because the symbol branch doubled the
 /// measuring code: the source resolution and graph build above are
 /// shared, everything from the scope note down is this question --
