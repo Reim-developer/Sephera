@@ -70,7 +70,9 @@ pub struct CrossRepoEdge {
 /// Discover path dependencies from a repo's manifests.
 ///
 /// Reads `Cargo.toml` (Rust), `package.json` (Node), `pyproject.toml` (Python),
-/// and `go.mod` (Go), extracting only `path`/`file:`/`replace` dependencies.
+/// `go.mod` (Go), `settings.gradle` (Gradle composite builds),
+/// `pom.xml` (Maven multi-module), `CMakeLists.txt` (CMake),
+/// and `WORKSPACE`/`MODULE.bazel` (Bazel), extracting only path-based dependencies.
 /// Version and git dependencies are ignored — they cannot be analyzed without
 /// source, and this function is honest about that.
 ///
@@ -84,6 +86,10 @@ pub fn discover_path_dependencies(repo_root: &Path) -> anyhow::Result<Vec<PathDe
     deps.extend(discover_npm_path_deps(repo_root)?);
     deps.extend(discover_python_path_deps(repo_root)?);
     deps.extend(discover_go_path_deps(repo_root)?);
+    deps.extend(discover_gradle_path_deps(repo_root)?);
+    deps.extend(discover_maven_path_deps(repo_root)?);
+    deps.extend(discover_cmake_path_deps(repo_root)?);
+    deps.extend(discover_bazel_path_deps(repo_root)?);
     Ok(deps)
 }
 
@@ -196,6 +202,342 @@ fn discover_go_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>
         }
     }
     Ok(deps)
+}
+
+/// Discover Gradle composite builds from `settings.gradle` or `settings.gradle.kts`.
+///
+/// Example: `includeBuild '../my-utils'` — combines independently-developed
+/// builds (e.g., app + library from separate Git repos).
+fn discover_gradle_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+    let mut deps = Vec::new();
+
+    for settings_file in ["settings.gradle", "settings.gradle.kts"] {
+        let manifest_path = repo_root.join(settings_file);
+        if !manifest_path.exists() {
+            continue;
+        }
+
+        let content = std::fs::read_to_string(&manifest_path)?;
+        // Match: includeBuild '../path' or includeBuild("../path") or includeBuild '../path'
+        for line in content.lines() {
+            let line = line.trim();
+            if line.starts_with("//") {
+                continue;
+            }
+            // Simple regex-like parsing: find includeBuild followed by quoted path
+            if let Some(idx) = line.find("includeBuild") {
+                let rest = &line[idx + "includeBuild".len()..];
+                let rest = rest.trim_start_matches(|c| c == ' ' || c == '(');
+                // Extract quoted string
+                let path_str = if let Some(s) = rest.strip_prefix('\'') {
+                    s.split('\'').next().unwrap_or("")
+                } else if let Some(s) = rest.strip_prefix('"') {
+                    s.split('"').next().unwrap_or("")
+                } else {
+                    continue;
+                };
+                if path_str.is_empty() {
+                    continue;
+                }
+                // Only relative paths (starting with . or /)
+                if path_str.starts_with('.') || path_str.starts_with('/') {
+                    let abs_path = if path_str.starts_with('/') {
+                        PathBuf::from(path_str)
+                    } else {
+                        repo_root.join(path_str)
+                    };
+                    if let Ok(canonical) = abs_path.canonicalize() {
+                        // Dep name: try to read rootProject.name from the included build,
+                        // fallback to directory basename
+                        let name = read_gradle_project_name(&canonical)
+                            .unwrap_or_else(|| {
+                                canonical
+                                    .file_name()
+                                    .and_then(|n| n.to_str())
+                                    .unwrap_or("unknown")
+                                    .to_string()
+                            });
+                        deps.push(PathDependency {
+                            name,
+                            path: canonical,
+                            via_manifest: settings_file.to_string(),
+                        });
+                    }
+                }
+            }
+        }
+    }
+    Ok(deps)
+}
+
+/// Try to read `rootProject.name` from a Gradle build's settings file.
+fn read_gradle_project_name(build_dir: &Path) -> Option<String> {
+    for settings_file in ["settings.gradle", "settings.gradle.kts"] {
+        let path = build_dir.join(settings_file);
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            for line in content.lines() {
+                let line = line.trim();
+                // rootProject.name = 'my-utils' or rootProject.name.set("my-utils")
+                if line.contains("rootProject.name") {
+                    // Try to extract quoted string
+                    if let Some(start) = line.find('\'') {
+                        if let Some(end) = line[start + 1..].find('\'') {
+                            return Some(line[start + 1..start + 1 + end].to_string());
+                        }
+                    }
+                    if let Some(start) = line.find('"') {
+                        if let Some(end) = line[start + 1..].find('"') {
+                            return Some(line[start + 1..start + 1 + end].to_string());
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Discover Maven multi-module reactor from `pom.xml`.
+///
+/// Example: `<modules><module>../my-utils</module></modules>` — modules
+/// build from source together as part of the reactor.
+fn discover_maven_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+    let manifest_path = repo_root.join("pom.xml");
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let mut deps = Vec::new();
+
+    // Simple XML parsing for <module>path</module> within <modules>
+    // We look for <module> tags and extract the path
+    let mut in_modules = false;
+    for line in content.lines() {
+        let line = line.trim();
+        if line.contains("<modules>") {
+            in_modules = true;
+            continue;
+        }
+        if line.contains("</modules>") {
+            in_modules = false;
+            continue;
+        }
+        if in_modules {
+            // Extract <module>path</module>
+            if let Some(start) = line.find("<module>") {
+                if let Some(end) = line.find("</module>") {
+                    let path_str = &line[start + "<module>".len()..end];
+                    let path_str = path_str.trim();
+                    if !path_str.is_empty()
+                        && (path_str.starts_with('.') || path_str.starts_with('/'))
+                    {
+                        let abs_path = if path_str.starts_with('/') {
+                            PathBuf::from(path_str)
+                        } else {
+                            repo_root.join(path_str)
+                        };
+                        if let Ok(canonical) = abs_path.canonicalize() {
+                            // Dep name: directory basename
+                            let name = canonical
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("unknown")
+                                .to_string();
+                            deps.push(PathDependency {
+                                name,
+                                path: canonical,
+                                via_manifest: "pom.xml".to_string(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+    Ok(deps)
+}
+
+/// Discover CMake `add_subdirectory` from `CMakeLists.txt`.
+///
+/// Example: `add_subdirectory(../my-utils)` — adds a subdirectory to the build,
+/// commonly used for vendored or locally-developed dependencies.
+fn discover_cmake_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+    let manifest_path = repo_root.join("CMakeLists.txt");
+    if !manifest_path.exists() {
+        return Ok(Vec::new());
+    }
+
+    let content = std::fs::read_to_string(&manifest_path)?;
+    let mut deps = Vec::new();
+
+    for line in content.lines() {
+        let line = line.trim();
+        if line.starts_with('#') {
+            continue;
+        }
+        // Match: add_subdirectory(source_dir [binary_dir])
+        if let Some(idx) = line.find("add_subdirectory") {
+            let rest = &line[idx + "add_subdirectory".len()..];
+            let rest = rest.trim_start_matches(|c| c == ' ' || c == '(');
+            // Extract first argument (source dir)
+            let path_str = rest
+                .split(|c| c == ' ' || c == ')' || c == '"')
+                .next()
+                .unwrap_or("")
+                .trim_matches('"')
+                .trim();
+            if path_str.is_empty() {
+                continue;
+            }
+            // Only relative paths starting with . (absolute paths are rare for deps)
+            if path_str.starts_with('.') {
+                let abs_path = repo_root.join(path_str);
+                if let Ok(canonical) = abs_path.canonicalize() {
+                    let name = canonical
+                        .file_name()
+                        .and_then(|n| n.to_str())
+                        .unwrap_or("unknown")
+                        .to_string();
+                    deps.push(PathDependency {
+                        name,
+                        path: canonical,
+                        via_manifest: "CMakeLists.txt".to_string(),
+                    });
+                }
+            }
+        }
+    }
+    Ok(deps)
+}
+
+/// Discover Bazel `local_repository` / `local_path_override`.
+///
+/// - WORKSPACE: `local_repository(name = "my_utils", path = "../my-utils")`
+/// - MODULE.bazel: `local_path_override(module_name = "my_utils", path = "../my-utils")`
+fn discover_bazel_path_deps(repo_root: &Path) -> anyhow::Result<Vec<PathDependency>> {
+    let mut deps = Vec::new();
+
+    // WORKSPACE file
+    let workspace_path = repo_root.join("WORKSPACE");
+    if workspace_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&workspace_path) {
+            deps.extend(parse_bazel_local_repos(&content, repo_root, "WORKSPACE"));
+        }
+    }
+
+    // MODULE.bazel file
+    let module_path = repo_root.join("MODULE.bazel");
+    if module_path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&module_path) {
+            deps.extend(parse_bazel_local_repos(&content, repo_root, "MODULE.bazel"));
+        }
+    }
+
+    Ok(deps)
+}
+
+/// Parse Bazel local_repository / local_path_override from file content.
+/// Handles multi-line rules like:
+/// ```python
+/// local_repository(
+///     name = "my_utils",
+///     path = "../my-utils",
+/// )
+/// ```
+fn parse_bazel_local_repos(
+    content: &str,
+    repo_root: &Path,
+    via_manifest: &str,
+) -> Vec<PathDependency> {
+    let mut deps = Vec::new();
+
+    // Join lines and find rule blocks
+    // Look for local_repository( ... ) or local_path_override( ... )
+    let mut search_from = 0;
+    while search_from < content.len() {
+        // Find the next rule start
+        let rule_start = content[search_from..]
+            .find("local_repository")
+            .or_else(|| content[search_from..].find("local_path_override"));
+        let rule_start = match rule_start {
+            Some(idx) => search_from + idx,
+            None => break,
+        };
+
+        // Find the opening paren
+        let paren_start = match content[rule_start..].find('(') {
+            Some(idx) => rule_start + idx,
+            None => break,
+        };
+
+        // Find the matching closing paren (simple: find the next ')' at line start or after comma)
+        // For simplicity, find the next ')' that ends the rule
+        let mut depth = 0;
+        let mut rule_end = None;
+        for (i, c) in content[paren_start..].char_indices() {
+            match c {
+                '(' => depth += 1,
+                ')' => {
+                    depth -= 1;
+                    if depth == 0 {
+                        rule_end = Some(paren_start + i);
+                        break;
+                    }
+                }
+                _ => {}
+            }
+        }
+
+        let rule_end = match rule_end {
+            Some(idx) => idx,
+            None => break,
+        };
+
+        let rule_text = &content[rule_start..=rule_end];
+
+        // Extract name and path from the rule text
+        let name = extract_bazel_attr(rule_text, "name")
+            .or_else(|| extract_bazel_attr(rule_text, "module_name"))
+            .unwrap_or_default();
+        let path_str = extract_bazel_attr(rule_text, "path").unwrap_or_default();
+
+        if !name.is_empty()
+            && !path_str.is_empty()
+            && (path_str.starts_with('.') || path_str.starts_with('/'))
+        {
+            let abs_path = if path_str.starts_with('/') {
+                PathBuf::from(&path_str)
+            } else {
+                repo_root.join(&path_str)
+            };
+            if let Ok(canonical) = abs_path.canonicalize() {
+                deps.push(PathDependency {
+                    name,
+                    path: canonical,
+                    via_manifest: via_manifest.to_string(),
+                });
+            }
+        }
+
+        search_from = rule_end + 1;
+    }
+    deps
+}
+
+/// Extract `attr = "value"` from a Bazel rule line.
+fn extract_bazel_attr(line: &str, attr: &str) -> Option<String> {
+    let pattern = format!("{} =", attr);
+    if let Some(idx) = line.find(&pattern) {
+        let rest = &line[idx + pattern.len()..];
+        let rest = rest.trim_start();
+        if let Some(s) = rest.strip_prefix('"') {
+            if let Some(end) = s.find('"') {
+                return Some(s[..end].to_string());
+            }
+        }
+    }
+    None
 }
 
 /// Discover `path` dependencies from `Cargo.toml`.
@@ -321,6 +663,34 @@ pub fn resolve_cross_repo_edges(
                     import_path: edge.import_path.clone(),
                 });
             }
+        } else {
+            // Java: imports use reversed-domain names (com.example.mylib.Foo)
+            // that never match the dep name. Try resolving the dotted path
+            // directly against Java source layouts in each dep.
+            // Only for deps from Java manifests (Gradle/Maven).
+            for dep in deps {
+                if dep.via_manifest == "settings.gradle"
+                    || dep.via_manifest == "settings.gradle.kts"
+                    || dep.via_manifest == "pom.xml"
+                {
+                    // Convert com.example.mylib.Foo → com/example/mylib/Foo.java
+                    let java_path = edge.import_path.replace('.', "/") + ".java";
+                    for base in ["src/main/java", "src"] {
+                        let candidate = format!("{}/{}", base, java_path);
+                        if dep.path.join(&candidate).exists() {
+                            cross_edges.push(CrossRepoEdge {
+                                from_repo: from_repo.to_path_buf(),
+                                from_file: edge.from.clone(),
+                                to_repo: dep.path.clone(),
+                                to_file: candidate,
+                                via: dep.clone(),
+                                import_path: edge.import_path.clone(),
+                            });
+                            break;
+                        }
+                    }
+                }
+            }
         }
     }
 
@@ -376,7 +746,7 @@ fn resolve_in_dep_repo(
     // JS: `mylib/utils` → `utils`
     let module_path = module_path.split('/').last().unwrap_or(module_path);
 
-    // Try common layouts: Rust, JS/TS, Python, Go
+    // Try common layouts: Rust, JS/TS, Python, Go, C/C++
     let candidates = [
         format!("src/{}.rs", module_path),
         format!("src/{}/mod.rs", module_path),
@@ -394,6 +764,14 @@ fn resolve_in_dep_repo(
         // Go: <module>.go, <module>/<file>.go (Go packages are directories)
         format!("{}.go", module_path),
         format!("{}/{}.go", module_path, module_path),
+        // C/C++: <module>.h, <module>.hpp, <module>.cpp, include/<module>.h
+        format!("{}.h", module_path),
+        format!("{}.hpp", module_path),
+        format!("{}.cpp", module_path),
+        format!("include/{}.h", module_path),
+        format!("include/{}.hpp", module_path),
+        format!("src/{}.h", module_path),
+        format!("src/{}.cpp", module_path),
     ];
 
     for candidate in candidates {
@@ -536,6 +914,129 @@ replace example.com/mylib => ../mylib
         assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "go.mod");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discovers_gradle_composite_dep() {
+        let tmp = std::env::temp_dir().join("multirepo-test-gradle");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create the dependency target (a Gradle library)
+        let dep_repo = tmp.join("my-utils");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(
+            dep_repo.join("settings.gradle"),
+            "rootProject.name = 'my-utils'\n",
+        )
+        .unwrap();
+
+        // Create the main repo with includeBuild
+        let main_repo = tmp.join("my-app");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("settings.gradle"),
+            "rootProject.name = 'my-app'\nincludeBuild '../my-utils'\n",
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps[0].name, "my-utils");
+        assert_eq!(deps[0].via_manifest, "settings.gradle");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discovers_maven_module_dep() {
+        let tmp = std::env::temp_dir().join("multirepo-test-maven");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create the dependency target (a Maven module)
+        let dep_repo = tmp.join("my-utils");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("pom.xml"), "<project></project>").unwrap();
+
+        // Create the main repo with <modules>
+        let main_repo = tmp.join("my-app");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("pom.xml"),
+            r#"<project>
+  <modules>
+    <module>../my-utils</module>
+  </modules>
+</project>"#,
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps[0].via_manifest, "pom.xml");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discovers_cmake_subdirectory_dep() {
+        let tmp = std::env::temp_dir().join("multirepo-test-cmake");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create the dependency target
+        let dep_repo = tmp.join("mylib");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("CMakeLists.txt"), "project(mylib)\n").unwrap();
+
+        // Create the main repo with add_subdirectory
+        let main_repo = tmp.join("my-app");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("CMakeLists.txt"),
+            "cmake_minimum_required(VERSION 3.10)\nproject(my-app)\nadd_subdirectory(../mylib)\n",
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps[0].name, "mylib");
+        assert_eq!(deps[0].via_manifest, "CMakeLists.txt");
+
+        let _ = fs::remove_dir_all(&tmp);
+    }
+
+    #[test]
+    fn discovers_bazel_local_repository_dep() {
+        let tmp = std::env::temp_dir().join("multirepo-test-bazel");
+        let _ = fs::remove_dir_all(&tmp);
+        fs::create_dir_all(&tmp).unwrap();
+
+        // Create the dependency target
+        let dep_repo = tmp.join("my-utils");
+        fs::create_dir_all(&dep_repo).unwrap();
+        fs::write(dep_repo.join("BUILD"), "").unwrap();
+
+        // Create the main repo with local_repository
+        let main_repo = tmp.join("my-app");
+        fs::create_dir_all(&main_repo).unwrap();
+        fs::write(
+            main_repo.join("WORKSPACE"),
+            r#"local_repository(
+    name = "my_utils",
+    path = "../my-utils",
+)
+"#,
+        )
+        .unwrap();
+
+        let deps = discover_path_dependencies(&main_repo).unwrap();
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps[0].name, "my_utils");
+        assert_eq!(deps[0].via_manifest, "WORKSPACE");
 
         let _ = fs::remove_dir_all(&tmp);
     }
