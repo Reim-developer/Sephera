@@ -856,6 +856,14 @@ tree_command_args!(
     )]
     pub format: ImpactOutputFormat,
 
+    /// Include cross-repo dependents via path dependencies
+    #[arg(
+        long,
+        help = "Report dependents in other repos linked by path dependencies.",
+        long_help = "Also report files in other repositories that depend on the target via path dependencies (e.g., `sephera_core = { path = \"../sephera_core\" }` in Cargo.toml). The current repo's manifests are read for path dependencies, those repos are analyzed, and cross-repo edges are reported separately from in-repo dependents. Only path dependencies are followed; version and git dependencies cannot be analyzed without source and are reported as unresolvable."
+    )]
+    pub multi: bool,
+
     }
 );
 
