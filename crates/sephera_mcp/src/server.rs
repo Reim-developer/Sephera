@@ -1677,7 +1677,8 @@ impl SepheraServer {
         >,
     ) -> Result<String, rmcp::ErrorData> {
         use sephera_graph::multirepo::{
-            discover_path_dependencies, resolve_cross_repo_edges,
+            discover_path_dependencies, edge_matches_target,
+            resolve_cross_repo_edges,
         };
         use std::fmt::Write as _;
 
@@ -1727,21 +1728,17 @@ impl SepheraServer {
         output.push_str("## Cross-repo dependents (via path dependencies)\n\n");
         let mut found_any = false;
         for target in &param.files {
-            let target_suffix = target
-                .rsplit('/')
-                .take(3)
-                .collect::<Vec<_>>()
-                .into_iter()
-                .rev()
-                .collect::<Vec<_>>()
-                .join("/");
+            // Match by canonical path, like the CLI: suffix matching
+            // reports one library's importers as another's when both
+            // deps have a `src/lib.rs`. A target that does not resolve
+            // to a file matches nothing, as before.
+            let Ok(target_canonical) = repo_root.join(target).canonicalize()
+            else {
+                continue;
+            };
             let dependents: Vec<_> = cross_edges
                 .iter()
-                .filter(|e| {
-                    e.to_file.ends_with(&target_suffix)
-                        || target.ends_with(&e.to_file)
-                        || e.to_file == *target
-                })
+                .filter(|e| edge_matches_target(e, &target_canonical))
                 .collect();
             if !dependents.is_empty() {
                 found_any = true;

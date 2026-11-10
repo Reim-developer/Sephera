@@ -730,6 +730,28 @@ fn package_segment(import_path: &str) -> &str {
     }
 }
 
+/// Whether a cross-repo edge points at the target file.
+///
+/// Compares canonical paths, not string suffixes. Every Rust dep has a
+/// `src/lib.rs`, so suffix matching (`target.ends_with(to_file)`)
+/// reports one library's importers as another's — and `mylib.go`
+/// suffix-matches `notmylib.go`. `target_canonical` must already be
+/// canonicalized; the edge side is canonicalized here because
+/// `to_file` is spelled relative to `to_repo`.
+///
+/// The CLI and the MCP tool share this matcher so the two entry points
+/// cannot disagree about which file a report is about.
+#[must_use]
+pub fn edge_matches_target(
+    edge: &CrossRepoEdge,
+    target_canonical: &Path,
+) -> bool {
+    edge.to_repo
+        .join(&edge.to_file)
+        .canonicalize()
+        .is_ok_and(|path| path == target_canonical)
+}
+
 /// Resolve cross-repo edges for one repo's unresolved imports.
 ///
 /// Takes a repo's graph edges (with unresolved imports) and its path
@@ -1677,6 +1699,45 @@ tokio = { version = "1.0", features = ["full"] }
         assert_eq!(cross[0].to_file, "sub/helper.go");
 
         let _ = fs::remove_dir_all(&tmp);
+    }
+
+    /// Regression: `edge_matches_target` must distinguish two deps whose
+    /// files share a name (`src/lib.rs` in both). Suffix matching
+    /// reported one library's importers as the other's; canonical path
+    /// equality is the only comparison that cannot cross-match.
+    #[test]
+    fn edge_matches_target_distinguishes_same_named_files() {
+        let temp_dir = tempfile::tempdir().unwrap();
+        let dir = temp_dir.path();
+        let dep_a = dir.join("depA");
+        let dep_b = dir.join("depB");
+        fs::create_dir_all(dep_a.join("src")).unwrap();
+        fs::create_dir_all(dep_b.join("src")).unwrap();
+        fs::write(dep_a.join("src/lib.rs"), "").unwrap();
+        fs::write(dep_b.join("src/lib.rs"), "").unwrap();
+
+        let edge_to_b = CrossRepoEdge {
+            from_repo: dir.join("main"),
+            from_file: "src/main.rs".to_string(),
+            to_repo: dep_b.canonicalize().unwrap(),
+            to_file: "src/lib.rs".to_string(),
+            via: PathDependency {
+                name: "dep_b".to_string(),
+                path: dep_b.canonicalize().unwrap(),
+                via_manifest: "Cargo.toml".to_string(),
+            },
+            import_path: "dep_b::helper".to_string(),
+        };
+        let target_a = dep_a.join("src/lib.rs").canonicalize().unwrap();
+        let target_b = dep_b.join("src/lib.rs").canonicalize().unwrap();
+        assert!(
+            !edge_matches_target(&edge_to_b, &target_a),
+            "an edge into depB must not match depA's lib.rs"
+        );
+        assert!(
+            edge_matches_target(&edge_to_b, &target_b),
+            "the same edge must match depB's lib.rs"
+        );
     }
 
     /// Regression: `mylib::types::mylib_helper` resolved to `src/lib.rs`

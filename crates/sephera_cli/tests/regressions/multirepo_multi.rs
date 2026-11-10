@@ -156,3 +156,77 @@ fn multi_pure_cross_repo_target_still_works() {
         "the cross-repo edge must be listed, got:\n{out}"
     );
 }
+
+/// tempdir holding `main/` with path deps on TWO libraries, `depA/` and
+/// `depB/`, each with a `src/lib.rs` — the shape that exposes suffix
+/// matching: the string "src/lib.rs" is the same for both.
+fn two_dep_fixture() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    write_file(
+        dir,
+        "depA/Cargo.toml",
+        b"[package]\nname = \"dep-a\"\nversion = \"0.1.0\"\n",
+    );
+    write_file(dir, "depA/src/lib.rs", b"pub fn a_helper() {}\n");
+    write_file(
+        dir,
+        "depB/Cargo.toml",
+        b"[package]\nname = \"dep-b\"\nversion = \"0.1.0\"\n",
+    );
+    write_file(dir, "depB/src/lib.rs", b"pub fn b_helper() {}\n");
+    write_file(
+        dir,
+        "main/Cargo.toml",
+        b"[package]\nname = \"main\"\nversion = \"0.1.0\"\n\n[dependencies]\ndep_a = { path = \"../depA\" }\ndep_b = { path = \"../depB\" }\n",
+    );
+    write_file(
+        dir,
+        "main/src/main.rs",
+        b"use dep_a::a_helper;\nuse dep_b::b_helper;\n\nfn main() {\n    a_helper();\n    b_helper();\n}\n",
+    );
+    temp_dir
+}
+
+/// Bug: with two path deps that both have a `src/lib.rs`, asking about
+/// one library's file listed the other library's importers too, because
+/// targets were matched by string suffix (`target.ends_with(to_file)`).
+/// The report for one library must name only that library's importers.
+/// Found by `CodeRabbit` on PR #68.
+#[test]
+fn multi_target_matches_only_its_own_dep_repo() {
+    let fixture = two_dep_fixture();
+    let main = fixture.path().join("main");
+
+    let output_a = run(&main, &["impact", "../depA/src/lib.rs", "--multi"]);
+    assert!(
+        output_a.status.success(),
+        "depA query must succeed, got stderr:\n{}",
+        stderr(&output_a)
+    );
+    let out_a = stdout(&output_a);
+    assert!(
+        out_a.contains("imports `dep_a::a_helper`"),
+        "depA's importer must be listed, got:\n{out_a}"
+    );
+    assert!(
+        !out_a.contains("dep_b::b_helper"),
+        "depB's importer must NOT leak into depA's report, got:\n{out_a}"
+    );
+
+    let output_b = run(&main, &["impact", "../depB/src/lib.rs", "--multi"]);
+    assert!(
+        output_b.status.success(),
+        "depB query must succeed, got stderr:\n{}",
+        stderr(&output_b)
+    );
+    let out_b = stdout(&output_b);
+    assert!(
+        out_b.contains("imports `dep_b::b_helper`"),
+        "depB's importer must be listed, got:\n{out_b}"
+    );
+    assert!(
+        !out_b.contains("dep_a::a_helper"),
+        "depA's importer must NOT leak into depB's report, got:\n{out_b}"
+    );
+}

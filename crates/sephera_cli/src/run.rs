@@ -873,7 +873,8 @@ fn multirepo_impact_section(
     symbol: Option<&str>,
 ) -> Result<String> {
     use sephera_graph::multirepo::{
-        discover_path_dependencies, resolve_cross_repo_edges,
+        discover_path_dependencies, edge_matches_target,
+        resolve_cross_repo_edges,
     };
     use std::fmt::Write as _;
 
@@ -898,26 +899,20 @@ fn multirepo_impact_section(
 
     let mut found_any = false;
     for target in target_files {
-        // Normalize the target to match against cross_edge.to_file
-        // If target is ../sephera_core/src/types.rs and dep is at ../sephera_core,
-        // then to_file would be "src/types.rs" — we need to match the suffix.
-        let target_suffix = target
-            .rsplit('/')
-            .take(3)
-            .collect::<Vec<_>>()
-            .into_iter()
-            .rev()
-            .collect::<Vec<_>>()
-            .join("/");
+        // Match by canonical path, not by string suffix: every Rust dep
+        // has a `src/lib.rs`, so suffix matching reports one library's
+        // importers as another's. The target was classified cross-repo
+        // by canonicalization already, so this succeeds for real
+        // targets; a target that no longer canonicalizes is skipped.
+        let Ok(target_canonical) = repo_root.join(target).canonicalize() else {
+            continue;
+        };
 
         let dependents: Vec<&sephera_graph::multirepo::CrossRepoEdge> =
             cross_edges
                 .iter()
                 .filter(|e| {
-                    let file_matches = e.to_file.ends_with(&target_suffix)
-                        || target.ends_with(&e.to_file)
-                        || e.to_file == *target;
-                    if !file_matches {
+                    if !edge_matches_target(e, &target_canonical) {
                         return false;
                     }
                     // If --symbol is given, only report edges importing that symbol.
