@@ -254,7 +254,7 @@ pub fn resolve_cross_repo_edges(
                 .trim_start_matches(':')
                 .trim_start_matches('.')
                 .trim_start_matches('/');
-            if let Some(to_file) = resolve_in_dep_repo(&dep.path, remainder)? {
+            if let Some(to_file) = resolve_in_dep_repo(&dep.path, &dep.name, remainder)? {
                 cross_edges.push(CrossRepoEdge {
                     from_repo: from_repo.to_path_buf(),
                     from_file: edge.from.clone(),
@@ -276,21 +276,34 @@ pub fn resolve_cross_repo_edges(
 /// If the module file doesn't exist (e.g., `Router` in `use axum::Router`),
 /// falls back to `src/lib.rs` — the symbol is likely defined or re-exported there.
 /// For JS/TS: `mylib` → tries `src/index.js`, `index.js`, `src/index.ts`.
-fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Option<String>> {
+/// For Python: `mylib` → tries `mylib.py`, `mylib/__init__.py`, `src/mylib.py`.
+fn resolve_in_dep_repo(
+    dep_path: &Path,
+    dep_name: &str,
+    remainder: &str,
+) -> anyhow::Result<Option<String>> {
     if remainder.is_empty() {
         // `use sephera_core;` or `import 'mylib';` — resolves to entry point
-        // Rust: lib.rs, JS/TS: index.js
-        for candidate in [
-            "src/lib.rs",
-            "src/main.rs",
-            "lib.rs",
-            "src/index.js",
-            "src/index.ts",
-            "index.js",
-            "index.ts",
-        ] {
-            if dep_path.join(candidate).exists() {
-                return Ok(Some(candidate.to_string()));
+        // Rust: lib.rs, JS/TS: index.js, Python: <name>.py or __init__.py
+        let mut candidates = vec![
+            "src/lib.rs".to_string(),
+            "src/main.rs".to_string(),
+            "lib.rs".to_string(),
+            "src/index.js".to_string(),
+            "src/index.ts".to_string(),
+            "index.js".to_string(),
+            "index.ts".to_string(),
+        ];
+        // Python: <name>.py, <name>/__init__.py, src/<name>.py
+        candidates.push(format!("{}.py", dep_name));
+        candidates.push(format!("{}/__init__.py", dep_name));
+        candidates.push(format!("src/{}.py", dep_name));
+        candidates.push(format!("src/{}/__init__.py", dep_name));
+        candidates.push("__init__.py".to_string());
+
+        for candidate in candidates {
+            if dep_path.join(&candidate).exists() {
+                return Ok(Some(candidate));
             }
         }
         return Ok(None);
