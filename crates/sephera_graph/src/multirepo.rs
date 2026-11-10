@@ -220,10 +220,20 @@ pub fn resolve_cross_repo_edges(
 /// For Rust: `types::GraphReport` → tries `src/types.rs`, `src/types/mod.rs`.
 /// If the module file doesn't exist (e.g., `Router` in `use axum::Router`),
 /// falls back to `src/lib.rs` — the symbol is likely defined or re-exported there.
+/// For JS/TS: `mylib` → tries `src/index.js`, `index.js`, `src/index.ts`.
 fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Option<String>> {
     if remainder.is_empty() {
-        // `use sephera_core;` alone — resolves to lib.rs
-        for candidate in ["src/lib.rs", "src/main.rs", "lib.rs"] {
+        // `use sephera_core;` or `import 'mylib';` — resolves to entry point
+        // Rust: lib.rs, JS/TS: index.js
+        for candidate in [
+            "src/lib.rs",
+            "src/main.rs",
+            "lib.rs",
+            "src/index.js",
+            "src/index.ts",
+            "index.js",
+            "index.ts",
+        ] {
             if dep_path.join(candidate).exists() {
                 return Ok(Some(candidate.to_string()));
             }
@@ -235,12 +245,20 @@ fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Optio
     // not the symbol — the symbol lives in the file)
     let module_path = remainder.split("::").next().unwrap_or(remainder);
     let module_path = module_path.split('.').next().unwrap_or(module_path);
+    // JS: `mylib/utils` → `utils`
+    let module_path = module_path.split('/').last().unwrap_or(module_path);
 
-    // Try common Rust layouts
+    // Try common layouts: Rust first, then JS/TS
     let candidates = [
         format!("src/{}.rs", module_path),
         format!("src/{}/mod.rs", module_path),
         format!("{}.rs", module_path),
+        format!("src/{}.js", module_path),
+        format!("src/{}/index.js", module_path),
+        format!("{}.js", module_path),
+        format!("src/{}.ts", module_path),
+        format!("src/{}/index.ts", module_path),
+        format!("{}.ts", module_path),
     ];
 
     for candidate in candidates {
@@ -249,9 +267,9 @@ fn resolve_in_dep_repo(dep_path: &Path, remainder: &str) -> anyhow::Result<Optio
         }
     }
 
-    // Fallback: symbol might be defined or re-exported in lib.rs
-    // (e.g., `use axum::Router` where Router is in lib.rs, not router.rs)
-    for lib_candidate in ["src/lib.rs", "lib.rs"] {
+    // Fallback: symbol might be defined or re-exported in entry point
+    // Rust: lib.rs, JS: index.js (e.g., `use axum::Router` where Router is in lib.rs)
+    for lib_candidate in ["src/lib.rs", "lib.rs", "src/index.js", "index.js"] {
         if dep_path.join(lib_candidate).exists() {
             return Ok(Some(lib_candidate.to_string()));
         }
