@@ -304,3 +304,54 @@ fn multi_symbol_filter_matches_js_imported_names() {
         stdout(&missed)
     );
 }
+
+/// tempdir holding a single repo whose path dep points INSIDE the repo
+/// (`foo = { path = "crates/foo" }`), the workspace layout.
+fn in_repo_path_dep_fixture() -> tempfile::TempDir {
+    let temp_dir = tempdir().unwrap();
+    let dir = temp_dir.path();
+    write_file(
+        dir,
+        "main/Cargo.toml",
+        b"[package]\nname = \"main\"\nversion = \"0.1.0\"\n\n[dependencies]\nfoo = { path = \"crates/foo\" }\n",
+    );
+    write_file(
+        dir,
+        "main/crates/foo/Cargo.toml",
+        b"[package]\nname = \"foo\"\nversion = \"0.1.0\"\n",
+    );
+    write_file(dir, "main/crates/foo/src/lib.rs", b"pub fn helper() {}\n");
+    write_file(
+        dir,
+        "main/src/main.rs",
+        b"use foo::helper;\n\nfn main() {\n    helper();\n}\n",
+    );
+    temp_dir
+}
+
+/// Bug: a path dep pointing inside the repo made its target
+/// cross-repo-only, dropping the in-repo blast radius — the exact loss
+/// the per-file partition was written to fix. A target inside the
+/// analysed repo is local first, whatever the dep layout says.
+/// Found by `CodeRabbit` on PR #68.
+#[test]
+fn multi_in_repo_path_dep_keeps_local_blast_radius() {
+    let fixture = in_repo_path_dep_fixture();
+    let main = fixture.path().join("main");
+
+    let output = run(&main, &["impact", "crates/foo/src/lib.rs", "--multi"]);
+    assert!(
+        output.status.success(),
+        "in-repo --multi run must succeed, got stderr:\n{}",
+        stderr(&output)
+    );
+    let out = stdout(&output);
+    assert!(
+        out.contains("# Blast radius for `crates/foo/src/lib.rs`"),
+        "the in-repo blast radius must be reported, got:\n{out}"
+    );
+    assert!(
+        out.contains("src/main.rs"),
+        "the in-repo importer must be listed, got:\n{out}"
+    );
+}

@@ -837,16 +837,35 @@ fn threshold_gates<T>(
 /// bucket so the normal path reports it as unresolvable instead of
 /// an empty success. A target that does not exist at all canonicalizes
 /// to nothing and lands there too, for the same reason.
+///
+/// A path dep can also point INSIDE the repo (`foo = { path =
+/// "crates/foo" }`): the target is then under a dep path AND under
+/// the repo root, and its in-repo blast radius is the answer — the
+/// graph already resolves the import locally, so the cross-repo
+/// section would find nothing. The repo-root check comes first, so
+/// those targets are local.
 fn partition_multi_targets(
     repo_root: &std::path::Path,
     deps: &[sephera_graph::multirepo::PathDependency],
     target_files: &[String],
 ) -> (Vec<String>, Vec<String>) {
+    let repo_root_canonical = repo_root.canonicalize().ok();
     let mut cross = Vec::new();
     let mut local = Vec::new();
     for target in target_files {
         let target_path = repo_root.join(target);
-        let is_cross = target_path.canonicalize().is_ok_and(|canonical| {
+        let canonical = target_path.canonicalize().ok();
+        // Inside the analysed repo first: a dep inside the repo does
+        // not make its files cross-repo.
+        let is_local = match (&repo_root_canonical, &canonical) {
+            (Some(root), Some(canonical)) => canonical.starts_with(root),
+            _ => false,
+        };
+        if is_local {
+            local.push(target.clone());
+            continue;
+        }
+        let is_cross = canonical.as_ref().is_some_and(|canonical| {
             deps.iter().any(|dep| canonical.starts_with(&dep.path))
         });
         if is_cross {
