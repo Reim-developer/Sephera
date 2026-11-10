@@ -304,6 +304,62 @@ a violated rule look identical in a log — and that is the situation where some
 teaches their CI to swallow the failing exit code and then never notices either
 one again.
 
+## Cross-repo dependents (`--multi`)
+
+A single repo's blast radius answers "what breaks in *this* repo". The real
+world is shared libraries: you change `mylib`, and a service in another repo
+that depends on it breaks. `--multi` answers the cross-repo question by
+honoring what the manifests already declare — a `path` dependency in
+`Cargo.toml` (or `file:` in `package.json`, `replace` in `go.mod`, and the
+other supported manifests) is a declaration that two repos are developed
+together, so Sephera turns it into edges.
+
+Run it **from the repo that declares the path dependency**, and point the
+target **at a file inside the dependency repo**:
+
+```bash
+# from the repo that declares `mylib = { path = "../mylib" }`
+sephera impact ../mylib/src/lib.rs --multi
+```
+
+```text
+## Cross-repo dependents (via path dependencies)
+
+### `../mylib/src/lib.rs`
+
+- `src/main.rs` imports `mylib::greet`
+  (via path dependency `mylib` → `mylib` in `Cargo.toml`)
+```
+
+Each entry names the importing file, the import path it used, and the path
+dependency that made the edge possible. The section is omitted entirely when
+there are no path dependencies or no cross-repo dependents — there is no
+empty section.
+
+Supported manifests: `Cargo.toml` (Rust path deps), `package.json` (npm
+`file:`), `pyproject.toml` (PEP 508 `file://`), `go.mod` (`replace`),
+`settings.gradle`/`settings.gradle.kts` (`includeBuild`), `pom.xml`
+(`<modules>`), `CMakeLists.txt` (`add_subdirectory`), `WORKSPACE` /
+`MODULE.bazel` (`local_repository` / `local_path_override`).
+
+Three rules that matter:
+
+1. **Only path dependencies are followed.** Version and git dependencies
+   cannot be analyzed without source; their imports are skipped.
+2. **Edges come from import declarations** (`use`, `import`, `#include`),
+   the same unit as in-repo edges.
+3. **Direction is fixed.** The target must live in a path dependency of the
+   current repo. Running from the library repo itself reports the in-repo
+   blast radius only.
+
+Known limitation: `--format json` is ignored for cross-repo targets — the
+output renders as Markdown. JSON for the cross-repo section is not yet
+implemented.
+
+> Two repos, one change
+> the shock jumps the fence unseen
+> one path ties their fate
+
 ## Related commands
 
 `graph --diff <SPEC>` answers the same question for a whole change rather than
