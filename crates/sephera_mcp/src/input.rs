@@ -703,7 +703,7 @@ pub struct SchemaImpactInput {
 /// `package.json` (Node), `pyproject.toml` (Python), `go.mod` (Go),
 /// `settings.gradle` (Gradle), `pom.xml` (Maven), `CMakeLists.txt` (`CMake`),
 /// `WORKSPACE`/`MODULE.bazel` (Bazel). Only path-based deps create edges;
-/// version and git deps are reported as unresolvable, never fabricated.
+/// version and git deps are skipped, never fabricated.
 #[derive(serde::Deserialize, schemars::JsonSchema)]
 #[serde(deny_unknown_fields)]
 pub struct MultirepoImpactInput {
@@ -725,6 +725,10 @@ pub struct MultirepoImpactInput {
     pub ignore: Option<Vec<String>>,
     /// Do not apply the repository's own `.gitignore` and `.sepheraignore`.
     pub no_gitignore: Option<bool>,
+    /// Optional symbol to narrow the report to: only dependents that import
+    /// this symbol (by name, or by an import path ending in it) are listed.
+    /// `None` lists every dependent of each target file.
+    pub symbol: Option<String>,
     /// Output format: 'json' (default) or 'markdown'. Prefer 'markdown' for a
     /// compact summary that fits an agent's context.
     pub format: Option<String>,

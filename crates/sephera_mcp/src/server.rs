@@ -1677,10 +1677,9 @@ impl SepheraServer {
         >,
     ) -> Result<String, rmcp::ErrorData> {
         use sephera_graph::multirepo::{
-            discover_path_dependencies, edge_matches_target,
-            resolve_cross_repo_edges,
+            discover_path_dependencies, edge_matches_symbol,
+            edge_matches_target, resolve_cross_repo_edges,
         };
-        use std::fmt::Write as _;
 
         let ignore_matcher =
             build_ignore_matcher(param.ignore, param.no_gitignore)?;
@@ -1705,71 +1704,125 @@ impl SepheraServer {
         let repo_root = &source.analysis_path;
         let deps = discover_path_dependencies(repo_root)
             .map_err(map_internal_error("path dependency discovery failed"))?;
-        if deps.is_empty() {
-            return Ok("No path dependencies found in this repo.".to_string());
-        }
 
-        // Build the graph to get unresolved imports
-        let report = build_graph(
-            &source.analysis_path,
-            &ignore_matcher,
-            &[],
-            None,
-            None,
-        )
-        .map_err(map_internal_error("graph build failed"))?;
-
-        let cross_edges =
-            resolve_cross_repo_edges(repo_root, &report.edges, &deps)
-                .map_err(map_internal_error("cross-repo resolution failed"))?;
-
-        // Match targets against cross edges
-        let mut output = String::new();
-        output.push_str("## Cross-repo dependents (via path dependencies)\n\n");
-        let mut found_any = false;
-        for target in &param.files {
-            // Match by canonical path, like the CLI: suffix matching
-            // reports one library's importers as another's when both
-            // deps have a `src/lib.rs`. A target that does not resolve
-            // to a file matches nothing, as before.
-            let Ok(target_canonical) = repo_root.join(target).canonicalize()
-            else {
-                continue;
-            };
-            let dependents: Vec<_> = cross_edges
-                .iter()
-                .filter(|e| edge_matches_target(e, &target_canonical))
-                .collect();
-            if !dependents.is_empty() {
-                found_any = true;
-                let _ = write!(output, "### `{target}`\n\n");
-                for d in dependents {
-                    let _ = write!(
-                        output,
-                        "- `{}` imports `{}`\n  (via path dependency `{}` → `{}` in `{}`)\n",
-                        d.from_file,
-                        d.import_path,
-                        d.via.name,
-                        d.via
-                            .path
-                            .file_name()
-                            .and_then(|n| n.to_str())
-                            .unwrap_or(""),
-                        d.via.via_manifest,
-                    );
-                }
-                output.push('\n');
+        // A repo with no path deps has no cross-repo question to answer:
+        // an empty report, not an error, and the Markdown spells the
+        // reason in words.
+        let built = if deps.is_empty() {
+            MultirepoReport {
+                targets: Vec::new(),
             }
+        } else {
+            // Build the graph to get unresolved imports
+            let report = build_graph(
+                &source.analysis_path,
+                &ignore_matcher,
+                &[],
+                None,
+                None,
+            )
+            .map_err(map_internal_error("graph build failed"))?;
+
+            let cross_edges =
+                resolve_cross_repo_edges(repo_root, &report.edges, &deps)
+                    .map_err(map_internal_error(
+                        "cross-repo resolution failed",
+                    ))?;
+
+            let targets: Vec<MultirepoTarget> = param
+                .files
+                .iter()
+                .map(|target| {
+                    let canonical =
+                        repo_root.join(target).canonicalize().map_err(|_| {
+                            rmcp::ErrorData::invalid_params(
+                                format!(
+                                    "multirepo_impact: `{target}` does not resolve to a file"
+                                ),
+                                None,
+                            )
+                        })?;
+                    // A target no cross-repo edge can name: it is inside no
+                    // path dependency, so answering with an empty section
+                    // would look like "nothing depends on it". The CLI
+                    // rejects the same target rather than answering it.
+                    if !deps.iter().any(|dep| canonical.starts_with(&dep.path)) {
+                        return Err(rmcp::ErrorData::invalid_params(
+                            format!(
+                                "multirepo_impact: `{target}` is not inside any path dependency"
+                            ),
+                            None,
+                        ));
+                    }
+                    let dependents: Vec<MultirepoDependent> = cross_edges
+                        .iter()
+                        .filter(|e| edge_matches_target(e, &canonical))
+                        .filter(|e| {
+                            edge_matches_symbol(e, param.symbol.as_deref())
+                        })
+                        .map(|e| MultirepoDependent {
+                            file: e.from_file.clone(),
+                            import_path: e.import_path.clone(),
+                            via_name: e.via.name.clone(),
+                            via_repo: e
+                                .via
+                                .path
+                                .file_name()
+                                .and_then(|n| n.to_str())
+                                .unwrap_or("")
+                                .to_string(),
+                            via_manifest: e.via.via_manifest.clone(),
+                        })
+                        .collect();
+                    Ok(MultirepoTarget {
+                        target: target.clone(),
+                        dependent_count: u64::try_from(dependents.len())
+                            .unwrap_or(u64::MAX),
+                        dependents,
+                        symbol: param.symbol.clone(),
+                    })
+                })
+                .collect::<Result<Vec<_>, rmcp::ErrorData>>()?;
+            MultirepoReport { targets }
+        };
+
+        OutputKind::parse(param.format.as_deref(), "multirepo_impact")?
+            .render(&built, || multirepo_markdown(&built))
+    }
+}
+
+/// Render a multirepo report as Markdown for an agent's context window.
+///
+/// The wording follows the CLI's cross-repo section.
+fn multirepo_markdown(report: &MultirepoReport) -> String {
+    use std::fmt::Write as _;
+
+    if report.targets.is_empty() {
+        return "No path dependencies found in this repo.".to_string();
+    }
+    let mut output = String::new();
+    output.push_str("## Cross-repo dependents (via path dependencies)\n\n");
+    let mut found_any = false;
+    for target in &report.targets {
+        if target.dependents.is_empty() {
+            continue;
         }
-        if !found_any {
-            output.push_str(
-                "No cross-repo dependents found for the given files.\n",
+        found_any = true;
+        let _ = write!(output, "### `{}`\n\n", target.target);
+        for d in &target.dependents {
+            let _ = write!(
+                output,
+                "- `{}` imports `{}`\n  (via path dependency `{}` → `{}` in `{}`)\n",
+                d.file, d.import_path, d.via_name, d.via_repo, d.via_manifest,
             );
         }
-        // format is accepted for parity; output is markdown-shaped text
-        let _ = param.format;
-        Ok(output)
+        output.push('\n');
     }
+    if !found_any {
+        output
+            .push_str("No cross-repo dependents found for the given files.\n");
+    }
+    output
 }
 
 /// Render an untested report as Markdown for an agent's context window.
@@ -2197,6 +2250,47 @@ pub struct ImpactDependent {
     /// Import paths naming the target. Empty for a file that reaches the target
     /// transitively rather than naming it.
     pub imports: Vec<String>,
+}
+
+/// One cross-repo blast-radius report: one entry per target file.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MultirepoReport {
+    /// One entry per target file, in the order the caller asked for them.
+    pub targets: Vec<MultirepoTarget>,
+}
+
+/// One target file's cross-repo dependents.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MultirepoTarget {
+    /// The target file, spelled as the caller asked for it.
+    pub target: String,
+    /// How many files import it from another repo. The number worth
+    /// comparing against a threshold without walking the dependent list.
+    ///
+    /// When `symbol` is set this counts the files that import the symbol,
+    /// not every dependent of the file.
+    pub dependent_count: u64,
+    /// The dependents, each with the import path that names the target.
+    pub dependents: Vec<MultirepoDependent>,
+    /// The name the report was narrowed to, when it was. Serialised as
+    /// `null` at target level rather than omitted, as `ImpactEntry` already
+    /// spells absence, so a caller learns one convention.
+    pub symbol: Option<String>,
+}
+
+/// One file that imports a target from another repo.
+#[derive(serde::Serialize, schemars::JsonSchema)]
+pub struct MultirepoDependent {
+    /// Path of the file that imports the target.
+    pub file: String,
+    /// The import path naming the target, as the importer spells it.
+    pub import_path: String,
+    /// The path dependency name the import resolves through.
+    pub via_name: String,
+    /// The dependency repo, spelled by its last path segment.
+    pub via_repo: String,
+    /// The manifest that declares the path dependency.
+    pub via_manifest: String,
 }
 
 impl ImpactReport {

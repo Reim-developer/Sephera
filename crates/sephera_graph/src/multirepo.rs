@@ -16,7 +16,8 @@
 //! This is not a guess about version dependencies. `sephera_core = "1.0"`
 //! from crates.io cannot be analyzed without the source, and we do not
 //! pretend. Only `path` dependencies create cross-repo edges. Version and git
-//! dependencies are reported as unresolvable — honest, not silent.
+//! dependencies are skipped — never listed as targets, and no edge is
+//! fabricated for them.
 //!
 //! ## How it works
 //!
