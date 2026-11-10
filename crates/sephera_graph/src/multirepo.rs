@@ -39,7 +39,7 @@ use std::path::{Path, PathBuf};
 /// names a location — and a location can be analyzed.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct PathDependency {
-    /// Name of the dependency as written in the manifest (e.g., "sephera_core").
+    /// Name of the dependency as written in the manifest (e.g., "`sephera_core`").
     pub name: String,
     /// Absolute path to the dependency's repository root.
     pub path: PathBuf,
@@ -63,7 +63,7 @@ pub struct CrossRepoEdge {
     pub to_file: String,
     /// The path dependency that enabled this edge.
     pub via: PathDependency,
-    /// The import path as written (e.g., "sephera_core::types::GraphReport").
+    /// The import path as written (e.g., "`sephera_core::types::GraphReport`").
     pub import_path: String,
 }
 
@@ -71,7 +71,7 @@ pub struct CrossRepoEdge {
 ///
 /// Reads `Cargo.toml` (Rust), `package.json` (Node), `pyproject.toml` (Python),
 /// `go.mod` (Go), `settings.gradle` (Gradle composite builds),
-/// `pom.xml` (Maven multi-module), `CMakeLists.txt` (CMake),
+/// `pom.xml` (Maven multi-module), `CMakeLists.txt` (`CMake`),
 /// and `WORKSPACE`/`MODULE.bazel` (Bazel), extracting only path-based dependencies.
 /// Version and git dependencies are ignored — they cannot be analyzed without
 /// source, and this function is honest about that.
@@ -91,7 +91,7 @@ pub fn discover_path_dependencies(
     deps.extend(discover_gradle_path_deps(repo_root)?);
     deps.extend(discover_maven_path_deps(repo_root)?);
     deps.extend(discover_cmake_path_deps(repo_root)?);
-    deps.extend(discover_bazel_path_deps(repo_root)?);
+    deps.extend(discover_bazel_path_deps(repo_root));
     Ok(deps)
 }
 
@@ -195,8 +195,7 @@ fn discover_go_path_deps(
                 if right.starts_with('.') || right.starts_with('/') {
                     // Left side: module path (and optional version)
                     // e.g., "example.com/mylib" or "example.com/mylib v1.0.0"
-                    let module =
-                        left.trim().split_whitespace().next().unwrap_or("");
+                    let module = left.split_whitespace().next().unwrap_or("");
                     // Use the last segment as the name (e.g., "mylib" from "example.com/mylib")
                     let name = module.rsplit('/').next().unwrap_or(module);
                     if !name.is_empty() {
@@ -245,7 +244,7 @@ fn discover_gradle_path_deps(
             // Simple regex-like parsing: find includeBuild followed by quoted path
             if let Some(idx) = line.find("includeBuild") {
                 let rest = &line[idx + "includeBuild".len()..];
-                let rest = rest.trim_start_matches(|c| c == ' ' || c == '(');
+                let rest = rest.trim_start_matches([' ', '(']);
                 // Extract quoted string
                 let path_str = if let Some(s) = rest.strip_prefix('\'') {
                     s.split('\'').next().unwrap_or("")
@@ -383,7 +382,7 @@ fn discover_maven_path_deps(
     Ok(deps)
 }
 
-/// Discover CMake `add_subdirectory` from `CMakeLists.txt`.
+/// Discover `CMake` `add_subdirectory` from `CMakeLists.txt`.
 ///
 /// Example: `add_subdirectory(../my-utils)` — adds a subdirectory to the build,
 /// commonly used for vendored or locally-developed dependencies.
@@ -406,10 +405,10 @@ fn discover_cmake_path_deps(
         // Match: add_subdirectory(source_dir [binary_dir])
         if let Some(idx) = line.find("add_subdirectory") {
             let rest = &line[idx + "add_subdirectory".len()..];
-            let rest = rest.trim_start_matches(|c| c == ' ' || c == '(');
+            let rest = rest.trim_start_matches([' ', '(']);
             // Extract first argument (source dir)
             let path_str = rest
-                .split(|c| c == ' ' || c == ')' || c == '"')
+                .split([' ', ')', '"'])
                 .next()
                 .unwrap_or("")
                 .trim_matches('"')
@@ -442,9 +441,7 @@ fn discover_cmake_path_deps(
 ///
 /// - WORKSPACE: `local_repository(name = "my_utils", path = "../my-utils")`
 /// - MODULE.bazel: `local_path_override(module_name = "my_utils", path = "../my-utils")`
-fn discover_bazel_path_deps(
-    repo_root: &Path,
-) -> anyhow::Result<Vec<PathDependency>> {
+fn discover_bazel_path_deps(repo_root: &Path) -> Vec<PathDependency> {
     let mut deps = Vec::new();
 
     // WORKSPACE file
@@ -471,10 +468,8 @@ fn discover_bazel_path_deps(
         }
     }
 
-    Ok(deps)
+    deps
 }
-
-/// Parse Bazel local_repository / local_path_override from file content.
 /// Handles multi-line rules like:
 /// ```python
 /// local_repository(
@@ -526,10 +521,7 @@ fn parse_bazel_local_repos(
             }
         }
 
-        let rule_end = match rule_end {
-            Some(idx) => idx,
-            None => break,
-        };
+        let Some(rule_end) = rule_end else { break };
 
         let rule_text = &content[rule_start..=rule_end];
 
@@ -565,7 +557,7 @@ fn parse_bazel_local_repos(
 
 /// Extract `attr = "value"` from a Bazel rule line.
 fn extract_bazel_attr(line: &str, attr: &str) -> Option<String> {
-    let pattern = format!("{} =", attr);
+    let pattern = format!("{attr} =");
     if let Some(idx) = line.find(&pattern) {
         let rest = &line[idx + pattern.len()..];
         let rest = rest.trim_start();
@@ -779,7 +771,7 @@ pub fn resolve_cross_repo_edges(
                 go_segment_end,
             );
             if let Some(to_file) =
-                resolve_in_dep_repo(&dep.path, &dep.name, remainder)?
+                resolve_in_dep_repo(&dep.path, &dep.name, remainder)
             {
                 cross_edges.push(CrossRepoEdge {
                     from_repo: from_repo.to_path_buf(),
@@ -798,13 +790,20 @@ pub fn resolve_cross_repo_edges(
                 if to_file.ends_with("lib.rs") {
                     // Extract the symbol name from the import
                     // e.g., "mylib::Config" → "Config", "mylib::types::Config" → "Config"
-                    let symbol = edge.import_path.rsplit("::").next()
+                    let symbol = edge
+                        .import_path
+                        .rsplit("::")
+                        .next()
                         .or_else(|| edge.import_path.rsplit('.').next())
                         .unwrap_or("");
                     if !symbol.is_empty() {
-                        if let Some(mod_path) = follow_rust_reexport(&dep.path, &to_file, symbol) {
+                        if let Some(mod_path) =
+                            follow_rust_reexport(&dep.path, &to_file, symbol)
+                        {
                             // Resolve the module path to a file
-                            if let Some(def_file) = resolve_in_dep_repo(&dep.path, &dep.name, &mod_path).unwrap_or(None) {
+                            if let Some(def_file) = resolve_in_dep_repo(
+                                &dep.path, &dep.name, &mod_path,
+                            ) {
                                 // Avoid duplicate if it's the same file
                                 if def_file != to_file {
                                     cross_edges.push(CrossRepoEdge {
@@ -835,7 +834,7 @@ pub fn resolve_cross_repo_edges(
                     let java_path =
                         edge.import_path.replace('.', "/") + ".java";
                     for base in ["src/main/java", "src"] {
-                        let candidate = format!("{}/{}", base, java_path);
+                        let candidate = format!("{base}/{java_path}");
                         if dep.path.join(&candidate).exists() {
                             cross_edges.push(CrossRepoEdge {
                                 from_repo: from_repo.to_path_buf(),
@@ -867,7 +866,7 @@ fn resolve_in_dep_repo(
     dep_path: &Path,
     dep_name: &str,
     remainder: &str,
-) -> anyhow::Result<Option<String>> {
+) -> Option<String> {
     if remainder.is_empty() {
         // `use sephera_core;` or `import 'mylib';` — resolves to entry point
         // Rust: lib.rs, JS/TS: index.js, Python: <name>.py or __init__.py
@@ -881,10 +880,10 @@ fn resolve_in_dep_repo(
             "index.ts".to_string(),
         ];
         // Python: <name>.py, <name>/__init__.py, src/<name>.py
-        candidates.push(format!("{}.py", dep_name));
-        candidates.push(format!("{}/__init__.py", dep_name));
-        candidates.push(format!("src/{}.py", dep_name));
-        candidates.push(format!("src/{}/__init__.py", dep_name));
+        candidates.push(format!("{dep_name}.py"));
+        candidates.push(format!("{dep_name}/__init__.py"));
+        candidates.push(format!("src/{dep_name}.py"));
+        candidates.push(format!("src/{dep_name}/__init__.py"));
         candidates.push("__init__.py".to_string());
         // Go: `import "example.com/mylib"` names the module root — the package
         // is the .go files at the dep root. Prefer the conventional <name>.go;
@@ -893,7 +892,7 @@ fn resolve_in_dep_repo(
 
         for candidate in candidates {
             if dep_path.join(&candidate).exists() {
-                return Ok(Some(candidate));
+                return Some(candidate);
             }
         }
 
@@ -901,10 +900,10 @@ fn resolve_in_dep_repo(
         // package lives in server.go, not mylib.go): take the first non-test
         // .go file at the dep root. Test files never satisfy an import.
         if let Some(first) = first_go_file(dep_path) {
-            return Ok(Some(first));
+            return Some(first);
         }
 
-        return Ok(None);
+        return None;
     }
 
     // Convert `types::GraphReport` → `types` (we only need the module path,
@@ -912,39 +911,39 @@ fn resolve_in_dep_repo(
     let module_path = remainder.split("::").next().unwrap_or(remainder);
     let module_path = module_path.split('.').next().unwrap_or(module_path);
     // JS: `mylib/utils` → `utils`
-    let module_path = module_path.split('/').last().unwrap_or(module_path);
+    let module_path = module_path.split('/').next_back().unwrap_or(module_path);
 
     // Try common layouts: Rust, JS/TS, Python, Go, C/C++
     let candidates = [
-        format!("src/{}.rs", module_path),
-        format!("src/{}/mod.rs", module_path),
-        format!("{}.rs", module_path),
-        format!("src/{}.js", module_path),
-        format!("src/{}/index.js", module_path),
-        format!("{}.js", module_path),
-        format!("src/{}.ts", module_path),
-        format!("src/{}/index.ts", module_path),
-        format!("{}.ts", module_path),
-        format!("src/{}.py", module_path),
-        format!("src/{}/__init__.py", module_path),
-        format!("{}.py", module_path),
-        format!("{}/__init__.py", module_path),
+        format!("src/{module_path}.rs"),
+        format!("src/{module_path}/mod.rs"),
+        format!("{module_path}.rs"),
+        format!("src/{module_path}.js"),
+        format!("src/{module_path}/index.js"),
+        format!("{module_path}.js"),
+        format!("src/{module_path}.ts"),
+        format!("src/{module_path}/index.ts"),
+        format!("{module_path}.ts"),
+        format!("src/{module_path}.py"),
+        format!("src/{module_path}/__init__.py"),
+        format!("{module_path}.py"),
+        format!("{module_path}/__init__.py"),
         // Go: <module>.go, <module>/<file>.go (Go packages are directories)
-        format!("{}.go", module_path),
-        format!("{}/{}.go", module_path, module_path),
+        format!("{module_path}.go"),
+        format!("{module_path}/{module_path}.go"),
         // C/C++: <module>.h, <module>.hpp, <module>.cpp, include/<module>.h
-        format!("{}.h", module_path),
-        format!("{}.hpp", module_path),
-        format!("{}.cpp", module_path),
-        format!("include/{}.h", module_path),
-        format!("include/{}.hpp", module_path),
-        format!("src/{}.h", module_path),
-        format!("src/{}.cpp", module_path),
+        format!("{module_path}.h"),
+        format!("{module_path}.hpp"),
+        format!("{module_path}.cpp"),
+        format!("include/{module_path}.h"),
+        format!("include/{module_path}.hpp"),
+        format!("src/{module_path}.h"),
+        format!("src/{module_path}.cpp"),
     ];
 
     for candidate in candidates {
         if dep_path.join(&candidate).exists() {
-            return Ok(Some(candidate));
+            return Some(candidate);
         }
     }
 
@@ -955,7 +954,7 @@ fn resolve_in_dep_repo(
     let dir = dep_path.join(module_path);
     if dir.is_dir() {
         if let Some(first) = first_go_file(&dir) {
-            return Ok(Some(format!("{module_path}/{first}")));
+            return Some(format!("{module_path}/{first}"));
         }
     }
 
@@ -966,11 +965,11 @@ fn resolve_in_dep_repo(
             // Try to follow re-exports: if the imported symbol is re-exported
             // from another module, also return that file.
             // For now, return the entry point; the caller can follow re-exports.
-            return Ok(Some(lib_candidate.to_string()));
+            return Some(lib_candidate.to_string());
         }
     }
 
-    Ok(None)
+    None
 }
 
 /// Follow Rust `pub use` re-exports in a file.
@@ -989,7 +988,8 @@ fn follow_rust_reexport(
         // Match: pub use types::Config; or pub use types::{Config, Other};
         // or pub use self::types::Config;
         if line.starts_with("pub use ") {
-            let rest = line.strip_prefix("pub use ")?.trim().trim_end_matches(';');
+            let rest =
+                line.strip_prefix("pub use ")?.trim().trim_end_matches(';');
             // Handle pub use types::{A, B} — check if symbol is in the list
             if let Some(brace_start) = rest.find('{') {
                 let modules = &rest[..brace_start].trim_end_matches(':');
@@ -998,10 +998,13 @@ fn follow_rust_reexport(
                 for item in items.split(',') {
                     let item = item.trim();
                     // Handle "Config as Renamed"
-                    let item_name = item.split(" as ").next().unwrap_or(item).trim();
+                    let item_name =
+                        item.split(" as ").next().unwrap_or(item).trim();
                     if item_name == symbol {
                         // Return the module path (e.g., "types")
-                        let mod_path = modules.trim_start_matches("self::").trim_start_matches("crate::");
+                        let mod_path = modules
+                            .trim_start_matches("self::")
+                            .trim_start_matches("crate::");
                         return Some(mod_path.to_string());
                     }
                 }
@@ -1014,7 +1017,9 @@ fn follow_rust_reexport(
                     let sym_name = sym.split_whitespace().next().unwrap_or(sym);
                     if sym_name == symbol {
                         let mod_path = rest[..last_sep].trim();
-                        let mod_path = mod_path.trim_start_matches("self::").trim_start_matches("crate::");
+                        let mod_path = mod_path
+                            .trim_start_matches("self::")
+                            .trim_start_matches("crate::");
                         return Some(mod_path.to_string());
                     }
                 }
@@ -1131,7 +1136,7 @@ dependencies = [
         .unwrap();
 
         let deps = discover_path_dependencies(&main_repo).unwrap();
-        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "pyproject.toml");
 
@@ -1159,19 +1164,19 @@ dependencies = [
         fs::create_dir_all(&main_repo).unwrap();
         fs::write(
             main_repo.join("go.mod"),
-            r#"module example.com/myservice
+            r"module example.com/myservice
 
 go 1.21
 
 require example.com/mylib v0.0.0
 
 replace example.com/mylib => ../mylib
-"#,
+",
         )
         .unwrap();
 
         let deps = discover_path_dependencies(&main_repo).unwrap();
-        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "go.mod");
 
@@ -1203,7 +1208,7 @@ replace example.com/mylib => ../mylib
         .unwrap();
 
         let deps = discover_path_dependencies(&main_repo).unwrap();
-        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "my-utils");
         assert_eq!(deps[0].via_manifest, "settings.gradle");
 
@@ -1226,16 +1231,16 @@ replace example.com/mylib => ../mylib
         fs::create_dir_all(&main_repo).unwrap();
         fs::write(
             main_repo.join("pom.xml"),
-            r#"<project>
+            r"<project>
   <modules>
     <module>../my-utils</module>
   </modules>
-</project>"#,
+</project>",
         )
         .unwrap();
 
         let deps = discover_path_dependencies(&main_repo).unwrap();
-        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].via_manifest, "pom.xml");
 
         let _ = fs::remove_dir_all(&tmp);
@@ -1262,7 +1267,7 @@ replace example.com/mylib => ../mylib
         .unwrap();
 
         let deps = discover_path_dependencies(&main_repo).unwrap();
-        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "mylib");
         assert_eq!(deps[0].via_manifest, "CMakeLists.txt");
 
@@ -1294,7 +1299,7 @@ replace example.com/mylib => ../mylib
         .unwrap();
 
         let deps = discover_path_dependencies(&main_repo).unwrap();
-        assert_eq!(deps.len(), 1, "expected 1 dep, got {:?}", deps);
+        assert_eq!(deps.len(), 1, "expected 1 dep, got {deps:?}");
         assert_eq!(deps[0].name, "my_utils");
         assert_eq!(deps[0].via_manifest, "WORKSPACE");
 
@@ -1320,7 +1325,7 @@ tokio = { version = "1.0", features = ["full"] }
         );
 
         let deps = discover_path_dependencies(&repo).unwrap();
-        assert!(deps.is_empty());
+        assert_eq!(deps.len(), 0, "expected no deps, got {deps:?}");
 
         let _ = fs::remove_dir_all(&tmp);
     }

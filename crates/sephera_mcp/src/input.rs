@@ -701,7 +701,7 @@ pub struct SchemaImpactInput {
 ///
 /// Path dependencies are discovered from manifests: `Cargo.toml` (Rust),
 /// `package.json` (Node), `pyproject.toml` (Python), `go.mod` (Go),
-/// `settings.gradle` (Gradle), `pom.xml` (Maven), `CMakeLists.txt` (CMake),
+/// `settings.gradle` (Gradle), `pom.xml` (Maven), `CMakeLists.txt` (`CMake`),
 /// `WORKSPACE`/`MODULE.bazel` (Bazel). Only path-based deps create edges;
 /// version and git deps are reported as unresolvable, never fabricated.
 #[derive(serde::Deserialize, schemars::JsonSchema)]

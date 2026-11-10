@@ -1676,7 +1676,10 @@ impl SepheraServer {
             MultirepoImpactInput,
         >,
     ) -> Result<String, rmcp::ErrorData> {
-        use sephera_graph::multirepo::{discover_path_dependencies, resolve_cross_repo_edges};
+        use sephera_graph::multirepo::{
+            discover_path_dependencies, resolve_cross_repo_edges,
+        };
+        use std::fmt::Write as _;
 
         let ignore_matcher =
             build_ignore_matcher(param.ignore, param.no_gitignore)?;
@@ -1715,8 +1718,9 @@ impl SepheraServer {
         )
         .map_err(map_internal_error("graph build failed"))?;
 
-        let cross_edges = resolve_cross_repo_edges(repo_root, &report.edges, &deps)
-            .map_err(map_internal_error("cross-repo resolution failed"))?;
+        let cross_edges =
+            resolve_cross_repo_edges(repo_root, &report.edges, &deps)
+                .map_err(map_internal_error("cross-repo resolution failed"))?;
 
         // Match targets against cross edges
         let mut output = String::new();
@@ -1741,22 +1745,29 @@ impl SepheraServer {
                 .collect();
             if !dependents.is_empty() {
                 found_any = true;
-                output.push_str(&format!("### `{target}`\n\n"));
+                let _ = write!(output, "### `{target}`\n\n");
                 for d in dependents {
-                    output.push_str(&format!(
+                    let _ = write!(
+                        output,
                         "- `{}` imports `{}`\n  (via path dependency `{}` → `{}` in `{}`)\n",
                         d.from_file,
                         d.import_path,
                         d.via.name,
-                        d.via.path.file_name().and_then(|n| n.to_str()).unwrap_or(""),
+                        d.via
+                            .path
+                            .file_name()
+                            .and_then(|n| n.to_str())
+                            .unwrap_or(""),
                         d.via.via_manifest,
-                    ));
+                    );
                 }
                 output.push('\n');
             }
         }
         if !found_any {
-            output.push_str("No cross-repo dependents found for the given files.\n");
+            output.push_str(
+                "No cross-repo dependents found for the given files.\n",
+            );
         }
         // format is accepted for parity; output is markdown-shaped text
         let _ = param.format;

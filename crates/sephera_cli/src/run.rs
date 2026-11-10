@@ -753,7 +753,7 @@ async fn run_impact(arguments: &ImpactArgs) -> Result<Vec<Gate>> {
     // Multi-repo: if --multi and the target is in a path dependency (not in
     // the current repo's graph), do cross-repo analysis directly. The normal
     // impact_outcome would fail because the target isn't in this repo's graph.
-    let (mut rendered, gates) = if arguments.multi
+    let (rendered, gates) = if arguments.multi
         && is_cross_repo_target(&source.analysis_path, &arguments.files)?
     {
         progress.set_message("Resolving cross-repo dependencies...");
@@ -867,6 +867,7 @@ fn multirepo_impact_section(
     use sephera_graph::multirepo::{
         discover_path_dependencies, resolve_cross_repo_edges,
     };
+    use std::fmt::Write as _;
 
     // Discover path deps from the current repo
     let deps = discover_path_dependencies(repo_root)?;
@@ -913,22 +914,20 @@ fn multirepo_impact_section(
                     }
                     // If --symbol is given, only report edges importing that symbol.
                     // e.g., --symbol greet matches `mylib::greet` but not `mylib::farewell`.
-                    if let Some(sym) = symbol {
+                    symbol.is_none_or(|sym| {
                         let import = &e.import_path;
                         // Match: ends with ::sym, .sym, /sym, or equals sym
                         import == sym
                             || import.ends_with(&format!("::{sym}"))
                             || import.ends_with(&format!(".{sym}"))
                             || import.ends_with(&format!("/{sym}"))
-                    } else {
-                        true
-                    }
+                    })
                 })
                 .collect();
 
         if !dependents.is_empty() {
             found_any = true;
-            section.push_str(&format!("### `{}`\n\n", target));
+            let _ = write!(section, "### `{target}`\n\n");
             for dep_edge in dependents {
                 // from_repo is where the dependent lives (current repo)
                 // to_repo is the dep repo containing the target
@@ -938,14 +937,15 @@ fn multirepo_impact_section(
                     .file_name()
                     .and_then(|n| n.to_str())
                     .unwrap_or("?");
-                section.push_str(&format!(
+                let _ = write!(
+                    section,
                     "- `{}` imports `{}`\n  (via path dependency `{}` → `{}` in `{}`)\n",
                     dep_edge.from_file,
                     dep_edge.import_path,
                     dep_edge.via.name,
                     dep_repo_name,
                     dep_edge.via.via_manifest,
-                ));
+                );
             }
             section.push('\n');
         }
