@@ -17,20 +17,39 @@ use tempfile::tempdir;
 /// Normalize JSON output for stable snapshots: absolute paths, timestamps,
 /// and other environment-specific values become placeholders.
 fn normalize_json(stdout: &str) -> String {
-    // Replace the temp dir path wherever it appears.
-    // We do this by replacing any absolute path prefix with [PATH].
-    let mut out = stdout.to_string();
-    // Common patterns: "/tmp/...", "C:\\Users\\...\\Temp\\..."
-    // A simple approach: replace everything that looks like an absolute path
-    // in the base_path field and file paths.
-    for line in stdout.lines() {
-        if line.contains("/tmp/")
-            || line.contains("\\Temp\\")
-            || line.contains("/private/")
-        {
-            // Extract and replace - this is heuristic but works for our fixtures
+    // Windows paths are JSON-escaped with doubled backslashes
+    // (`C:\\Users\\...\\Temp\\...`), so a single-backslash pattern never
+    // matches them and the user-specific prefix survives into the
+    // snapshot. Collapse `\\` to `\` first: a no-op on Unix output,
+    // which has no backslashes, and the escaped form becomes the plain
+    // path the scans below expect.
+    let mut out = stdout.replace("\\\\", "\\");
+    // Replace any `X:\...` or `X:/...` span (a drive letter through the
+    // end of the path) with `[PATH]`. The letter before the colon keeps a
+    // time like `12:30` or a key like `a: b` from matching: only a letter
+    // followed by `:` and a slash is a drive.
+    let mut search_from = 0;
+    loop {
+        let backslash =
+            out[search_from..].find(":\\").map(|idx| search_from + idx);
+        let slash = out[search_from..].find(":/").map(|idx| search_from + idx);
+        let Some(colon) = [backslash, slash].into_iter().flatten().min() else {
             break;
+        };
+        if colon == 0 || !out.as_bytes()[colon - 1].is_ascii_alphabetic() {
+            search_from = colon + 1;
+            continue;
         }
+        let drive = colon - 1;
+        let rest = &out[drive..];
+        let end = rest
+            .find(|c: char| {
+                c == '"' || c == '\'' || c == ',' || c == '\n' || c == ' '
+            })
+            .unwrap_or(rest.len());
+        let path = &rest[..end];
+        out = out.replacen(path, "[PATH]", 1);
+        search_from = drive + "[PATH]".len();
     }
     // Replace temp dir paths: find the pattern and replace
     // This handles Unix (/tmp/xxx) and Windows paths
@@ -321,4 +340,45 @@ fn json_contract_risk() {
     with_settings!({ snapshot_suffix => "risk" }, {
         assert_snapshot!(out);
     });
+}
+
+/// A Windows JSON-escaped path must not leak its user-specific prefix
+/// into a snapshot. Before the fix the doubled backslashes meant no
+/// pattern matched, so `C:\Users\runner\...` survived verbatim; on the
+/// old normalizer this test fails with `runner` still present.
+#[test]
+fn normalize_json_handles_windows_escaped_paths() {
+    let windows = r#"{"base_path": "C:\\Users\\runner\\AppData\\Local\\Temp\\.tmpAbC123\\main.rs", "file": "helper.rs"}"#;
+    let normalized = normalize_json(windows);
+    assert!(
+        !normalized.contains("runner"),
+        "user-specific prefix survived: {normalized}"
+    );
+    assert!(
+        !normalized.contains("C:"),
+        "drive letter survived: {normalized}"
+    );
+    assert!(
+        normalized.contains("[PATH]"),
+        "no [PATH] placeholder: {normalized}"
+    );
+    assert_eq!(
+        normalized, r#"{"base_path": "[PATH]", "file": "helper.rs"}"#,
+        "windows path not fully replaced"
+    );
+    // A time or a `key: value` pair is not a drive letter.
+    let plain = r#"{"elapsed_ms": 12, "note": "ran at 12:30"}"#;
+    let normalized = normalize_json(plain);
+    assert!(
+        normalized.contains("12:30"),
+        "non-path colon text was mangled: {normalized}"
+    );
+    // The Unix form still normalizes.
+    let unix = r#"{"base_path": "/tmp/.tmpAbC123/main.rs"}"#;
+    let normalized = normalize_json(unix);
+    assert!(
+        !normalized.contains("/tmp/"),
+        "unix temp path survived: {normalized}"
+    );
+    assert!(normalized.contains("[PATH]"));
 }
