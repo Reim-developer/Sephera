@@ -238,6 +238,209 @@ fn write(base: &Path, relative: &str, contents: &[u8]) {
     std::fs::write(path, contents).expect("write fixture file");
 }
 
+/// Two repos joined by a JS `file:` path dependency: `dep` exports `greet`
+/// and `farewell`, `main` imports `greet` from `index.js` and `farewell`
+/// from `other.js`. Returns the temp dir and the main repo path.
+fn js_multirepo_fixture() -> (TempDir, String) {
+    let dir = tempfile::tempdir().expect("temp dir");
+    write(
+        dir.path(),
+        "dep/package.json",
+        b"{\"name\": \"mylib\", \"version\": \"1.0.0\", \"main\": \"index.js\"}\n",
+    );
+    write(
+        dir.path(),
+        "dep/index.js",
+        b"export function greet() {}\nexport function farewell() {}\n",
+    );
+    write(
+        dir.path(),
+        "main/package.json",
+        b"{\"name\": \"main\", \"version\": \"1.0.0\", \"dependencies\": {\"mylib\": \"file:../dep\"}}\n",
+    );
+    write(
+        dir.path(),
+        "main/index.js",
+        b"import { greet } from 'mylib';\nconsole.log(greet());\n",
+    );
+    write(
+        dir.path(),
+        "main/other.js",
+        b"import { farewell } from 'mylib';\nconsole.log(farewell());\n",
+    );
+    let main = dir.path().join("main").to_string_lossy().into_owned();
+    (dir, main)
+}
+
+/// `multirepo_impact` ignored its `format` field and always returned
+/// Markdown, even though the schema says json is the default: a client
+/// that parsed the content as JSON got a parse error. The report is now
+/// a serializable struct routed through `OutputKind`, like every other
+/// tool. On the unfixed server this test fails in `tool()`: the content
+/// is Markdown, not JSON. Found by `CodeRabbit` on PR #68.
+#[test]
+fn multirepo_impact_returns_json_by_default() {
+    let (_dir, main) = js_multirepo_fixture();
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let report = mcp.tool(
+        "multirepo_impact",
+        json!({ "path": main, "files": ["../dep/index.js"] }),
+    );
+
+    assert_eq!(report["targets"].as_array().map(Vec::len), Some(1));
+    assert_eq!(report["targets"][0]["target"], "../dep/index.js");
+    assert_eq!(report["targets"][0]["dependent_count"], 2);
+    let files: Vec<&str> = report["targets"][0]["dependents"]
+        .as_array()
+        .expect("dependents should be an array")
+        .iter()
+        .filter_map(|d| d["file"].as_str())
+        .collect();
+    assert_eq!(files, vec!["index.js", "other.js"], "{report}");
+    assert_eq!(
+        report["targets"][0]["dependents"][0]["via_name"], "mylib",
+        "{report}"
+    );
+}
+
+/// The same report as Markdown when the caller asks for it: the
+/// `format` field is honored rather than accepted and dropped.
+/// (This half pins the shape; the teeth against ignoring `format`
+/// live in the JSON-default test above.)
+#[test]
+fn multirepo_impact_markdown_format_is_honored() {
+    let (_dir, main) = js_multirepo_fixture();
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let response = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "multirepo_impact",
+                "arguments": {
+                    "path": main,
+                    "files": ["../dep/index.js"],
+                    "format": "markdown",
+                },
+            }),
+        )
+        .expect("a markdown call must be answered");
+    let text = response["result"]["content"][0]["text"]
+        .as_str()
+        .expect("the tool must return text content");
+
+    assert!(
+        text.starts_with("## Cross-repo dependents"),
+        "markdown must open with the section header, got:\n{text}"
+    );
+    assert!(
+        text.contains("imports `mylib`"),
+        "markdown must list the importer, got:\n{text}"
+    );
+    assert!(
+        !text.trim_start().starts_with('{'),
+        "markdown must not be JSON, got:\n{text}"
+    );
+}
+
+/// The MCP tool dropped the CLI's symbol filter, so `--multi --symbol`
+/// had no MCP equivalent: every dependent came back whatever name was
+/// asked for. The tool now applies the same `edge_matches_symbol`
+/// match. On the unfixed server `greet` returns both dependents.
+#[test]
+fn multirepo_impact_symbol_filter_narrows_to_named_imports() {
+    let (_dir, main) = js_multirepo_fixture();
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let report = mcp.tool(
+        "multirepo_impact",
+        json!({
+            "path": main,
+            "files": ["../dep/index.js"],
+            "symbol": "greet",
+        }),
+    );
+    assert_eq!(report["targets"][0]["dependent_count"], 1, "{report}");
+    assert_eq!(
+        report["targets"][0]["dependents"][0]["file"], "index.js",
+        "{report}"
+    );
+
+    let report = mcp.tool(
+        "multirepo_impact",
+        json!({
+            "path": main,
+            "files": ["../dep/index.js"],
+            "symbol": "farewell",
+        }),
+    );
+    assert_eq!(report["targets"][0]["dependent_count"], 1, "{report}");
+    assert_eq!(
+        report["targets"][0]["dependents"][0]["file"], "other.js",
+        "{report}"
+    );
+}
+
+/// The MCP tool silently answered an empty section for a target inside
+/// the consumer repo itself, which looks exactly like "nothing depends
+/// on it". The CLI rejects that target, and the tool now does too.
+/// On the unfixed server this call succeeds with "No cross-repo
+/// dependents found".
+#[test]
+fn multirepo_impact_rejects_a_target_outside_every_path_dep() {
+    let (_dir, main) = js_multirepo_fixture();
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let error = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "multirepo_impact",
+                "arguments": { "path": main, "files": ["index.js"] },
+            }),
+        )
+        .expect_err("a target inside no path dep is not a question");
+    assert_eq!(error["code"], -32602, "invalid params: {error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("not inside any path dependency")),
+        "{error}"
+    );
+}
+
+/// A target that does not resolve to a file was silently skipped, so a
+/// typo came back as "No cross-repo dependents found" instead of an
+/// error. On the unfixed server this call succeeds.
+#[test]
+fn multirepo_impact_rejects_an_unresolvable_target() {
+    let (_dir, main) = js_multirepo_fixture();
+    let mut mcp = Mcp::start();
+    mcp.handshake();
+
+    let error = mcp
+        .call(
+            "tools/call",
+            json!({
+                "name": "multirepo_impact",
+                "arguments": { "path": main, "files": ["../dep/nope.js"] },
+            }),
+        )
+        .expect_err("a nonexistent target is not a question");
+    assert_eq!(error["code"], -32602, "invalid params: {error}");
+    assert!(
+        error["message"]
+            .as_str()
+            .is_some_and(|m| m.contains("does not resolve to a file")),
+        "{error}"
+    );
+}
+
 #[test]
 fn the_server_identifies_itself_after_the_handshake() {
     let mut mcp = Mcp::start();
@@ -288,6 +491,7 @@ fn every_documented_tool_is_discoverable_over_the_protocol() {
             "impact",
             "loc",
             "merge",
+            "multirepo_impact",
             "review",
             "risk",
             "schema_impact",

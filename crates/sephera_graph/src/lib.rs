@@ -19,6 +19,7 @@ pub mod diff;
 mod extract_cache;
 pub mod manifests;
 pub mod merge;
+pub mod multirepo;
 pub mod plugins;
 pub mod render;
 pub mod resolver;
