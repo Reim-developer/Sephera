@@ -7,33 +7,64 @@ The workspace version lives in the root Cargo.toml. The Tauri host
 gui/src-tauri/Cargo.toml and gui/src-tauri/tauri.conf.json. This script
 asserts all three agree.
 
+Versions are read structurally (tomllib / json), never by regex: a
+`^version` scan cannot tell `[workspace.package]` from a dependency's
+inline `version = ...` key, and would silently read the wrong one if a
+`[package]` section were ever added to the root manifest.
+
 Run from the repo root. Exits 0 when in sync, 1 with a message when not.
 """
 
 import json
-import re
 import sys
+import tomllib
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
 
 
-def workspace_version() -> str:
-    text = (ROOT / "Cargo.toml").read_text(encoding="utf-8")
-    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    if not match:
-        print("error: no version in root Cargo.toml", file=sys.stderr)
+def _load_toml(path: Path) -> dict:
+    try:
+        return tomllib.loads(path.read_text(encoding="utf-8"))
+    except tomllib.TOMLDecodeError as error:
+        print(f"error: {path} is not valid TOML: {error}", file=sys.stderr)
         sys.exit(1)
-    return match.group(1)
+
+
+def _version_at(table: dict, *keys: str, source: str) -> str:
+    value: object = table
+    for key in keys:
+        if not isinstance(value, dict) or key not in value:
+            print(
+                f"error: no version at {'.'.join(keys)} in {source}",
+                file=sys.stderr,
+            )
+            sys.exit(1)
+        value = value[key]
+    if not isinstance(value, str) or not value:
+        print(f"error: version at {'.'.join(keys)} in {source} is not a string",
+              file=sys.stderr)
+        sys.exit(1)
+    return value
+
+
+def workspace_version() -> str:
+    return _version_at(
+        _load_toml(ROOT / "Cargo.toml"),
+        "workspace",
+        "package",
+        "version",
+        source="root Cargo.toml",
+    )
 
 
 def tauri_cargo_version() -> str:
-    text = (ROOT / "gui" / "src-tauri" / "Cargo.toml").read_text(encoding="utf-8")
-    match = re.search(r'^version\s*=\s*"([^"]+)"', text, re.MULTILINE)
-    if not match:
-        print("error: no version in gui/src-tauri/Cargo.toml", file=sys.stderr)
-        sys.exit(1)
-    return match.group(1)
+    return _version_at(
+        _load_toml(ROOT / "gui" / "src-tauri" / "Cargo.toml"),
+        "package",
+        "version",
+        source="gui/src-tauri/Cargo.toml",
+    )
 
 
 def tauri_conf_version() -> str:
