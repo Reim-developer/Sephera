@@ -50,6 +50,9 @@ until proven otherwise.
 - `0` — success. The analysis ran; any gate thresholds were not crossed.
 - `1` — failure. The analysis could not run. An `error:` line is printed to stderr.
 - `2` — gate violated. The analysis ran and a `--fail-on` threshold was crossed.
+- `64` — usage error. The command line could not be parsed (unknown flag,
+  missing required argument). The run never started, so this cannot be
+  confused with a gate violation.
 - `130` — interrupted. The user pressed Ctrl+C. Distinct from failure by design.
 
 These codes are stable. A script that checks `== 2` for gate violations will
