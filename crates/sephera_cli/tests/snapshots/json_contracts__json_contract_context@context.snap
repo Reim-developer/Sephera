@@ -1,0 +1,98 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "metadata": {
+    "base_path": "[PATH]",
+    "focus_paths": [],
+    "compression_mode": "none",
+    "budget_tokens": 128000,
+    "metadata_budget_tokens": 12800,
+    "excerpt_budget_tokens": 115200,
+    "estimated_tokens": 252,
+    "estimated_metadata_tokens": 216,
+    "estimated_excerpt_tokens": 36,
+    "files_considered": 3,
+    "files_selected": 3,
+    "truncated_files": 0,
+    "closure_pulled_files": 0
+  },
+  "dominant_languages": [
+    {
+      "language": "Rust",
+      "files": 3,
+      "size_bytes": 142
+    }
+  ],
+  "groups": [
+    {
+      "group": "entrypoints",
+      "label": "Entrypoints",
+      "files": 1,
+      "estimated_tokens": 18,
+      "truncated_files": 0
+    },
+    {
+      "group": "testing",
+      "label": "Testing",
+      "files": 1,
+      "estimated_tokens": 13,
+      "truncated_files": 0
+    },
+    {
+      "group": "general",
+      "label": "General",
+      "files": 1,
+      "estimated_tokens": 5,
+      "truncated_files": 0
+    }
+  ],
+  "files": [
+    {
+      "relative_path": "main.rs",
+      "language": "Rust",
+      "size_bytes": 71,
+      "estimated_tokens": 18,
+      "truncated": false,
+      "compressed": false,
+      "group": "entrypoints",
+      "selection_class": "entrypoint",
+      "excerpt": {
+        "line_start": 1,
+        "line_end": 6,
+        "content": "#[path = \"helper.rs\"]\nmod helper;\n\nfn main() {\n    helper::helper();\n}"
+      }
+    },
+    {
+      "relative_path": "tests/test_main.rs",
+      "language": "Rust",
+      "size_bytes": 52,
+      "estimated_tokens": 13,
+      "truncated": false,
+      "compressed": false,
+      "group": "testing",
+      "selection_class": "adjacent-test",
+      "excerpt": {
+        "line_start": 1,
+        "line_end": 5,
+        "content": "#[path = \"../main.rs\"]\nmod main;\n\n#[test]\nfn t() {}"
+      }
+    },
+    {
+      "relative_path": "helper.rs",
+      "language": "Rust",
+      "size_bytes": 19,
+      "estimated_tokens": 5,
+      "truncated": false,
+      "compressed": false,
+      "group": "general",
+      "selection_class": "general",
+      "excerpt": {
+        "line_start": 1,
+        "line_end": 1,
+        "content": "pub fn helper() {}"
+      }
+    }
+  ]
+}

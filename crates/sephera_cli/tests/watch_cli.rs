@@ -34,12 +34,14 @@ fn stdout(output: &Output) -> String {
 /// passed" — while `--once` was exactly what had been passed. The
 /// target is now required outright, so clap rejects the invocation
 /// with its standard missing-argument error and no self-contradiction.
+/// The rejection is a usage error, so it exits 64 (`EX_USAGE`), not 2:
+/// 2 is reserved for gate violations by the stability contract.
 #[test]
 fn regression_once_without_target_is_a_parse_error() {
     let dir = tempdir().unwrap();
     let path = dir.path().to_str().unwrap();
     let output = sephera(&["watch", "--once", "--path", path]);
-    assert_eq!(output.status.code(), Some(2), "{}", stderr(&output));
+    assert_eq!(output.status.code(), Some(64), "{}", stderr(&output));
     let text = stderr(&output);
     assert!(text.contains("--target"), "{text}");
     assert!(

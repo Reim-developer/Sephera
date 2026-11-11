@@ -15,6 +15,7 @@
 //! | 0 | analysed, nothing crossed a threshold |
 //! | 1 | the analysis could not run |
 //! | 2 | analysed, something crossed a threshold |
+//! | 64 | the command line could not be parsed (usage error, sysexits `EX_USAGE`) |
 //!
 //! Merging 1 and 2 into a single non-zero would mean a broken install and a
 //! violated rule look identical in a log, which is the situation where someone

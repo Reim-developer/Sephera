@@ -1,0 +1,23 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "base": "035d7c670ca01fde236058f36b662fa8653dff0e",
+  "ours": "ours",
+  "theirs": "theirs",
+  "conflicts": [
+    {
+      "file": "lib.py",
+      "symbol": "add",
+      "kind": {
+        "type": "removed_vs_new_consumer"
+      },
+      "contract_side": "ours",
+      "consumers": [
+        "new.py"
+      ],
+      "suggestion": null
+    }
+  ]
+}

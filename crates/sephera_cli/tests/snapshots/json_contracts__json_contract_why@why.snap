@@ -1,0 +1,23 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "from": "main.rs",
+  "to": "helper.rs",
+  "connected": true,
+  "hop_count": 1,
+  "direct": true,
+  "hops": [
+    {
+      "file": "main.rs",
+      "via": []
+    },
+    {
+      "file": "helper.rs",
+      "via": [
+        "helper.rs"
+      ]
+    }
+  ]
+}

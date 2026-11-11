@@ -1,0 +1,63 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "report": {
+    "base_path": "[PATH]",
+    "by_language": [
+      {
+        "language": "Rust",
+        "files": 3,
+        "counts": {
+          "functions": 3,
+          "types": 2
+        }
+      }
+    ],
+    "totals": {
+      "functions": 3,
+      "types": 2
+    },
+    "files_scanned": 3,
+    "files_skipped": 0,
+    "languages_detected": 1
+  },
+  "symbols": [
+    {
+      "file_path": "helper.rs",
+      "name": "helper",
+      "kind": "functions",
+      "line": 1,
+      "end_line": 1
+    },
+    {
+      "file_path": "main.rs",
+      "name": "helper",
+      "kind": "types",
+      "line": 2,
+      "end_line": 2
+    },
+    {
+      "file_path": "main.rs",
+      "name": "main",
+      "kind": "functions",
+      "line": 4,
+      "end_line": 6
+    },
+    {
+      "file_path": "tests/test_main.rs",
+      "name": "main",
+      "kind": "types",
+      "line": 2,
+      "end_line": 2
+    },
+    {
+      "file_path": "tests/test_main.rs",
+      "name": "t",
+      "kind": "functions",
+      "line": 5,
+      "end_line": 5
+    }
+  ]
+}

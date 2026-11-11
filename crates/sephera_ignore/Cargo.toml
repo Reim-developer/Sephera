@@ -1,4 +1,5 @@
 [package]
+publish = false
 name = "sephera_ignore"
 version.workspace = true
 edition.workspace = true
@@ -8,7 +9,6 @@ repository.workspace = true
 homepage.workspace = true
 rust-version.workspace = true
 description = "Git-aware ignore rules (.gitignore, .sepheraignore) with globset matching."
-documentation = "https://docs.rs/sephera_ignore"
 readme = "README.md"
 keywords = ["gitignore", "glob", "ignore", "filesystem"]
 categories = ["development-tools", "filesystem"]

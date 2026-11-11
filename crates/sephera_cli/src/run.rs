@@ -59,6 +59,15 @@ use crate::{
     untested, watch, why,
 };
 
+/// Exit code for a command-line usage error (sysexits `EX_USAGE`).
+///
+/// Distinct from [`crate::gate::GATE_VIOLATED`] (2), which means the
+/// analysis ran and a `--fail-on` threshold was crossed, and from
+/// [`ExitCode::FAILURE`] (1), which means the analysis could not run.
+/// A usage error means the run never started: an unknown flag, a
+/// missing required argument, a value that fails validation.
+const USAGE_ERROR: i32 = 64;
+
 #[must_use]
 pub fn main_exit_code() -> ExitCode {
     match run() {
@@ -95,7 +104,25 @@ pub fn run() -> Result<ExitCode> {
     // typed flag still wins. See `configure` for why this is a pre-pass rather
     // than a second source of defaults.
     let expanded = configure::expand(std::env::args().collect(), None)?;
-    let cli = Cli::parse_from(&expanded.argv);
+    // Clap's default usage-error code is 2, which the stability contract
+    // reserves for gate violations (`gate::GATE_VIOLATED`): a script
+    // checking `== 2` could not tell "you mistyped a flag" from "a
+    // threshold was crossed". Usage errors are `EX_USAGE` (64) instead —
+    // the sysexits convention for a command-line usage error — while
+    // `--help` and `--version` still exit 0: their error carries exit
+    // code 0 and is passed through unchanged.
+    let cli = match Cli::try_parse_from(&expanded.argv) {
+        Ok(cli) => cli,
+        Err(error) => {
+            let code = if error.exit_code() == 0 {
+                0
+            } else {
+                USAGE_ERROR
+            };
+            let _ = error.print();
+            std::process::exit(code);
+        }
+    };
     progress::set_mode(cli.progress);
 
     // `watch` keeps a blocking loop over `notify`'s synchronous receiver, so it
