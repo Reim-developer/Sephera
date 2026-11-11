@@ -49,6 +49,34 @@ fn normalize_json(stdout: &str) -> String {
             out = out.replacen(path, "[PATH]", 1);
         }
     }
+    // `loc --format json` reports a measured `elapsed_ms`, which varies with
+    // machine speed (CI can report 1 where this laptop reports 0) and would
+    // make the snapshot flaky. Pin the number to 0 while keeping the type,
+    // so the contract still proves the field exists as a number. This is
+    // deliberate string surgery on the pretty-printed `"elapsed_ms": N` line:
+    // re-serializing the whole document through `serde_json::Value` would
+    // re-sort struct-serialized keys (only `loc`'s `json!` payload is already
+    // alphabetical) and churn every snapshot.
+    const KEY: &str = "\"elapsed_ms\"";
+    if let Some(key_idx) = out.find(KEY) {
+        let after_key = &out[key_idx + KEY.len()..];
+        if let Some(colon) = after_key.find(':') {
+            let mut num_start = key_idx + KEY.len() + colon + 1;
+            // Skip the whitespace between the colon and the number.
+            while out[num_start..].starts_with(char::is_whitespace) {
+                num_start += 1;
+            }
+            let digits: usize = out[num_start..]
+                .char_indices()
+                .take_while(|(_, c)| c.is_ascii_digit() || *c == '-')
+                .map(|(i, _)| i + 1)
+                .last()
+                .unwrap_or(0);
+            if digits > 0 {
+                out.replace_range(num_start..num_start + digits, "0");
+            }
+        }
+    }
     out
 }
 
