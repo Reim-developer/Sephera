@@ -3,7 +3,16 @@ source: crates/sephera_cli/tests/json_contracts.rs
 expression: out
 ---
 {
-  "commits_scanned": 2,
-  "commits_counted": 2,
-  "pairs": []
+  "commits_scanned": 5,
+  "commits_counted": 5,
+  "pairs": [
+    {
+      "first": "alpha.rs",
+      "second": "beta.rs",
+      "co_changes": 4,
+      "first_commits": 4,
+      "second_commits": 4,
+      "containment": 1.0
+    }
+  ]
 }

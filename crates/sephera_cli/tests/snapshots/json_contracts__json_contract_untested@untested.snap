@@ -3,7 +3,9 @@ source: crates/sephera_cli/tests/json_contracts.rs
 expression: out
 ---
 {
-  "test_files": [],
+  "test_files": [
+    "tests/test_main.rs"
+  ],
   "tested_direct": 0,
   "tested_indirect": 0,
   "untested": [
@@ -11,6 +13,11 @@ expression: out
       "file": "helper.rs",
       "symbol": "helper",
       "kind": "function"
+    },
+    {
+      "file": "main.rs",
+      "symbol": "helper",
+      "kind": "module"
     },
     {
       "file": "main.rs",

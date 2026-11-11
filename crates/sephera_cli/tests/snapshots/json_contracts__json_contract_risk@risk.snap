@@ -5,5 +5,20 @@ expression: out
 {
   "commits_scanned": 1,
   "commits_counted": 1,
-  "files": []
+  "files": [
+    {
+      "file": "helper.rs",
+      "dependents": 2,
+      "churn": 1,
+      "coupled_partners": 0,
+      "score": 2
+    },
+    {
+      "file": "main.rs",
+      "dependents": 1,
+      "churn": 1,
+      "coupled_partners": 0,
+      "score": 1
+    }
+  ]
 }

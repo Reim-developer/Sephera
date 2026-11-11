@@ -104,8 +104,41 @@ fn sephera() -> String {
 }
 
 fn write_fixture(dir: &std::path::Path) {
-    std::fs::write(dir.join("main.rs"), b"fn main() {}\n").unwrap();
+    // `main.rs` imports `helper.rs`, so impact/why/affected-tests
+    // exercise non-empty paths. A plain `mod helper;` does not resolve
+    // in a flat fixture (the resolver only finds the module through an
+    // explicit `#[path]` or a `src/` layout), so the import is spelled
+    // with `#[path]`: without it `impact helper.rs` reports no
+    // dependents and the snapshots pin empty answers.
+    std::fs::write(
+        dir.join("main.rs"),
+        b"#[path = \"helper.rs\"]\nmod helper;\n\nfn main() {\n    helper::helper();\n}\n",
+    )
+    .unwrap();
     std::fs::write(dir.join("helper.rs"), b"pub fn helper() {}\n").unwrap();
+    // The test file lives under `tests/`, which is what makes it a test
+    // file for affected-tests/untested: a root-level `test_main.rs` is
+    // not one (the Rust name rule is the exact name `tests.rs`). Its
+    // `#[path]` import makes `main.rs` reachable from a test.
+    std::fs::create_dir(dir.join("tests")).unwrap();
+    std::fs::write(
+        dir.join("tests").join("test_main.rs"),
+        b"#[path = \"../main.rs\"]\nmod main;\n\n#[test]\nfn t() {}\n",
+    )
+    .unwrap();
+}
+
+fn git_commit(dir: &std::path::Path, message: &str) {
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", message])
+        .current_dir(dir)
+        .output()
+        .unwrap();
 }
 
 fn init_git_repo(dir: &std::path::Path) {
@@ -124,16 +157,7 @@ fn init_git_repo(dir: &std::path::Path) {
         .current_dir(dir)
         .output()
         .unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", "init"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    git_commit(dir, "init");
 }
 
 fn run_json(args: &[&str], dir: &std::path::Path) -> String {
@@ -257,8 +281,6 @@ fn json_contract_why() {
 fn json_contract_affected_tests() {
     let dir = tempdir().unwrap();
     write_fixture(dir.path());
-    std::fs::write(dir.path().join("test_main.rs"), b"#[test] fn t() {}\n")
-        .unwrap();
     let output = Command::new(sephera())
         .args(["affected-tests", "--path"])
         .arg(dir.path())
@@ -312,19 +334,22 @@ fn json_contract_coupling() {
     let dir = tempdir().unwrap();
     write_fixture(dir.path());
     init_git_repo(dir.path());
-    // Make a second commit touching both files for coupling data
-    std::fs::write(dir.path().join("main.rs"), b"fn main() { helper(); }\n")
-        .unwrap();
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", "couple"])
-        .current_dir(dir.path())
-        .output()
-        .unwrap();
+    // A real pair: `alpha.rs` and `beta.rs` never import each other, so
+    // no graph edge excludes them, and they change together in four
+    // commits (added together, then three joint edits), for 4 co-changes
+    // against the default `min_co_changes` of 3 -- 3 even if the commit
+    // that adds them does not count. (`main.rs`, `helper.rs`) can never
+    // appear as a pair: `main.rs` imports `helper.rs`, and linked pairs
+    // are excluded by design.
+    let alpha = dir.path().join("alpha.rs");
+    let beta = dir.path().join("beta.rs");
+    for n in 1..=4 {
+        let suffix = "// v2\n".repeat(n - 1);
+        std::fs::write(&alpha, format!("pub fn alpha() {{}}\n{suffix}"))
+            .unwrap();
+        std::fs::write(&beta, format!("pub fn beta() {{}}\n{suffix}")).unwrap();
+        git_commit(dir.path(), &format!("couple {n}"));
+    }
     let out = run_json(&["coupling"], dir.path());
     with_settings!({ snapshot_suffix => "coupling" }, {
         assert_snapshot!(out);

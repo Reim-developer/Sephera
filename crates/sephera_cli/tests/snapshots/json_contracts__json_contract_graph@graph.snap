@@ -12,19 +12,44 @@ expression: out
       "file_path": "helper.rs",
       "language": "Rust",
       "imports_count": 0,
-      "imported_by_count": 0
+      "imported_by_count": 1
     },
     {
       "file_path": "main.rs",
       "language": "Rust",
-      "imports_count": 0,
+      "imports_count": 1,
+      "imported_by_count": 1
+    },
+    {
+      "file_path": "tests/test_main.rs",
+      "language": "Rust",
+      "imports_count": 1,
       "imported_by_count": 0
     }
   ],
-  "edges": [],
+  "edges": [
+    {
+      "from": "main.rs",
+      "to": "helper.rs",
+      "import_path": "helper.rs",
+      "resolved": true,
+      "local_gap": false,
+      "cfg_gated": false,
+      "kind": "module_declaration"
+    },
+    {
+      "from": "tests/test_main.rs",
+      "to": "main.rs",
+      "import_path": "../main.rs",
+      "resolved": true,
+      "local_gap": false,
+      "cfg_gated": false,
+      "kind": "module_declaration"
+    }
+  ],
   "metrics": {
-    "total_files": 2,
-    "total_internal_edges": 0,
+    "total_files": 3,
+    "total_internal_edges": 2,
     "self_references": 0,
     "total_external_edges": 0,
     "unresolved_local_edges": 0,
@@ -35,8 +60,26 @@ expression: out
     "local_crate_edges": 0,
     "builtin_edges": 0,
     "circular_dependencies": 0,
-    "most_importing": [],
-    "most_imported": [],
+    "most_importing": [
+      {
+        "file_path": "main.rs",
+        "count": 1
+      },
+      {
+        "file_path": "tests/test_main.rs",
+        "count": 1
+      }
+    ],
+    "most_imported": [
+      {
+        "file_path": "helper.rs",
+        "count": 1
+      },
+      {
+        "file_path": "main.rs",
+        "count": 1
+      }
+    ],
     "cycles": []
   }
 }

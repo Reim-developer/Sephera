@@ -6,20 +6,20 @@ expression: out
   "base_path": "[PATH]",
   "by_language": [
     {
-      "code_lines": 2,
+      "code_lines": 10,
       "comment_lines": 0,
-      "empty_lines": 0,
+      "empty_lines": 2,
       "language": "Rust",
-      "size_bytes": 32
+      "size_bytes": 142
     }
   ],
   "elapsed_ms": 0,
-  "files_scanned": 2,
+  "files_scanned": 3,
   "languages_detected": 1,
   "totals": {
-    "code_lines": 2,
+    "code_lines": 10,
     "comment_lines": 0,
-    "empty_lines": 0,
-    "size_bytes": 32
+    "empty_lines": 2,
+    "size_bytes": 142
   }
 }

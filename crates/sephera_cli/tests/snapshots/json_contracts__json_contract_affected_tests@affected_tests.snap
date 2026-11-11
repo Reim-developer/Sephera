@@ -6,11 +6,21 @@ expression: out
   "targets": [
     {
       "target": "main.rs",
-      "affected_test_count": 0,
+      "affected_test_count": 1,
       "depth": null,
-      "tests": []
+      "tests": [
+        {
+          "file": "tests/test_main.rs",
+          "distance": 1,
+          "imports": [
+            "../main.rs"
+          ]
+        }
+      ]
     }
   ],
-  "run_plan": [],
+  "run_plan": [
+    "cargo test --test test_main"
+  ],
   "manual": []
 }

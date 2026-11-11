@@ -6,9 +6,20 @@ expression: out
   "targets": [
     {
       "target": "helper.rs",
-      "dependent_count": 0,
+      "dependent_count": 2,
       "depth": null,
-      "dependents": []
+      "dependents": [
+        {
+          "file": "main.rs",
+          "imports": [
+            "helper.rs"
+          ]
+        },
+        {
+          "file": "tests/test_main.rs",
+          "imports": []
+        }
+      ]
     }
   ]
 }

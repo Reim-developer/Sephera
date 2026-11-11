@@ -5,8 +5,19 @@ expression: out
 {
   "from": "main.rs",
   "to": "helper.rs",
-  "connected": false,
-  "hop_count": null,
-  "direct": false,
-  "hops": []
+  "connected": true,
+  "hop_count": 1,
+  "direct": true,
+  "hops": [
+    {
+      "file": "main.rs",
+      "via": []
+    },
+    {
+      "file": "helper.rs",
+      "via": [
+        "helper.rs"
+      ]
+    }
+  ]
 }
