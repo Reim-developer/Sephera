@@ -1,0 +1,26 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "from_ref": "v1",
+  "to_ref": "working tree",
+  "breaks": [
+    {
+      "schema_file": "api/user.proto",
+      "element": "api.User.name",
+      "change": "removed",
+      "note": null,
+      "proven": [
+        {
+          "file": "consumer.py",
+          "via": "constructor_kwarg"
+        }
+      ],
+      "named": [],
+      "downstream": []
+    }
+  ],
+  "added": [],
+  "coverage": []
+}

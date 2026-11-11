@@ -1,0 +1,34 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "from": "v1",
+  "to": "working tree",
+  "changes": [
+    {
+      "file": "helper.rs",
+      "symbol": "helper",
+      "kind": "function",
+      "change": {
+        "type": "removed"
+      }
+    },
+    {
+      "file": "helper.rs",
+      "symbol": "helper2",
+      "kind": "function",
+      "change": {
+        "type": "added"
+      }
+    },
+    {
+      "file": "helper.rs",
+      "symbol": "removed_fn",
+      "kind": "function",
+      "change": {
+        "type": "removed"
+      }
+    }
+  ]
+}

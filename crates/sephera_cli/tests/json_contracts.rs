@@ -4,10 +4,13 @@
 //! If a snapshot changes, it is a breaking change until proven otherwise.
 //! See STABILITY.md for the full contract.
 //!
-//! Commands without JSON output (`guard`, `skill`) are not part of the
-//! JSON contract. Commands requiring git history (`review`, `risk`,
-//! `coupling`) use a minimal git repo. `watch` and `mcp` cannot run in
-//! tests (indefinite/server mode).
+//! Commands without a `--format` flag (`guard`, `skill`, `watch`, `mcp`)
+//! are not part of the JSON contract: `guard` and `skill` have no JSON
+//! output, and `watch`/`mcp` cannot run in tests (indefinite/server
+//! mode). Commands requiring git history (`review`, `risk`, `coupling`,
+//! `breaking`, `merge`, `diff`, `archaeology`, `behavior`,
+//! `schema-impact`) build a minimal git repo with fixed dates, so SHAs
+//! and dates in the output are deterministic.
 
 use std::process::Command;
 
@@ -175,6 +178,222 @@ fn run_json(args: &[&str], dir: &std::path::Path) -> String {
         String::from_utf8_lossy(&output.stderr)
     );
     normalize_json(&String::from_utf8(output.stdout).unwrap())
+}
+
+/// Like [`run_json`], but the command takes its own arguments before
+/// `--path` (a target file, `--from`, `--symbol`, `--ours`/`--theirs`).
+fn run_json_args(args: &[&str], dir: &std::path::Path) -> String {
+    let output = Command::new(sephera())
+        .args(args)
+        .arg("--path")
+        .arg(dir)
+        .arg("--format")
+        .arg("json")
+        .output()
+        .unwrap();
+    assert!(
+        output.status.success(),
+        "command {args:?} failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    normalize_json(&String::from_utf8(output.stdout).unwrap())
+}
+
+fn git_init(dir: &std::path::Path) {
+    Command::new("git")
+        .args(["init", "-q"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "t@t"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "t"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+}
+
+/// A commit with fixed author/committer dates, so SHAs and any dates in
+/// the output are identical on every run and every machine. The date is
+/// arbitrary; what matters is that it never varies.
+fn git_commit_fixed(dir: &std::path::Path, message: &str) {
+    Command::new("git")
+        .args(["add", "."])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["commit", "-qm", message])
+        .current_dir(dir)
+        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00+00:00")
+        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+00:00")
+        .output()
+        .unwrap();
+}
+
+/// Shared two-ref Rust history for the two-ref commands. v1 declares
+/// `helper`, `removed_fn`, `LIMIT = 10` and `get_limit`; v2 renames
+/// `helper` to `helper2`, drops `removed_fn`, and moves `LIMIT` to 20.
+/// `get_limit` reads `LIMIT` in its own file: `behavior` only sees a
+/// constant change when the constant is used where it is declared, not
+/// when it is merely named from another file.
+fn history_repo(dir: &std::path::Path) {
+    git_init(dir);
+    std::fs::write(
+        dir.join("helper.rs"),
+        b"pub fn helper() {}\npub fn removed_fn() {}\npub const LIMIT: u32 = 10;\npub fn get_limit() -> u32 {\n    LIMIT\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.rs"),
+        b"mod helper;\nfn main() {\n    helper::helper();\n    let _ = helper::get_limit();\n}\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "v1: helper, removed_fn, LIMIT=10");
+    Command::new("git")
+        .args(["tag", "v1"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::fs::write(
+        dir.join("helper.rs"),
+        b"pub fn helper2() {}\npub const LIMIT: u32 = 20;\npub fn get_limit() -> u32 {\n    LIMIT\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.rs"),
+        b"mod helper;\nfn main() {\n    helper::helper2();\n    let _ = helper::get_limit();\n}\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "v2: helper->helper2, removed_fn gone, LIMIT=20");
+}
+
+/// A symbol born, renamed, then moved, with the same consumer
+/// throughout: `old_name` in `lib.py`, renamed to `new_name`, then the
+/// file moved to `new.py`. The shape is from `archaeology_cli.rs`
+/// (`repo_with_rename_and_move`).
+fn archaeology_repo(dir: &std::path::Path) {
+    git_init(dir);
+    std::fs::write(
+        dir.join("lib.py"),
+        b"def old_name(a, b):\n    return a - b\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("user.py"),
+        b"from lib import old_name\n\n\nprint(old_name(x, y))\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "born");
+    std::fs::write(
+        dir.join("lib.py"),
+        b"def new_name(a, b):\n    return a - b\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("user.py"),
+        b"from lib import new_name\n\n\nprint(new_name(x, y))\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "renamed");
+    std::fs::rename(dir.join("lib.py"), dir.join("new.py")).unwrap();
+    std::fs::write(
+        dir.join("user.py"),
+        b"from new import new_name\n\n\nprint(new_name(x, y))\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "moved");
+}
+
+/// Base on `main` declares `add` and `keep`; `ours` removes `add`
+/// while `theirs` adds a new consumer of it, so the merge has exactly
+/// one `removed_vs_new_consumer` conflict. The default branch after
+/// `git init` varies by machine, so the fixture names `main` itself.
+fn merge_repo(dir: &std::path::Path) {
+    Command::new("git")
+        .args(["init", "-q", "-b", "main"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.email", "t@t"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["config", "user.name", "t"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::fs::write(
+        dir.join("lib.py"),
+        b"def add(x):\n    return x\n\ndef keep(x):\n    return x\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "base");
+    Command::new("git")
+        .args(["checkout", "-qb", "ours"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::fs::write(dir.join("lib.py"), b"def keep(x):\n    return x\n")
+        .unwrap();
+    git_commit_fixed(dir, "ours removes add");
+    Command::new("git")
+        .args(["checkout", "-q", "main"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    Command::new("git")
+        .args(["checkout", "-qb", "theirs"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::fs::write(
+        dir.join("new.py"),
+        b"from lib import add\n\nprint(add(1))\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "theirs adds a consumer");
+}
+
+/// A proto message with a generated-code marker and a Python consumer:
+/// v1 declares `api.User` with `name` and `age`; the working tree
+/// removes `name`. Without the generated `user_pb2.py` marker the
+/// break would be unproven, so the marker is part of the fixture.
+fn schema_repo(dir: &std::path::Path) {
+    git_init(dir);
+    std::fs::create_dir(dir.join("api")).unwrap();
+    std::fs::write(
+        dir.join("api").join("user.proto"),
+        b"syntax = \"proto3\";\npackage api;\nmessage User {\n  string name = 1;\n  int32 age = 2;\n}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("api").join("user_pb2.py"),
+        b"# Generated by the protocol buffer compiler.  DO NOT EDIT!\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("consumer.py"),
+        b"from api.user_pb2 import User\n\n\ndef make():\n    return User(name=\"Ada\", age=36)\n",
+    )
+    .unwrap();
+    git_commit_fixed(dir, "v1");
+    Command::new("git")
+        .args(["tag", "v1"])
+        .current_dir(dir)
+        .output()
+        .unwrap();
+    std::fs::write(
+        dir.join("api").join("user.proto"),
+        b"syntax = \"proto3\";\npackage api;\nmessage User {\n  int32 age = 2;\n}\n",
+    )
+    .unwrap();
 }
 
 #[test]
@@ -406,4 +625,88 @@ fn normalize_json_handles_windows_escaped_paths() {
         "unix temp path survived: {normalized}"
     );
     assert!(normalized.contains("[PATH]"));
+}
+
+#[test]
+fn json_contract_review() {
+    let dir = tempdir().unwrap();
+    history_repo(dir.path());
+    // A clean tree reviews to an empty `changed` list, which pins
+    // nothing; dirty the tree so the snapshot proves the shape of a
+    // real changed file.
+    std::fs::write(
+        dir.path().join("main.rs"),
+        b"mod helper;\nfn main() {\n    helper::helper2();\n    let _ = helper::get_limit();\n}\n\n// dirty\n",
+    )
+    .unwrap();
+    let out = run_json_args(&["review"], dir.path());
+    with_settings!({ snapshot_suffix => "review" }, {
+        assert_snapshot!(out);
+    });
+}
+
+#[test]
+fn json_contract_breaking() {
+    let dir = tempdir().unwrap();
+    history_repo(dir.path());
+    let out = run_json_args(&["breaking", "--from", "v1"], dir.path());
+    with_settings!({ snapshot_suffix => "breaking" }, {
+        assert_snapshot!(out);
+    });
+}
+
+#[test]
+fn json_contract_merge() {
+    let dir = tempdir().unwrap();
+    merge_repo(dir.path());
+    let out = run_json_args(
+        &["merge", "--ours", "ours", "--theirs", "theirs"],
+        dir.path(),
+    );
+    with_settings!({ snapshot_suffix => "merge" }, {
+        assert_snapshot!(out);
+    });
+}
+
+#[test]
+fn json_contract_diff() {
+    let dir = tempdir().unwrap();
+    history_repo(dir.path());
+    let out = run_json_args(&["diff", "--from", "v1"], dir.path());
+    with_settings!({ snapshot_suffix => "diff" }, {
+        assert_snapshot!(out);
+    });
+}
+
+#[test]
+fn json_contract_archaeology() {
+    let dir = tempdir().unwrap();
+    archaeology_repo(dir.path());
+    let out = run_json_args(
+        &["archaeology", "new.py", "--symbol", "new_name"],
+        dir.path(),
+    );
+    with_settings!({ snapshot_suffix => "archaeology" }, {
+        assert_snapshot!(out);
+    });
+}
+
+#[test]
+fn json_contract_behavior() {
+    let dir = tempdir().unwrap();
+    history_repo(dir.path());
+    let out = run_json_args(&["behavior", "--from", "v1"], dir.path());
+    with_settings!({ snapshot_suffix => "behavior" }, {
+        assert_snapshot!(out);
+    });
+}
+
+#[test]
+fn json_contract_schema_impact() {
+    let dir = tempdir().unwrap();
+    schema_repo(dir.path());
+    let out = run_json_args(&["schema-impact", "--from", "v1"], dir.path());
+    with_settings!({ snapshot_suffix => "schema_impact" }, {
+        assert_snapshot!(out);
+    });
 }

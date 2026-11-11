@@ -1,0 +1,45 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "file": "new.py",
+  "symbol": "new_name",
+  "origin_found": true,
+  "note": null,
+  "steps": [
+    {
+      "kind": "born",
+      "commit": "f4db620f9546a9a97323c2abde5a16020786461d",
+      "author": "t",
+      "date": "2026-01-01",
+      "message": "born",
+      "from_file": null,
+      "from_name": null,
+      "to_file": "lib.py",
+      "to_name": "old_name"
+    },
+    {
+      "kind": "renamed",
+      "commit": "16873de625173174ca6128e8a331777d6cb7c126",
+      "author": "t",
+      "date": "2026-01-01",
+      "message": "renamed",
+      "from_file": "lib.py",
+      "from_name": "old_name",
+      "to_file": "lib.py",
+      "to_name": "new_name"
+    },
+    {
+      "kind": "moved",
+      "commit": "e9c53c6a9e1c3251692c058452aa2631f244191a",
+      "author": "t",
+      "date": "2026-01-01",
+      "message": "moved",
+      "from_file": "lib.py",
+      "from_name": "new_name",
+      "to_file": "new.py",
+      "to_name": "new_name"
+    }
+  ]
+}
