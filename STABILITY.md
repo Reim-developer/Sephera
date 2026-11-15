@@ -83,7 +83,11 @@ type is a breaking change. Adding a new optional parameter is not.
 
 The MCP server speaks JSON-RPC 2.0 over stdio with newline-delimited JSON
 framing: one JSON message per line, each terminated by `\n`. This framing is
-stable. The protocol version (`2024-11-05`) is negotiated at initialization.
+stable. The protocol version is negotiated at initialization: the server
+supports `2024-11-05`, `2025-03-26`, and `2025-06-18` (rmcp 1.3.0) and
+answers with the version the client requested when it supports it,
+otherwise its latest (`2025-06-18`). `2024-11-05` is the oldest
+supported version, not the negotiated one.
 
 ### Output format
 
