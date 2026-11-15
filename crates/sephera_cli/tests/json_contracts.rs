@@ -43,6 +43,20 @@ fn json_string_value_end(out: &str, drive: usize) -> Option<usize> {
 /// Normalize JSON output for stable snapshots: absolute paths, timestamps,
 /// and other environment-specific values become placeholders.
 fn normalize_json(stdout: &str) -> String {
+    // Validate before surgery: the `elapsed_ms` pin below rewrites the
+    // digits after the key, so invalid JSON such as `"elapsed_ms": 00`
+    // would silently become valid `0` and the snapshot would pin output
+    // no consumer can parse. Parsing validates without reserializing,
+    // so key order (and every snapshot) is unchanged. Empty output — a
+    // command that failed before printing — is not JSON at all and
+    // stays unvalidated, as before.
+    if !stdout.trim().is_empty() {
+        serde_json::from_str::<serde_json::Value>(stdout).unwrap_or_else(
+            |error| {
+                panic!("snapshot input is not valid JSON: {error}\n{stdout}")
+            },
+        );
+    }
     // Windows paths are JSON-escaped with doubled backslashes
     // (`C:\\Users\\...\\Temp\\...`), so a single-backslash pattern never
     // matches them and the user-specific prefix survives into the
@@ -567,6 +581,26 @@ fn json_contract_risk() {
     with_settings!({ snapshot_suffix => "risk" }, {
         assert_snapshot!(out);
     });
+}
+
+/// Invalid JSON must fail here, not be silently repaired: the old
+/// `elapsed_ms` surgery rewrote `"elapsed_ms": 00` to `0`, so a
+/// snapshot could pin output no consumer can parse.
+#[test]
+#[should_panic(expected = "not valid JSON")]
+fn normalize_json_rejects_invalid_json() {
+    normalize_json(r#"{"elapsed_ms": 00}"#);
+}
+
+/// Valid JSON still normalizes: the validation above must not break
+/// the `elapsed_ms` pin it guards.
+#[test]
+fn normalize_json_pins_elapsed_ms_on_valid_json() {
+    let normalized = normalize_json("{\n  \"elapsed_ms\": 42\n}");
+    assert!(
+        normalized.contains("\"elapsed_ms\": 0"),
+        "elapsed_ms was not pinned: {normalized}"
+    );
 }
 
 /// A Windows JSON-escaped path must not leak its user-specific prefix
