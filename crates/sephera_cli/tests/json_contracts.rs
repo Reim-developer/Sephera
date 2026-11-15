@@ -28,7 +28,7 @@ fn json_string_value_end(out: &str, drive: usize) -> Option<usize> {
     if drive == 0 || out.as_bytes()[drive - 1] != b'"' {
         return None;
     }
-    let bytes = out[drive..].as_bytes();
+    let bytes = &out.as_bytes()[drive..];
     let mut idx = 0;
     while idx < bytes.len() {
         match bytes[idx] {
