@@ -68,6 +68,29 @@ fn flag_missing_its_value_exits_64() {
     );
 }
 
+/// Bare `sephera` prints help to stderr and exits 64, with no `error:`
+/// prefix: the output is help, not an error report, so STABILITY.md
+/// explicitly excludes this case from the prefix promise. A real usage
+/// error (unknown flag) still carries the prefix.
+#[test]
+fn no_arguments_prints_help_without_error_prefix() {
+    let dir = tempdir().unwrap();
+    let output = Command::new(sephera())
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(output.status.code(), Some(64));
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        stderr.contains("Usage:"),
+        "expected help text on stderr: {stderr}"
+    );
+    assert!(
+        !stderr.contains("error:"),
+        "help output must not carry the error prefix: {stderr}"
+    );
+}
+
 /// `--help` and `--version` still exit 0: their clap error carries exit
 /// code 0 and is passed through unchanged by the remap.
 #[test]

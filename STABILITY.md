@@ -63,6 +63,10 @@ keep working.
 Errors are printed to stderr as `error: <message>`. The message text may change;
 the `error:` prefix and the stderr stream are stable.
 
+One case is not an error report and carries no prefix: running `sephera`
+with no arguments prints the help text to stderr and exits 64 (a missing
+required argument), because the output is help, not an error message.
+
 ## MCP contract
 
 ### Tools
