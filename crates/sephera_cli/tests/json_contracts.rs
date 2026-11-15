@@ -160,35 +160,36 @@ fn write_fixture(dir: &std::path::Path) {
     .unwrap();
 }
 
+/// Run a git command for a fixture and fail loudly when it fails: a
+/// silent failure (e.g. `commit.gpgsign` enabled with no key, which
+/// makes `git commit` exit 128) would leave the fixture without its
+/// history and the snapshot test would fail somewhere confusing.
+/// Commits carry `--no-gpg-sign` so a developer's signing config
+/// cannot break the fixtures at all.
+fn run_git(dir: &std::path::Path, args: &[&str], envs: &[(&str, &str)]) {
+    let mut command = Command::new("git");
+    command.args(args).current_dir(dir);
+    for (key, value) in envs {
+        command.env(key, value);
+    }
+    let output = command.output().unwrap();
+    assert!(
+        output.status.success(),
+        "git {args:?} failed in {}: {}",
+        dir.display(),
+        String::from_utf8_lossy(&output.stderr)
+    );
+}
+
 fn git_commit(dir: &std::path::Path, message: &str) {
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", message])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["add", "."], &[]);
+    run_git(dir, &["commit", "-qm", message, "--no-gpg-sign"], &[]);
 }
 
 fn init_git_repo(dir: &std::path::Path) {
-    Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "t@t"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "t"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["init", "-q"], &[]);
+    run_git(dir, &["config", "user.email", "t@t"], &[]);
+    run_git(dir, &["config", "user.name", "t"], &[]);
     git_commit(dir, "init");
 }
 
@@ -229,39 +230,24 @@ fn run_json_args(args: &[&str], dir: &std::path::Path) -> String {
 }
 
 fn git_init(dir: &std::path::Path) {
-    Command::new("git")
-        .args(["init", "-q"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "t@t"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "t"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["init", "-q"], &[]);
+    run_git(dir, &["config", "user.email", "t@t"], &[]);
+    run_git(dir, &["config", "user.name", "t"], &[]);
 }
 
 /// A commit with fixed author/committer dates, so SHAs and any dates in
 /// the output are identical on every run and every machine. The date is
 /// arbitrary; what matters is that it never varies.
 fn git_commit_fixed(dir: &std::path::Path, message: &str) {
-    Command::new("git")
-        .args(["add", "."])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["commit", "-qm", message])
-        .current_dir(dir)
-        .env("GIT_AUTHOR_DATE", "2026-01-01T00:00:00+00:00")
-        .env("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+00:00")
-        .output()
-        .unwrap();
+    run_git(dir, &["add", "."], &[]);
+    run_git(
+        dir,
+        &["commit", "-qm", message, "--no-gpg-sign"],
+        &[
+            ("GIT_AUTHOR_DATE", "2026-01-01T00:00:00+00:00"),
+            ("GIT_COMMITTER_DATE", "2026-01-01T00:00:00+00:00"),
+        ],
+    );
 }
 
 /// Shared two-ref Rust history for the two-ref commands. v1 declares
@@ -283,11 +269,7 @@ fn history_repo(dir: &std::path::Path) {
     )
     .unwrap();
     git_commit_fixed(dir, "v1: helper, removed_fn, LIMIT=10");
-    Command::new("git")
-        .args(["tag", "v1"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["tag", "v1"], &[]);
     std::fs::write(
         dir.join("helper.rs"),
         b"pub fn helper2() {}\npub const LIMIT: u32 = 20;\npub fn get_limit() -> u32 {\n    LIMIT\n}\n",
@@ -343,45 +325,21 @@ fn archaeology_repo(dir: &std::path::Path) {
 /// one `removed_vs_new_consumer` conflict. The default branch after
 /// `git init` varies by machine, so the fixture names `main` itself.
 fn merge_repo(dir: &std::path::Path) {
-    Command::new("git")
-        .args(["init", "-q", "-b", "main"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.email", "t@t"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["config", "user.name", "t"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["init", "-q", "-b", "main"], &[]);
+    run_git(dir, &["config", "user.email", "t@t"], &[]);
+    run_git(dir, &["config", "user.name", "t"], &[]);
     std::fs::write(
         dir.join("lib.py"),
         b"def add(x):\n    return x\n\ndef keep(x):\n    return x\n",
     )
     .unwrap();
     git_commit_fixed(dir, "base");
-    Command::new("git")
-        .args(["checkout", "-qb", "ours"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["checkout", "-qb", "ours"], &[]);
     std::fs::write(dir.join("lib.py"), b"def keep(x):\n    return x\n")
         .unwrap();
     git_commit_fixed(dir, "ours removes add");
-    Command::new("git")
-        .args(["checkout", "-q", "main"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
-    Command::new("git")
-        .args(["checkout", "-qb", "theirs"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["checkout", "-q", "main"], &[]);
+    run_git(dir, &["checkout", "-qb", "theirs"], &[]);
     std::fs::write(
         dir.join("new.py"),
         b"from lib import add\n\nprint(add(1))\n",
@@ -413,11 +371,7 @@ fn schema_repo(dir: &std::path::Path) {
     )
     .unwrap();
     git_commit_fixed(dir, "v1");
-    Command::new("git")
-        .args(["tag", "v1"])
-        .current_dir(dir)
-        .output()
-        .unwrap();
+    run_git(dir, &["tag", "v1"], &[]);
     std::fs::write(
         dir.join("api").join("user.proto"),
         b"syntax = \"proto3\";\npackage api;\nmessage User {\n  int32 age = 2;\n}\n",
@@ -747,4 +701,44 @@ fn json_contract_schema_impact() {
     with_settings!({ snapshot_suffix => "schema_impact" }, {
         assert_snapshot!(out);
     });
+}
+
+/// A `commit.gpgsign` config with no key must not silently empty the
+/// fixture: commits carry `--no-gpg-sign`, so this commit lands and
+/// `git log` proves it. On the unfixed helpers the commit failed
+/// silently (exit 128, "gpg failed to sign the data") and the fixture
+/// had no history.
+#[test]
+fn git_commit_lands_when_signing_is_configured() {
+    let dir = tempdir().unwrap();
+    git_init(dir.path());
+    Command::new("git")
+        .args(["config", "commit.gpgsign", "true"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    std::fs::write(dir.path().join("a.rs"), b"pub fn a() {}\n").unwrap();
+    git_commit(dir.path(), "signed-config commit");
+    let output = Command::new("git")
+        .args(["log", "--oneline"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    let log = String::from_utf8(output.stdout).unwrap();
+    assert!(
+        log.contains("signed-config commit"),
+        "commit did not land: {log}"
+    );
+}
+
+/// A failed fixture command must fail loudly, not silently continue:
+/// committing with nothing staged exits 1, and the helper asserts.
+/// On the unfixed helpers the commit failed silently and the test
+/// would pass with no history at all.
+#[test]
+#[should_panic(expected = "git [\"commit\"")]
+fn git_commit_fails_loudly_when_it_fails() {
+    let dir = tempdir().unwrap();
+    git_init(dir.path());
+    git_commit(dir.path(), "nothing to commit");
 }
