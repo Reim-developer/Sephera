@@ -273,11 +273,22 @@ fn discover(anchor: &Path) -> Option<PathBuf> {
 }
 
 /// The value after `flag`, if present.
+///
+/// A following token that looks like a flag is not a value: clap would
+/// report the flag as missing its value, and swallowing the next flag
+/// here would both hide that error and misread the flag as a path
+/// (`loc --config --format json` read `--format` as the config filename
+/// and exited 1 for a missing file instead of 64 for a missing
+/// argument). A lone `-` is a value, not a flag, and `--flag=value`
+/// still supplies its value directly.
 fn flag_value(argv: &[String], flag: &str) -> Option<String> {
     let mut arguments = argv.iter();
     while let Some(argument) = arguments.next() {
         if argument == flag {
-            return arguments.next().cloned();
+            return match arguments.next() {
+                Some(value) if is_flag_like(value) => None,
+                value => value.cloned(),
+            };
         }
         // `--flag=value` is the other spelling of the same thing.
         if let Some(value) = argument.strip_prefix(&format!("{flag}=")) {
@@ -285,6 +296,12 @@ fn flag_value(argv: &[String], flag: &str) -> Option<String> {
         }
     }
     None
+}
+
+/// Whether a token reads as a flag rather than a value: it starts with
+/// `-` and is more than the lone `-`, which clap treats as a value.
+fn is_flag_like(token: &str) -> bool {
+    token.len() > 1 && token.starts_with('-')
 }
 
 /// The command name the user asked for, before `clap` sees it.

@@ -34,6 +34,40 @@ fn usage_error_exits_64_not_2() {
     );
 }
 
+/// A flag left without its value must exit 64, not 1. Before the fix the
+/// config pre-pass swallowed the next flag as the config filename
+/// (`loc --config --format json` read `--format` as the file and exited 1
+/// for a missing file); now the pre-pass leaves it for clap, which
+/// reports the missing value as a usage error. A genuinely missing file
+/// is still a failure (1), not a usage error: the flag had its value,
+/// the file is what is wrong.
+#[test]
+fn flag_missing_its_value_exits_64() {
+    let dir = tempdir().unwrap();
+    let missing_value = Command::new(sephera())
+        .args(["loc", "--config", "--format", "json"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        missing_value.status.code(),
+        Some(64),
+        "stderr: {}",
+        String::from_utf8_lossy(&missing_value.stderr)
+    );
+    let missing_file = Command::new(sephera())
+        .args(["loc", "--config", "missing.toml"])
+        .current_dir(dir.path())
+        .output()
+        .unwrap();
+    assert_eq!(
+        missing_file.status.code(),
+        Some(1),
+        "stderr: {}",
+        String::from_utf8_lossy(&missing_file.stderr)
+    );
+}
+
 /// `--help` and `--version` still exit 0: their clap error carries exit
 /// code 0 and is passed through unchanged by the remap.
 #[test]
