@@ -17,6 +17,29 @@ use std::process::Command;
 use insta::{assert_snapshot, with_settings};
 use tempfile::tempdir;
 
+/// The end of the JSON string value starting at the drive letter at
+/// `drive` in `out`, if the drive letter opens a string value: the
+/// closing `"` of the value, skipping `\"` escapes. `None` when the
+/// drive letter does not open a value or no closing quote exists, so
+/// the caller falls back to the old terminators (a path ending in a
+/// backslash collapses ambiguously against its closing quote; temp
+/// paths never end in one, and the fallback is the old behavior).
+fn json_string_value_end(out: &str, drive: usize) -> Option<usize> {
+    if drive == 0 || out.as_bytes()[drive - 1] != b'"' {
+        return None;
+    }
+    let bytes = out[drive..].as_bytes();
+    let mut idx = 0;
+    while idx < bytes.len() {
+        match bytes[idx] {
+            b'\\' => idx += 2,
+            b'"' => return Some(idx),
+            _ => idx += 1,
+        }
+    }
+    None
+}
+
 /// Normalize JSON output for stable snapshots: absolute paths, timestamps,
 /// and other environment-specific values become placeholders.
 fn normalize_json(stdout: &str) -> String {
@@ -45,11 +68,17 @@ fn normalize_json(stdout: &str) -> String {
         }
         let drive = colon - 1;
         let rest = &out[drive..];
-        let end = rest
-            .find(|c: char| {
+        // The path is usually the whole JSON string value (`"base_path":
+        // "C:\Users\Jane Doe\..."`): the value ends at its closing quote,
+        // and stopping at the space inside `Jane Doe` would leave `Doe`
+        // in the snapshot. Match the complete value when the drive letter
+        // opens one; otherwise keep the old terminators.
+        let end = json_string_value_end(&out, drive).unwrap_or_else(|| {
+            rest.find(|c: char| {
                 c == '"' || c == '\'' || c == ',' || c == '\n' || c == ' '
             })
-            .unwrap_or(rest.len());
+            .unwrap_or(rest.len())
+        });
         let path = &rest[..end];
         out = out.replacen(path, "[PATH]", 1);
         search_from = drive + "[PATH]".len();
@@ -616,6 +645,15 @@ fn normalize_json_handles_windows_escaped_paths() {
     assert!(
         normalized.contains("12:30"),
         "non-path colon text was mangled: {normalized}"
+    );
+    // A profile directory with a space (`Jane Doe`) must not leak its
+    // second half: the old drive scan stopped at the space, so `Doe`
+    // survived in the snapshot and it varied by user.
+    let spaced = r#"{"base_path": "C:\\Users\\Jane Doe\\AppData\\Local\\Temp\\.tmpAbC123\\main.rs"}"#;
+    let normalized = normalize_json(spaced);
+    assert_eq!(
+        normalized, r#"{"base_path": "[PATH]"}"#,
+        "spaced Windows path not fully replaced: {normalized}"
     );
     // The Unix form still normalizes.
     let unix = r#"{"base_path": "/tmp/.tmpAbC123/main.rs"}"#;
