@@ -1,0 +1,17 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "from": "v1",
+  "to": "working tree",
+  "changes": [
+    {
+      "kind": "constant_changed",
+      "file": "helper.rs",
+      "name": "LIMIT",
+      "old_value": "10",
+      "new_value": "20"
+    }
+  ]
+}

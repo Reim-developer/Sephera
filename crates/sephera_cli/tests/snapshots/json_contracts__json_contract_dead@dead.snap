@@ -1,0 +1,13 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "total": 3,
+  "reachable": 3,
+  "roots": [
+    "main.rs",
+    "tests/test_main.rs"
+  ],
+  "dead": []
+}

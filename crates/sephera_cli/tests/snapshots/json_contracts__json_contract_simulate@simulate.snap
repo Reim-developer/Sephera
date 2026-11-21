@@ -1,0 +1,15 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "file": "helper.rs",
+  "symbol": "helper",
+  "new_name": "helper2",
+  "new_file": "helper.rs",
+  "blocked": false,
+  "direct": [],
+  "namespace_users": [],
+  "downstream": [],
+  "collisions": []
+}

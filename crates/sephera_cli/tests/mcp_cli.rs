@@ -83,11 +83,18 @@ impl Mcp {
     /// other way round gets the connection dropped with no explanation. That is
     /// the same trap the last test in this file pins from the other side.
     fn handshake(&mut self) -> Value {
+        self.handshake_with("2024-11-05")
+    }
+
+    /// Like [`Self::handshake`], but the client requests `version`: the
+    /// server answers with the requested version when it supports it,
+    /// otherwise its latest.
+    fn handshake_with(&mut self, version: &str) -> Value {
         let result = self
             .call(
                 "initialize",
                 json!({
-                    "protocolVersion": "2024-11-05",
+                    "protocolVersion": version,
                     "capabilities": {},
                     "clientInfo": { "name": "sephera-cli-tests", "version": "0" },
                 }),
@@ -453,6 +460,21 @@ fn the_server_identifies_itself_after_the_handshake() {
     assert!(
         result["result"]["serverInfo"]["version"].is_string(),
         "{result}"
+    );
+}
+
+/// The negotiated version is the one the client asked for, when the
+/// server supports it — not a fixed `2024-11-05`. STABILITY.md used to
+/// state the old version as the negotiated one; a client requesting
+/// the latest gets the latest.
+#[test]
+fn the_server_negotiates_the_requested_protocol_version() {
+    let mut mcp = Mcp::start();
+    let result = mcp.handshake_with("2025-06-18");
+
+    assert_eq!(
+        result["result"]["protocolVersion"], "2025-06-18",
+        "the server must answer with the requested version: {result}"
     );
 }
 

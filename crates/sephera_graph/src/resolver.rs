@@ -2292,7 +2292,7 @@ fn detect_cycles(node_map: &NodeMap) -> Vec<Vec<String>> {
                     .iter()
                     .map(|(n, _)| n.clone())
                     .collect();
-                cycle.push(child.clone());
+                cycle.push(child);
 
                 if seen_cycle_keys.insert(cycle_key(&cycle)) {
                     cycles.push(cycle);

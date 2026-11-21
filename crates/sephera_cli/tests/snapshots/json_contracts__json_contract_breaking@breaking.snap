@@ -1,0 +1,34 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "from": "v1",
+  "to": "working tree",
+  "broken": [
+    {
+      "file": "helper.rs",
+      "symbol": "helper",
+      "kind": "function",
+      "change": {
+        "type": "removed"
+      },
+      "suggestion": null,
+      "direct": [],
+      "namespace_users": [],
+      "downstream": []
+    },
+    {
+      "file": "helper.rs",
+      "symbol": "removed_fn",
+      "kind": "function",
+      "change": {
+        "type": "removed"
+      },
+      "suggestion": null,
+      "direct": [],
+      "namespace_users": [],
+      "downstream": []
+    }
+  ]
+}

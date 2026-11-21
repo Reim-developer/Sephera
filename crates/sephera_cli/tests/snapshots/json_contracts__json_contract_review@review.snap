@@ -1,0 +1,24 @@
+---
+source: crates/sephera_cli/tests/json_contracts.rs
+expression: out
+---
+{
+  "against": "HEAD",
+  "commits_scanned": 2,
+  "commits_counted": 2,
+  "changed": [
+    {
+      "file": "main.rs",
+      "present": true,
+      "direct_dependents": [],
+      "dependent_count": 0,
+      "tests": []
+    }
+  ],
+  "breaking": {
+    "from": "HEAD",
+    "to": "working tree",
+    "broken": []
+  },
+  "warnings": []
+}

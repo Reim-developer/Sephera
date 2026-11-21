@@ -2223,7 +2223,7 @@ fn build_go_module(
             continue;
         }
         let mut gen_message = GenMessage {
-            go_name: go_name.clone(),
+            go_name,
             ..Default::default()
         };
         for field in message.by_number.values() {
