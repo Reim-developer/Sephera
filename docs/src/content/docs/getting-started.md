@@ -5,7 +5,7 @@ description: Build Sephera locally, run the CLI, and preview the documentation s
 
 # Getting Started
 
-This guide targets the `0.7.x` release line.
+This guide targets the `2.0.x` release line.
 
 ## Requirements
 
@@ -14,6 +14,8 @@ This guide targets the `0.7.x` release line.
 - Python if you want to run the benchmark harness
 
 ## Install from crates.io
+
+Note: `cargo install sephera` currently installs 0.7.1, the latest version published to crates.io (2026-10-09). For 2.0.0, use the prebuilt binaries from GitHub Releases below.
 
 Install the published CLI:
 
@@ -51,8 +53,7 @@ reads `.sephera.toml` and `.gitignore` exactly as the CLI does, so the number it
 shows is the number `sephera loc` would print. See [the architecture
 notes](/architecture/releasing/) for why it has its own cargo profile.
 
-Prebuilt binaries ship inside the same release archive as the CLI, so one
-download has both.
+2.0.0 ships the CLI only: there is no packaged GUI in this release, so run it from source with the command above.
 
 Run the same scan against a remote repository:
 

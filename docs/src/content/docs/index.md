@@ -1,21 +1,19 @@
 ---
 title: Sephera
-description: Fast LOC analysis and deterministic context packs for review, debugging, and LLM-assisted workflows.
+description: "Change safety for codebases: what breaks if you change this file - plus fast LOC analysis and deterministic context packs."
 ---
 
 # Sephera
 
-Sephera is a Rust workspace for codebase inspection. It currently focuses on seven practical workflows:
+Sephera is a Rust CLI for change safety: if I change this file, what else breaks? It builds a dependency graph from real imports across six languages (Rust, Python, TypeScript/JavaScript, Go, Java, C/C++), then answers that question at file and symbol level - offline, static analysis only.
 
-- `loc` for fast, language-aware line counting
-- `symbols` for what each language declares, read from parse trees rather than text
-- `context` for deterministic Markdown or JSON context packs with AST compression
-- `graph` for multi-language dependency graph analysis
-- `impact` for the blast radius of a single file, with a CI exit-code gate
-- `watch` for re-running any of the above whenever the tree changes
-- `mcp` for built-in MCP server agent integration
+The current docs describe the `2.0.x` release line. Version 2.0.0 ships 24 commands:
 
-The current docs describe the `0.7.x` release line.
+- **Change safety:** `breaking`, `review`, `merge`, `behavior`, `diff`, `simulate`, `archaeology`, `why`, `impact`, `graph`
+- **Test analysis:** `untested`, `affected-tests`, `test-priority`
+- **Code health:** `dead`, `coupling`, `risk`
+- **For agents:** `mcp` (21 tools), `skill`, `context`, `schema-impact`, `guard`, `watch`
+- **Foundations:** `loc`, `symbols`
 
 The project is intentionally narrow in scope. It does not try to be an AI agent framework or a hosted service. The goal is to provide reliable local analysis primitives that fit naturally into review, debugging, and prompting workflows.
 
@@ -45,6 +43,13 @@ Sephera provides both without requiring a server, a browser extension, or a prov
 - Generated language metadata sourced from `config/languages.yml`
 - Byte-oriented scanning with newline portability across `LF`, `CRLF`, and classic `CR`
 - Benchmark and fuzzing infrastructure to keep behavior stable over time
+- `breaking` reports symbols removed or reshaped between two refs, joined to the files that still use them
+- `review` reports blast radius and affected tests for each file a change touches
+- `merge` predicts merges git completes cleanly but that break the build
+- `behavior` catches silent changes that still compile (argument order, constants)
+- `diff` is a symbol changelog; `simulate` tries a rename/move without touching the tree; `archaeology` traces a symbol through history
+- FFI impact: a Rust `#[pyfunction]` change shows which Python files call it (also JNI, wasm-bindgen, cgo)
+- `test-priority` orders tests by what changed; `schema-impact` reports the impact of a database schema change; `skill` installs the change-safety agent skill
 
 ## Quick examples
 

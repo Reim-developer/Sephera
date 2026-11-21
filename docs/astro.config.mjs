@@ -8,7 +8,7 @@ export default defineConfig({
 			title: 'Sephera Docs',
 			disable404Route: true,
 			description:
-				'Documentation for Sephera, a Rust tool focused on fast LOC analysis and deterministic LLM-ready context packs.',
+				'Documentation for Sephera, a Rust CLI for change safety - what breaks if you change this file - with fast LOC analysis and deterministic LLM-ready context packs.',
 			sidebar: [
 				{
 					label: 'Start Here',
