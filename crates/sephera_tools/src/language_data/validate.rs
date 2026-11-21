@@ -94,7 +94,7 @@ pub fn validate_registry(
 
             let extension_key = extension.trim_start_matches('.').to_owned();
             if let Some(previous_language) =
-                seen_extensions.insert(extension_key.clone(), name.to_owned())
+                seen_extensions.insert(extension_key, name.to_owned())
             {
                 bail!(
                     "extension `{extension}` is defined by both `{previous_language}` and `{name}`"

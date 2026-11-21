@@ -68,7 +68,7 @@ use crate::{
 /// missing required argument, a value that fails validation.
 const USAGE_ERROR: i32 = 64;
 
-#[must_use]
+#[must_use = "dropping the exit code would report success for a failed run"]
 pub fn main_exit_code() -> ExitCode {
     match run() {
         Ok(exit) => exit,

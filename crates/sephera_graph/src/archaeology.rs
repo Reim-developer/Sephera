@@ -498,7 +498,7 @@ pub fn trace_symbol(
             break;
         }
         let older = build(&older_commit)?;
-        examined.insert(older_commit.hash.clone());
+        examined.insert(older_commit.hash);
         examined_count += 1;
         match classify_older(&newer, &older, &tracked_file, &tracked_name) {
             OlderOutcome::Continuous => {
